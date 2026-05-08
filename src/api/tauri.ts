@@ -201,7 +201,7 @@ export const api = {
   // 设置相关
   getSettings: () => invoke<Settings>('get_settings'),
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
-  saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),
+  saveSettings: (settings: Settings) => invoke<Settings>('save_settings', { settings }),
 
   // 提供商相关
   fetchModels: (providerId: string, provider?: ProviderConnectionInput) =>

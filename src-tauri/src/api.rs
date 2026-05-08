@@ -6,7 +6,7 @@
 //! - `effective_retry_attempts` —— 把 settings.retry_enabled + retry_attempts 折成实际尝试次数。
 //! - `extract_status_code` / `is_failover_error` —— failover 判定（仅 401/402/403/429）。
 //! - `send_with_retry` —— 网络抖动 / 5xx / 429 退避重试。
-//! - `send_with_failover` —— 在 api_keys 列表上轮换。
+//! - `send_with_failover` —— 在 api_keys 列表上轮换；401/402/403/429 直接切 key。
 //! - `call_openai_text` / `call_openai_ocr` / `call_vision_api` —— chat completion 三类调用。
 //! - `stream_chat_call` / `stream_translate_combined` / `stream_vision_response` —— SSE 流解析。
 //! - `build_ocr_request_body` —— 视觉 + 流式 body 构造。
@@ -197,8 +197,17 @@ pub fn is_failover_error(err_msg: &str) -> bool {
   matches!(extract_status_code(err_msg), Some(401 | 402 | 403 | 429))
 }
 
+fn is_failover_status(status: StatusCode) -> bool {
+  matches!(status.as_u16(), 401 | 402 | 403 | 429)
+}
+
+fn is_retryable_status_for_failover(status: StatusCode) -> bool {
+  is_retryable_status(status) && !is_failover_status(status)
+}
+
 /// 多 key failover 包装：在 api_keys 列表上依次尝试，遇到 failover-eligible 错误自动切下一 key
-/// 内层每次尝试仍走 send_with_retry（处理网络抖动 / 服务端 5xx 等通用重试）
+/// 内层每次尝试仍走 send_with_retry_for_failover（处理网络抖动 / 服务端 5xx 等通用重试；
+/// 401/402/403/429 立即交回外层换 key，避免在同一 key 上耗尽重试次数）。
 pub async fn send_with_failover<F, Fut>(
   state: &AppState,
   label: &str,
@@ -227,7 +236,7 @@ where
     tried.insert(idx);
     let key = api_keys[idx].as_str();
 
-    match send_with_retry(label, attempts, || send(key)).await {
+    match send_with_retry_for_failover(label, attempts, || send(key)).await {
       Ok(resp) => {
         state.mark_key_ok(provider_id, idx);
         return Ok(resp);
@@ -270,6 +279,32 @@ where
   F: FnMut() -> Fut,
   Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
+  send_with_retry_status_policy(label, attempts, &mut send, is_retryable_status).await
+}
+
+async fn send_with_retry_for_failover<F, Fut>(
+  label: &str,
+  attempts: usize,
+  mut send: F,
+) -> Result<reqwest::Response, String>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+  send_with_retry_status_policy(label, attempts, &mut send, is_retryable_status_for_failover).await
+}
+
+async fn send_with_retry_status_policy<F, Fut, P>(
+  label: &str,
+  attempts: usize,
+  send: &mut F,
+  should_retry_status: P,
+) -> Result<reqwest::Response, String>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+  P: Fn(StatusCode) -> bool,
+{
   let attempts = attempts.max(1);
   let mut last_error: Option<String> = None;
 
@@ -285,7 +320,7 @@ where
         let text = response.text().await.unwrap_or_default();
         let err_msg = format!("{} Error: {} - {}", label, status, text);
 
-        if is_retryable_status(status) && attempt < attempts {
+        if should_retry_status(status) && attempt < attempts {
           last_error = Some(err_msg);
           let delay = retry_delay_ms(attempt, retry_after);
           eprintln!("{} retrying in {}ms (attempt {}/{})", label, delay, attempt, attempts);
@@ -487,33 +522,48 @@ pub async fn call_vision_api(
     .unwrap_or(&settings.translator_provider_id);
   let provider = settings.get_provider(provider_id)
     .ok_or_else(|| "Vision provider not found".to_string())?;
-  if provider.base_url == APPLE_INTELLIGENCE_BASE_URL {
-    return Err("Apple Intelligence 暂不支持图像输入,请为 Lens / 截图视觉功能配置云端 provider".into());
-  }
 
   // image_id 为空 → 走纯文本对话路径（不附图）
   let has_image = !image_id.is_empty();
 
-  let mut api_messages = Vec::new();
   // 优先用调用方传入的 system_prompt_override；否则用默认模板（区分有/无图片）
   // 关闭思考时在 system 末尾追加显式禁止指令，作为参数层不生效时的兜底
-  let system_prompt_to_use: Option<String> = {
+  let system_prompt_to_use = {
     let base = match system_prompt_override.filter(|s| !s.is_empty()) {
       Some(s) => s.to_string(),
       None => default_system_prompt(language, has_image),
     };
     if !thinking_enabled {
-      Some(format!("{}{}", base, no_think_instruction(language)))
+      format!("{}{}", base, no_think_instruction(language))
     } else {
-      Some(base)
+      base
     }
   };
-  if let Some(sp) = system_prompt_to_use {
-    api_messages.push(serde_json::json!({
-      "role": "system",
-      "content": sp
-    }));
+
+  if provider.base_url == APPLE_INTELLIGENCE_BASE_URL {
+    if has_image {
+      return Err("Apple Intelligence 暂不支持图像输入,请为 Lens / 截图视觉功能配置云端 provider".into());
+    }
+    let prompt = build_apple_text_prompt(&system_prompt_to_use, &messages);
+    if stream {
+      return stream_apple_text_response(
+        app,
+        state,
+        &prompt,
+        image_id,
+        stream_kind,
+        event_name,
+      )
+      .await;
+    }
+    return state.apple_intelligence.call_text(&prompt).await;
   }
+
+  let mut api_messages = Vec::new();
+  api_messages.push(serde_json::json!({
+    "role": "system",
+    "content": system_prompt_to_use
+  }));
 
   if has_image {
     let image_path = resolve_explain_image_path(app, state, image_id)?;
@@ -625,6 +675,87 @@ pub async fn call_vision_api(
     .ok_or_else(|| format!("Invalid vision response: {}", raw.chars().take(500).collect::<String>()))?;
 
   Ok(content.trim().to_string())
+}
+
+fn build_apple_text_prompt(system_prompt: &str, messages: &[ExplainMessage]) -> String {
+  let mut parts = Vec::new();
+  let system_prompt = system_prompt.trim();
+  if !system_prompt.is_empty() {
+    parts.push(format!("System:\n{}", system_prompt));
+  }
+
+  for message in messages {
+    let role = match message.role.as_str() {
+      "assistant" => "Assistant",
+      "system" => "System",
+      _ => "User",
+    };
+    let content = message.content.trim();
+    if !content.is_empty() {
+      parts.push(format!("{}:\n{}", role, content));
+    }
+  }
+
+  parts.push("Assistant:".to_string());
+  parts.join("\n\n")
+}
+
+async fn stream_apple_text_response(
+  app: &AppHandle,
+  state: &State<'_, AppState>,
+  prompt: &str,
+  image_id: &str,
+  kind: &str,
+  event_name: &str,
+) -> Result<String, String> {
+  let generation = state
+    .explain_stream_generation
+    .fetch_add(1, Ordering::SeqCst)
+    + 1;
+  let generation_atom = &state.explain_stream_generation;
+  let apple = state.apple_intelligence.clone();
+  let app_for_emit = app.clone();
+  let image_id_for_emit = image_id.to_string();
+  let kind_for_emit = kind.to_string();
+  let event_name_for_emit = event_name.to_string();
+  let mut full = String::new();
+
+  let result = apple
+    .stream_text(prompt, |delta| {
+      if generation_atom.load(Ordering::SeqCst) != generation {
+        return;
+      }
+      full.push_str(delta);
+      let _ = app_for_emit.emit(
+        &event_name_for_emit,
+        serde_json::json!({
+          "imageId": image_id_for_emit.clone(),
+          "kind": kind_for_emit.clone(),
+          "delta": delta,
+        }),
+      );
+    })
+    .await;
+
+  let full = full.trim().to_string();
+  let reason = match result {
+    Ok(_) if generation_atom.load(Ordering::SeqCst) != generation => "cancelled",
+    Ok(_) => "done",
+    Err(_) => "error",
+  };
+  let _ = app.emit(
+    event_name,
+    serde_json::json!({
+      "imageId": image_id,
+      "kind": kind,
+      "delta": "",
+      "done": true,
+      "reason": reason,
+      "full": full.clone(),
+    }),
+  );
+
+  result.map(|_| full)
 }
 
 // ===== SSE 流 =====
@@ -1135,5 +1266,35 @@ mod tests {
     // 旧版宽泛匹配 body 含 "billing" / "quota" 会误触发；现版严格按状态码
     assert!(!is_failover_error("X Error: 400 - {\"message\":\"billing issue\"}"));
     assert!(!is_failover_error("X Error: 500 - {\"message\":\"quota exceeded\"}"));
+  }
+
+  #[test]
+  fn failover_retry_policy_switches_key_on_429_without_inner_retry() {
+    assert!(is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
+    assert!(!is_retryable_status_for_failover(StatusCode::TOO_MANY_REQUESTS));
+    assert!(is_retryable_status_for_failover(StatusCode::INTERNAL_SERVER_ERROR));
+    assert!(is_retryable_status_for_failover(StatusCode::BAD_GATEWAY));
+  }
+
+  #[test]
+  fn build_apple_text_prompt_keeps_system_and_conversation_roles() {
+    let prompt = build_apple_text_prompt(
+      "System prompt",
+      &[
+        ExplainMessage {
+          role: "user".to_string(),
+          content: "Question".to_string(),
+        },
+        ExplainMessage {
+          role: "assistant".to_string(),
+          content: "Earlier answer".to_string(),
+        },
+      ],
+    );
+
+    assert!(prompt.contains("System:\nSystem prompt"));
+    assert!(prompt.contains("User:\nQuestion"));
+    assert!(prompt.contains("Assistant:\nEarlier answer"));
+    assert!(prompt.ends_with("Assistant:"));
   }
 }

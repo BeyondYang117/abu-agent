@@ -112,7 +112,11 @@ fn get_default_prompt_templates() -> serde_json::Value {
 /// 先对传入的设置进行清理（sanitize），然后应用开机自启动、重新注册热键、持久化设置、更新托盘菜单
 /// 如果热键注册失败，则回滚运行时设置到之前的状态
 #[tauri::command]
-fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<(), String> {
+fn save_settings(
+    app: AppHandle,
+    state: State<AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
     let previous_settings = state.settings_read().clone();
     let sanitized = sanitize_settings(settings);
     apply_launch_at_startup(&app, sanitized.launch_at_startup)?;
@@ -136,7 +140,7 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
         eprintln!("Failed to update tray: {err}");
     }
 
-    Ok(())
+    Ok(sanitized)
 }
 
 /// 翻译文本命令
@@ -2748,20 +2752,16 @@ fn lens_commit_image_to_history(
     state: State<AppState>,
     image_id: String,
 ) -> Result<(), String> {
-    let src = {
-        let map = state.images_lock();
-        map.get(&image_id).cloned()
-    };
-    let Some(src) = src else {
-        // 已经被 lens_close 清掉 → 大概率前端在我们之前已经把图存过了，直接当成幂等成功返回
-        return Ok(());
-    };
-    if !src.exists() {
-        return Ok(());
-    }
     let dst = lens_history_dir(&app)?.join(format!("{image_id}.png"));
     if dst.exists() {
         return Ok(()); // 幂等
+    }
+    let map = state.images_lock();
+    let Some(src) = map.get(&image_id) else {
+        return Err("Image is no longer available for history".to_string());
+    };
+    if !src.exists() {
+        return Err("Image file is no longer available for history".to_string());
     }
     fs::copy(&src, &dst).map_err(|e| format!("commit image to history: {e}"))?;
     Ok(())

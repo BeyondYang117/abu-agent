@@ -296,8 +296,9 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
         clearTimeout(saveSuccessTimerRef.current)
         saveSuccessTimerRef.current = null
       }
-      await api.saveSettings(settings)
-      setInitialSettingsSnapshot(JSON.stringify(settings))
+      const savedSettings = await api.saveSettings(settings)
+      setSettings(savedSettings)
+      setInitialSettingsSnapshot(JSON.stringify(savedSettings))
       onSettingsChange()
       setSaveSuccess(true)
       saveSuccessTimerRef.current = setTimeout(() => {

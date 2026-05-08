@@ -811,10 +811,16 @@ export default function Lens() {
     const id = imageIdRef.current
     let cancelled = false
     void (async () => {
+      try {
+        // Persist the image before writing the history row. Otherwise a fast close
+        // can delete the temp file and leave an unusable history item behind.
+        await api.lensCommitImageToHistory(id)
+      } catch (err) {
+        console.error('[lens-history] commit failed:', err)
+        return
+      }
       const thumb = await makeThumbnail(imagePreview, HISTORY_THUMB_SIZE)
       if (cancelled) return
-      // 把活跃 image 拷贝到 lens-history 持久目录（lens_close 不会再删它，下次打开历史还能继续聊）
-      api.lensCommitImageToHistory(id).catch(err => console.error('[lens-history] commit failed:', err))
       setHistory(prev => {
         const filtered = prev.filter(h => h.id !== id)
         const next: HistoryItem = {

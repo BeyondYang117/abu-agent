@@ -22,6 +22,7 @@ function Translator({
 }) {
   const [input, setInput] = useState('')
   const [result, setResult] = useState('')
+  const [resultInput, setResultInput] = useState('')
   const [loading, setLoading] = useState(false)
   const resultRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -31,9 +32,10 @@ function Translator({
   // 输入防抖翻译：600ms 延迟后发送翻译请求
   useEffect(() => {
     const seq = ++translateSeq.current
+    setResult('')
+    setResultInput('')
     const trimmed = input.trim()
     if (!trimmed) {
-      setResult('')
       setLoading(false)
       return
     }
@@ -45,10 +47,12 @@ function Translator({
         const translated = await api.translateText(input)
         if (seq !== translateSeq.current) return
         setResult(translated)
+        setResultInput(input)
       } catch (e) {
         if (seq !== translateSeq.current) return
         console.error(e)
         setResult(typeof e === 'string' ? e : (e as Error).message || 'Error')
+        setResultInput(input)
       } finally {
         if (seq === translateSeq.current) setLoading(false)
       }
@@ -91,10 +95,12 @@ function Translator({
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
-    const textToCommit = result || input
+    if (loading || !result || resultInput !== input) return
+    const textToCommit = result
     await api.commitTranslation(textToCommit)
     setInput('')
     setResult('')
+    setResultInput('')
   }
 
   return (
