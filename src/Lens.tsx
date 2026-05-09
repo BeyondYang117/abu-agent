@@ -14,7 +14,7 @@ import type { Arrow, BarRect, CapturedFrame, HistoryItem, Metrics, Mode, Point, 
 import { ArrowSvg } from './lens/ArrowSvg'
 import { ARROW_MIN_DRAG_PX, composeAnnotatedImage } from './lens/annotation'
 import { HISTORY_MAX, HISTORY_THUMB_SIZE, loadHistoryFromStorage, makeThumbnail, saveHistoryToStorage } from './lens/history'
-import { ANCHOR_GAP, DRAG_THRESHOLD, FLOATING_GAP, FLOATING_PADDING, READY_BAR_H, SELECT_REVEAL_DELAY_MS, TRANSITION_MS, clamp, computeMetrics, computeSelectBar, cubicBezier, isMacPlatform } from './lens/layout'
+import { ANCHOR_GAP, DRAG_THRESHOLD, FLOATING_GAP, FLOATING_PADDING, READY_BAR_H, SELECT_REVEAL_DELAY_MS, TRANSITION_MS, clamp, computeMetrics, computeSelectBar, isMacPlatform } from './lens/layout'
 import { estimateTokens, formatTokens } from './lens/markdown'
 import { ThinkingBlock } from './lens/ThinkingBlock'
 
@@ -783,17 +783,12 @@ export default function Lens() {
       const isTranslateMode = mode === 'translate'
 
       if (isMacPlatform) {
-        // macOS:窗口逐帧缩放,bar 始终锚在窗口 (0, 0)。
-        // 这样窗口的视觉移动 + 缩小 = bar 的视觉飞入,两者天然同步,不存在 OS 窗口和 React state
-        // 的中间不一致状态。
-        // 不走 Windows 的 SetWindowRgn 那条路是因为 macOS 没有等价 API,只能 set_frame 实搬窗口;
-        // 而实搬窗口 + 静态 rebase 会有一帧 race(OS 已搬过去但 React barRect 没更新)→ 闪烁。
+        // macOS:走 AppKit 原生 NSAnimationContext + animator setFrame:。
+        // 一次 IPC 触发,Core Animation 在合成器线程按显示器原生刷新率插值,
+        // 不再有 JS rAF 每帧打 IPC + 两次独立 AppKit 调用导致的 coalescing 掉帧。
+        // 时间曲线 cubic-bezier(0.22, 1, 0.36, 1) 与原 CSS transition / rAF 完全一致。
         const floatX = winOrigin.x + finalX - FLOATING_PADDING
         const floatY = winOrigin.y + finalY - FLOATING_PADDING
-        const animStartX = winOrigin.x
-        const animStartY = winOrigin.y
-        const animStartW = window.innerWidth
-        const animStartH = window.innerHeight
 
         flushSync(() => {
           setAppLabel(label)
@@ -819,28 +814,23 @@ export default function Lens() {
         }
 
         if (floatingRebaseTimerRef.current) clearTimeout(floatingRebaseTimerRef.current)
-        const animStart = performance.now()
-        const animateFrame = () => {
+        void api.lensAnimateFloating({
+          x: floatX,
+          y: floatY,
+          width: floatW,
+          height: floatH,
+          durationMs: TRANSITION_MS,
+        }).catch((err: unknown) => console.error('[lens] lensAnimateFloating failed:', err))
+
+        // AppKit 动画在原生侧异步跑;+40ms 余量等 Core Animation 收尾,再切 floatingRebased。
+        // 加 motionSeq + stage 守卫防止用户中途触发新会话时把旧会话的尾巴覆盖到新窗口。
+        floatingRebaseTimerRef.current = window.setTimeout(() => {
+          floatingRebaseTimerRef.current = null
           if (motionSeq !== motionSeqRef.current) return
           if (stageRef.current === 'select') return
-          const elapsed = performance.now() - animStart
-          const tLinear = Math.min(elapsed / TRANSITION_MS, 1)
-          const t = cubicBezier(tLinear, 0.22, 1, 0.36, 1)
-          const curX = animStartX + (floatX - animStartX) * t
-          const curY = animStartY + (floatY - animStartY) * t
-          const curW = animStartW + (floatW - animStartW) * t
-          const curH = animStartH + (floatH - animStartH) * t
-          void api.lensSetFloating({ x: curX, y: curY, width: curW, height: curH })
-            .catch((err: unknown) => console.error('[lens] lensSetFloating frame failed:', err))
-          if (tLinear < 1) {
-            requestAnimationFrame(animateFrame)
-          } else {
-            if (motionSeq !== motionSeqRef.current) return
-            setFloatingRebased(true)
-            if (isTranslateMode) setBarIntro(true)
-          }
-        }
-        requestAnimationFrame(animateFrame)
+          setFloatingRebased(true)
+          if (isTranslateMode) setBarIntro(true)
+        }, TRANSITION_MS + 40)
       } else {
         // Windows: WebView 始终保持全屏,Rust 用 SetWindowRgn 把窗口可见区域裁剪到 bar 矩形。
         // 不走 macOS 的逐帧实搬窗口路线是因为多次 lens 会话后 WebView2 内部状态会退化导致累积型 jitter。

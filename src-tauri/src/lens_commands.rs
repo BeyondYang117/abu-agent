@@ -1166,6 +1166,118 @@ pub(crate) fn lens_set_floating(app: AppHandle, rect: FloatingRect) -> Result<()
     Ok(())
 }
 
+/// macOS:用 AppKit 原生 `[window.animator setFrame:display:]` 一次 IPC 触发动画。
+/// 之前的 JS rAF 循环每帧打 IPC + 两次独立 AppKit 调用,coalescing 后实际帧率掉到 ~50fps。
+/// 这里改成单次调度,Core Animation 在合成器线程按显示器原生刷新率插值。
+///
+/// duration_ms 与前端 TRANSITION_MS 对齐;timing function 用 cubic-bezier(0.22, 1, 0.36, 1)
+/// 与原 CSS transition 完全一致。
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub(crate) fn lens_animate_floating(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    duration_ms: f64,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("lens") else {
+        return Ok(());
+    };
+    // AppKit 调用必须落在主线程;run_on_main_thread 立即返回,动画后续由 Core Animation 驱动。
+    app.run_on_main_thread(move || unsafe {
+        run_lens_animate_macos(&window, x, y, width, height, duration_ms);
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn run_lens_animate_macos(
+    window: &WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    duration_ms: f64,
+) {
+    use cocoa::base::{id, nil, NO};
+    use cocoa::foundation::{NSPoint, NSRect, NSSize};
+    use objc::runtime::{Class, Sel};
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let ns_window_ptr = match window.ns_window() {
+        Ok(ptr) if !ptr.is_null() => ptr as id,
+        _ => return,
+    };
+
+    // top-left logical → NSScreen 全局底原点。
+    // ns_y = primary_h - top_left_y - height 跨多屏通用:NSScreen 全局原点在主屏底左,
+    // 其它屏只是该坐标系里的偏移,不影响这里的换算。
+    let screens: id = msg_send![class!(NSScreen), screens];
+    if screens == nil {
+        return;
+    }
+    let count: usize = msg_send![screens, count];
+    if count == 0 {
+        return;
+    }
+    let primary: id = msg_send![screens, objectAtIndex: 0usize];
+    let primary_frame: NSRect = msg_send![primary, frame];
+    let primary_h = primary_frame.size.height;
+
+    let ns_y = primary_h - y - height;
+    let target_rect = NSRect::new(NSPoint::new(x, ns_y), NSSize::new(width, height));
+
+    // CAMediaTimingFunction 的 functionWithControlPoints:::: 是「关键字+3个匿名冒号」的
+    // 多 colon 选择器,objc 0.2 的 sel!() 不支持这种形式,这里用 Sel::register +
+    // 直接 objc_msgSend FFI 调用。返回的 timing 是 autoreleased,setTimingFunction: 会 retain。
+    extern "C" {
+        fn objc_msgSend();
+    }
+    type FnSig = unsafe extern "C" fn(*const Class, Sel, f32, f32, f32, f32) -> id;
+    let send: FnSig = std::mem::transmute(objc_msgSend as *const ());
+    let timing_cls = class!(CAMediaTimingFunction);
+    let timing_sel = Sel::register("functionWithControlPoints::::");
+    let timing: id = send(timing_cls, timing_sel, 0.22, 1.0, 0.36, 1.0);
+    if timing == nil {
+        return;
+    }
+
+    let nsac = class!(NSAnimationContext);
+    let _: () = msg_send![nsac, beginGrouping];
+    let ctx: id = msg_send![nsac, currentContext];
+    if ctx != nil {
+        let _: () = msg_send![ctx, setDuration: duration_ms / 1000.0];
+        let _: () = msg_send![ctx, setTimingFunction: timing];
+    }
+    let animator: id = msg_send![ns_window_ptr, animator];
+    // display:NO → AppKit 不每帧强同步 displayIfNeeded,重绘交给合成器,
+    // 减少 WKWebView 在 resize 过程中的 reflow + paint 压力。
+    let _: () = msg_send![animator, setFrame: target_rect display: NO];
+    let _: () = msg_send![nsac, endGrouping];
+}
+
+/// 非 macOS:fallback 到立即 snap 到目标矩形;前端用 setTimeout 模拟动画完成时序。
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub(crate) fn lens_animate_floating(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    duration_ms: f64,
+) -> Result<(), String> {
+    let _ = duration_ms;
+    let Some(window) = app.get_webview_window("lens") else {
+        return Ok(());
+    };
+    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    Ok(())
+}
+
 /// Windows 平台：截取指定区域的屏幕图像
 /// 需要将逻辑坐标根据缩放因子转换为物理坐标，再转换为相对于显示器的相对坐标
 #[cfg(target_os = "windows")]

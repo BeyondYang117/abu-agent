@@ -210,6 +210,7 @@ fn main() {
             lens_commands::lens_cancel_stream,
             lens_commands::lens_close,
             lens_commands::lens_set_floating,
+            lens_commands::lens_animate_floating,
             commands::take_lens_selection,
             lens_commands::lens_commit_image_to_history,
             lens_commands::lens_delete_history_image,

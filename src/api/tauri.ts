@@ -301,6 +301,10 @@ export const api = {
     invoke<void>('lens_delete_history_image', { imageId }),
   lensSetFloating: (rect: { x?: number; y?: number; width: number; height: number }) =>
     invoke<void>('lens_set_floating', { rect }),
+  // macOS 走 AppKit 原生 NSAnimationContext + animator setFrame,一次 IPC 触发,Core Animation
+  // 在合成器线程驱动剩余帧;duration_ms 必须与前端 TRANSITION_MS 对齐。非 macOS 平台是 snap 兜底。
+  lensAnimateFloating: (args: { x: number; y: number; width: number; height: number; durationMs: number }) =>
+    invoke<void>('lens_animate_floating', args),
 
   // 取走 Rust 端在 lens_request_internal 中抓到的选中文本（take 一次清一次）
   takeLensSelection: () => invoke<string>('take_lens_selection'),
