@@ -33,6 +33,9 @@ interface ScreenshotTranslationSettingsProps {
   onToggleRecording: (target: 'screenshotTranslation' | 'screenshotTranslationText') => void
   onRefreshRapidOcrStatus: () => void
   onDownloadRapidOcr: () => void
+  hotkeyError?: string
+  textHotkeyError?: string
+  hotkeyClearLabel?: string
 }
 
 export function ScreenshotTranslationSettings({
@@ -50,6 +53,9 @@ export function ScreenshotTranslationSettings({
   onToggleRecording,
   onRefreshRapidOcrStatus,
   onDownloadRapidOcr,
+  hotkeyError,
+  textHotkeyError,
+  hotkeyClearLabel,
 }: ScreenshotTranslationSettingsProps) {
   const screenshot = settings.screenshotTranslation
   const ocrMode = screenshot?.ocrMode ?? 'cloud_vision'
@@ -80,6 +86,9 @@ export function ScreenshotTranslationSettings({
                   recordLabel={t.hotkeyRecord}
                   recordingLabel={t.hotkeyRecording}
                   recordingPlaceholder={t.hotkeyRecordingPlaceholder}
+                  onClear={() => onUpdate({ hotkey: '' })}
+                  clearLabel={hotkeyClearLabel}
+                  error={hotkeyError}
                 />
               </div>
 
@@ -95,6 +104,9 @@ export function ScreenshotTranslationSettings({
                   recordLabel={t.hotkeyRecord}
                   recordingLabel={t.hotkeyRecording}
                   recordingPlaceholder={t.hotkeyRecordingPlaceholder}
+                  onClear={() => onUpdate({ textHotkey: '' })}
+                  clearLabel={hotkeyClearLabel}
+                  error={textHotkeyError}
                 />
               </div>
 

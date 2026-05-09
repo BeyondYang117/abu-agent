@@ -345,36 +345,107 @@ pub(crate) fn capture_active_selection() -> Option<String> {
     }
 }
 
+/// 热键注册错误的种类。序列化为 snake_case 字符串,前端按它查 i18n 模板。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HotkeyErrorKind {
+    /// 系统层冲突：被其他应用或系统占用,OS 拒绝注册
+    Conflict,
+    /// 应用内重复：用户把同一个组合分配给了多个功能
+    Duplicate,
+    /// 热键字段为空但功能开关打开
+    Empty,
+    /// 其他注册失败(网络/权限/未知错误)
+    Other,
+}
+
+/// 热键所属的功能范围。前端按它查"翻译器"/"截图翻译"等本地化名称。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HotkeyScope {
+    Translator,
+    Screenshot,
+    ScreenshotText,
+    Lens,
+}
+
+/// 单条热键注册错误。会被收集成 `Vec<HotkeyError>` 并 JSON 序列化作为 `register_hotkeys`
+/// 的错误返回 — 前端 `Settings.tsx` `JSON.parse` 后按用户语言渲染。
+#[derive(serde::Serialize)]
+struct HotkeyError {
+    kind: HotkeyErrorKind,
+    scope: HotkeyScope,
+    hotkey: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw: Option<String>,
+}
+
+/// 把 `register_hotkeys` 返回的 JSON 错误字符串还原成人类可读的英文,
+/// 供 main.rs 启动 / shortcuts.rs rollback 这种只能 eprintln 的场景使用。
+/// JSON 解析失败时直接原样返回。
+pub(crate) fn display_hotkey_errors(json_str: &str) -> String {
+    let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(json_str) else {
+        return json_str.to_string();
+    };
+    items
+        .iter()
+        .map(|e| {
+            let kind = e.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let scope = e.get("scope").and_then(|v| v.as_str()).unwrap_or("");
+            let hotkey = e.get("hotkey").and_then(|v| v.as_str()).unwrap_or("");
+            let raw = e.get("raw").and_then(|v| v.as_str()).unwrap_or("");
+            match kind {
+                "conflict" => format!(
+                    "Hotkey conflict for {scope}: \"{hotkey}\" is already in use"
+                ),
+                "duplicate" => format!("Duplicate hotkey \"{hotkey}\" for {scope}"),
+                "empty" => format!("{scope} hotkey is empty"),
+                _ => format!("Failed to register {scope} hotkey \"{hotkey}\": {raw}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn classify_hotkey_error(scope: HotkeyScope, hotkey: String, raw: String) -> HotkeyError {
+    let normalized = raw.to_lowercase();
+    let is_conflict = normalized.contains("already registered")
+        || normalized.contains("already in use")
+        || (normalized.contains("hotkey") && normalized.contains("registered"));
+    HotkeyError {
+        kind: if is_conflict {
+            HotkeyErrorKind::Conflict
+        } else {
+            HotkeyErrorKind::Other
+        },
+        scope,
+        hotkey,
+        raw: if is_conflict { None } else { Some(raw) },
+    }
+}
+
 /// 注册全局热键
-/// 包括翻译热键、截图翻译热键、lens 热键；会检测重复热键并给出友好错误提示
+/// 包括翻译热键、截图翻译热键、lens 热键；检测重复热键并把错误以结构化形式收集,
+/// JSON 序列化后由前端按界面语言渲染。
 pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
     let settings = app.state::<AppState>().settings_read().clone();
     let shortcut_manager = app.global_shortcut();
     shortcut_manager
         .unregister_all()
         .map_err(|e| e.to_string())?;
-    let mut errors = Vec::new();
+    let mut errors: Vec<HotkeyError> = Vec::new();
     let mut registered = HashSet::new();
-
-    let format_hotkey_error = |scope: &str, hotkey: &str, error_message: &str| {
-        let normalized = error_message.to_lowercase();
-        if normalized.contains("already registered")
-            || normalized.contains("already in use")
-            || normalized.contains("hotkey") && normalized.contains("registered")
-        {
-            format!(
-        "Hotkey conflict for {scope}: \"{hotkey}\" is already in use. Please change this shortcut or close the app that is occupying it."
-      )
-        } else {
-            format!("Failed to register {scope} hotkey \"{hotkey}\": {error_message}")
-        }
-    };
 
     if !settings.hotkey.trim().is_empty() {
         let hotkey = settings.hotkey.trim().to_string();
         let hotkey_key = hotkey.to_lowercase();
         if !registered.insert(hotkey_key) {
-            errors.push(format!("Duplicate hotkey \"{hotkey}\" for translator"));
+            errors.push(HotkeyError {
+                kind: HotkeyErrorKind::Duplicate,
+                scope: HotkeyScope::Translator,
+                hotkey: hotkey.clone(),
+                raw: None,
+            });
         } else if let Err(err) =
             shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
@@ -382,20 +453,32 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                 }
             })
         {
-            errors.push(format_hotkey_error("translator", &hotkey, &err.to_string()));
+            errors.push(classify_hotkey_error(
+                HotkeyScope::Translator,
+                hotkey,
+                err.to_string(),
+            ));
         }
     }
 
     if settings.screenshot_translation.enabled {
         let hotkey = settings.screenshot_translation.hotkey.trim().to_string();
         if hotkey.is_empty() {
-            errors.push("Screenshot translation hotkey is empty".to_string());
+            errors.push(HotkeyError {
+                kind: HotkeyErrorKind::Empty,
+                scope: HotkeyScope::Screenshot,
+                hotkey: String::new(),
+                raw: None,
+            });
         } else {
             let hotkey_key = hotkey.to_lowercase();
             if !registered.insert(hotkey_key) {
-                errors.push(format!(
-                    "Duplicate hotkey \"{hotkey}\" for screenshot translation"
-                ));
+                errors.push(HotkeyError {
+                    kind: HotkeyErrorKind::Duplicate,
+                    scope: HotkeyScope::Screenshot,
+                    hotkey: hotkey.clone(),
+                    raw: None,
+                });
             } else if let Err(err) =
                 shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -413,10 +496,10 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                     }
                 })
             {
-                errors.push(format_hotkey_error(
-                    "screenshot translation",
-                    &hotkey,
-                    &err.to_string(),
+                errors.push(classify_hotkey_error(
+                    HotkeyScope::Screenshot,
+                    hotkey,
+                    err.to_string(),
                 ));
             }
         }
@@ -427,13 +510,21 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
             .trim()
             .to_string();
         if text_hotkey.is_empty() {
-            errors.push("Selected text screenshot translation hotkey is empty".to_string());
+            errors.push(HotkeyError {
+                kind: HotkeyErrorKind::Empty,
+                scope: HotkeyScope::ScreenshotText,
+                hotkey: String::new(),
+                raw: None,
+            });
         } else {
             let hotkey_key = text_hotkey.to_lowercase();
             if !registered.insert(hotkey_key) {
-                errors.push(format!(
-                    "Duplicate hotkey \"{text_hotkey}\" for selected text screenshot translation"
-                ));
+                errors.push(HotkeyError {
+                    kind: HotkeyErrorKind::Duplicate,
+                    scope: HotkeyScope::ScreenshotText,
+                    hotkey: text_hotkey.clone(),
+                    raw: None,
+                });
             } else if let Err(err) =
                 shortcut_manager.on_shortcut(text_hotkey.as_str(), move |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -452,10 +543,10 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                     }
                 })
             {
-                errors.push(format_hotkey_error(
-                    "selected text screenshot translation",
-                    &text_hotkey,
-                    &err.to_string(),
+                errors.push(classify_hotkey_error(
+                    HotkeyScope::ScreenshotText,
+                    text_hotkey,
+                    err.to_string(),
                 ));
             }
         }
@@ -464,11 +555,21 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
     if settings.lens.enabled {
         let hotkey = settings.lens.hotkey.trim().to_string();
         if hotkey.is_empty() {
-            errors.push("Lens hotkey is empty".to_string());
+            errors.push(HotkeyError {
+                kind: HotkeyErrorKind::Empty,
+                scope: HotkeyScope::Lens,
+                hotkey: String::new(),
+                raw: None,
+            });
         } else {
             let hotkey_key = hotkey.to_lowercase();
             if !registered.insert(hotkey_key) {
-                errors.push(format!("Duplicate hotkey \"{hotkey}\" for lens"));
+                errors.push(HotkeyError {
+                    kind: HotkeyErrorKind::Duplicate,
+                    scope: HotkeyScope::Lens,
+                    hotkey: hotkey.clone(),
+                    raw: None,
+                });
             } else if let Err(err) =
                 shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
@@ -486,7 +587,11 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                     }
                 })
             {
-                errors.push(format_hotkey_error("lens", &hotkey, &err.to_string()));
+                errors.push(classify_hotkey_error(
+                    HotkeyScope::Lens,
+                    hotkey,
+                    err.to_string(),
+                ));
             }
         }
     }
@@ -494,7 +599,9 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(errors.join("\n"))
+        // 序列化失败几乎不可能(字段都是 String/枚举),fallback 给一个最小可读消息
+        Err(serde_json::to_string(&errors)
+            .unwrap_or_else(|_| "Hotkey registration failed".to_string()))
     }
 }
 
@@ -579,7 +686,7 @@ pub(crate) fn restore_runtime_settings(
     }
 
     if let Err(err) = register_hotkeys(app) {
-        eprintln!("Failed to rollback hotkeys: {err}");
+        eprintln!("Failed to rollback hotkeys: {}", display_hotkey_errors(&err));
     }
 
     if let Err(err) = setup_tray(app) {

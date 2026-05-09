@@ -40,7 +40,9 @@ use api::build_http_client;
 use commands::apply_launch_at_startup;
 use screenshot::cleanup_orphan_temp_files;
 use settings::load_settings;
-use shortcuts::{open_settings_window_for_activation, register_hotkeys, setup_tray};
+use shortcuts::{
+    display_hotkey_errors, open_settings_window_for_activation, register_hotkeys, setup_tray,
+};
 use state::AppState;
 use updates::check_github_latest_release;
 #[cfg(target_os = "macos")]
@@ -128,7 +130,7 @@ fn main() {
             });
 
             if let Err(err) = register_hotkeys(&app.handle()) {
-                eprintln!("Failed to register hotkeys: {err}");
+                eprintln!("Failed to register hotkeys: {}", display_hotkey_errors(&err));
             }
             if let Err(err) = setup_tray(&app.handle()) {
                 eprintln!("Failed to setup tray: {err}");

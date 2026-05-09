@@ -1,4 +1,5 @@
 import { type ModelProvider } from '../api/tauri'
+import { i18n, type Lang } from './i18n'
 
 export type Platform = 'macos' | 'windows' | 'linux'
 
@@ -135,3 +136,78 @@ export const buildModelPairOptions = (providers: ModelProvider[], platform: Plat
         label: `${provider.name} - ${model}`,
       }))
     })
+
+/**
+ * 与 JSON.stringify 等价但对对象 key 做递归排序,用于 dirty diff:
+ * 后端 sanitize 与前端 spread 都可能改变字段顺序,普通 JSON.stringify 会
+ * 把"语义无差异、字段顺序不同"误判为脏。数组顺序保留(数组顺序在 settings
+ * 里语义上是有意义的,如 apiKeys 的 primary/backup 顺序)。
+ */
+export const stableStringify = (value: unknown): string =>
+  JSON.stringify(value, (_key, v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const sorted: Record<string, unknown> = {}
+      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+        sorted[k] = (v as Record<string, unknown>)[k]
+      }
+      return sorted
+    }
+    return v
+  })
+
+type HotkeyErrorPayload = {
+  kind: 'conflict' | 'duplicate' | 'empty' | 'other'
+  scope: 'translator' | 'screenshot' | 'screenshot_text' | 'lens'
+  hotkey: string
+  raw?: string
+}
+
+const SCOPE_KEY: Record<HotkeyErrorPayload['scope'], keyof typeof i18n.zh> = {
+  translator: 'hotkeyScopeTranslator',
+  screenshot: 'hotkeyScopeScreenshot',
+  screenshot_text: 'hotkeyScopeScreenshotText',
+  lens: 'hotkeyScopeLens',
+}
+
+const KIND_KEY: Record<HotkeyErrorPayload['kind'], keyof typeof i18n.zh> = {
+  conflict: 'hotkeyErrorConflict',
+  duplicate: 'hotkeyErrorDuplicate',
+  empty: 'hotkeyErrorEmpty',
+  other: 'hotkeyErrorOther',
+}
+
+/**
+ * 把后端 register_hotkeys 抛出的 JSON 错误数组翻译成用户语言的可读消息。
+ * 解析失败(普通字符串错误)时原样返回,保证所有非热键错误也能正常显示。
+ */
+export const formatHotkeyError = (raw: string, lang: Lang): string => {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return raw
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return raw
+  const table = i18n[lang]
+  const messages: string[] = []
+  for (const item of parsed) {
+    if (
+      !item ||
+      typeof item !== 'object' ||
+      !(SCOPE_KEY as Record<string, unknown>)[(item as HotkeyErrorPayload).scope] ||
+      !(KIND_KEY as Record<string, unknown>)[(item as HotkeyErrorPayload).kind]
+    ) {
+      return raw
+    }
+    const e = item as HotkeyErrorPayload
+    const scope = table[SCOPE_KEY[e.scope]]
+    const template = table[KIND_KEY[e.kind]]
+    messages.push(
+      template
+        .replace('{scope}', scope)
+        .replace('{hotkey}', e.hotkey)
+        .replace('{raw}', e.raw ?? ''),
+    )
+  }
+  return messages.join(' / ')
+}
