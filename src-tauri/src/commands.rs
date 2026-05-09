@@ -1,0 +1,398 @@
+use std::time::Duration;
+
+use arboard::Clipboard;
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_shell::ShellExt;
+
+use crate::api::{
+    call_openai_text, effective_retry_attempts, resolve_provider_credentials, send_with_failover,
+    send_with_retry, ProviderConnectionInput,
+};
+use crate::apple_intelligence;
+use crate::prompts::{
+    build_translation_prompt, DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE, DEFAULT_TRANSLATION_TEMPLATE,
+};
+use crate::rapidocr;
+use crate::settings::{
+    default_question_prompt, default_system_prompt, persist_settings, sanitize_settings, Settings,
+};
+#[cfg(target_os = "macos")]
+use crate::shortcuts::{check_accessibility, check_screen_recording_permission};
+use crate::shortcuts::{
+    register_hotkeys, restore_runtime_settings, send_paste_shortcut, setup_tray,
+};
+use crate::state::AppState;
+use crate::utils::{language_name, resolve_target_lang};
+use crate::windows::get_main_window;
+
+pub(crate) fn apply_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let auto_launch = app.autolaunch();
+    let current = auto_launch.is_enabled().map_err(|e| e.to_string())?;
+
+    if enabled && !current {
+        auto_launch.enable().map_err(|e| e.to_string())?;
+    } else if !enabled && current {
+        auto_launch.disable().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// 获取当前应用设置
+#[tauri::command]
+pub(crate) fn get_settings(state: State<AppState>) -> Settings {
+    state.settings_read().clone()
+}
+
+/// 获取默认提示词模板
+/// 返回翻译模板、截图翻译模板，以及 lens 视觉对话用的系统/提问提示词
+#[tauri::command]
+pub(crate) fn get_default_prompt_templates() -> serde_json::Value {
+    serde_json::json!({
+      "translationTemplate": DEFAULT_TRANSLATION_TEMPLATE,
+      "screenshotTranslationTemplate": DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE,
+      "lensPrompts": {
+        "zh": {
+          "system": default_system_prompt("zh", true),
+          "question": default_question_prompt("zh", true)
+        },
+        "en": {
+          "system": default_system_prompt("en", true),
+          "question": default_question_prompt("en", true)
+        }
+      }
+    })
+}
+
+/// 保存设置
+/// 先对传入的设置进行清理（sanitize），然后应用开机自启动、重新注册热键、持久化设置、更新托盘菜单
+/// 如果热键注册失败，则回滚运行时设置到之前的状态
+#[tauri::command]
+pub(crate) fn save_settings(
+    app: AppHandle,
+    state: State<AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
+    let previous_settings = state.settings_read().clone();
+    let sanitized = sanitize_settings(settings);
+    apply_launch_at_startup(&app, sanitized.launch_at_startup)?;
+    {
+        let mut guard = state.settings_write();
+        *guard = sanitized.clone();
+    }
+
+    if let Err(err) = register_hotkeys(&app) {
+        restore_runtime_settings(&app, &state, &previous_settings);
+        return Err(err);
+    }
+
+    if let Err(err) = persist_settings(&app, &sanitized) {
+        eprintln!("Failed to save settings: {err}");
+        restore_runtime_settings(&app, &state, &previous_settings);
+        return Err(err);
+    }
+
+    if let Err(err) = setup_tray(&app) {
+        eprintln!("Failed to update tray: {err}");
+    }
+
+    Ok(sanitized)
+}
+
+/// 翻译文本命令
+/// 根据设置中的翻译供应商和模型进行翻译；如果 API Key 为空则返回提示信息
+#[tauri::command]
+pub(crate) async fn translate_text(
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok("".to_string());
+    }
+
+    let settings = state.settings_read().clone();
+    let provider = settings
+        .get_provider(&settings.translator_provider_id)
+        .ok_or_else(|| "Translator provider not found".to_string())?;
+
+    if provider.api_keys.is_empty() {
+        return Ok("Missing API Key".to_string());
+    }
+    if provider.base_url != apple_intelligence::APPLE_INTELLIGENCE_BASE_URL
+        && settings.translator_model.trim().is_empty()
+    {
+        return Ok("Please select a model first".to_string());
+    }
+
+    let target_lang = resolve_target_lang(&settings.target_lang, trimmed);
+    let lang_name = language_name(&target_lang).to_string();
+    let prompt =
+        build_translation_prompt(trimmed, &lang_name, settings.translator_prompt.as_deref());
+
+    let retry_attempts = effective_retry_attempts(&settings);
+    // 主翻译路径默认关思考：reasoning 模型对单句翻译几乎无质量收益但显著拖慢；非 reasoning 模型该字段被忽略
+    call_openai_text(
+        &state,
+        provider,
+        &settings.translator_model,
+        prompt,
+        retry_attempts,
+        false,
+    )
+    .await
+}
+
+/// 提交翻译结果
+/// 将翻译后的文本写入剪贴板，隐藏主窗口，如果启用了自动粘贴则发送粘贴快捷键到之前的应用
+#[tauri::command]
+pub(crate) async fn commit_translation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+
+    let auto_paste = state.settings_read().auto_paste;
+    let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.set_text(text).map_err(|e| e.to_string())?;
+
+    // 先隐藏窗口，让焦点回到之前的应用
+    if let Some(window) = get_main_window(&app) {
+        let _ = window.hide();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[allow(deprecated, unexpected_cfgs)]
+    unsafe {
+        use cocoa::base::{id, nil};
+        use objc::{class, msg_send, sel, sel_impl};
+        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, hide: nil];
+    }
+
+    if auto_paste {
+        // 增加延迟以确保焦点切换完成
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        send_paste_shortcut();
+    }
+
+    Ok(())
+}
+
+/// 取走 Rust 端在 lens_request_internal 中暂存的 selection 文本。
+/// 取一次清一次：前端 enterSelect 调用，第二次调用立即返回空串。
+#[tauri::command]
+pub(crate) fn take_lens_selection(state: State<'_, AppState>) -> Result<String, String> {
+    match state.pending_selection.lock() {
+        Ok(mut guard) => Ok(guard.take().unwrap_or_default()),
+        Err(_) => Ok(String::new()),
+    }
+}
+
+/// 使用系统默认浏览器打开外部链接（仅限 https）
+#[tauri::command]
+#[allow(deprecated)]
+pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("Invalid URL".to_string());
+    }
+
+    app.shell().open(url, None).map_err(|e| e.to_string())
+}
+
+/// 查询 Apple Intelligence 预设是否应在设置页中显示。
+/// 为避免打开设置页时就拉起 sidecar，这里只做轻量本地判断：
+/// - 非 macOS → false
+/// - sidecar 资源二进制不存在 → false
+/// - 其余情况 → true（真正可用性在首次调用时由 sidecar ready 结果决定）
+#[tauri::command]
+pub(crate) fn apple_intelligence_available(state: State<AppState>) -> bool {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app) = state.apple_intelligence.app_handle() {
+            let path = app.path().resource_dir().ok().map(|dir| {
+                let name = if cfg!(target_os = "windows") {
+                    "binaries/kivio-ai-helper.exe"
+                } else {
+                    "binaries/kivio-ai-helper"
+                };
+                dir.join(name)
+            });
+            return path
+                .and_then(|p| p.metadata().ok())
+                .map(|m| m.is_file() && m.len() > 0)
+                .unwrap_or(false);
+        }
+        false
+    }
+}
+
+// ===== RapidOCR 离线 OCR 命令 =====
+//
+// status: 检查 app data 目录里 4 个文件齐不齐(dylib + det + rec + keys),前端据此决定
+// 是否渲染下载按钮。
+// install: 顺序下载 4 个文件到 app data 目录,~15-30s,前端转圈圈等返回。
+
+/// 查询 RapidOCR 模型 + dylib 是否就绪。
+#[tauri::command]
+pub(crate) fn rapidocr_status(state: State<AppState>) -> rapidocr::RapidOcrStatus {
+    state.rapidocr.status()
+}
+
+/// 下载 RapidOCR 包(onnxruntime dylib + 模型 + 字典)到 app data 目录。
+/// 阻塞到全部完成(成功或失败),前端转圈圈等返回。
+#[tauri::command]
+pub(crate) async fn rapidocr_install(
+    state: State<'_, AppState>,
+) -> Result<rapidocr::RapidOcrInstallResult, String> {
+    let client = state.rapidocr.clone();
+    Ok(client.install().await)
+}
+
+#[tauri::command]
+pub(crate) async fn fetch_models(
+    state: State<'_, AppState>,
+    provider_id: String,
+    provider: Option<ProviderConnectionInput>,
+) -> Result<Vec<String>, String> {
+    let settings = state.settings_read().clone();
+    let (base_url, api_keys) = resolve_provider_credentials(&settings, &provider_id, provider)?;
+    let retry_attempts = effective_retry_attempts(&settings);
+
+    if api_keys.is_empty() {
+        return Err("Missing API Key".to_string());
+    }
+
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+
+    let response = send_with_failover(
+        &state,
+        "Models API",
+        retry_attempts,
+        &provider_id,
+        &api_keys,
+        |key| state.http.get(url.clone()).bearer_auth(key).send(),
+    )
+    .await?;
+
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse models response JSON: {e}"))?;
+
+    let models = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .ok_or_else(|| "Invalid response format: expected 'data' array".to_string())?
+        .iter()
+        .filter_map(|m| {
+            if let Some(s) = m.as_str() {
+                Some(s.to_string())
+            } else {
+                m.get("id")
+                    .and_then(|id| id.as_str())
+                    .map(|s| s.to_string())
+            }
+        })
+        .collect::<Vec<String>>();
+
+    Ok(models)
+}
+
+/// 测试供应商连接是否可用
+/// 多 key：测试时只用第一个 key（避免一次连接测试遍历多 key 让用户困惑）
+#[tauri::command]
+pub(crate) async fn test_provider_connection(
+    state: State<'_, AppState>,
+    provider_id: String,
+    provider: Option<ProviderConnectionInput>,
+) -> Result<serde_json::Value, String> {
+    let settings = state.settings_read().clone();
+    let (base_url, api_keys) = resolve_provider_credentials(&settings, &provider_id, provider)?;
+
+    let api_key = match api_keys.first() {
+        Some(k) if !k.trim().is_empty() => k.clone(),
+        _ => {
+            return Ok(serde_json::json!({
+              "success": false,
+              "error": "Missing API Key"
+            }));
+        }
+    };
+
+    let retry_attempts = effective_retry_attempts(&settings);
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let result = send_with_retry("Provider API", retry_attempts, || {
+        state.http.get(url.clone()).bearer_auth(&api_key).send()
+    })
+    .await;
+
+    match result {
+        Ok(_) => Ok(serde_json::json!({ "success": true })),
+        Err(err) => Ok(serde_json::json!({ "success": false, "error": err })),
+    }
+}
+
+/// 获取平台权限状态（仅限 macOS：辅助功能和屏幕录制权限）
+#[tauri::command]
+pub(crate) fn get_permission_status() -> serde_json::Value {
+    #[cfg(target_os = "macos")]
+    {
+        let accessibility = check_accessibility(false);
+        let screen_recording = check_screen_recording_permission();
+        return serde_json::json!({
+          "platform": "macos",
+          "accessibility": accessibility,
+          "screenRecording": screen_recording,
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        serde_json::json!({
+          "platform": "other",
+          "accessibility": true,
+          "screenRecording": true,
+        })
+    }
+}
+
+/// 打开系统权限设置面板（仅限 macOS）
+#[tauri::command]
+pub(crate) fn open_permission_settings(kind: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        let target = match kind.as_str() {
+            "accessibility" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            "screen-recording" => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            }
+            _ => return Err("Unsupported permission kind".to_string()),
+        };
+
+        Command::new("open")
+            .arg(target)
+            .output()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = kind;
+        Err("Permission settings are only available on macOS".to_string())
+    }
+}

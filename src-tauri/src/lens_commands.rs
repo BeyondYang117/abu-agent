@@ -1,0 +1,1479 @@
+use std::{fs, path::PathBuf, sync::atomic::Ordering};
+
+use base64::{engine::general_purpose, Engine as _};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use uuid::Uuid;
+
+#[cfg(target_os = "windows")]
+use xcap::Monitor;
+
+use crate::api::{
+    build_ocr_request_body, call_openai_ocr, call_openai_text, call_vision_api,
+    effective_retry_attempts, stream_chat_call, stream_translate_combined,
+};
+use crate::apple_intelligence;
+use crate::lens;
+use crate::prompts::{
+    build_combined_translate_prompt, build_ocr_direct_translation_prompt,
+    build_screenshot_translation_prompt, build_translation_prompt, compact_ocr_text,
+    COMBINED_TRANSLATE_SEPARATOR,
+};
+use crate::screenshot::cleanup_temp_file;
+use crate::settings::{self, default_question_prompt, ExplainMessage, OcrMode};
+use crate::shortcuts::{capture_active_selection, get_mouse_position};
+use crate::state::AppState;
+use crate::utils::{language_name, resolve_target_lang};
+use crate::windows;
+#[cfg(target_os = "windows")]
+use crate::windows_ocr;
+
+#[tauri::command]
+pub(crate) fn explain_read_image(
+    app: AppHandle,
+    state: State<AppState>,
+    image_id: String,
+) -> Result<serde_json::Value, String> {
+    let image_path = resolve_explain_image_path(&app, &state, &image_id)?;
+    let bytes = fs::read(&image_path).map_err(|e| e.to_string())?;
+    let base64 = general_purpose::STANDARD.encode(bytes);
+    Ok(serde_json::json!({
+      "success": true,
+      "data": format!("data:image/png;base64,{base64}")
+    }))
+}
+
+// ====== Lens 模式命令 ======
+
+/// 把 lens 窗口铺满目标显示器（用于 select 态）。
+///
+/// 显示器选择优先级：
+///   1. 光标所在显示器（正常路径）
+///   2. primary monitor（cursor_position 失败 / 无 monitor 匹配光标 — 罕见但
+///      合盖切外接、睡眠唤醒后 monitor 列表暂时不一致时会发生）
+///   3. 第一个 monitor（极端兜底，primary 也拿不到时）
+///
+/// 任何兜底都比"什么都不做"强 —— 之前的实现这种情况下窗口停留在上次几何，
+/// 用户看到的就是 ready 浮条 / 旧位置，体验远差于跳到 primary。
+fn lens_position_fullscreen(app: &AppHandle, window: &WebviewWindow) {
+    let cursor_opt = app.cursor_position().ok();
+    let monitors = match app.available_monitors() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => {
+            eprintln!("[lens-pos] available_monitors returned empty list");
+            return;
+        }
+        Err(e) => {
+            eprintln!("[lens-pos] available_monitors err: {}", e);
+            return;
+        }
+    };
+
+    // 1. 找光标所在的 monitor
+    let target = cursor_opt.as_ref().and_then(|cursor| {
+        monitors.iter().find(|monitor| {
+            let mp = monitor.position();
+            let ms = monitor.size();
+            let mw = ms.width as i32;
+            let mh = ms.height as i32;
+            (cursor.x as i32) >= mp.x
+                && (cursor.x as i32) < mp.x + mw
+                && (cursor.y as i32) >= mp.y
+                && (cursor.y as i32) < mp.y + mh
+        })
+    });
+
+    // 2-3. fallback: primary monitor，再不行第一个 monitor
+    let target = target
+        .or_else(|| {
+            let p = app.primary_monitor().ok().flatten();
+            // primary_monitor 返回 Option<Monitor> 而 monitors iter 给的是 &Monitor，
+            // 这里需要从 monitors 里按 name 找回相同的 monitor 引用，避免类型不一致
+            p.and_then(|prim| monitors.iter().find(|m| m.name() == prim.name()))
+        })
+        .or_else(|| monitors.first());
+
+    let Some(monitor) = target else {
+        eprintln!("[lens-pos] no usable monitor found");
+        return;
+    };
+
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let scale = monitor.scale_factor();
+    let lx = mp.x as f64 / scale;
+    let ly = mp.y as f64 / scale;
+    let lw = ms.width as f64 / scale;
+    let lh = ms.height as f64 / scale;
+    let _ = window.set_position(tauri::LogicalPosition::new(lx, ly));
+    let _ = window.set_size(tauri::LogicalSize::new(lw, lh));
+    lens_clear_interactive_region(window);
+}
+
+#[cfg(target_os = "windows")]
+fn lens_clear_interactive_region(window: &WebviewWindow) {
+    use ::windows::Win32::Graphics::Gdi::SetWindowRgn;
+
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let _ = SetWindowRgn(hwnd, None, false);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn lens_clear_interactive_region(_window: &WebviewWindow) {}
+
+#[cfg(target_os = "windows")]
+fn lens_set_interactive_region(
+    window: &WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    use ::windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn, HGDIOBJ};
+
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let left = (x * scale).round() as i32;
+    let top = (y * scale).round() as i32;
+    let right = ((x + width) * scale).round() as i32;
+    let bottom = ((y + height) * scale).round() as i32;
+
+    unsafe {
+        let region = CreateRectRgn(left, top, right.max(left + 1), bottom.max(top + 1));
+        if region.is_invalid() {
+            return Err("CreateRectRgn failed".to_string());
+        }
+        if SetWindowRgn(hwnd, Some(region), false) == 0 {
+            let _ = DeleteObject(HGDIOBJ(region.0));
+            return Err("SetWindowRgn failed".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+fn lens_set_interactive_region(
+    window: &WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if let (Ok(pos), Ok(scale)) = (window.outer_position(), window.scale_factor()) {
+        let _ = window.set_position(tauri::LogicalPosition::new(
+            (pos.x as f64 / scale) + x,
+            (pos.y as f64 / scale) + y,
+        ));
+    }
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    Ok(())
+}
+
+fn lens_position_text_floating(app: &AppHandle, window: &WebviewWindow) {
+    const WIDTH: f64 = 640.0;
+    const HEIGHT: f64 = 320.0;
+    const GAP: f64 = 12.0;
+
+    let _ = window.set_size(tauri::LogicalSize::new(WIDTH, HEIGHT));
+
+    let Some(cursor) = get_mouse_position(app) else {
+        let _ = window.center();
+        return;
+    };
+
+    let mut x = cursor.x + GAP;
+    let mut y = cursor.y + GAP;
+
+    if let Ok(monitors) = app.available_monitors() {
+        if let Some(monitor) = monitors.iter().find(|monitor| {
+            let mp = monitor.position();
+            let ms = monitor.size();
+            cursor.x >= mp.x as f64
+                && cursor.x < (mp.x + ms.width as i32) as f64
+                && cursor.y >= mp.y as f64
+                && cursor.y < (mp.y + ms.height as i32) as f64
+        }) {
+            let mp = monitor.position();
+            let ms = monitor.size();
+            let scale = monitor.scale_factor();
+            let width = WIDTH * scale;
+            let height = HEIGHT * scale;
+            let min_x = mp.x as f64 + GAP;
+            let min_y = mp.y as f64 + GAP;
+            let max_x = (mp.x + ms.width as i32) as f64 - width - GAP;
+            let max_y = (mp.y + ms.height as i32) as f64 - height - GAP;
+            x = x.max(min_x).min(max_x.max(min_x));
+            y = y.max(min_y).min(max_y.max(min_y));
+        }
+    }
+
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        x.round() as i32,
+        y.round() as i32,
+    ));
+}
+
+/// 入口（公共底层）：打开 lens webview 进入 select 态。
+/// mode：
+///   - "chat"（默认）：截完进对话栏 ready 态
+///   - "translate"：截完直接做 OCR + 翻译，弹原文/译文浮动卡
+///   - "translateText"：直接翻译当前选中文本，复用截图翻译结果卡
+pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), String> {
+    // 预热 SCK SCShareableContent 缓存，摊销首次截图的 WindowServer 查询开销。
+    // 用户从按热键到选目标 + 单击截图通常 ≥ 300 ms，足以盖住 30-80 ms 的 prewarm。
+    #[cfg(target_os = "macos")]
+    if mode != "translateText" {
+        crate::sck::prewarm();
+    }
+
+    let state = app.state::<AppState>();
+    // 自愈：busy=true 但 lens 窗口已不可见（外部强关 / dev 重载等异常），重置 busy
+    if state.lens_busy.load(Ordering::SeqCst) {
+        let visible = app
+            .get_webview_window("lens")
+            .and_then(|w| w.is_visible().ok())
+            .unwrap_or(false);
+        if !visible {
+            state.lens_busy.store(false, Ordering::SeqCst);
+        }
+    }
+    if state.lens_busy.swap(true, Ordering::SeqCst) {
+        return Err("Lens already active".to_string());
+    }
+
+    // 必须在 ensure_lens_window/show/set_focus 之前抓取。创建隐藏 webview 在 macOS 上也可能
+    // 改变当前 focused UI element，导致 Cmd+C/AXSelectedText 读到 Lens 自己而不是前台 App。
+    let pending_selection = if mode == "chat" || mode == "translateText" {
+        capture_active_selection()
+    } else {
+        None
+    };
+    if mode == "translateText" && pending_selection.is_none() {
+        if let Ok(mut guard) = state.pending_selection.lock() {
+            *guard = None;
+        }
+        state.lens_busy.store(false, Ordering::SeqCst);
+        return Ok(());
+    }
+
+    let window = match windows::ensure_lens_window(app) {
+        Ok(w) => w,
+        Err(e) => {
+            state.lens_busy.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
+    // 结果暂存在 state.pending_selection，等前端 take 走。translate 模式写 None，避免遗留旧值。
+    if let Ok(mut guard) = state.pending_selection.lock() {
+        *guard = pending_selection;
+    }
+    // 把 mode 编码进 hash query，前端通过 location.hash 读取（'#lens?mode=translate'）
+    let safe_mode = match mode {
+        "translate" => "translate",
+        "translateText" => "translateText",
+        _ => "chat",
+    };
+    let script = format!(
+    "window.location.hash = '#lens?mode={mode}'; window.dispatchEvent(new HashChangeEvent('hashchange')); window.dispatchEvent(new CustomEvent('lens:reset'));",
+    mode = safe_mode,
+  );
+    let _ = window.eval(&script);
+    if safe_mode == "translateText" {
+        lens_position_text_floating(app, &window);
+    } else {
+        // 先在 hidden 状态下尝试定位：即便部分系统下 hidden 窗口 set_position 被忽略，也比
+        // 不调强（成功则消除"先在旧位置闪一帧再跳到全屏"的可见跳变）。
+        lens_position_fullscreen(app, &window);
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+    if safe_mode == "translateText" {
+        lens_position_text_floating(app, &window);
+    } else {
+        // show 后再调，处理 always_on_top + visible_on_all_workspaces 把首次 set_position 吃掉的情况
+        lens_position_fullscreen(app, &window);
+    }
+    Ok(())
+}
+
+/// 默认入口：lens 模式（commit 后进 ready 悬浮栏）
+#[tauri::command]
+pub(crate) fn lens_request(app: AppHandle) -> Result<(), String> {
+    lens_request_internal(&app, "chat")
+}
+
+/// 截图翻译入口：lens webview 进入 select 态，截完做 OCR + 翻译并弹结果浮卡
+#[tauri::command]
+pub(crate) fn lens_request_translate(app: AppHandle) -> Result<(), String> {
+    lens_request_internal(&app, "translate")
+}
+
+#[tauri::command]
+pub(crate) fn lens_request_translate_text(app: AppHandle) -> Result<(), String> {
+    lens_request_internal(&app, "translateText")
+}
+
+/// 返回当前屏幕上可见应用窗口列表（macOS 实际数据；Windows 空数组）。
+#[tauri::command]
+pub(crate) fn lens_list_windows() -> Vec<lens::WindowInfo> {
+    lens::list_windows()
+}
+
+/// 整窗截图（macOS）：用 `screencapture -l <id>` 按 window id 截，不会截到 lens webview，
+/// 所以无需 hide lens（避免 hide/show 那 ~250ms 的视觉闪烁）。
+#[tauri::command]
+pub(crate) async fn lens_capture_window(
+    app: AppHandle,
+    window_id: u32,
+) -> Result<serde_json::Value, String> {
+    let result = lens::capture_window(window_id);
+    let _ = app; // 保留参数避免破坏现有调用签名
+
+    match result {
+        Ok(path) => {
+            let image_id = Uuid::new_v4().to_string();
+            let state = app.state::<AppState>();
+
+            // 自动归档（在 insert 前直接用 path，避免二次加锁）
+            archive_captured_image(&app, &path, &image_id);
+
+            {
+                let mut map = state.images_lock();
+                map.insert(image_id.clone(), path);
+            }
+            {
+                let mut current = state.current_id_lock();
+                *current = Some(image_id.clone());
+            }
+            Ok(serde_json::json!({ "success": true, "imageId": image_id }))
+        }
+        Err(err) => Ok(serde_json::json!({ "success": false, "error": err })),
+    }
+}
+
+/// 区域截图：复用 capture_region_image 路径，注册 image_id 返回。
+#[tauri::command]
+pub(crate) async fn lens_capture_region(
+    app: AppHandle,
+    absolute_x: i32,
+    absolute_y: i32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> Result<serde_json::Value, String> {
+    // SCK 路径：把自己 PID 传给 capture_region_image，SCK 在 GPU compositor 排除 lens webview，
+    // 不再需要 hide webview + sleep 60ms 等 NSWindow.orderOut 生效（旧 `screencapture -R` 会截到全屏透明 lens 自己）。
+    // Windows 版 capture_region_image 忽略 exclude_self_pid 参数。
+    let _ = app.get_webview_window("lens"); // 仍引用以保证 webview 存活
+    let exclude_self_pid: Option<i32> = {
+        #[cfg(target_os = "macos")]
+        {
+            Some(std::process::id() as i32)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    };
+
+    let result = capture_region_image(
+        absolute_x,
+        absolute_y,
+        x,
+        y,
+        width,
+        height,
+        scale_factor,
+        exclude_self_pid,
+    );
+    match result {
+        Ok(path) => {
+            let image_id = Uuid::new_v4().to_string();
+            let state = app.state::<AppState>();
+
+            // 自动归档（在 insert 前直接用 path，避免二次加锁）
+            archive_captured_image(&app, &path, &image_id);
+
+            {
+                let mut map = state.images_lock();
+                map.insert(image_id.clone(), path);
+            }
+            {
+                let mut current = state.current_id_lock();
+                *current = Some(image_id.clone());
+            }
+            Ok(serde_json::json!({ "success": true, "imageId": image_id }))
+        }
+        Err(err) => Ok(serde_json::json!({ "success": false, "error": err })),
+    }
+}
+
+/// 多轮提问：调用 vision API 流式发出 lens-stream 事件。
+/// 字段全部独立。空字符串使用默认值：
+///   - default_language：空 → 跟 settings.target_lang（"auto" 视为 "zh"）
+///   - system_prompt / question_prompt：空 → default_system_prompt / default_question_prompt 模板
+///   - provider_id / model：空 → fallback 到 translator_provider_id / translator_model
+///   - stream_enabled：lens 自身配置
+#[tauri::command]
+pub(crate) async fn lens_ask(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    image_id: String,
+    messages: Vec<ExplainMessage>,
+) -> Result<serde_json::Value, String> {
+    let settings = state.settings_read().clone();
+    let retry_attempts = effective_retry_attempts(&settings);
+
+    let language = if !settings.lens.default_language.is_empty() {
+        settings.lens.default_language.clone()
+    } else if settings.target_lang.starts_with("zh") || settings.target_lang == "en" {
+        settings.target_lang.clone()
+    } else {
+        "zh".to_string()
+    };
+    let stream_enabled = settings.lens.stream_enabled;
+    let thinking_enabled = settings.lens.thinking_enabled;
+
+    let provider_override = if !settings.lens.provider_id.is_empty() {
+        Some(settings.lens.provider_id.clone())
+    } else {
+        None
+    };
+    let model_override = if !settings.lens.model.is_empty() {
+        Some(settings.lens.model.clone())
+    } else {
+        None
+    };
+
+    let has_image = !image_id.is_empty();
+
+    // question_prompt：lens 自定义 → 默认模板（无图时返回空，不附加前缀）
+    let question_prompt = if !settings.lens.question_prompt.is_empty() {
+        settings.lens.question_prompt.clone()
+    } else {
+        default_question_prompt(&language, has_image)
+    };
+
+    // system_prompt：lens 显式自定义时传 override，否则交给 call_vision_api 走默认模板
+    let system_prompt_override = if !settings.lens.system_prompt.is_empty() {
+        Some(settings.lens.system_prompt.clone())
+    } else {
+        None
+    };
+
+    if messages.is_empty() {
+        return Ok(serde_json::json!({
+          "success": false,
+          "error": "Missing messages"
+        }));
+    }
+
+    // 多轮对话：保留前面所有历史，仅把最后一条用户提问注入 question_prompt
+    // question_prompt 为空（纯文本对话）时直接传用户原话，不加前缀
+    // 关闭思考时在末尾追加 "/no_think"：Qwen3 hybrid 模型识别后直接关思考；其它模型当无意义文本忽略
+    let mut api_messages = messages.clone();
+    if let Some(last) = api_messages.pop() {
+        let mut content = if question_prompt.is_empty() {
+            last.content
+        } else {
+            format!("{}\n\n用户问题：{}", question_prompt, last.content)
+        };
+        if !thinking_enabled {
+            content.push_str(" /no_think");
+        }
+        api_messages.push(ExplainMessage {
+            role: "user".to_string(),
+            content,
+        });
+    }
+
+    match call_vision_api(
+        &app,
+        &state,
+        &image_id,
+        api_messages,
+        &language,
+        retry_attempts,
+        stream_enabled,
+        "answer",
+        "lens-stream",
+        provider_override.as_deref(),
+        model_override.as_deref(),
+        system_prompt_override.as_deref(),
+        thinking_enabled,
+    )
+    .await
+    {
+        Ok(response) => Ok(serde_json::json!({ "success": true, "response": response })),
+        Err(err) => Ok(serde_json::json!({ "success": false, "error": err })),
+    }
+}
+
+/// 取消正在进行的 lens 流（复用同一代号）。
+#[tauri::command]
+pub(crate) fn lens_cancel_stream(state: State<AppState>) -> Result<(), String> {
+    state
+        .explain_stream_generation
+        .fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+/// 截图翻译（lens translate 模式）：单次调用视觉模型，模型先输出译文 + `<<<ORIGINAL>>>` + 原文。
+/// stream_enabled=true 时通过 lens-translate-stream emit 流式 delta（kind=translated → kind=original）。
+/// `direct_translate=true` 时降级为纯翻译路径（无原文显示），保留旧行为。
+#[tauri::command]
+pub(crate) async fn lens_translate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    image_id: String,
+) -> Result<serde_json::Value, String> {
+    let temp_path = match resolve_explain_image_path(&app, &state, &image_id) {
+        Ok(p) => p,
+        Err(e) => return Ok(serde_json::json!({ "success": false, "error": e })),
+    };
+
+    let settings = state.settings_read().clone();
+    let ocr_provider = match settings.get_provider(&settings.screenshot_translation.provider_id) {
+        Some(p) => p.clone(),
+        None => {
+            return Ok(serde_json::json!({ "success": false, "error": "OCR provider not found" }))
+        }
+    };
+    let provider_is_apple =
+        ocr_provider.base_url == apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
+    if !provider_is_apple && ocr_provider.api_keys.is_empty() {
+        return Ok(serde_json::json!({ "success": false, "error": "Missing API Key" }));
+    }
+    if !provider_is_apple && settings.screenshot_translation.model.trim().is_empty() {
+        return Ok(serde_json::json!({
+          "success": false,
+          "error": "Please select a model first"
+        }));
+    }
+
+    let retry_attempts = effective_retry_attempts(&settings);
+    let direct_translate = settings.screenshot_translation.direct_translate;
+    let st_thinking = settings.screenshot_translation.thinking_enabled;
+    let st_stream = settings.screenshot_translation.stream_enabled;
+
+    let target_lang = resolve_target_lang(&settings.target_lang, "");
+    let lang_name = language_name(&target_lang).to_string();
+
+    // OCR 引擎路由：System / RapidOcr 走 local_ocr_then_translate（先识别再翻译两步）
+    // CloudVision 落到下方 call_openai_ocr 单次完成 OCR+翻译的多模态路径。
+    // Apple provider 在 macOS 强制走 System：Foundation Models 没视觉,只能识别后再让它翻文字。
+    let system_ocr_available = cfg!(any(target_os = "macos", target_os = "windows"));
+    if provider_is_apple && !cfg!(target_os = "macos") {
+        return Ok(serde_json::json!({
+          "success": false,
+          "error": "Apple Intelligence is not available on this platform"
+        }));
+    }
+    let mut effective_mode = settings
+        .screenshot_translation
+        .ocr_mode
+        .unwrap_or(OcrMode::CloudVision);
+    if provider_is_apple && cfg!(target_os = "macos") && effective_mode == OcrMode::CloudVision {
+        effective_mode = OcrMode::System;
+    }
+    // 平台不支持 System / RapidOcr 时(理论上 sanitize 已经处理掉,这里防御性兜底)
+    if !system_ocr_available && matches!(effective_mode, OcrMode::System | OcrMode::RapidOcr) {
+        effective_mode = OcrMode::CloudVision;
+    }
+    if matches!(effective_mode, OcrMode::System | OcrMode::RapidOcr) {
+        return local_ocr_then_translate(
+            &app,
+            &state,
+            &temp_path,
+            &image_id,
+            &lang_name,
+            direct_translate,
+            st_stream,
+            st_thinking,
+            &ocr_provider,
+            &settings.screenshot_translation.model,
+            retry_attempts,
+            settings.translator_prompt.as_deref(),
+            effective_mode,
+        )
+        .await;
+    }
+
+    let prompt = if direct_translate {
+        build_ocr_direct_translation_prompt(
+            &lang_name,
+            settings.screenshot_translation.prompt.as_deref(),
+        )
+    } else {
+        build_combined_translate_prompt(
+            &lang_name,
+            settings.screenshot_translation.prompt.as_deref(),
+        )
+    };
+
+    let emit_done_event = |success: bool, error: Option<&str>| {
+        let _ = app.emit(
+            "lens-translate-stream",
+            serde_json::json!({
+              "imageId": image_id,
+              "done": true,
+              "success": success,
+              "error": error,
+            }),
+        );
+    };
+
+    // direct_translate：纯翻译，无原文。复用 stream_chat_call kind="translated"。
+    if direct_translate {
+        if st_stream {
+            let translated = match stream_chat_call(
+                &app,
+                &state,
+                &ocr_provider,
+                &settings.screenshot_translation.model,
+                build_ocr_request_body(&temp_path, &prompt, st_thinking)?,
+                retry_attempts,
+                &image_id,
+                "translated",
+                "lens-translate-stream",
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    emit_done_event(false, Some(&e));
+                    return Ok(serde_json::json!({ "success": false, "error": e }));
+                }
+            };
+            emit_done_event(true, None);
+            return Ok(serde_json::json!({
+              "success": true, "original": "", "translated": translated,
+            }));
+        }
+        let translated = match call_openai_ocr(
+            &state,
+            &ocr_provider,
+            &settings.screenshot_translation.model,
+            &temp_path,
+            &prompt,
+            retry_attempts,
+            st_thinking,
+        )
+        .await
+        {
+            Ok(text) => {
+                let _ = app.emit(
+                    "lens-translate-stream",
+                    serde_json::json!({ "imageId": image_id, "kind": "translated", "delta": text }),
+                );
+                text
+            }
+            Err(e) => {
+                emit_done_event(false, Some(&e));
+                return Ok(serde_json::json!({ "success": false, "error": e }));
+            }
+        };
+        emit_done_event(true, None);
+        return Ok(serde_json::json!({
+          "success": true, "original": "", "translated": translated,
+        }));
+    }
+
+    // 默认：合并模式 — 单次调用拿译文 + 原文
+    if st_stream {
+        let (translated, original) = match stream_translate_combined(
+            &app,
+            &state,
+            &ocr_provider,
+            &settings.screenshot_translation.model,
+            build_ocr_request_body(&temp_path, &prompt, st_thinking)?,
+            retry_attempts,
+            &image_id,
+            "lens-translate-stream",
+        )
+        .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                emit_done_event(false, Some(&e));
+                return Ok(serde_json::json!({ "success": false, "error": e }));
+            }
+        };
+        emit_done_event(true, None);
+        return Ok(serde_json::json!({
+          "success": true, "original": original, "translated": translated,
+        }));
+    }
+
+    // 非流式：调用一次拿到全文，按分隔符拆 translated / original
+    let full = match call_openai_ocr(
+        &state,
+        &ocr_provider,
+        &settings.screenshot_translation.model,
+        &temp_path,
+        &prompt,
+        retry_attempts,
+        st_thinking,
+    )
+    .await
+    {
+        Ok(text) => text,
+        Err(e) => {
+            emit_done_event(false, Some(&e));
+            return Ok(serde_json::json!({ "success": false, "error": e }));
+        }
+    };
+    let (translated, original) = match full.find(COMBINED_TRANSLATE_SEPARATOR) {
+        Some(idx) => {
+            let t = full[..idx].trim_end_matches('\n').trim().to_string();
+            let o = full[idx + COMBINED_TRANSLATE_SEPARATOR.len()..]
+                .trim_start_matches('\n')
+                .trim()
+                .to_string();
+            (t, o)
+        }
+        None => (full.trim().to_string(), String::new()),
+    };
+    if !translated.is_empty() {
+        let _ = app.emit(
+            "lens-translate-stream",
+            serde_json::json!({ "imageId": image_id, "kind": "translated", "delta": translated }),
+        );
+    }
+    if !original.is_empty() {
+        let _ = app.emit(
+            "lens-translate-stream",
+            serde_json::json!({ "imageId": image_id, "kind": "original", "delta": original }),
+        );
+    }
+    emit_done_event(true, None);
+    Ok(serde_json::json!({
+      "success": true, "original": original, "translated": translated,
+    }))
+}
+
+#[tauri::command]
+pub(crate) async fn lens_translate_text(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+    request_id: String,
+) -> Result<serde_json::Value, String> {
+    let original = text.trim().to_string();
+    let emit_done = |success: bool, error: Option<&str>| {
+        let _ = app.emit(
+            "lens-translate-stream",
+            serde_json::json!({
+              "imageId": request_id.clone(),
+              "done": true,
+              "success": success,
+              "error": error,
+            }),
+        );
+    };
+
+    if original.is_empty() {
+        let msg = "No selected text".to_string();
+        emit_done(false, Some(&msg));
+        return Ok(serde_json::json!({ "success": false, "error": msg }));
+    }
+
+    let settings = state.settings_read().clone();
+    let provider = match settings.get_provider(&settings.screenshot_translation.provider_id) {
+        Some(p) => p.clone(),
+        None => {
+            let msg = "Translation provider not found".to_string();
+            emit_done(false, Some(&msg));
+            return Ok(serde_json::json!({ "success": false, "error": msg }));
+        }
+    };
+    if provider.base_url != apple_intelligence::APPLE_INTELLIGENCE_BASE_URL
+        && provider.api_keys.is_empty()
+    {
+        let msg = "Missing API Key".to_string();
+        emit_done(false, Some(&msg));
+        return Ok(serde_json::json!({ "success": false, "error": msg }));
+    }
+
+    let retry_attempts = effective_retry_attempts(&settings);
+    let direct_translate = settings.screenshot_translation.direct_translate;
+    let st_thinking = settings.screenshot_translation.thinking_enabled;
+    let st_stream = settings.screenshot_translation.stream_enabled;
+    let target_lang = resolve_target_lang(&settings.target_lang, &original);
+    let lang_name = language_name(&target_lang).to_string();
+    let prompt = build_screenshot_translation_prompt(
+        &original,
+        &lang_name,
+        settings.screenshot_translation.prompt.as_deref(),
+    );
+
+    let is_apple = provider.base_url == apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
+    let translated = if st_stream {
+        if is_apple {
+            let app_for_emit = app.clone();
+            let request_id_for_emit = request_id.clone();
+            let mut accumulated = String::new();
+            if let Err(err) = state
+                .apple_intelligence
+                .stream_text(&prompt, |delta| {
+                    accumulated.push_str(delta);
+                    let _ = app_for_emit.emit(
+                        "lens-translate-stream",
+                        serde_json::json!({
+                          "imageId": request_id_for_emit.clone(),
+                          "kind": "translated",
+                          "delta": delta,
+                        }),
+                    );
+                })
+                .await
+            {
+                emit_done(false, Some(&err));
+                return Ok(serde_json::json!({ "success": false, "error": err }));
+            }
+            accumulated
+        } else {
+            let mut body = serde_json::json!({
+              "messages": [{ "role": "user", "content": prompt }],
+              "stream": true,
+              "temperature": 0.2,
+            });
+            if !st_thinking {
+                body["thinking"] = serde_json::json!({ "type": "disabled" });
+            }
+            match stream_chat_call(
+                &app,
+                &state,
+                &provider,
+                &settings.screenshot_translation.model,
+                body,
+                retry_attempts,
+                &request_id,
+                "translated",
+                "lens-translate-stream",
+            )
+            .await
+            {
+                Ok(text) => text,
+                Err(err) => {
+                    emit_done(false, Some(&err));
+                    return Ok(serde_json::json!({ "success": false, "error": err }));
+                }
+            }
+        }
+    } else {
+        let result = call_openai_text(
+            &state,
+            &provider,
+            &settings.screenshot_translation.model,
+            prompt,
+            retry_attempts,
+            st_thinking,
+        )
+        .await;
+        match result {
+            Ok(text) => {
+                let _ = app.emit(
+          "lens-translate-stream",
+          serde_json::json!({ "imageId": request_id.clone(), "kind": "translated", "delta": text }),
+        );
+                text
+            }
+            Err(err) => {
+                emit_done(false, Some(&err));
+                return Ok(serde_json::json!({ "success": false, "error": err }));
+            }
+        }
+    };
+
+    if !direct_translate {
+        let _ = app.emit(
+      "lens-translate-stream",
+      serde_json::json!({ "imageId": request_id.clone(), "kind": "original", "delta": original.clone() }),
+    );
+    }
+
+    emit_done(true, None);
+    Ok(serde_json::json!({
+      "success": true,
+      "original": if direct_translate { String::new() } else { original.clone() },
+      "translated": translated,
+    }))
+}
+
+async fn run_system_ocr(
+    state: &State<'_, AppState>,
+    image_path: &std::path::Path,
+) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        return state
+            .macos_ocr
+            .ocr_image(&image_path.to_string_lossy())
+            .await;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = state;
+        return windows_ocr::ocr_image(image_path).await;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (state, image_path);
+        Err("System OCR is not available on this platform".to_string())
+    }
+}
+
+/// RapidOCR 离线 OCR：dispatch 到 RapidOcrClient.ocr_image。
+/// 模型 / dylib 文件未下载时返回 "rapidocr_models_missing",
+/// 路由层会在调用前先 precheck,这里是双层保险。
+async fn run_rapidocr_ocr(
+    state: &State<'_, AppState>,
+    image_path: &std::path::Path,
+) -> Result<String, String> {
+    state.rapidocr.ocr_image(image_path).await
+}
+
+/// 本地 OCR + 任意 provider 翻译的两步链路。
+/// `engine` 决定 OCR 来源:`OcrMode::System`(macOS Apple Vision / Windows.Media.Ocr) 或
+/// `OcrMode::RapidOcr`(本地 RapidOCR PaddleOCR ONNX)。`OcrMode::CloudVision` 走另一条单步路径,
+/// 不进这里。
+/// 翻译可以是 Apple FoundationModels 或任意 OpenAI 兼容 cloud provider。
+/// 与 cloud vision 单次 OCR+translate 调用相比,这里手动 emit lens-translate-stream 事件维持前端契约。
+///
+/// RapidOCR 预检:dylib / 模型文件未下载时返回结构化错误,前端 lens 据此渲染下载按钮。
+#[allow(clippy::too_many_arguments)]
+async fn local_ocr_then_translate(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    image_path: &std::path::Path,
+    image_id: &str,
+    lang_name: &str,
+    direct_translate: bool,
+    st_stream: bool,
+    st_thinking: bool,
+    translate_provider: &settings::ModelProvider,
+    translate_model: &str,
+    retry_attempts: usize,
+    translator_template: Option<&str>,
+    engine: OcrMode,
+) -> Result<serde_json::Value, String> {
+    let emit_done = |success: bool, error: Option<&str>| {
+        let _ = app.emit(
+            "lens-translate-stream",
+            serde_json::json!({
+              "imageId": image_id, "done": true, "success": success, "error": error,
+            }),
+        );
+    };
+
+    // 1) OCR via selected local engine
+    // RapidOCR 找不到模型文件时 ocr_image 自己会返回 "rapidocr_models_missing",
+    // 走下面统一 error 分支 emit 给前端,Lens 据此渲染下载提示——不再做单独 precheck。
+    let ocr_result = match engine {
+        OcrMode::System => run_system_ocr(state, image_path).await,
+        OcrMode::RapidOcr => run_rapidocr_ocr(state, image_path).await,
+        // 路由层只把 System / RapidOcr 派发到这里,CloudVision 走另一条单步路径。
+        // Legacy 兜底变体在 sanitize_settings 中会被正常化为 CloudVision,理论不会到这里。
+        // 仍留 runtime 兜底,防止后续重构时漏掉某个分支。
+        OcrMode::CloudVision | OcrMode::Legacy => {
+            Err("internal: non-local OCR mode reached local_ocr_then_translate".to_string())
+        }
+    };
+    let original = match ocr_result {
+        Ok(text) => text,
+        Err(err) => {
+            emit_done(false, Some(&err));
+            return Ok(serde_json::json!({ "success": false, "error": err }));
+        }
+    };
+    if original.trim().is_empty() {
+        let msg = "OCR 未识别到文字".to_string();
+        emit_done(false, Some(&msg));
+        return Ok(serde_json::json!({ "success": false, "error": msg }));
+    }
+    // 折叠 OCR 引擎产生的多余空行,避免被翻译模型一字不漏 echo 进译文占空间。
+    let original = compact_ocr_text(&original);
+    if !direct_translate {
+        let _ = app.emit(
+      "lens-translate-stream",
+      serde_json::json!({ "imageId": image_id, "kind": "original", "delta": original.clone() }),
+    );
+    }
+
+    // 2) 翻译 prompt：用主翻译模板。新版默认模板已经加了"输入像 OCR 输出时用上下文修错 + 压缩空行"的规则,
+    // 跟纯文本翻译共用一份模板;用户在 Settings 里改 translator_prompt 同样会作用到这条路径。
+    let translate_prompt = build_translation_prompt(&original, lang_name, translator_template);
+
+    // 3) Translate via configured provider —— Apple 走 sidecar,其它走 cloud OpenAI 兼容接口
+    let is_apple_translate =
+        translate_provider.base_url == apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
+    let translated = if st_stream {
+        if is_apple_translate {
+            let app_for_emit = app.clone();
+            let image_id_for_emit = image_id.to_string();
+            let mut accumulated = String::new();
+            if let Err(err) = state
+                .apple_intelligence
+                .stream_text(&translate_prompt, |delta| {
+                    accumulated.push_str(delta);
+                    let _ = app_for_emit.emit(
+                        "lens-translate-stream",
+                        serde_json::json!({
+                          "imageId": image_id_for_emit, "kind": "translated", "delta": delta,
+                        }),
+                    );
+                })
+                .await
+            {
+                emit_done(false, Some(&err));
+                return Ok(serde_json::json!({ "success": false, "error": err }));
+            }
+            accumulated
+        } else {
+            // Cloud streaming: 用 stream_chat_call + 文字消息（不带 image）
+            let mut body = serde_json::json!({
+              "messages": [{ "role": "user", "content": translate_prompt }],
+              "stream": true,
+              "temperature": 0.2,
+            });
+            if !st_thinking {
+                body["thinking"] = serde_json::json!({ "type": "disabled" });
+            }
+            match stream_chat_call(
+                app,
+                state,
+                translate_provider,
+                translate_model,
+                body,
+                retry_attempts,
+                image_id,
+                "translated",
+                "lens-translate-stream",
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(err) => {
+                    emit_done(false, Some(&err));
+                    return Ok(serde_json::json!({ "success": false, "error": err }));
+                }
+            }
+        }
+    } else {
+        let result = if is_apple_translate {
+            state.apple_intelligence.call_text(&translate_prompt).await
+        } else {
+            call_openai_text(
+                state,
+                translate_provider,
+                translate_model,
+                translate_prompt,
+                retry_attempts,
+                st_thinking,
+            )
+            .await
+        };
+        match result {
+            Ok(t) => {
+                let _ = app.emit(
+                    "lens-translate-stream",
+                    serde_json::json!({ "imageId": image_id, "kind": "translated", "delta": t }),
+                );
+                t
+            }
+            Err(err) => {
+                emit_done(false, Some(&err));
+                return Ok(serde_json::json!({ "success": false, "error": err }));
+            }
+        }
+    };
+
+    emit_done(true, None);
+    Ok(serde_json::json!({
+      "success": true,
+      "original": if direct_translate { String::new() } else { original.clone() },
+      "translated": translated,
+    }))
+}
+
+/// 关闭 lens：清理图片、释放 busy、隐藏窗口。
+///
+/// hide 前先把窗口几何复位到当前光标所在显示器的全屏，避免下次 show 出来时还停在
+/// 上一次截图后的浮动 bar 位置（先在旧位置闪一帧再跳到 select 全屏的可见跳变）。
+#[tauri::command]
+pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    state
+        .explain_stream_generation
+        .fetch_add(1, Ordering::SeqCst);
+    let current_id = {
+        let current = state.current_id_lock();
+        current.clone()
+    };
+    if let Some(id) = current_id {
+        cleanup_explain_image(&app, &id);
+    }
+    state.lens_busy.store(false, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("lens") {
+        // 先复位再隐藏：visible 状态下 set_position 比 hidden 状态更稳。
+        // 即便用户下次按热键时光标已经移到别的 monitor，lens_request_internal
+        // 还会再调一次 lens_position_fullscreen 修正，这一步只是消除"上次浮动 bar 位置"的残影。
+        lens_position_fullscreen(&app, &window);
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
+/// 将 lens 窗口缩小为浮动尺寸（截图后非全屏模式用）
+/// x/y 为可选，不传则只改尺寸不改位置
+#[derive(serde::Deserialize)]
+pub(crate) struct FloatingRect {
+    x: Option<f64>,
+    y: Option<f64>,
+    width: f64,
+    height: f64,
+}
+
+#[tauri::command]
+pub(crate) fn lens_set_floating(app: AppHandle, rect: FloatingRect) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("lens") else {
+        return Ok(());
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        if let (Some(x), Some(y)) = (rect.x, rect.y) {
+            lens_set_interactive_region(&window, x, y, rect.width, rect.height)?;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let (Some(x), Some(y)) = (rect.x, rect.y) {
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        }
+        let _ = window.set_size(tauri::LogicalSize::new(rect.width, rect.height));
+    }
+
+    Ok(())
+}
+
+/// Windows 平台：截取指定区域的屏幕图像
+/// 需要将逻辑坐标根据缩放因子转换为物理坐标，再转换为相对于显示器的相对坐标
+#[cfg(target_os = "windows")]
+fn capture_region_image(
+    absolute_x: i32,
+    absolute_y: i32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    _exclude_self_pid: Option<i32>,
+) -> Result<PathBuf, String> {
+    // 先用前端传入的 scale factor 估算物理坐标，用于定位目标显示器
+    let sf = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let estimated_px = ((absolute_x as f64) * sf).round() as i32;
+    let estimated_py = ((absolute_y as f64) * sf).round() as i32;
+
+    // 定位目标显示器：优先用 from_point，失败时遍历所有显示器作为 fallback
+    let monitor = Monitor::from_point(estimated_px, estimated_py).or_else(|_| {
+        Monitor::all()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|m| {
+                let Ok(mx) = m.x() else { return false };
+                let Ok(my) = m.y() else { return false };
+                let Ok(mw) = m.width() else { return false };
+                let Ok(mh) = m.height() else { return false };
+                let right = mx + mw as i32;
+                let bottom = my + mh as i32;
+                estimated_px >= mx
+                    && estimated_px < right
+                    && estimated_py >= my
+                    && estimated_py < bottom
+            })
+            .ok_or_else(|| "No monitor found at the given position".to_string())
+    })?;
+
+    let monitor_x = monitor.x().map_err(|e| e.to_string())?;
+    let monitor_y = monitor.y().map_err(|e| e.to_string())?;
+    let monitor_scale = monitor.scale_factor().map_err(|e| e.to_string())? as f64;
+
+    // 使用显示器实际 scale factor 重新计算物理坐标
+    // 这可以修正前端 devicePixelRatio 在多屏幕不同 DPI 下可能不准确的情况
+    let absolute_physical_x = ((absolute_x as f64) * monitor_scale).round() as i32;
+    let absolute_physical_y = ((absolute_y as f64) * monitor_scale).round() as i32;
+
+    let relative_x = absolute_physical_x - monitor_x;
+    let relative_y = absolute_physical_y - monitor_y;
+    let region_width = ((width as f64) * monitor_scale).round() as u32;
+    let region_height = ((height as f64) * monitor_scale).round() as u32;
+
+    let monitor_width = monitor.width().map_err(|e| e.to_string())?;
+    let monitor_height = monitor.height().map_err(|e| e.to_string())?;
+    if relative_x < 0
+        || relative_y < 0
+        || region_width == 0
+        || region_height == 0
+        || (relative_x as u32) >= monitor_width
+        || (relative_y as u32) >= monitor_height
+    {
+        return Err("Invalid capture region".to_string());
+    }
+
+    let max_width = monitor_width.saturating_sub(relative_x as u32);
+    let max_height = monitor_height.saturating_sub(relative_y as u32);
+    let capture_width = region_width.min(max_width).max(1);
+    let capture_height = region_height.min(max_height).max(1);
+
+    let image = monitor
+        .capture_region(
+            relative_x as u32,
+            relative_y as u32,
+            capture_width,
+            capture_height,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let temp_path = std::env::temp_dir().join(format!("screenshot-{}.png", Uuid::new_v4()));
+    image.save(&temp_path).map_err(|e| e.to_string())?;
+    Ok(temp_path)
+}
+
+/// macOS 平台：区域截图，走 ScreenCaptureKit。
+/// `exclude_self_pid` 传 `Some(pid)` 让 SCK 在 GPU compositor 阶段排除该 PID 的所有窗口
+/// （lens webview 自己），无需 hide+sleep 60ms。
+#[cfg(target_os = "macos")]
+fn capture_region_image(
+    absolute_x: i32,
+    absolute_y: i32,
+    _x: i32,
+    _y: i32,
+    width: u32,
+    height: u32,
+    _scale_factor: f64,
+    exclude_self_pid: Option<i32>,
+) -> Result<PathBuf, String> {
+    crate::sck::capture_region(
+        absolute_x as f64,
+        absolute_y as f64,
+        width as f64,
+        height as f64,
+        exclude_self_pid,
+    )
+}
+
+/// 其他平台：占位
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn capture_region_image(
+    _absolute_x: i32,
+    _absolute_y: i32,
+    _x: i32,
+    _y: i32,
+    _width: u32,
+    _height: u32,
+    _scale_factor: f64,
+) -> Result<PathBuf, String> {
+    Err("Region capture is not supported on this platform".to_string())
+}
+
+#[tauri::command]
+pub(crate) fn lens_register_annotated_image(
+    state: State<AppState>,
+    base64_png: String,
+) -> Result<serde_json::Value, String> {
+    let bytes = match general_purpose::STANDARD.decode(base64_png.as_bytes()) {
+        Ok(b) => b,
+        Err(e) => {
+            return Ok(serde_json::json!({
+              "success": false,
+              "error": format!("base64 decode failed: {e}")
+            }));
+        }
+    };
+
+    let temp_path = std::env::temp_dir().join(format!("lens-{}.png", Uuid::new_v4()));
+    if let Err(e) = std::fs::write(&temp_path, &bytes) {
+        return Ok(serde_json::json!({
+          "success": false,
+          "error": format!("write png failed: {e}")
+        }));
+    }
+
+    // 不归档:归档目录只保留 capture 时的原图,合成版只活在 temp_dir + history。
+    let image_id = Uuid::new_v4().to_string();
+    let previous_image_id = {
+        let current = state.current_id_lock();
+        current.clone()
+    };
+
+    {
+        let mut map = state.images_lock();
+        map.insert(image_id.clone(), temp_path);
+    }
+    {
+        let mut current = state.current_id_lock();
+        *current = Some(image_id.clone());
+    }
+    if let Some(previous_image_id) = previous_image_id {
+        if previous_image_id != image_id {
+            let mut map = state.images_lock();
+            if let Some(previous_path) = map.remove(&previous_image_id) {
+                cleanup_temp_file(&previous_path);
+            }
+        }
+    }
+
+    Ok(serde_json::json!({ "success": true, "imageId": image_id }))
+}
+
+/// 清理截图临时文件：从映射中移除并删除磁盘文件
+/// 把截图自动归档到用户指定目录（best-effort，失败不阻塞主流程）
+fn archive_captured_image(app: &AppHandle, temp_path: &std::path::Path, image_id: &str) {
+    let settings = app.state::<AppState>().settings_read().clone();
+    if !settings.image_archive_enabled || settings.image_archive_path.is_empty() {
+        return;
+    }
+
+    let archive_dir = std::path::Path::new(&settings.image_archive_path);
+    if !archive_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(archive_dir) {
+            eprintln!(
+                "[image-archive] failed to create dir {}: {}",
+                archive_dir.display(),
+                e
+            );
+            return;
+        }
+    }
+    if !archive_dir.is_dir() {
+        eprintln!(
+            "[image-archive] archive path is not a directory: {}",
+            archive_dir.display()
+        );
+        return;
+    }
+
+    let now = chrono::Local::now();
+    let short_uuid = &image_id[..image_id.len().min(8)];
+    let filename = format!("kivio-{}-{}.png", now.format("%Y-%m-%d-%H%M%S"), short_uuid);
+    let dest = archive_dir.join(&filename);
+
+    if let Err(e) = std::fs::copy(temp_path, &dest) {
+        eprintln!(
+            "[image-archive] failed to copy {} -> {}: {}",
+            temp_path.display(),
+            dest.display(),
+            e
+        );
+    } else {
+        eprintln!("[image-archive] archived to {}", dest.display());
+    }
+}
+
+fn cleanup_explain_image(app: &AppHandle, image_id: &str) {
+    let state = app.state::<AppState>();
+    let mut map = state.images_lock();
+    if let Some(path) = map.remove(image_id) {
+        cleanup_temp_file(&path);
+    }
+    let mut current = state.current_id_lock();
+    if current.as_deref() == Some(image_id) {
+        *current = None;
+    }
+}
+
+/// `{app_data_dir}/lens-history/` —— 历史记录引用的截图持久化目录。
+/// 区别于 temp_dir：temp_dir 系统会清，且 lens_close 会立即删；这里只在用户从历史里淘汰条目时才删。
+fn lens_history_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
+    let dir = base.join("lens-history");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("create lens-history dir: {e}"))?;
+    }
+    Ok(dir)
+}
+
+/// 根据 image_id 解析图片实际路径。
+///
+/// 解析顺序：
+///   1. 内存 HashMap（当前活跃截图）→ 必须落在 temp_dir，文件存在
+///   2. `lens-history/{image_id}.png`（历史记录从 temp 拷贝过来的持久副本）
+///
+/// 1 失败时退到 2，使得用户重启后从历史里恢复对话仍能继续提问。
+pub(crate) fn resolve_explain_image_path(
+    app: &AppHandle,
+    state: &State<AppState>,
+    image_id: &str,
+) -> Result<PathBuf, String> {
+    // 1. 活跃截图
+    {
+        let map = state.images_lock();
+        if let Some(path) = map.get(image_id).cloned() {
+            let temp_dir = std::env::temp_dir();
+            if !path.starts_with(&temp_dir) {
+                return Err("Invalid image path".to_string());
+            }
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+    }
+    // 2. 历史持久副本
+    let history_path = lens_history_dir(app)?.join(format!("{image_id}.png"));
+    if history_path.exists() {
+        return Ok(history_path);
+    }
+    Err("Image not found".to_string())
+}
+
+/// 把当前活跃图片复制到 `lens-history/{image_id}.png`，让它在 temp 文件被
+/// lens_close 清理后仍能被历史记录引用。前端在 history-add 完成后调一次。
+#[tauri::command]
+pub(crate) fn lens_commit_image_to_history(
+    app: AppHandle,
+    state: State<AppState>,
+    image_id: String,
+) -> Result<(), String> {
+    let dst = lens_history_dir(&app)?.join(format!("{image_id}.png"));
+    if dst.exists() {
+        return Ok(()); // 幂等
+    }
+    let map = state.images_lock();
+    let Some(src) = map.get(&image_id) else {
+        return Err("Image is no longer available for history".to_string());
+    };
+    if !src.exists() {
+        return Err("Image file is no longer available for history".to_string());
+    }
+    fs::copy(&src, &dst).map_err(|e| format!("commit image to history: {e}"))?;
+    Ok(())
+}
+
+/// 从历史持久目录删除指定 image_id 对应的 PNG。
+/// 前端 history 淘汰一条记录时调用，避免目录无限增长。
+#[tauri::command]
+pub(crate) fn lens_delete_history_image(app: AppHandle, image_id: String) -> Result<(), String> {
+    let dir = lens_history_dir(&app)?;
+    let path = dir.join(format!("{image_id}.png"));
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("remove history image: {e}"))?;
+    }
+    Ok(())
+}

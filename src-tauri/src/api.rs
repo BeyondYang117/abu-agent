@@ -27,7 +27,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
 use crate::prompts::COMBINED_TRANSLATE_SEPARATOR;
-use crate::resolve_explain_image_path;
+use crate::lens_commands::resolve_explain_image_path;
 use crate::settings::{
   self, default_system_prompt, no_think_instruction, ExplainMessage, Settings,
 };

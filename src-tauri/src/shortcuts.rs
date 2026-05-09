@@ -1,0 +1,840 @@
+use std::{collections::HashSet, sync::atomic::Ordering, time::Duration};
+
+use arboard::Clipboard;
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+use crate::commands::apply_launch_at_startup;
+use crate::lens_commands::{
+    lens_close, lens_request, lens_request_internal, lens_request_translate,
+    lens_request_translate_text,
+};
+use crate::settings::Settings;
+use crate::state::AppState;
+use crate::windows::ensure_main_window;
+
+/// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
+/// 用于 Lens 启动时把前台 App 的选中文本拷进剪贴板。
+/// macOS：直接走 CGEvent（不走 AppleScript），用 Private state source 避免与用户当前
+/// 仍按住的热键修饰键(Cmd/Shift/Option)合并出 Cmd+Shift+C 之类的组合。
+fn send_copy_shortcut() {
+    #[cfg(target_os = "macos")]
+    {
+        if !check_accessibility(true) {
+            eprintln!("[lens-capture] Accessibility permission missing for copy shortcut");
+            return;
+        }
+        use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+        let source = match CGEventSource::new(CGEventSourceStateID::Private) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("[lens-capture] CGEventSource::new(Private) failed");
+                return;
+            }
+        };
+
+        // ANSI 'c' = keycode 8
+        const KEY_C: core_graphics::event::CGKeyCode = 8;
+        let down = match CGEvent::new_keyboard_event(source.clone(), KEY_C, true) {
+            Ok(ev) => ev,
+            Err(_) => {
+                eprintln!("[lens-capture] CGEvent::new_keyboard_event(down) failed");
+                return;
+            }
+        };
+        down.set_flags(CGEventFlags::CGEventFlagCommand);
+        down.post(CGEventTapLocation::HID);
+
+        let up = match CGEvent::new_keyboard_event(source, KEY_C, false) {
+            Ok(ev) => ev,
+            Err(_) => {
+                eprintln!("[lens-capture] CGEvent::new_keyboard_event(up) failed");
+                return;
+            }
+        };
+        up.set_flags(CGEventFlags::CGEventFlagCommand);
+        up.post(CGEventTapLocation::HID);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use enigo::{Enigo, Key, KeyboardControllable};
+        let mut enigo = Enigo::new();
+        enigo.key_down(Key::Control);
+        enigo.key_click(Key::Layout('c'));
+        enigo.key_up(Key::Control);
+    }
+}
+
+/// macOS: 直接从当前前台控件读取 Accessibility selected text。
+/// 这条路径不碰剪贴板，也不受 Lens 热键仍按住的 Cmd/Shift/G 干扰。
+#[cfg(target_os = "macos")]
+fn read_accessibility_selected_text() -> Option<String> {
+    if !check_accessibility(false) {
+        return None;
+    }
+
+    use core_foundation::{
+        base::{CFRelease, CFType, CFTypeRef, TCFType},
+        string::{CFString, CFStringRef},
+    };
+
+    type AXUIElementRef = *const libc::c_void;
+    type AXError = i32;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+        fn AXUIElementCopyAttributeValue(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> AXError;
+    }
+
+    const AX_ERROR_SUCCESS: AXError = 0;
+
+    unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return None;
+        }
+
+        let focused_attr = CFString::new("AXFocusedUIElement");
+        let mut focused_ref: CFTypeRef = std::ptr::null();
+        let focused_err = AXUIElementCopyAttributeValue(
+            system,
+            focused_attr.as_concrete_TypeRef(),
+            &mut focused_ref,
+        );
+        CFRelease(system as CFTypeRef);
+        if focused_err != AX_ERROR_SUCCESS || focused_ref.is_null() {
+            return None;
+        }
+        let focused = CFType::wrap_under_create_rule(focused_ref);
+
+        let selected_attr = CFString::new("AXSelectedText");
+        let mut selected_ref: CFTypeRef = std::ptr::null();
+        let selected_err = AXUIElementCopyAttributeValue(
+            focused.as_CFTypeRef() as AXUIElementRef,
+            selected_attr.as_concrete_TypeRef(),
+            &mut selected_ref,
+        );
+        if selected_err != AX_ERROR_SUCCESS || selected_ref.is_null() {
+            return None;
+        }
+
+        let selected = CFType::wrap_under_create_rule(selected_ref);
+        let text = selected.downcast_into::<CFString>()?.to_string();
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+}
+
+/// Windows: 通过 UI Automation TextPattern 直接读取当前前台控件的选区。
+/// 这条路径不碰剪贴板；不支持 TextPattern 的控件会自动降级到 Ctrl+C fallback。
+#[cfg(target_os = "windows")]
+fn read_accessibility_selected_text() -> Option<String> {
+    use ::windows::{
+        core::Interface,
+        Win32::{
+            Foundation::RPC_E_CHANGED_MODE,
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+                COINIT_APARTMENTTHREADED,
+            },
+            UI::Accessibility::{
+                CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
+            },
+        },
+    };
+
+    unsafe {
+        let init_result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if init_result.is_err() && init_result != RPC_E_CHANGED_MODE {
+            eprintln!("[lens-capture] CoInitializeEx failed: {init_result:?}");
+            return None;
+        }
+        let should_uninitialize = init_result.is_ok();
+
+        let result = (|| {
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+            let focused = automation.GetFocusedElement().ok()?;
+            let pattern: IUIAutomationTextPattern = focused
+                .GetCurrentPattern(UIA_TextPatternId)
+                .ok()?
+                .cast()
+                .ok()?;
+            let ranges = pattern.GetSelection().ok()?;
+            let count = ranges.Length().ok()?.max(0);
+            let mut parts = Vec::new();
+
+            for index in 0..count {
+                let range = ranges.GetElement(index).ok()?;
+                let text = range.GetText(-1).ok()?;
+                let text = String::from_utf16_lossy(&text);
+                if !text.trim().is_empty() {
+                    parts.push(text);
+                }
+            }
+
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        })();
+
+        if should_uninitialize {
+            CoUninitialize();
+        }
+
+        result
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn read_accessibility_selected_text() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn clipboard_change_count() -> Option<i64> {
+    use cocoa::{
+        appkit::NSPasteboard,
+        base::{id, nil},
+    };
+    unsafe {
+        let pasteboard = <id as NSPasteboard>::generalPasteboard(nil);
+        if pasteboard == nil {
+            None
+        } else {
+            Some(pasteboard.changeCount() as i64)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_change_count() -> Option<i64> {
+    use ::windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+    let count = unsafe { GetClipboardSequenceNumber() };
+    if count == 0 {
+        None
+    } else {
+        Some(i64::from(count))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn clipboard_change_count() -> Option<i64> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_copy_shortcut_modifiers_to_clear(timeout: Duration) {
+    use core_graphics::{event::CGEventFlags, event_source::CGEventSourceStateID};
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> u64;
+    }
+
+    let mask = CGEventFlags::CGEventFlagShift.bits()
+        | CGEventFlags::CGEventFlagControl.bits()
+        | CGEventFlags::CGEventFlagAlternate.bits()
+        | CGEventFlags::CGEventFlagCommand.bits();
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        let flags = unsafe { CGEventSourceFlagsState(CGEventSourceStateID::CombinedSessionState) };
+        if flags & mask == 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_copy_shortcut_modifiers_to_clear(timeout: Duration) {
+    use ::windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+
+    let keys = [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN];
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        let pressed = keys
+            .iter()
+            .any(|key| unsafe { (GetAsyncKeyState(key.0 as i32) as u16 & 0x8000) != 0 });
+        if !pressed {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn wait_for_copy_shortcut_modifiers_to_clear(timeout: Duration) {
+    std::thread::sleep(timeout.min(Duration::from_millis(120)));
+}
+
+/// 在前一个 App 仍持焦点时把选中文本读出来，失败时才模拟 Cmd+C/Ctrl+C 兜底。
+/// 失败/Accessibility 权限缺失/剪贴板为非文本格式 → 一律静默降级返回 None。
+/// 调用方负责确保此函数在 Lens 窗口 show() 之前执行。
+pub(crate) fn capture_active_selection() -> Option<String> {
+    if let Some(text) = read_accessibility_selected_text() {
+        eprintln!(
+            "[lens-capture] selected text captured via Accessibility len={}",
+            text.len()
+        );
+        return Some(text);
+    }
+
+    // snapshot 原剪贴板文本(仅 text)。若是图片/文件/空，snapshot=None，事后不还原。
+    let snapshot: Option<String> = Clipboard::new().ok().and_then(|mut cb| cb.get_text().ok());
+    let before_change_count = clipboard_change_count();
+    eprintln!(
+        "[lens-capture] snapshot present={} len={} change_count={:?}",
+        snapshot.is_some(),
+        snapshot.as_ref().map(|s| s.len()).unwrap_or(0),
+        before_change_count,
+    );
+
+    // 等用户松开 Lens 热键修饰键，避免 Cmd+C 与残留 Shift 等组合成 Cmd+Shift+C。
+    wait_for_copy_shortcut_modifiers_to_clear(Duration::from_millis(450));
+    send_copy_shortcut();
+    std::thread::sleep(Duration::from_millis(150));
+
+    let captured: Option<String> = Clipboard::new().ok().and_then(|mut cb| cb.get_text().ok());
+    let text_changed = match (&snapshot, &captured) {
+        (Some(a), Some(b)) => a != b,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let after_change_count = clipboard_change_count();
+    let pasteboard_changed = match (before_change_count, after_change_count) {
+        (Some(before), Some(after)) => before != after,
+        _ => false,
+    };
+    eprintln!(
+    "[lens-capture] captured present={} len={} text_changed={} pasteboard_changed={} change_count={:?}",
+    captured.is_some(),
+    captured.as_ref().map(|s| s.len()).unwrap_or(0),
+    text_changed,
+    pasteboard_changed,
+    after_change_count,
+  );
+
+    if let Some(orig) = &snapshot {
+        if let Ok(mut cb) = Clipboard::new() {
+            let _ = cb.set_text(orig.clone());
+        }
+    }
+
+    // pasteboard changeCount 覆盖"选中文本与原剪贴板文本完全相同"的情况。
+    if !text_changed && !pasteboard_changed {
+        return None;
+    }
+    match captured {
+        Some(t) if !t.trim().is_empty() => Some(t),
+        _ => None,
+    }
+}
+
+/// 注册全局热键
+/// 包括翻译热键、截图翻译热键、lens 热键；会检测重复热键并给出友好错误提示
+pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
+    let settings = app.state::<AppState>().settings_read().clone();
+    let shortcut_manager = app.global_shortcut();
+    shortcut_manager
+        .unregister_all()
+        .map_err(|e| e.to_string())?;
+    let mut errors = Vec::new();
+    let mut registered = HashSet::new();
+
+    let format_hotkey_error = |scope: &str, hotkey: &str, error_message: &str| {
+        let normalized = error_message.to_lowercase();
+        if normalized.contains("already registered")
+            || normalized.contains("already in use")
+            || normalized.contains("hotkey") && normalized.contains("registered")
+        {
+            format!(
+        "Hotkey conflict for {scope}: \"{hotkey}\" is already in use. Please change this shortcut or close the app that is occupying it."
+      )
+        } else {
+            format!("Failed to register {scope} hotkey \"{hotkey}\": {error_message}")
+        }
+    };
+
+    if !settings.hotkey.trim().is_empty() {
+        let hotkey = settings.hotkey.trim().to_string();
+        let hotkey_key = hotkey.to_lowercase();
+        if !registered.insert(hotkey_key) {
+            errors.push(format!("Duplicate hotkey \"{hotkey}\" for translator"));
+        } else if let Err(err) =
+            shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    toggle_main_window(app);
+                }
+            })
+        {
+            errors.push(format_hotkey_error("translator", &hotkey, &err.to_string()));
+        }
+    }
+
+    if settings.screenshot_translation.enabled {
+        let hotkey = settings.screenshot_translation.hotkey.trim().to_string();
+        if hotkey.is_empty() {
+            errors.push("Screenshot translation hotkey is empty".to_string());
+        } else {
+            let hotkey_key = hotkey.to_lowercase();
+            if !registered.insert(hotkey_key) {
+                errors.push(format!(
+                    "Duplicate hotkey \"{hotkey}\" for screenshot translation"
+                ));
+            } else if let Err(err) =
+                shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        // 切换行为：Lens 可见时关闭，不可见时打开截图翻译
+                        if lens_is_active(app) {
+                            let _ = lens_close(app.clone());
+                        } else {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(err) = lens_request_translate(handle) {
+                                    eprintln!("Screenshot translation trigger error: {err}");
+                                }
+                            });
+                        }
+                    }
+                })
+            {
+                errors.push(format_hotkey_error(
+                    "screenshot translation",
+                    &hotkey,
+                    &err.to_string(),
+                ));
+            }
+        }
+
+        let text_hotkey = settings
+            .screenshot_translation
+            .text_hotkey
+            .trim()
+            .to_string();
+        if text_hotkey.is_empty() {
+            errors.push("Selected text screenshot translation hotkey is empty".to_string());
+        } else {
+            let hotkey_key = text_hotkey.to_lowercase();
+            if !registered.insert(hotkey_key) {
+                errors.push(format!(
+                    "Duplicate hotkey \"{text_hotkey}\" for selected text screenshot translation"
+                ));
+            } else if let Err(err) =
+                shortcut_manager.on_shortcut(text_hotkey.as_str(), move |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if lens_is_active(app) {
+                            let _ = lens_close(app.clone());
+                        } else {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(err) = lens_request_translate_text(handle) {
+                                    eprintln!(
+                                        "Selected text screenshot translation trigger error: {err}"
+                                    );
+                                }
+                            });
+                        }
+                    }
+                })
+            {
+                errors.push(format_hotkey_error(
+                    "selected text screenshot translation",
+                    &text_hotkey,
+                    &err.to_string(),
+                ));
+            }
+        }
+    }
+
+    if settings.lens.enabled {
+        let hotkey = settings.lens.hotkey.trim().to_string();
+        if hotkey.is_empty() {
+            errors.push("Lens hotkey is empty".to_string());
+        } else {
+            let hotkey_key = hotkey.to_lowercase();
+            if !registered.insert(hotkey_key) {
+                errors.push(format!("Duplicate hotkey \"{hotkey}\" for lens"));
+            } else if let Err(err) =
+                shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        // 切换行为：Lens 可见时关闭，不可见时打开
+                        if lens_is_active(app) {
+                            let _ = lens_close(app.clone());
+                        } else {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(err) = lens_request(handle) {
+                                    eprintln!("Lens trigger error: {err}");
+                                }
+                            });
+                        }
+                    }
+                })
+            {
+                errors.push(format_hotkey_error("lens", &hotkey, &err.to_string()));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
+}
+
+/// 获取当前鼠标位置
+pub(crate) fn get_mouse_position(app: &AppHandle) -> Option<tauri::PhysicalPosition<f64>> {
+    app.cursor_position().ok()
+}
+
+/// 切换主窗口显示/隐藏
+/// 隐藏时直接隐藏；显示时窗口跟随鼠标位置偏移 (10,10) 弹出，翻译器保持置顶
+pub(crate) fn toggle_main_window(app: &AppHandle) {
+    let window = match ensure_main_window(app) {
+        Ok(window) => window,
+        Err(err) => {
+            eprintln!("Failed to ensure main window: {}", err);
+            return;
+        }
+    };
+
+    let visible = window.is_visible().unwrap_or(false);
+    if visible {
+        let _ = window.hide();
+        return;
+    }
+
+    let _ = window.set_always_on_top(true);
+
+    // 重置 hash 为翻译模式，防止之前打开过设置导致显示设置界面
+    let _ = window.eval(
+        "window.location.hash = ''; window.dispatchEvent(new HashChangeEvent('hashchange'));",
+    );
+
+    let pos = get_mouse_position(app).map(|cursor| {
+        tauri::PhysicalPosition::new((cursor.x + 10.0) as i32, (cursor.y + 10.0) as i32)
+    });
+
+    #[cfg(target_os = "macos")]
+    {
+        let window_for_task = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Some(pos) = pos {
+                if let Err(e) = window_for_task.set_position(pos) {
+                    eprintln!("Failed to set window position: {}", e);
+                }
+            } else {
+                eprintln!("Failed to get mouse position");
+            }
+            let _ = window_for_task.show();
+            let _ = window_for_task.set_focus();
+        });
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(pos) = pos {
+            if let Err(e) = window.set_position(pos) {
+                eprintln!("Failed to set window position: {}", e);
+            }
+        } else {
+            eprintln!("Failed to get mouse position");
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 恢复运行时设置
+/// 当保存设置失败时，将设置、热键、托盘等回滚到之前的状态
+pub(crate) fn restore_runtime_settings(
+    app: &AppHandle,
+    state: &State<AppState>,
+    previous: &Settings,
+) {
+    if let Err(err) = apply_launch_at_startup(app, previous.launch_at_startup) {
+        eprintln!("Failed to rollback launch-at-startup setting: {err}");
+    }
+
+    {
+        let mut guard = state.settings_write();
+        *guard = previous.clone();
+    }
+
+    if let Err(err) = register_hotkeys(app) {
+        eprintln!("Failed to rollback hotkeys: {err}");
+    }
+
+    if let Err(err) = setup_tray(app) {
+        eprintln!("Failed to rollback tray: {err}");
+    }
+}
+
+/// 接收前端合成的带箭头标注 PNG（base64 编码），落盘到 temp_dir、注册新 image_id。
+/// 不再次归档:归档目录里只保留 capture 时的原图,合成版只活在 temp_dir。
+/// 原 image_id 对应的临时文件在切到新 image_id 后立即清理，避免同一会话里堆积 orphan。
+
+/// macOS 平台：检查辅助功能权限
+/// 如果 open_if_needed 为 true 且未授权，则自动打开系统设置面板
+#[cfg(target_os = "macos")]
+pub(crate) fn check_accessibility(open_if_needed: bool) -> bool {
+    use std::process::Command;
+    unsafe {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(options: *mut libc::c_void) -> bool;
+        }
+
+        // 先进行简单检查（不传入选项）
+        if AXIsProcessTrustedWithOptions(std::ptr::null_mut()) {
+            return true;
+        }
+
+        if open_if_needed {
+            // 直接打开系统设置，而不是尝试通过 FFI 触发授权弹窗
+            eprintln!("Accessibility not trusted, opening preferences...");
+            let _ = Command::new("open")
+                .arg(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+                )
+                .output();
+        }
+        false
+    }
+}
+
+/// macOS 平台：检查屏幕录制权限
+#[cfg(target_os = "macos")]
+pub(crate) fn check_screen_recording_permission() -> bool {
+    unsafe {
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn CGPreflightScreenCaptureAccess() -> bool;
+        }
+        CGPreflightScreenCaptureAccess()
+    }
+}
+
+/// 发送粘贴快捷键到当前活动应用
+/// macOS 通过 AppleScript 发送 Command+V；Windows 通过 enigo 模拟 Ctrl+V
+pub(crate) fn send_paste_shortcut() {
+    #[cfg(target_os = "macos")]
+    {
+        if !check_accessibility(true) {
+            eprintln!("Accessibility permission missing!");
+            return;
+        }
+
+        use std::process::Command;
+        eprintln!("Sending Paste Shortcut via AppleScript...");
+        match Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+            .output()
+        {
+            Ok(output) => {
+                if !output.status.success() {
+                    eprintln!(
+                        "AppleScript failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                } else {
+                    eprintln!("AppleScript success");
+                }
+            }
+            Err(e) => eprintln!("Failed to execute AppleScript: {}", e),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use enigo::{Enigo, Key, KeyboardControllable};
+        let mut enigo = Enigo::new();
+        enigo.key_down(Key::Control);
+        enigo.key_click(Key::Layout('v'));
+        enigo.key_up(Key::Control);
+    }
+}
+
+/// 打开设置窗口
+/// 调整窗口大小为 640x520，取消置顶，显示并聚焦，同时通过 hash 路由切换到设置页面
+pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
+    let window = ensure_main_window(app)?;
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_size(tauri::LogicalSize::new(640.0, 520.0));
+
+    let window_for_task = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let _ = window_for_task.center();
+        let _ = window_for_task.show();
+        let _ = window_for_task.set_focus();
+    });
+
+    let _ = window.eval(
+    "window.location.hash = '#settings'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
+  );
+    // 仅向 main webview 发送 open-settings 事件，避免广播到 screenshot/explain 等其他 webview
+    // 导致它们也被切到设置视图（出现多个设置界面的 bug）。
+    let _ = app.emit_to("main", "open-settings", ());
+    Ok(())
+}
+
+fn lens_is_active(app: &AppHandle) -> bool {
+    if let Some(state) = app.try_state::<AppState>() {
+        if state.lens_busy.load(Ordering::SeqCst) {
+            let visible = app
+                .get_webview_window("lens")
+                .and_then(|window| window.is_visible().ok())
+                .unwrap_or(false);
+            if visible {
+                return true;
+            }
+            state.lens_busy.store(false, Ordering::SeqCst);
+        }
+    }
+
+    app.get_webview_window("lens")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
+}
+
+fn focus_lens_window(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window("lens") else {
+        return false;
+    };
+    if !window.is_visible().ok().unwrap_or(false) {
+        return false;
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+    true
+}
+
+/// 自动激活 app（单实例二次启动 / Windows 普通启动默认设置页）时使用。
+/// 如果用户正在拉起 Lens，就不要再抢 main 窗口到设置页。
+pub(crate) fn open_settings_window_for_activation(app: &AppHandle) -> Result<(), String> {
+    if lens_is_active(app) {
+        let _ = focus_lens_window(app);
+        return Ok(());
+    }
+    open_settings_window(app)
+}
+
+/// 根据语言返回托盘菜单的标签文本
+fn tray_labels(lang: &str) -> (&'static str, &'static str, &'static str) {
+    match lang {
+        "en" => ("Show Translator", "Settings", "Quit"),
+        _ => ("显示翻译器", "设置", "退出"),
+    }
+}
+
+/// 构建托盘菜单
+fn build_tray_menu(app: &AppHandle, lang: &str) -> Result<tauri::menu::Menu<tauri::Wry>, String> {
+    use tauri::menu::{Menu, MenuItem};
+    let (show_label, settings_label, quit_label) = tray_labels(lang);
+    let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    Menu::with_items(app, &[&show, &settings, &quit]).map_err(|e| e.to_string())
+}
+
+/// 设置系统托盘图标和菜单
+/// 如果托盘已存在则只更新菜单；否则创建新的托盘图标并绑定菜单事件
+pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let lang = app
+        .state::<AppState>()
+        .settings_read()
+        .settings_language
+        .clone()
+        .unwrap_or_else(|| "zh".to_string());
+
+    let menu = build_tray_menu(app, &lang)?;
+
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let icon_bytes = include_bytes!("../icons/tray-icon.png");
+    let icon_image = image::load_from_memory(icon_bytes)
+        .map_err(|e| e.to_string())?
+        .to_rgba8();
+    let (width, height) = icon_image.dimensions();
+    let tray = TrayIconBuilder::<tauri::Wry>::with_id("main")
+        .icon(tauri::image::Image::new_owned(
+            icon_image.into_raw(),
+            width,
+            height,
+        ))
+        // macOS template image：纯黑透明 PNG,系统按 light/dark 主题自动反色为白
+        // (Windows/Linux 上 ignore 此 flag,直接显示原图)
+        .icon_as_template(true)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => match ensure_main_window(app) {
+                Ok(window) => {
+                    let _ = window.set_always_on_top(true);
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                Err(err) => eprintln!("Failed to ensure main window: {}", err),
+            },
+            "settings" => {
+                if let Err(err) = open_settings_window(app) {
+                    eprintln!("Failed to open settings window: {}", err);
+                }
+            }
+            "quit" => {
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle().clone();
+                // 切换行为：Lens 可见时关闭，不可见时打开
+                if lens_is_active(&app) {
+                    let _ = lens_close(app);
+                } else {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(err) = lens_request_internal(&app, "chat") {
+                            eprintln!("Tray click lens trigger error: {}", err);
+                        }
+                    });
+                }
+            }
+        })
+        .build(app)
+        .map_err(|e| e.to_string())?;
+
+    tray.set_tooltip(Some("Kivio".to_string()))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
