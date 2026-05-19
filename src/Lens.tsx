@@ -260,9 +260,10 @@ export default function Lens() {
       const w = window.innerWidth
       const h = window.innerHeight
       setViewport({ w, h })
+      const m = computeMetrics(w, h)
       setBarRect(curMode === 'translateText'
-        ? { x: 0, y: 0, width: w }
-        : computeSelectBar(w, h, computeMetrics(w, h)))
+        ? { x: 0, y: 0, width: Math.min(m.READY_W, w) }
+        : computeSelectBar(w, h, m))
       setFlyDelta({ x: 0, y: 0 })
       setCapturedFrame(null)
       // 重置 intro：先关再开，下一帧让 transition 从 scale-90 到 scale-100
@@ -432,7 +433,8 @@ export default function Lens() {
     if (stageRef.current === 'select') {
       setBarRect(computeSelectBar(viewport.w, viewport.h, metrics))
     } else if (modeRef.current === 'translateText' && stageRef.current === 'translating') {
-      setBarRect({ x: 0, y: 0, width: viewport.w })
+      const w = Math.min(metrics.READY_W, viewport.w)
+      setBarRect({ x: 0, y: 0, width: w })
     }
   }, [viewport, metrics])
 
@@ -1979,7 +1981,7 @@ export default function Lens() {
                   </div>
                 )}
                 {/* 原文区（参考）：分隔符之后的 delta 才到这里，置于译文下方小字灰色 */}
-                {translateOriginal && (
+                {translateOriginal && mode !== 'translateText' && (
                   <>
                     <div className="border-t border-black/[0.05] dark:border-white/[0.06] -mx-3.5 my-3" />
                     <div className="prose prose-sm dark:prose-invert max-w-none text-[12.5px] leading-6 text-neutral-500 dark:text-neutral-400">
