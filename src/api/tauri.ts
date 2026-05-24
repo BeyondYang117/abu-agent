@@ -123,6 +123,8 @@ export type Settings = {
     keepFullscreenAfterCapture?: boolean
     /** 进入截图选择态时是否显示顶部提示（默认 true） */
     showCaptureHint?: boolean
+    /** Windows 兼容模式：进入选择态前冻结当前画面，再从冻结帧裁剪（默认 false） */
+    windowsFreezeFrameSelection?: boolean
   }
   settingsLanguage?: 'zh' | 'en'
   /** 启动时静默检查 GH Releases 是否有新版（默认 true） */
@@ -276,6 +278,7 @@ export const api = {
     width: number
     height: number
     scaleFactor: number
+    freezeFrameImageId?: string
   }) => invoke<{ success: boolean; imageId?: string; error?: string }>('lens_capture_region', params),
   lensRegisterAnnotatedImage: (base64Png: string) =>
     invoke<{ success: boolean; imageId?: string; error?: string }>(

@@ -40,17 +40,29 @@ type LensResetFrame = {
   height?: number
 }
 
-function readLensResetFrame(detail: unknown): LensResetFrame | undefined {
-  if (!detail || typeof detail !== 'object') return undefined
+type LensResetPayload = {
+  frame?: LensResetFrame
+  freezeFrameImageId?: string
+}
+
+function readLensResetPayload(detail: unknown): LensResetPayload {
+  if (!detail || typeof detail !== 'object') return {}
   const frame = (detail as { frame?: unknown }).frame
-  if (!frame || typeof frame !== 'object') return undefined
+  const freezeFrameImageId = (detail as { freezeFrameImageId?: unknown }).freezeFrameImageId
+  const payload: LensResetPayload = {
+    freezeFrameImageId: typeof freezeFrameImageId === 'string' ? freezeFrameImageId : undefined,
+  }
+  if (!frame || typeof frame !== 'object') return payload
   const { x, y, width, height } = frame as Partial<LensResetFrame>
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
-  return {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return payload
+  payload.frame = {
     x: x as number,
     y: y as number,
     width: Number.isFinite(width) ? width : undefined,
     height: Number.isFinite(height) ? height : undefined,
+  }
+  return {
+    ...payload,
   }
 }
 
@@ -102,6 +114,8 @@ export default function Lens() {
   const [translateDurationMs, setTranslateDurationMs] = useState<number | null>(null)
   const [translateNow, setTranslateNow] = useState(() => Date.now())
   const translateStartRef = useRef<number | null>(null)
+  const [freezeFrameImageId, setFreezeFrameImageId] = useState('')
+  const [freezeFramePreview, setFreezeFramePreview] = useState('')
   // viewport 大小：监听 resize（拔显示器/系统缩放变化都会触发），所有相对尺寸由此重算
   const [viewport, setViewport] = useState(() => ({
     w: typeof window !== 'undefined' ? window.innerWidth : 1280,
@@ -259,8 +273,10 @@ export default function Lens() {
   }, [])
 
   // select 态进入：刷新所有 state、重算对话栏位置、播放 intro 动画
-  const enterSelect = useCallback(async (resetFrame?: LensResetFrame) => {
+  const enterSelect = useCallback(async (resetPayload: LensResetPayload = {}) => {
     const curMode = readModeFromHash()
+    const resetFrame = resetPayload.frame
+    const resetFreezeFrameImageId = resetPayload.freezeFrameImageId ?? ''
     cancelPendingMotion()
     const motionSeq = motionSeqRef.current
     fullscreenMetricsRef.current = null
@@ -289,6 +305,8 @@ export default function Lens() {
       setTranslateOriginal('')
       setTranslateText('')
       setTranslateError('')
+      setFreezeFrameImageId(resetFreezeFrameImageId)
+      setFreezeFramePreview('')
       const w = resetFrame?.width ?? window.innerWidth
       const h = resetFrame?.height ?? window.innerHeight
       setViewport({ w, h })
@@ -306,6 +324,18 @@ export default function Lens() {
     selectRevealedRef.current = false
     imageIdRef.current = ''
     translateCardDragRef.current = null
+    if (resetFreezeFrameImageId) {
+      void (async () => {
+        try {
+          const img = await api.explainReadImage(resetFreezeFrameImageId)
+          if (motionSeq === motionSeqRef.current && img.success) {
+            setFreezeFramePreview(img.data ?? '')
+          }
+        } catch (err) {
+          console.error('Failed to load freeze frame', err)
+        }
+      })()
+    }
     // 重新加载设置：用户在设置面板修改后关闭再打开 Lens，需要读到最新值。按当前 mode 选 lens / screenshotTranslation 配置。
     // 必须放在 reset DOM 之后，避免 await 期间 Rust 已 show 导致旧 ready/answering surface 露出首帧。
     void (async () => {
@@ -431,7 +461,7 @@ export default function Lens() {
   useEffect(() => {
     void enterSelect()
     const handleReset = (event: Event) => {
-      void enterSelect(readLensResetFrame((event as CustomEvent).detail))
+      void enterSelect(readLensResetPayload((event as CustomEvent).detail))
     }
     window.addEventListener('lens:reset', handleReset)
     return () => {
@@ -609,6 +639,8 @@ export default function Lens() {
       setDragCurrent(null)
       setDragging(false)
       setImagePreview('')
+      setFreezeFrameImageId('')
+      setFreezeFramePreview('')
       setAppLabel('')
       setInput('')
       setSelectionText('')
@@ -1094,6 +1126,7 @@ export default function Lens() {
       width: Math.round(rect.width),
       height: Math.round(rect.height),
       scaleFactor: window.devicePixelRatio || 1,
+      freezeFrameImageId: freezeFrameImageId || undefined,
     }
     // capturingRef 全程 true 直到 flyBarToAnchor 完成（同 handleCaptureWindow 注释）
     capturingRef.current = true
@@ -1106,6 +1139,8 @@ export default function Lens() {
       }
       const newId = result.imageId
       imageIdRef.current = newId
+      setFreezeFrameImageId('')
+      setFreezeFramePreview('')
 
       setCapturedFrame({
         x: params.x,
@@ -1478,6 +1513,15 @@ export default function Lens() {
       onMouseUp={handleMouseUp}
       data-tauri-drag-region="false"
     >
+      {stage === 'select' && freezeFramePreview && (
+        <img
+          src={freezeFramePreview}
+          alt=""
+          draggable={false}
+          className="absolute inset-0 w-full h-full object-fill pointer-events-none"
+        />
+      )}
+
       {/* select 态全屏覆盖层：完全透明，仅用于捕获鼠标事件，不再加黑色蒙层 */}
       <div
         className="absolute inset-0 transition-opacity ease-out pointer-events-none"

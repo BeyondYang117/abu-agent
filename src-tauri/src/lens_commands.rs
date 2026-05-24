@@ -1,4 +1,8 @@
-use std::{fs, path::PathBuf, sync::atomic::Ordering};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::Ordering,
+};
 
 use base64::{engine::general_purpose, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -39,6 +43,14 @@ struct LensFrame {
     height: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImageCropRect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
 pub(crate) fn request_lens_close(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("lens") {
         if window.is_visible().ok().unwrap_or(false) {
@@ -47,6 +59,17 @@ pub(crate) fn request_lens_close(app: &AppHandle) -> Result<(), String> {
         }
     }
     lens_close(app.clone())
+}
+
+#[cfg(target_os = "windows")]
+fn insert_temp_explain_image(app: &AppHandle, path: PathBuf) -> String {
+    let image_id = Uuid::new_v4().to_string();
+    let state = app.state::<AppState>();
+    {
+        let mut map = state.images_lock();
+        map.insert(image_id.clone(), path);
+    }
+    image_id
 }
 
 #[tauri::command]
@@ -379,6 +402,7 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
     if state.lens_busy.swap(true, Ordering::SeqCst) {
         return Err("Lens already active".to_string());
     }
+    cleanup_lens_freeze_frame(app);
     state
         .explain_stream_generation
         .fetch_add(1, Ordering::SeqCst);
@@ -415,12 +439,14 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
         "translateText" => "translateText",
         _ => "chat",
     };
+    let mut freeze_frame_image_id: Option<String> = None;
     if safe_mode == "translateText" {
         lens_position_text_floating(app, &window);
     } else {
         // 先在 hidden 状态下尝试定位：即便部分系统下 hidden 窗口 set_position 被忽略，也比
         // 不调强（成功则消除"先在旧位置闪一帧再跳到全屏"的可见跳变）。
-        let _ = lens_position_fullscreen(app, &window);
+        let frame = lens_position_fullscreen(app, &window);
+        freeze_frame_image_id = prepare_windows_freeze_frame(app, frame);
     }
     let _ = window.show();
     let _ = window.set_focus();
@@ -431,18 +457,20 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
         // show 后再调，处理 always_on_top + visible_on_all_workspaces 把首次 set_position 吃掉的情况
         lens_position_fullscreen(app, &window)
     };
-    let reset_detail = frame
-        .map(|frame| {
-            serde_json::json!({
+    let reset_detail = match frame {
+        Some(frame) => serde_json::json!({
                 "frame": {
                     "x": frame.x,
                     "y": frame.y,
                     "width": frame.width,
                     "height": frame.height,
-                }
-            })
-        })
-        .unwrap_or_else(|| serde_json::json!({}));
+                },
+                "freezeFrameImageId": freeze_frame_image_id,
+        }),
+        None => freeze_frame_image_id
+            .map(|image_id| serde_json::json!({ "freezeFrameImageId": image_id }))
+            .unwrap_or_else(|| serde_json::json!({})),
+    };
     let reset_detail = serde_json::to_string(&reset_detail).unwrap_or_else(|_| "{}".to_string());
     let script = format!(
         "window.location.hash = '#lens?mode={mode}'; window.dispatchEvent(new HashChangeEvent('hashchange')); window.dispatchEvent(new CustomEvent('lens:reset', {{ detail: {detail} }}));",
@@ -519,6 +547,7 @@ pub(crate) async fn lens_capture_region(
     width: u32,
     height: u32,
     scale_factor: f64,
+    freeze_frame_image_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // SCK 路径：把自己 PID 传给 capture_region_image，SCK 在 GPU compositor 排除 lens webview，
     // 不再需要 hide webview + sleep 60ms 等 NSWindow.orderOut 生效（旧 `screencapture -R` 会截到全屏透明 lens 自己）。
@@ -535,16 +564,27 @@ pub(crate) async fn lens_capture_region(
         }
     };
 
-    let result = capture_region_image(
-        absolute_x,
-        absolute_y,
+    let result = capture_region_from_freeze_frame(
+        &app,
+        freeze_frame_image_id.as_deref(),
         x,
         y,
         width,
         height,
         scale_factor,
-        exclude_self_pid,
-    );
+    )
+    .unwrap_or_else(|| {
+        capture_region_image(
+            absolute_x,
+            absolute_y,
+            x,
+            y,
+            width,
+            height,
+            scale_factor,
+            exclude_self_pid,
+        )
+    });
     match result {
         Ok(path) => {
             let image_id = Uuid::new_v4().to_string();
@@ -560,6 +600,9 @@ pub(crate) async fn lens_capture_region(
             {
                 let mut current = state.current_id_lock();
                 *current = Some(image_id.clone());
+            }
+            if let Some(freeze_id) = freeze_frame_image_id.as_deref() {
+                cleanup_lens_freeze_frame_if_current(&app, freeze_id);
             }
             Ok(serde_json::json!({ "success": true, "imageId": image_id }))
         }
@@ -1275,6 +1318,7 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
     if let Some(id) = current_id {
         cleanup_explain_image(&app, &id);
     }
+    cleanup_lens_freeze_frame(&app);
     state.lens_busy.store(false, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("lens") {
         // 先隐藏再复位：避免 visible 状态下从浮动尺寸 resize 到全屏时用户看到闪屏
@@ -1285,6 +1329,180 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
         lens_position_fullscreen(&app, &window);
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn prepare_windows_freeze_frame(app: &AppHandle, frame: Option<LensFrame>) -> Option<String> {
+    let settings = app.state::<AppState>().settings_read().clone();
+    if !settings.lens.windows_freeze_frame_selection {
+        return None;
+    }
+    let frame = frame?;
+    let width = frame.width.round().max(1.0) as u32;
+    let height = frame.height.round().max(1.0) as u32;
+    let path = capture_region_image(
+        frame.x.round() as i32,
+        frame.y.round() as i32,
+        0,
+        0,
+        width,
+        height,
+        1.0,
+        None,
+    )
+    .map_err(|err| {
+        eprintln!("[lens-freeze] capture failed: {err}");
+        err
+    })
+    .ok()?;
+    let image_id = insert_temp_explain_image(app, path);
+    let state = app.state::<AppState>();
+    {
+        let mut freeze = state
+            .lens_freeze_frame_image_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *freeze = Some(image_id.clone());
+    }
+    Some(image_id)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn prepare_windows_freeze_frame(_app: &AppHandle, _frame: Option<LensFrame>) -> Option<String> {
+    None
+}
+
+fn capture_region_from_freeze_frame(
+    app: &AppHandle,
+    freeze_frame_image_id: Option<&str>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> Option<Result<PathBuf, String>> {
+    let image_id = freeze_frame_image_id?;
+    let state = app.state::<AppState>();
+    let is_current_freeze = {
+        let freeze = state
+            .lens_freeze_frame_image_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        freeze.as_deref() == Some(image_id)
+    };
+    if !is_current_freeze {
+        return None;
+    }
+
+    let path = match resolve_explain_image_path(app, &state, image_id) {
+        Ok(path) => path,
+        Err(err) => return Some(Err(err)),
+    };
+    Some(crop_freeze_frame_image(
+        &path,
+        x,
+        y,
+        width,
+        height,
+        scale_factor,
+    ))
+}
+
+fn crop_freeze_frame_image(
+    path: &Path,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+) -> Result<PathBuf, String> {
+    let image = image::open(path).map_err(|e| e.to_string())?;
+    let rect = freeze_frame_crop_rect(
+        x,
+        y,
+        width,
+        height,
+        scale_factor,
+        image.width(),
+        image.height(),
+    )
+    .ok_or_else(|| "Invalid freeze-frame capture region".to_string())?;
+    let cropped = image.crop_imm(rect.x, rect.y, rect.width, rect.height);
+    let temp_path = std::env::temp_dir().join(format!("screenshot-{}.png", Uuid::new_v4()));
+    cropped.save(&temp_path).map_err(|e| e.to_string())?;
+    Ok(temp_path)
+}
+
+fn freeze_frame_crop_rect(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+    image_width: u32,
+    image_height: u32,
+) -> Option<ImageCropRect> {
+    if width == 0 || height == 0 || image_width == 0 || image_height == 0 {
+        return None;
+    }
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let x = (x as f64 * scale).round() as i32;
+    let y = (y as f64 * scale).round() as i32;
+    let width = (width as f64 * scale).round().max(1.0) as u32;
+    let height = (height as f64 * scale).round().max(1.0) as u32;
+
+    let left = x.clamp(0, image_width as i32);
+    let top = y.clamp(0, image_height as i32);
+    let right = (x as i64 + width as i64).clamp(left as i64, image_width as i64) as i32;
+    let bottom = (y as i64 + height as i64).clamp(top as i64, image_height as i64) as i32;
+
+    if right <= left || bottom <= top {
+        return None;
+    }
+
+    Some(ImageCropRect {
+        x: left as u32,
+        y: top as u32,
+        width: (right - left) as u32,
+        height: (bottom - top) as u32,
+    })
+}
+
+fn cleanup_lens_freeze_frame(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let image_id = {
+        let mut freeze = state
+            .lens_freeze_frame_image_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        freeze.take()
+    };
+    if let Some(image_id) = image_id {
+        cleanup_explain_image(app, &image_id);
+    }
+}
+
+fn cleanup_lens_freeze_frame_if_current(app: &AppHandle, image_id: &str) {
+    let state = app.state::<AppState>();
+    let should_cleanup = {
+        let mut freeze = state
+            .lens_freeze_frame_image_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if freeze.as_deref() == Some(image_id) {
+            *freeze = None;
+            true
+        } else {
+            false
+        }
+    };
+    if should_cleanup {
+        cleanup_explain_image(app, image_id);
+    }
 }
 
 /// 将 lens 窗口缩小为浮动尺寸（截图后非全屏模式用）
@@ -1709,4 +1927,52 @@ pub(crate) fn lens_delete_history_image(app: AppHandle, image_id: String) -> Res
         fs::remove_file(&path).map_err(|e| format!("remove history image: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn freeze_frame_crop_rect_clamps_to_image_bounds() {
+        assert_eq!(
+            freeze_frame_crop_rect(-10, 8, 30, 20, 1.0, 100, 80),
+            Some(ImageCropRect {
+                x: 0,
+                y: 8,
+                width: 20,
+                height: 20,
+            })
+        );
+
+        assert_eq!(
+            freeze_frame_crop_rect(90, 70, 30, 20, 1.0, 100, 80),
+            Some(ImageCropRect {
+                x: 90,
+                y: 70,
+                width: 10,
+                height: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn freeze_frame_crop_rect_rejects_empty_or_outside_region() {
+        assert_eq!(freeze_frame_crop_rect(10, 10, 0, 20, 1.0, 100, 80), None);
+        assert_eq!(freeze_frame_crop_rect(120, 10, 20, 20, 1.0, 100, 80), None);
+        assert_eq!(freeze_frame_crop_rect(10, 90, 20, 20, 1.0, 100, 80), None);
+    }
+
+    #[test]
+    fn freeze_frame_crop_rect_scales_logical_region_to_physical_pixels() {
+        assert_eq!(
+            freeze_frame_crop_rect(10, 12, 40, 20, 1.5, 300, 200),
+            Some(ImageCropRect {
+                x: 15,
+                y: 18,
+                width: 60,
+                height: 30,
+            })
+        );
+    }
 }

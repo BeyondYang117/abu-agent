@@ -737,7 +737,10 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
         thinkingEnabled: true,
         systemPrompt: '',
         questionPrompt: '',
-        messageOrder: 'asc' as const
+        messageOrder: 'asc' as const,
+        keepFullscreenAfterCapture: true,
+        showCaptureHint: true,
+        windowsFreezeFrameSelection: false
       }
       return { ...prev, lens: { ...current, ...updates } }
     })
@@ -1225,6 +1228,14 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           onChange={(v) => updateLens({ showCaptureHint: v })}
                         />
                       </SettingRow>
+                      {platform === 'windows' && (
+                        <SettingRow label={t.lensWindowsFreezeFrameSelection} description={t.lensWindowsFreezeFrameSelectionHint}>
+                          <Toggle
+                            checked={settings.lens?.windowsFreezeFrameSelection === true}
+                            onChange={(v) => updateLens({ windowsFreezeFrameSelection: v })}
+                          />
+                        </SettingRow>
+                      )}
                       <SettingRow label={t.selectModelPair}>
                         <ModelPairSelect
                           providerId={settings.lens?.providerId || ''}

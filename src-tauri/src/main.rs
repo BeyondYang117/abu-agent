@@ -121,6 +121,7 @@ fn main() {
                 lens_busy: AtomicBool::new(false),
                 explain_stream_generation: AtomicU64::new(0),
                 pending_selection: Mutex::new(None),
+                lens_freeze_frame_image_id: Mutex::new(None),
                 key_cooldowns: Mutex::new(HashMap::new()),
                 active_key_idx: Mutex::new(HashMap::new()),
                 http: build_http_client(),

@@ -287,6 +287,10 @@ pub struct LensConfig {
     /// 进入截图选择态时是否显示顶部提示。默认 true，避免用户按下快捷键后看不出已进入截图模式。
     #[serde(default = "default_true")]
     pub show_capture_hint: bool,
+    /// Windows 兼容模式：进入截图选择态前先抓取当前显示器冻结帧，再在覆盖层内显示和裁剪冻结帧。
+    /// 默认 false，保留实时透明覆盖层行为；用于规避浏览器视频在透明置顶 WebView2 下变黑。
+    #[serde(default = "default_false")]
+    pub windows_freeze_frame_selection: bool,
 }
 
 fn default_message_order() -> String {
@@ -308,6 +312,7 @@ impl Default for LensConfig {
             message_order: "asc".to_string(),
             keep_fullscreen_after_capture: true,
             show_capture_hint: true,
+            windows_freeze_frame_selection: false,
         }
     }
 }
@@ -1216,6 +1221,15 @@ mod tests {
 
         let cfg: LensConfig = serde_json::from_str("{}").expect("empty lens config should load");
         assert!(cfg.show_capture_hint);
+    }
+
+    #[test]
+    fn lens_windows_freeze_frame_selection_defaults_to_disabled() {
+        let s = Settings::default();
+        assert!(!s.lens.windows_freeze_frame_selection);
+
+        let cfg: LensConfig = serde_json::from_str("{}").expect("empty lens config should load");
+        assert!(!cfg.windows_freeze_frame_selection);
     }
 
     #[test]
