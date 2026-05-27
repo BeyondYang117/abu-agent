@@ -281,9 +281,6 @@ pub struct LensConfig {
     /// 消息排序："asc" 老到新（默认），"desc" 新到老
     #[serde(default = "default_message_order")]
     pub message_order: String,
-    /// 截图后是否保持全屏覆盖。默认 true（保持现有行为）；false 时截图后窗口缩小为浮动。
-    #[serde(default = "default_true")]
-    pub keep_fullscreen_after_capture: bool,
     /// 进入截图选择态时是否显示顶部提示。默认 true，避免用户按下快捷键后看不出已进入截图模式。
     #[serde(default = "default_true")]
     pub show_capture_hint: bool,
@@ -310,7 +307,6 @@ impl Default for LensConfig {
             system_prompt: String::new(),
             question_prompt: String::new(),
             message_order: "asc".to_string(),
-            keep_fullscreen_after_capture: true,
             show_capture_hint: true,
             windows_freeze_frame_selection: false,
         }

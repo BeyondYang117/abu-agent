@@ -104,7 +104,7 @@ export default function Lens() {
   const [copied, setCopied] = useState(false)
   const [lang, setLang] = useState<Lang>('zh')
   const [messageOrder, setMessageOrder] = useState<'asc' | 'desc'>('asc')
-  const [keepFullscreen, setKeepFullscreen] = useState(true)
+  const [keepFullscreen, setKeepFullscreen] = useState(() => readModeFromHash() !== 'translateText')
   const [floatingRebased, setFloatingRebased] = useState(false)
   const [mode, setMode] = useState<Mode>(() => readModeFromHash())
   // translate 模式专用：OCR 原文 + 翻译结果 + 计时
@@ -178,6 +178,7 @@ export default function Lens() {
   const selectRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const selectRevealedRef = useRef(false)
   const captureHintEnabledRef = useRef(true)
+  const screenshotKeepFullscreenRef = useRef(true)
   const prevStreamingRef = useRef(false)
   const preparingSendRef = useRef(false)
   const answerFinishedRef = useRef(false)
@@ -229,8 +230,7 @@ export default function Lens() {
     return selectionText.split(/\r?\n/).length
   }, [selectionText, mode])
 
-  // 加载设置：语言 + 消息顺序。keepFullscreen 按当前 mode 读对应配置:
-  // chat 模式读 settings.lens.keepFullscreenAfterCapture，translate 模式读 settings.screenshotTranslation.keepFullscreenAfterCapture。
+  // 加载设置：普通 Lens 截图后固定保持全屏覆盖；截图翻译仍读自己的保留全屏配置。
   useEffect(() => {
     void (async () => {
       try {
@@ -238,8 +238,8 @@ export default function Lens() {
         setLang((settings.settingsLanguage as Lang) || 'zh')
         setMessageOrder(settings.lens?.messageOrder === 'desc' ? 'desc' : 'asc')
         const curMode = readModeFromHash()
-        const cfg = curMode === 'translate' ? settings.screenshotTranslation : settings.lens
-        setKeepFullscreen(cfg?.keepFullscreenAfterCapture !== false)
+        screenshotKeepFullscreenRef.current = settings.screenshotTranslation?.keepFullscreenAfterCapture !== false
+        setKeepFullscreen(curMode === 'chat' || (curMode === 'translate' && screenshotKeepFullscreenRef.current))
         captureHintEnabledRef.current = settings.lens?.showCaptureHint !== false
       } catch (err) { console.error('Failed to load settings', err) }
     })()
@@ -290,6 +290,7 @@ export default function Lens() {
       setBarNoTransition(true)
       setStage(curMode === 'translateText' ? 'translating' : 'select')
       setMode(curMode)
+      setKeepFullscreen(curMode === 'chat' || (curMode === 'translate' && screenshotKeepFullscreenRef.current))
       setFloatingRebased(false)
       setHovered(null)
       setDragStart(null)
@@ -336,14 +337,14 @@ export default function Lens() {
         }
       })()
     }
-    // 重新加载设置：用户在设置面板修改后关闭再打开 Lens，需要读到最新值。按当前 mode 选 lens / screenshotTranslation 配置。
+    // 重新加载设置：用户在设置面板修改后关闭再打开 Lens，需要读到最新值。
     // 必须放在 reset DOM 之后，避免 await 期间 Rust 已 show 导致旧 ready/answering surface 露出首帧。
     void (async () => {
       try {
         const settings = await api.getSettings()
         if (motionSeq !== motionSeqRef.current) return
-        const cfg = curMode === 'translate' || curMode === 'translateText' ? settings.screenshotTranslation : settings.lens
-        setKeepFullscreen(cfg?.keepFullscreenAfterCapture !== false)
+        screenshotKeepFullscreenRef.current = settings.screenshotTranslation?.keepFullscreenAfterCapture !== false
+        setKeepFullscreen(curMode === 'chat' || (curMode === 'translate' && screenshotKeepFullscreenRef.current))
         captureHintEnabledRef.current = settings.lens?.showCaptureHint !== false
         if (stageRef.current === 'select' && selectRevealedRef.current) {
           setShowCaptureHint(captureHintEnabledRef.current)

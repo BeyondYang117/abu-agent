@@ -738,7 +738,6 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
         systemPrompt: '',
         questionPrompt: '',
         messageOrder: 'asc' as const,
-        keepFullscreenAfterCapture: true,
         showCaptureHint: true,
         windowsFreezeFrameSelection: false
       }
@@ -1214,12 +1213,6 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                             { value: 'asc', label: t.lensMessageOrderAsc },
                             { value: 'desc', label: t.lensMessageOrderDesc },
                           ]}
-                        />
-                      </SettingRow>
-                      <SettingRow label={t.lensKeepFullscreen} description={t.lensKeepFullscreenHint}>
-                        <Toggle
-                          checked={settings.lens?.keepFullscreenAfterCapture !== false}
-                          onChange={(v) => updateLens({ keepFullscreenAfterCapture: v })}
                         />
                       </SettingRow>
                       <SettingRow label={t.lensShowCaptureHint} description={t.lensShowCaptureHintHint}>

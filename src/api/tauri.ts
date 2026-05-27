@@ -119,8 +119,6 @@ export type Settings = {
     questionPrompt?: string
     /** 消息排序：'asc' 老到新（默认），'desc' 新到老 */
     messageOrder?: 'asc' | 'desc'
-    /** 截图后是否保持全屏覆盖（默认 true）。false 时截图后窗口缩小为浮动 */
-    keepFullscreenAfterCapture?: boolean
     /** 进入截图选择态时是否显示顶部提示（默认 true） */
     showCaptureHint?: boolean
     /** Windows 兼容模式：进入选择态前冻结当前画面，再从冻结帧裁剪（默认 false） */
