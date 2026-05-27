@@ -1,13 +1,13 @@
-import { Camera, ChevronRight, Download, RefreshCw } from 'lucide-react'
+import { ChevronRight, Download, RefreshCw } from 'lucide-react'
 import { type DefaultPromptTemplates, type RapidOcrStatus, type Settings } from '../api/tauri'
 import { ModelPairSelect } from './ModelPairSelect'
 import {
   DefaultPrompt,
   HotkeyInput,
   Label,
-  SectionTitle,
   Select,
   SettingRow,
+  SettingsGroup,
   TextArea,
   Toggle,
 } from './components'
@@ -61,10 +61,8 @@ export function ScreenshotTranslationSettings({
   const ocrMode = screenshot?.ocrMode ?? 'cloud_vision'
 
   return (
-    <section>
-      <SectionTitle icon={Camera}>{t.screenshotTranslate}</SectionTitle>
-      <div className="settings-card overflow-hidden">
-        <div className="divide-y divide-black/[0.04] dark:divide-white/[0.05]">
+    <>
+      <SettingsGroup title={t.screenshotTranslate}>
           <SettingRow label={t.enabled}>
             <Toggle
               checked={screenshot?.enabled ?? true}
@@ -74,10 +72,7 @@ export function ScreenshotTranslationSettings({
 
           {screenshot?.enabled !== false && (
             <>
-              <div className="px-4 py-3 space-y-1.5">
-                <span className="text-[12px] font-medium text-neutral-700 dark:text-neutral-200">
-                  {t.screenshotHotkey}
-                </span>
+              <SettingRow label={t.screenshotHotkey} description={t.screenshotHotkey} stack>
                 <HotkeyInput
                   value={screenshot?.hotkey || 'CommandOrControl+Shift+A'}
                   placeholder="CommandOrControl+Shift+A"
@@ -90,12 +85,9 @@ export function ScreenshotTranslationSettings({
                   clearLabel={hotkeyClearLabel}
                   error={hotkeyError}
                 />
-              </div>
+              </SettingRow>
 
-              <div className="px-4 py-3 space-y-1.5">
-                <span className="text-[12px] font-medium text-neutral-700 dark:text-neutral-200">
-                  {t.screenshotTextHotkey}
-                </span>
+              <SettingRow label={t.screenshotTextHotkey} description={t.selectedText} stack>
                 <HotkeyInput
                   value={screenshot?.textHotkey || 'CommandOrControl+Shift+T'}
                   placeholder="CommandOrControl+Shift+T"
@@ -108,18 +100,14 @@ export function ScreenshotTranslationSettings({
                   clearLabel={hotkeyClearLabel}
                   error={textHotkeyError}
                 />
-              </div>
-
-              <SettingRow label={t.selectModelPair}>
-                <ModelPairSelect
-                  providerId={screenshot.providerId}
-                  model={screenshot.model}
-                  providers={settings.providers}
-                  platform={platform}
-                  onChange={(providerId, model) => onUpdate({ providerId, model })}
-                />
               </SettingRow>
+            </>
+          )}
+      </SettingsGroup>
 
+      {screenshot?.enabled !== false && (
+        <>
+          <SettingsGroup title={t.screenshotTranslate}>
               <SettingRow
                 label={t.screenshotShowOriginal}
                 description={t.screenshotShowOriginalHint}
@@ -149,9 +137,16 @@ export function ScreenshotTranslationSettings({
                   onChange={(streamEnabled) => onUpdate({ streamEnabled })}
                 />
               </SettingRow>
+              <SettingRow label={t.lensKeepFullscreen} description={t.lensKeepFullscreenHint}>
+                <Toggle
+                  checked={screenshot?.keepFullscreenAfterCapture !== false}
+                  onChange={(keepFullscreenAfterCapture) => onUpdate({ keepFullscreenAfterCapture })}
+                />
+              </SettingRow>
+          </SettingsGroup>
 
-              {hasSystemOcr && (
-                <>
+          {hasSystemOcr && (
+            <SettingsGroup title={t.ocrEngine}>
                   <SettingRow label={t.ocrEngine} description={t.ocrEngineHint}>
                     <Select
                       value={ocrMode}
@@ -170,8 +165,10 @@ export function ScreenshotTranslationSettings({
                   </SettingRow>
 
                   {ocrMode === 'system' && (
-                    <div className="px-4 py-2 text-[11px] text-neutral-500 dark:text-neutral-400 border-t border-black/[0.04] dark:border-white/[0.05]">
+                    <div className="kv-panel mt-2">
+                      <div className="kv-panel-body">
                       {isMac ? t.ocrEngineMacHint : t.ocrEngineWindowsHint}
+                      </div>
                     </div>
                   )}
 
@@ -185,22 +182,33 @@ export function ScreenshotTranslationSettings({
                       onDownload={onDownloadRapidOcr}
                     />
                   )}
-                </>
-              )}
+            </SettingsGroup>
+          )}
 
-              <SettingRow label={t.lensKeepFullscreen} description={t.lensKeepFullscreenHint}>
-                <Toggle
-                  checked={screenshot?.keepFullscreenAfterCapture !== false}
-                  onChange={(keepFullscreenAfterCapture) => onUpdate({ keepFullscreenAfterCapture })}
+          <SettingsGroup title={t.engine}>
+              <SettingRow label={t.selectModelPair}>
+                <ModelPairSelect
+                  providerId={screenshot.providerId}
+                  model={screenshot.model}
+                  providers={settings.providers}
+                  platform={platform}
+                  onChange={(providerId, model) => onUpdate({ providerId, model })}
                 />
               </SettingRow>
+          </SettingsGroup>
 
-              <details className="group border-t border-black/[0.04] dark:border-white/[0.05]">
-                <summary className="flex items-center gap-1.5 cursor-pointer text-[12px] font-medium text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/[0.02] dark:hover:bg-white/[0.025] transition-colors list-none px-4 py-3">
-                  <ChevronRight size={13} className="text-neutral-400 dark:text-neutral-500 group-open:rotate-90 transition-transform duration-200" strokeWidth={2.25} />
-                  {t.customPrompts}
+          <SettingsGroup title={t.customPrompts}>
+              <details className="group">
+                <summary className="kv-row cursor-pointer list-none">
+                  <div className="kv-row-text">
+                    <div className="kv-row-label flex items-center gap-1.5">
+                      <ChevronRight size={13} className="text-neutral-400 dark:text-neutral-500 group-open:rotate-90 transition-transform duration-200" strokeWidth={2.25} />
+                      {t.customPrompts}
+                    </div>
+                    <div className="kv-row-desc">{t.screenshotTranslationPromptHint}</div>
+                  </div>
                 </summary>
-                <div className="px-4 pb-4 space-y-2">
+                <div className="pb-2 space-y-2">
                   <Label>{t.screenshotTranslationPrompt}</Label>
                   <TextArea
                     value={screenshot?.prompt || ''}
@@ -216,11 +224,10 @@ export function ScreenshotTranslationSettings({
                   )}
                 </div>
               </details>
-            </>
-          )}
-        </div>
-      </div>
-    </section>
+          </SettingsGroup>
+        </>
+      )}
+    </>
   )
 }
 
@@ -240,23 +247,23 @@ function RapidOcrStatusPanel({
   onDownload: () => void
 }) {
   return (
-    <div className="border-t border-black/[0.04] dark:border-white/[0.05] px-4 py-3 space-y-2 text-[12px]">
+    <div className="kv-panel mt-2">
       {status?.modelsAvailable ? (
         <div className="flex items-start gap-2">
           <span className="mt-0.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
           <div className="flex-1">
-            <div className="text-neutral-700 dark:text-neutral-200">
+            <div className="kv-panel-title !mb-0">
               {t.rapidOcrModelsFound}
             </div>
             {status.modelDir && (
-              <div className="text-[11px] text-neutral-400 dark:text-neutral-500 mt-0.5 font-mono break-all">
+              <div className="kv-panel-body font-mono break-all">
                 {status.modelDir}
               </div>
             )}
           </div>
           <button
             onClick={onRefresh}
-            className="text-[11px] text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+            className="kv-icon-btn"
             title={t.rapidOcrRefresh}
           >
             <RefreshCw size={12} strokeWidth={2.25} />
@@ -266,13 +273,13 @@ function RapidOcrStatusPanel({
         <div className="space-y-2.5">
           <div className="flex items-start gap-2">
             <span className="mt-0.5 inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
-            <div className="flex-1 text-neutral-700 dark:text-neutral-200">
+            <div className="flex-1 kv-panel-title !mb-0">
               {t.rapidOcrModelsNotFound}
             </div>
             <button
               onClick={onRefresh}
               disabled={downloadState === 'downloading'}
-              className="text-[11px] text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 disabled:opacity-40"
+              className="kv-icon-btn disabled:opacity-40"
               title={t.rapidOcrRefresh}
             >
               <RefreshCw size={12} strokeWidth={2.25} />
@@ -280,7 +287,7 @@ function RapidOcrStatusPanel({
           </div>
 
           {downloadState === 'downloading' ? (
-            <div className="pl-3.5 flex items-center gap-2 text-[11px] text-neutral-600 dark:text-neutral-300">
+            <div className="pl-3.5 flex items-center gap-2 kv-panel-body">
               <RefreshCw size={12} strokeWidth={2.25} className="animate-spin" />
               <span>{t.rapidOcrDownloading}</span>
             </div>
@@ -288,7 +295,7 @@ function RapidOcrStatusPanel({
             <div className="pl-3.5">
               <button
                 onClick={onDownload}
-                className="text-[12px] px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white inline-flex items-center gap-1"
+                className="kv-btn primary"
               >
                 <Download size={12} strokeWidth={2.5} />
                 {t.rapidOcrDownloadButton}
@@ -297,12 +304,12 @@ function RapidOcrStatusPanel({
           )}
 
           {downloadState === 'failed' && downloadError && (
-            <div className="pl-3.5 text-[11px] text-red-500 break-words">
+            <div className="kv-inline-error pl-3.5 break-words">
               {t.rapidOcrDownloadFailed}: {downloadError}
             </div>
           )}
 
-          <div className="text-[11px] text-neutral-500 dark:text-neutral-400 leading-5 pl-3.5">
+          <div className="kv-panel-body pl-3.5">
             {t.rapidOcrHint}
           </div>
         </div>

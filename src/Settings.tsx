@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
-  X, Save, Plus, Trash2, RefreshCw,
+  X, Check, Plus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Camera,
-  Cloud, Info, Palette, Keyboard, SlidersHorizontal, Globe,
-  Cpu, FileText, ShieldCheck, Aperture, ExternalLink, Download, ChevronRight
+  Cloud, Info, Aperture, ExternalLink, Download, ChevronRight
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -16,7 +15,7 @@ import { ScreenshotTranslationSettings } from './settings/ScreenshotTranslationS
 import {
   Toggle, Select, Input, TextArea, Label,
   SettingRow, PermissionItem, HotkeyInput, DefaultPrompt,
-  SectionTitle,
+  SettingsGroup,
 } from './settings/components'
 
 type SettingsData = SettingsType
@@ -48,6 +47,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
   const [permissionsLoading, setPermissionsLoading] = useState(false)
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null)
   const [providerTestFeedback, setProviderTestFeedback] = useState<Record<string, { ok: boolean; message: string }>>({})
+  const [selectedProviderId, setSelectedProviderId] = useState('')
   // 更新检查状态：'idle' / 'checking' / 'up-to-date' / 'available'
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available'>('idle')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -336,6 +336,16 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
     setRetryAttemptsInput(String(retryAttempts ?? 3))
   }, [retryAttempts])
 
+  useEffect(() => {
+    if (!settings?.providers.length) {
+      setSelectedProviderId('')
+      return
+    }
+    if (!selectedProviderId || !settings.providers.some((provider) => provider.id === selectedProviderId)) {
+      setSelectedProviderId(settings.providers[0].id)
+    }
+  }, [selectedProviderId, settings?.providers])
+
   /**
    * 保存设置
    */
@@ -406,6 +416,16 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
       onClose()
     }
   }
+
+  const handleSettingsDragMouseDown = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement | null
+    if (target?.closest('button, input, textarea, select, [data-tauri-drag-region="false"]')) return
+    event.preventDefault()
+    void api.startDragging().catch((err) => {
+      console.error('[settings-drag] startDragging failed:', err)
+    })
+  }, [])
 
   // Esc 键关闭（带未保存提示）
   useEffect(() => {
@@ -538,6 +558,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
       ...settings,
       providers: [...settings.providers, newProvider]
     })
+    setSelectedProviderId(newId)
   }
 
   /** 用预设一键添加 provider —— baseUrl 和默认模型已填好，用户只需填 API key */
@@ -557,6 +578,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
       ...settings,
       providers: [...settings.providers, newProvider]
     })
+    setSelectedProviderId(newId)
   }
 
   /**
@@ -825,337 +847,349 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
     )
   }
 
+  const navItems = [
+    { id: 'general' as const, label: t.tabGeneral, icon: SettingsIcon },
+    { id: 'translate' as const, label: t.tabTranslate, icon: Languages },
+    { id: 'screenshot' as const, label: t.tabScreenshot, icon: Camera },
+    { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
+    { id: 'providers' as const, label: t.tabModels, icon: Cloud },
+  ]
+  const pageMeta: Record<typeof activeTab, { title: string; subtitle: string; right?: string }> = {
+    general: {
+      title: t.tabGeneral,
+      subtitle: lang === 'zh' ? '外观、行为、归档和权限。' : 'Appearance, behavior, archive, and permissions.',
+    },
+    translate: {
+      title: t.tabTranslate,
+      subtitle: lang === 'zh' ? '输入翻译的快捷键、语言、模型和提示词。' : 'Shortcut, language, model, and prompt for input translation.',
+    },
+    screenshot: {
+      title: t.tabScreenshot,
+      subtitle: lang === 'zh' ? '截图选择、OCR、输出和翻译模型。' : 'Capture selection, OCR, output, and translation model.',
+    },
+    lens: {
+      title: t.lensTabLabel,
+      subtitle: lang === 'zh' ? '视觉问答的快捷键、响应方式和提示词。' : 'Shortcut, response behavior, and prompts for visual Q&A.',
+    },
+    providers: {
+      title: t.tabModels,
+      subtitle: lang === 'zh' ? '管理 OpenAI 兼容供应商、密钥和启用模型。' : 'Manage OpenAI-compatible providers, keys, and enabled models.',
+    },
+    about: {
+      title: lang === 'zh' ? '关于' : 'About',
+      subtitle: lang === 'zh' ? '版本、更新和应用信息。' : 'Version, updates, and application details.',
+    },
+  }
+  const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
+
   return (
-    <div className="flex bg-[#fafafa] dark:bg-black text-neutral-900 dark:text-neutral-100 font-sans rounded-xl border border-black/5 dark:border-white/10 shadow-none overflow-hidden h-full w-full">
-      {/* 左侧侧边栏 */}
-      <div className="w-[180px] flex flex-col border-r border-black/[0.04] dark:border-white/[0.05] bg-white dark:bg-[#1C1C1E] shrink-0">
-        {/* 标题 */}
-        <div className="px-5 py-4" data-tauri-drag-region>
-          <h2 className="font-semibold text-[14px] tracking-tight text-neutral-900 dark:text-neutral-100">{t.settings}</h2>
-        </div>
-
-        {/* 导航项 */}
-        <nav className="flex-1 px-2.5 space-y-0.5">
-          {[
-            { id: 'general' as const, label: t.tabGeneral, icon: SettingsIcon },
-            { id: 'translate' as const, label: t.tabTranslate, icon: Languages },
-            { id: 'screenshot' as const, label: t.tabScreenshot, icon: Camera },
-            { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
-            { id: 'providers' as const, label: t.tabModels, icon: Cloud },
-            { id: 'about' as const, label: lang === 'zh' ? '关于' : 'About', icon: Info },
-          ].map((item) => {
-            const Icon = item.icon
-            const active = activeTab === item.id
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-2.5 px-2.5 h-9 rounded-md text-[13px] font-medium transition-colors duration-150 ${active
-                  ? 'bg-[#2563eb]/[0.09] dark:bg-blue-400/[0.12] text-[#2563eb] dark:text-blue-300'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/[0.035] dark:hover:bg-white/[0.04]'
-                  }`}
-                data-tauri-drag-region="false"
-              >
-                <Icon size={15} strokeWidth={1.75} />
-                {item.label}
-              </button>
-            )
-          })}
-        </nav>
-
-        <div className="px-5 py-3">
-          <span className="text-[10px] font-medium text-neutral-400 dark:text-neutral-500 tracking-wide">v{appVersion}</span>
-        </div>
-
+    <div className="kv kv-window">
+      <div className="kv-titlebar" onMouseDown={handleSettingsDragMouseDown}>
+        <div className="kv-titlebar-spacer" aria-hidden="true" />
+        <div className="kv-title">{t.settings}</div>
+        <button
+          type="button"
+          onClick={handleCloseRequest}
+          className="kv-titlebar-close"
+          data-tauri-drag-region="false"
+          aria-label={t.cancel}
+        >
+          <X size={13} strokeWidth={2.2} />
+        </button>
       </div>
 
-      {/* 右侧内容区域 */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* 顶部关闭按钮 */}
-        <div className="flex justify-end px-4 pt-3" data-tauri-drag-region>
-          <button
-            onClick={handleCloseRequest}
-            className="p-1.5 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] rounded-md text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
-            data-tauri-drag-region="false"
-          >
-            <X size={16} strokeWidth={2} />
-          </button>
-        </div>
-        {/* 内容滚动区 */}
-        <div className="flex-1 overflow-auto px-5 py-2 space-y-5 custom-scrollbar">
-        {/* ===== 基础设置标签页 ===== */}
-        {activeTab === 'general' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {/* 外观 */}
-            <section>
-              <SectionTitle icon={Palette}>{lang === 'zh' ? '外观' : 'Appearance'}</SectionTitle>
-              <div className="settings-card overflow-hidden divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-                <SettingRow label={t.theme}>
-                  <Select
-                    className="w-36"
-                    value={settings.theme || 'system'}
-                    onChange={(v) => updateSettings({ theme: v as SettingsData['theme'] })}
-                    options={[
-                      { value: 'system', label: t.themeSystem },
-                      { value: 'light', label: t.themeLight },
-                      { value: 'dark', label: t.themeDark },
-                    ]}
-                  />
-                </SettingRow>
-                <SettingRow label={t.language}>
-                  <Select
-                    className="w-36"
-                    value={settings.settingsLanguage || 'zh'}
-                    onChange={(v) => updateSettings({ settingsLanguage: v as 'zh' | 'en' })}
-                    options={[
-                      { value: 'zh', label: '中文' },
-                      { value: 'en', label: 'English' },
-                    ]}
-                  />
-                </SettingRow>
-              </div>
-            </section>
+      <div className="kv-body">
+        <aside className="kv-sidebar">
+          <div className="kv-sidebar-brand" onMouseDown={handleSettingsDragMouseDown}>
+            <div className="kv-sidebar-brand-mark">K</div>
+            <div className="kv-sidebar-brand-name">Kivio</div>
+            <div className="kv-sidebar-brand-ver">v{appVersion}</div>
+          </div>
 
-            {/* 行为 */}
-            <section>
-              <SectionTitle icon={SlidersHorizontal}>{lang === 'zh' ? '行为' : 'Behavior'}</SectionTitle>
-              <div className="settings-card overflow-hidden divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-                <SettingRow label={t.retryEnabled} description={t.retryAttemptsHint}>
-                  <Toggle
-                    checked={settings.retryEnabled ?? true}
-                    onChange={(v) => updateSettings({ retryEnabled: v })}
-                  />
-                </SettingRow>
-                {settings.retryEnabled !== false && (
-                  <div className="px-4 py-2.5 animate-in fade-in slide-in-from-top-1 duration-150">
-                    <Input
-                      type="number"
-                      value={retryAttemptsInput}
-                      onChange={handleRetryAttemptsChange}
-                      onBlur={handleRetryAttemptsBlur}
-                      placeholder="3"
-                      min={1}
-                      max={5}
-                      className="!w-20 text-center"
+          <nav className="kv-nav">
+            {navItems.map((item) => {
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveTab(item.id)}
+                  className={`kv-nav-item ${activeTab === item.id ? 'active' : ''}`}
+                  data-tauri-drag-region="false"
+                >
+                  <Icon strokeWidth={1.7} />
+                  <span>{item.label}</span>
+                </button>
+              )
+            })}
+          </nav>
+
+          <div className="kv-nav-spacer" />
+
+          <nav className="kv-nav">
+            <button
+              type="button"
+              onClick={() => setActiveTab('about')}
+              className={`kv-nav-item ${activeTab === 'about' ? 'active' : ''}`}
+              data-tauri-drag-region="false"
+            >
+              <Info strokeWidth={1.7} />
+              <span>{lang === 'zh' ? '关于' : 'About'}</span>
+            </button>
+          </nav>
+        </aside>
+
+        <main className="kv-content">
+          <header className="kv-page-header">
+            <div>
+              <div className="kv-page-title">{pageMeta[activeTab].title}</div>
+              <div className="kv-page-sub">{pageMeta[activeTab].subtitle}</div>
+            </div>
+            <div className="kv-page-header-right">{pageMeta[activeTab].right}</div>
+          </header>
+
+          <div className="kv-scroll">
+            {/* ===== 基础设置标签页 ===== */}
+            {activeTab === 'general' && (
+              <>
+                <SettingsGroup title={lang === 'zh' ? '外观' : 'Appearance'}>
+                  <SettingRow label={t.language} description={lang === 'zh' ? '设置 Kivio 界面语言。' : 'Used for the Kivio interface.'}>
+                    <Select
+                      className="w-36"
+                      value={settings.settingsLanguage || 'zh'}
+                      onChange={(v) => updateSettings({ settingsLanguage: v as 'zh' | 'en' })}
+                      options={[
+                        { value: 'zh', label: '中文' },
+                        { value: 'en', label: 'English' },
+                      ]}
                     />
-                  </div>
-                )}
-                <SettingRow label={t.autoPaste}>
-                  <Toggle
-                    checked={settings.autoPaste ?? true}
-                    onChange={(v) => updateSettings({ autoPaste: v })}
-                  />
-                </SettingRow>
-                <SettingRow label={t.launchAtStartup}>
-                  <Toggle
-                    checked={settings.launchAtStartup ?? false}
-                    onChange={(v) => updateSettings({ launchAtStartup: v })}
-                  />
-                </SettingRow>
-              </div>
-            </section>
+                  </SettingRow>
+                  <SettingRow label={t.theme} description={lang === 'zh' ? '跟随系统外观，或固定浅色/深色。' : 'Match system appearance or pick a mode.'}>
+                    <div className="kv-seg">
+                      {[
+                        { value: 'system', label: t.themeSystem },
+                        { value: 'light', label: t.themeLight },
+                        { value: 'dark', label: t.themeDark },
+                      ].map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={(settings.theme || 'system') === option.value ? 'active' : ''}
+                          onClick={() => updateSettings({ theme: option.value as SettingsData['theme'] })}
+                          data-tauri-drag-region="false"
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </SettingRow>
+                </SettingsGroup>
 
-            {/* 截图自动归档 */}
-            <section>
-              <SectionTitle icon={Camera}>{t.imageArchive}</SectionTitle>
-              <div className="settings-card overflow-hidden divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-                <SettingRow label={t.imageArchive} description={t.imageArchiveHint}>
-                  <Toggle
-                    checked={settings.imageArchiveEnabled ?? false}
-                    onChange={(v) => updateSettings({ imageArchiveEnabled: v })}
-                  />
-                </SettingRow>
-                {settings.imageArchiveEnabled && (
-                  <div className="px-4 py-3 space-y-1.5 animate-in fade-in slide-in-from-top-1 duration-150">
-                    <span className="text-[12px] font-medium text-neutral-700 dark:text-neutral-200">{t.imageArchivePath}</span>
-                    <div className="flex items-center gap-2">
+                <SettingsGroup title={lang === 'zh' ? '行为' : 'Behavior'}>
+                  <SettingRow label={t.launchAtStartup} description={lang === 'zh' ? '登录后在后台启动 Kivio。' : 'Open Kivio in the background when you sign in.'}>
+                    <Toggle
+                      checked={settings.launchAtStartup ?? false}
+                      onChange={(v) => updateSettings({ launchAtStartup: v })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.autoPaste} description={lang === 'zh' ? '翻译完成后自动粘贴到当前应用。' : 'Paste translated text into the foreground app after translation completes.'}>
+                    <Toggle
+                      checked={settings.autoPaste ?? true}
+                      onChange={(v) => updateSettings({ autoPaste: v })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.retryEnabled} description={t.retryAttemptsHint}>
+                    <Toggle
+                      checked={settings.retryEnabled ?? true}
+                      onChange={(v) => updateSettings({ retryEnabled: v })}
+                    />
+                  </SettingRow>
+                  {settings.retryEnabled !== false && (
+                    <SettingRow label={t.retryAttempts} description={lang === 'zh' ? '范围 1-5 次。' : 'Range: 1-5 attempts.'}>
                       <Input
-                        value={settings.imageArchivePath || ''}
-                        onChange={(v) => updateSettings({ imageArchivePath: v })}
-                        placeholder={t.imageArchivePathPlaceholder}
-                        className="flex-1"
+                        type="number"
+                        value={retryAttemptsInput}
+                        onChange={handleRetryAttemptsChange}
+                        onBlur={handleRetryAttemptsBlur}
+                        placeholder="3"
+                        min={1}
+                        max={5}
+                        className="!w-20 text-center"
                       />
+                    </SettingRow>
+                  )}
+                </SettingsGroup>
+
+                <SettingsGroup title={t.imageArchive}>
+                  <SettingRow label={t.imageArchive} description={t.imageArchiveHint}>
+                    <Toggle
+                      checked={settings.imageArchiveEnabled ?? false}
+                      onChange={(v) => updateSettings({ imageArchiveEnabled: v })}
+                    />
+                  </SettingRow>
+                  {settings.imageArchiveEnabled && (
+                    <SettingRow label={t.imageArchivePath} description={t.imageArchivePathPlaceholder} stack>
+                      <div className="kv-path-row">
+                        <Input
+                          value={settings.imageArchivePath || ''}
+                          onChange={(v) => updateSettings({ imageArchivePath: v })}
+                          placeholder={t.imageArchivePathPlaceholder}
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const selected = await open({ directory: true, multiple: false })
+                              if (typeof selected === 'string') {
+                                updateSettings({ imageArchivePath: selected })
+                              }
+                            } catch (err) {
+                              console.error('Failed to pick directory:', err)
+                            }
+                          }}
+                          className="kv-btn"
+                          data-tauri-drag-region="false"
+                        >
+                          {t.imageArchiveBrowse}
+                        </button>
+                      </div>
+                    </SettingRow>
+                  )}
+                </SettingsGroup>
+
+                {permissionStatus?.platform === 'macos' && (
+                  <SettingsGroup title={t.permissions}>
+                    <PermissionItem
+                      label={t.accessibilityPermission}
+                      granted={permissionStatus.accessibility}
+                      grantedText={t.permissionGranted}
+                      missingText={t.permissionMissing}
+                      actionLabel={t.openSystemSettings}
+                      onOpen={() => handleOpenPermissionSettings('accessibility')}
+                    />
+                    <PermissionItem
+                      label={t.screenRecordingPermission}
+                      granted={permissionStatus.screenRecording}
+                      grantedText={t.permissionGranted}
+                      missingText={t.permissionMissing}
+                      actionLabel={t.openSystemSettings}
+                      onOpen={() => handleOpenPermissionSettings('screen-recording')}
+                    />
+                    <div className="flex justify-end py-2">
                       <button
                         type="button"
-                        onClick={async () => {
-                          try {
-                            const selected = await open({ directory: true, multiple: false })
-                            if (typeof selected === 'string') {
-                              updateSettings({ imageArchivePath: selected })
-                            }
-                          } catch (err) {
-                            console.error('Failed to pick directory:', err)
-                          }
-                        }}
-                        className="px-3 h-[36px] rounded-md text-[12px] font-medium border border-black/10 dark:border-white/10 text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+                        onClick={refreshPermissions}
+                        disabled={permissionsLoading}
+                        className="kv-btn sm"
                         data-tauri-drag-region="false"
                       >
-                        {t.imageArchiveBrowse}
+                        <RefreshCw size={10} className={permissionsLoading ? 'animate-spin' : ''} />
+                        {t.refreshPermissions}
                       </button>
                     </div>
-                  </div>
+                  </SettingsGroup>
                 )}
-              </div>
-            </section>
-
-            {/* 权限状态（仅 macOS 显示） */}
-            {permissionStatus?.platform === 'macos' && (
-              <section>
-                <SectionTitle icon={ShieldCheck}>{t.permissions}</SectionTitle>
-                <div className="settings-card overflow-hidden divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-                  <PermissionItem
-                    label={t.accessibilityPermission}
-                    granted={permissionStatus.accessibility}
-                    grantedText={t.permissionGranted}
-                    missingText={t.permissionMissing}
-                    actionLabel={t.openSystemSettings}
-                    onOpen={() => handleOpenPermissionSettings('accessibility')}
-                  />
-                  <PermissionItem
-                    label={t.screenRecordingPermission}
-                    granted={permissionStatus.screenRecording}
-                    grantedText={t.permissionGranted}
-                    missingText={t.permissionMissing}
-                    actionLabel={t.openSystemSettings}
-                    onOpen={() => handleOpenPermissionSettings('screen-recording')}
-                  />
-                  <div className="flex justify-end px-4 py-2.5">
-                    <button
-                      type="button"
-                      onClick={refreshPermissions}
-                      disabled={permissionsLoading}
-                      className={`text-[11px] font-medium flex items-center gap-1 px-2 py-1 rounded-md transition-all ${permissionsLoading
-                        ? 'text-neutral-400 cursor-not-allowed'
-                        : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-black/5 dark:hover:bg-white/5'
-                        }`}
-                      data-tauri-drag-region="false"
-                    >
-                      <RefreshCw size={10} className={permissionsLoading ? 'animate-spin' : ''} />
-                      {t.refreshPermissions}
-                    </button>
-                  </div>
-                </div>
-              </section>
+              </>
             )}
-          </div>
-        )}
 
-        {/* ===== 翻译设置标签页 ===== */}
-        {activeTab === 'translate' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {/* 快捷键 */}
-            <section>
-              <SectionTitle icon={Keyboard}>{t.hotkey}</SectionTitle>
-              <div className="settings-card overflow-hidden px-4 py-3">
-                <HotkeyInput
-                  value={settings.hotkey}
-                  placeholder={t.hotkeyPlaceholder}
-                  recording={recordingTarget === 'main'}
-                  onToggleRecording={() => toggleRecording('main')}
-                  recordLabel={t.hotkeyRecord}
-                  recordingLabel={t.hotkeyRecording}
-                  recordingPlaceholder={t.hotkeyRecordingPlaceholder}
-                  onClear={() => updateSettings({ hotkey: '' })}
-                  clearLabel={t.hotkeyClear}
-                  error={conflictMessageFor('main')}
-                />
-              </div>
-            </section>
+            {/* ===== 翻译设置标签页 ===== */}
+            {activeTab === 'translate' && (
+              <>
+                <SettingsGroup title={t.hotkey}>
+                  <SettingRow label={t.hotkey} description={lang === 'zh' ? '翻译当前选中文本或剪贴板内容。' : 'Translates the current selection or clipboard.'} stack>
+                    <HotkeyInput
+                      value={settings.hotkey}
+                      placeholder={t.hotkeyPlaceholder}
+                      recording={recordingTarget === 'main'}
+                      onToggleRecording={() => toggleRecording('main')}
+                      recordLabel={t.hotkeyRecord}
+                      recordingLabel={t.hotkeyRecording}
+                      recordingPlaceholder={t.hotkeyRecordingPlaceholder}
+                      onClear={() => updateSettings({ hotkey: '' })}
+                      clearLabel={t.hotkeyClear}
+                      error={conflictMessageFor('main')}
+                    />
+                  </SettingRow>
+                </SettingsGroup>
 
-            {/* 目标语言 */}
-            <section>
-              <SectionTitle icon={Globe}>{t.targetLang}</SectionTitle>
-              <div className="settings-card overflow-hidden">
-                <SettingRow label={t.targetLang}>
-                  <Select
-                    className="w-40"
-                    value={settings.targetLang || 'auto'}
-                    onChange={(v) => updateSettings({ targetLang: v })}
-                    options={[
-                      { value: 'auto', label: t.langAuto },
-                      { value: 'en', label: t.langEn },
-                      { value: 'zh', label: t.langZh },
-                      { value: 'zh-Hant', label: t.langZhTw },
-                      { value: 'ja', label: t.langJa },
-                      { value: 'ko', label: t.langKo },
-                      { value: 'fr', label: t.langFr },
-                      { value: 'de', label: t.langDe },
-                    ]}
-                  />
-                </SettingRow>
-              </div>
-            </section>
+                <SettingsGroup title={lang === 'zh' ? '输出' : 'Output'}>
+                  <SettingRow label={t.targetLang} description={lang === 'zh' ? '自动模式会在中英文之间切换。' : 'Auto switches between Chinese and English.'}>
+                    <Select
+                      className="w-40"
+                      value={settings.targetLang || 'auto'}
+                      onChange={(v) => updateSettings({ targetLang: v })}
+                      options={[
+                        { value: 'auto', label: t.langAuto },
+                        { value: 'en', label: t.langEn },
+                        { value: 'zh', label: t.langZh },
+                        { value: 'zh-Hant', label: t.langZhTw },
+                        { value: 'ja', label: t.langJa },
+                        { value: 'ko', label: t.langKo },
+                        { value: 'fr', label: t.langFr },
+                        { value: 'de', label: t.langDe },
+                      ]}
+                    />
+                  </SettingRow>
+                </SettingsGroup>
 
-            {/* 翻译引擎 */}
-            <section>
-              <SectionTitle icon={Cpu}>{t.engine}</SectionTitle>
-              <div className="settings-card overflow-hidden">
-                <SettingRow label={t.selectModelPair}>
-                  <ModelPairSelect
-                    providerId={settings.translatorProviderId}
-                    model={settings.translatorModel}
-                    providers={settings.providers}
-                    platform={platform}
-                    onChange={(providerId, model) => {
-                      updateSettings({ translatorProviderId: providerId, translatorModel: model })
-                    }}
-                  />
-                </SettingRow>
-              </div>
-            </section>
+                <SettingsGroup title={t.engine}>
+                  <SettingRow label={t.selectModelPair} description={lang === 'zh' ? '选择输入翻译使用的供应商和模型。' : 'Choose the provider and model used for input translation.'}>
+                    <ModelPairSelect
+                      providerId={settings.translatorProviderId}
+                      model={settings.translatorModel}
+                      providers={settings.providers}
+                      platform={platform}
+                      onChange={(providerId, model) => {
+                        updateSettings({ translatorProviderId: providerId, translatorModel: model })
+                      }}
+                    />
+                  </SettingRow>
+                </SettingsGroup>
 
-            {/* 提示词 */}
-            <section>
-              <SectionTitle icon={FileText}>{t.translatorPrompt}</SectionTitle>
-              <div className="settings-card overflow-hidden px-4 py-3">
-                <TextArea
-                  value={settings.translatorPrompt || ''}
-                  onChange={(v) => updateSettings({ translatorPrompt: v })}
-                  placeholder={t.translatorPromptHint}
-                  rows={3}
-                />
-                {!settings.translatorPrompt?.trim() && defaultPrompts?.translationTemplate && (
-                  <DefaultPrompt label={t.defaultTemplate} content={defaultPrompts.translationTemplate} />
-                )}
-              </div>
-            </section>
-          </div>
-        )}
+                <SettingsGroup title={t.translatorPrompt}>
+                  <SettingRow label={t.translatorPrompt} description={t.translatorPromptHint} stack>
+                    <TextArea
+                      value={settings.translatorPrompt || ''}
+                      onChange={(v) => updateSettings({ translatorPrompt: v })}
+                      placeholder={t.translatorPromptHint}
+                      rows={3}
+                    />
+                    {!settings.translatorPrompt?.trim() && defaultPrompts?.translationTemplate && (
+                      <DefaultPrompt label={t.defaultTemplate} content={defaultPrompts.translationTemplate} />
+                    )}
+                  </SettingRow>
+                </SettingsGroup>
+              </>
+            )}
 
-        {/* ===== 截图设置标签页 ===== */}
-        {activeTab === 'screenshot' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <ScreenshotTranslationSettings
-              settings={settings}
-              platform={platform}
-              isMac={isMac}
-              hasSystemOcr={hasSystemOcr}
-              recordingTarget={recordingTarget}
-              defaultPrompts={defaultPrompts}
-              rapidOcrStatus={rapidOcrStatus}
-              rapidOcrDownloadState={rapidOcrDownloadState}
-              rapidOcrDownloadError={rapidOcrDownloadError}
-              t={t}
-              onUpdate={updateScreenshotTranslation}
-              onToggleRecording={toggleRecording}
-              onRefreshRapidOcrStatus={refreshRapidOcrStatus}
-              onDownloadRapidOcr={handleDownloadRapidOcr}
-              hotkeyError={conflictMessageFor('screenshotTranslation')}
-              textHotkeyError={conflictMessageFor('screenshotTranslationText')}
-              hotkeyClearLabel={t.hotkeyClear}
-            />
+            {/* ===== 截图设置标签页 ===== */}
+            {activeTab === 'screenshot' && (
+              <ScreenshotTranslationSettings
+                settings={settings}
+                platform={platform}
+                isMac={isMac}
+                hasSystemOcr={hasSystemOcr}
+                recordingTarget={recordingTarget}
+                defaultPrompts={defaultPrompts}
+                rapidOcrStatus={rapidOcrStatus}
+                rapidOcrDownloadState={rapidOcrDownloadState}
+                rapidOcrDownloadError={rapidOcrDownloadError}
+                t={t}
+                onUpdate={updateScreenshotTranslation}
+                onToggleRecording={toggleRecording}
+                onRefreshRapidOcrStatus={refreshRapidOcrStatus}
+                onDownloadRapidOcr={handleDownloadRapidOcr}
+                hotkeyError={conflictMessageFor('screenshotTranslation')}
+                textHotkeyError={conflictMessageFor('screenshotTranslationText')}
+                hotkeyClearLabel={t.hotkeyClear}
+              />
+            )}
 
-          </div>
-        )}
-
-        {/* ===== Lens 标签页 ===== */}
-        {activeTab === 'lens' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <section>
-              <SectionTitle icon={Aperture}>{t.lensSection}</SectionTitle>
-              <div className="settings-card overflow-hidden">
-                <div className="divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-                  <SettingRow label={t.enabled}>
+            {/* ===== Lens 标签页 ===== */}
+            {activeTab === 'lens' && (
+              <>
+                <SettingsGroup title={t.lensSection}>
+                  <SettingRow label={t.enabled} description={lang === 'zh' ? '启用 Lens 截图问答入口。' : 'Enable the Lens screenshot Q&A entry point.'}>
                     <Toggle
                       checked={settings.lens?.enabled !== false}
                       onChange={(v) => updateLens({ enabled: v })}
@@ -1164,8 +1198,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
 
                   {settings.lens?.enabled !== false && (
                     <>
-                      <div className="px-4 py-3 space-y-1.5">
-                        <span className="text-[12px] font-medium text-neutral-700 dark:text-neutral-200">{t.hotkey}</span>
+                      <SettingRow label={t.hotkey} description={lang === 'zh' ? '进入 Lens 截图选择模式。' : 'Enter Lens screenshot selection mode.'} stack>
                         <HotkeyInput
                           value={settings.lens?.hotkey || 'CommandOrControl+Shift+G'}
                           placeholder="CommandOrControl+Shift+G"
@@ -1178,8 +1211,8 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           clearLabel={t.hotkeyClear}
                           error={conflictMessageFor('lens')}
                         />
-                      </div>
-                      <SettingRow label={t.lensResponseLanguage}>
+                      </SettingRow>
+                      <SettingRow label={t.lensResponseLanguage} description={lang === 'zh' ? '默认继承输入翻译语言设置。' : 'Defaults to the input translation language setting.'}>
                         <Select
                           className="w-44"
                           value={settings.lens?.defaultLanguage || ''}
@@ -1192,7 +1225,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           ]}
                         />
                       </SettingRow>
-                      <SettingRow label={t.lensStreamEnabled}>
+                      <SettingRow label={t.lensStreamEnabled} description={lang === 'zh' ? '模型返回时逐步显示答案。' : 'Show answers progressively as the model responds.'}>
                         <Toggle
                           checked={settings.lens?.streamEnabled !== false}
                           onChange={(v) => updateLens({ streamEnabled: v })}
@@ -1204,7 +1237,14 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           onChange={(v) => updateLens({ thinkingEnabled: v })}
                         />
                       </SettingRow>
-                      <SettingRow label={t.lensMessageOrder}>
+                    </>
+                  )}
+                </SettingsGroup>
+
+                {settings.lens?.enabled !== false && (
+                  <>
+                    <SettingsGroup title={lang === 'zh' ? '对话' : 'Conversation'}>
+                      <SettingRow label={t.lensMessageOrder} description={lang === 'zh' ? '控制 Lens 历史消息的排列顺序。' : 'Controls the order of Lens history messages.'}>
                         <Select
                           className="w-52"
                           value={settings.lens?.messageOrder ?? 'asc'}
@@ -1229,7 +1269,10 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           />
                         </SettingRow>
                       )}
-                      <SettingRow label={t.selectModelPair}>
+                    </SettingsGroup>
+
+                    <SettingsGroup title={t.engine}>
+                      <SettingRow label={t.selectModelPair} description={lang === 'zh' ? '留空时继承输入翻译模型。' : 'Leave empty to inherit the input translation model.'}>
                         <ModelPairSelect
                           providerId={settings.lens?.providerId || ''}
                           model={settings.lens?.model || ''}
@@ -1241,12 +1284,20 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           }}
                         />
                       </SettingRow>
-                      <details className="group border-t border-black/[0.04] dark:border-white/[0.05]">
-                        <summary className="flex items-center gap-1.5 cursor-pointer text-[12px] font-medium text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/[0.02] dark:hover:bg-white/[0.025] transition-colors list-none px-4 py-3">
-                          <ChevronRight size={13} className="text-neutral-400 dark:text-neutral-500 group-open:rotate-90 transition-transform duration-200" strokeWidth={2.25} />
-                          {t.customPrompts}
+                    </SettingsGroup>
+
+                    <SettingsGroup title={t.customPrompts}>
+                      <details className="group">
+                        <summary className="kv-row cursor-pointer list-none">
+                          <div className="kv-row-text">
+                            <div className="kv-row-label flex items-center gap-1.5">
+                              <ChevronRight size={13} className="text-neutral-400 dark:text-neutral-500 group-open:rotate-90 transition-transform duration-200" strokeWidth={2.25} />
+                              {t.customPrompts}
+                            </div>
+                            <div className="kv-row-desc">{t.customPromptsHint}</div>
+                          </div>
                         </summary>
-                        <div className="px-4 pb-4 space-y-4">
+                        <div className="space-y-4 pb-2">
                           <div>
                             <Label>{t.lensSystemPrompt}</Label>
                             <TextArea
@@ -1273,534 +1324,496 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                           </div>
                         </div>
                       </details>
-                    </>
-                  )}
-                </div>
-              </div>
-            </section>
-          </div>
-        )}
+                    </SettingsGroup>
+                  </>
+                )}
+              </>
+            )}
 
-        {/* ===== 模型管理标签页 ===== */}
-        {activeTab === 'providers' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {settings.providers.map((provider) => {
-              // 端上 provider(Apple Intelligence)：不需 baseURL/API Key/连接测试/可用模型 fetch，
-              // 这些字段对用户毫无意义,渲染时全部隐藏。
-              const isOnDevice = provider.baseUrl === 'applefoundation://local'
-              return (
-              <section key={provider.id} className="relative">
-                <div className="settings-card overflow-hidden">
-                  {/* 卡头：状态点 + 名称输入 + 删除按钮（始终可见） */}
-                  <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-black/[0.04] dark:border-white/[0.05] bg-black/[0.012] dark:bg-white/[0.018]">
-                    <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${
-                      isOnDevice
-                        ? 'bg-emerald-500'
-                        : provider.apiKeys.some(k => k.trim()) ? 'bg-[#2563eb] dark:bg-blue-400' : 'bg-neutral-300 dark:bg-neutral-600'
-                    }`} />
-                    <input
-                      value={provider.name}
-                      onChange={(e) => updateProvider(provider.id, { name: e.target.value })}
-                      placeholder="Provider name"
-                      className="flex-1 min-w-0 bg-transparent border-0 outline-none text-[13.5px] font-semibold text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:placeholder-neutral-300"
-                      data-tauri-drag-region="false"
-                    />
-                    {isOnDevice && (
-                      <span className="shrink-0 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded bg-emerald-500/10">
-                        {lang === 'zh' ? '本地' : 'Local'}
-                      </span>
-                    )}
-                    <button
-                      onClick={() => setConfirmDeleteProviderId(provider.id)}
-                      className="shrink-0 p-1.5 text-neutral-400 hover:text-red-500 hover:bg-red-500/10 rounded-md transition-colors"
-                      title={t.deleteProvider}
-                      data-tauri-drag-region="false"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-
-                  <div className="divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-                    {/* Base URL — 端上 provider(Apple Intelligence)用哨兵 baseURL,无展示价值,隐藏 */}
-                    {!isOnDevice && (
-                    <div className="px-4 py-3">
-                      <Label>{t.baseUrl}</Label>
-                      <div className="mt-1.5">
-                        <Input
-                          value={provider.baseUrl}
-                          onChange={(v) => updateProvider(provider.id, { baseUrl: v })}
-                          placeholder="https://api.openai.com/v1"
-                          mono
-                        />
-                      </div>
-                    </div>
-                    )}
-
-                    {/* API Keys — 端上 provider 不需 key,隐藏 */}
-                    {!isOnDevice && (
-                    <div className="px-4 py-3">
-                      <div className="flex items-center justify-between">
-                        <Label className="!mb-0">{t.apiKey}</Label>
-                        <span className="text-[10px] text-neutral-400 dark:text-neutral-500">
-                          {t.apiKeysHint}
-                        </span>
-                      </div>
-                      <div className="mt-2 space-y-1.5">
-                        {(provider.apiKeys.length > 0 ? provider.apiKeys : ['']).map((key, idx) => {
-                          const total = Math.max(provider.apiKeys.length, 1)
-                          // key 含 total（apiKeys.length）：add/remove 时整列强制 remount，
-                          // 避免删除 idx 0 后 React 把旧 row 0 的 DOM（焦点 / 光标 / 浏览器自动填充状态）复用给新 idx 0
-                          return (
-                            <div key={`${provider.id}-${total}-${idx}`} className="flex items-center gap-1.5">
-                              <div className="flex-1">
-                                <Input
-                                  type="password"
-                                  value={key}
-                                  mono
-                                  onChange={(v) => {
-                                    const base = provider.apiKeys.length > 0 ? [...provider.apiKeys] : ['']
-                                    base[idx] = v
-                                    updateProvider(provider.id, { apiKeys: base })
-                                  }}
-                                  placeholder={idx === 0 ? `sk-... (${t.apiKeyPrimary})` : `sk-... (${t.apiKeyBackup})`}
-                                />
-                              </div>
-                              {total > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const next = provider.apiKeys.filter((_, i) => i !== idx)
-                                    updateProvider(provider.id, { apiKeys: next })
-                                  }}
-                                  className="text-neutral-400 hover:text-red-500 transition-colors p-1"
-                                  title={t.removeKey}
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
+            {/* ===== 模型管理标签页 ===== */}
+            {activeTab === 'providers' && (
+              <div className="kv-providers">
+                <div className="kv-provider-list">
+                  {settings.providers.map((provider) => {
+                    const isOnDevice = provider.baseUrl === 'applefoundation://local'
+                    const configured = isOnDevice || provider.apiKeys.some((key) => key.trim())
+                    return (
                       <button
+                        key={provider.id}
                         type="button"
-                        onClick={() => {
-                          const base = provider.apiKeys.length > 0 ? provider.apiKeys : ['']
-                          updateProvider(provider.id, { apiKeys: [...base, ''] })
-                        }}
-                        className="mt-2 text-[11px] text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 px-2 py-1 rounded-md bg-black/[0.04] dark:bg-white/[0.04] hover:bg-black/[0.06] dark:hover:bg-white/[0.06] transition-colors flex items-center gap-1"
-                      >
-                        <Plus size={11} />
-                        {t.addKey}
-                      </button>
-                    </div>
-                    )}
-
-                    {/* 连接测试 — 端上 provider 不走 HTTP,无连接可测,隐藏 */}
-                    {!isOnDevice && (
-                    <div className="flex items-center justify-between gap-3 px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => handleTestConnection(provider.id)}
-                        disabled={testingProviderId === provider.id}
-                        className={`text-[11px] font-medium flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors border ${testingProviderId === provider.id
-                          ? 'text-neutral-400 border-black/5 dark:border-white/5 cursor-not-allowed'
-                          : 'text-neutral-600 dark:text-neutral-300 border-black/[0.08] dark:border-white/[0.08] hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.04]'
-                          }`}
+                        onClick={() => setSelectedProviderId(provider.id)}
+                        className={`kv-provider-item ${selectedProvider?.id === provider.id ? 'active' : ''}`}
                         data-tauri-drag-region="false"
                       >
-                        <RefreshCw size={10} className={testingProviderId === provider.id ? 'animate-spin' : ''} />
-                        {testingProviderId === provider.id ? t.testingConnection : t.testConnection}
+                        <span className={`kv-provider-dot ${configured ? 'on' : 'warn'}`} />
+                        <span className="kv-provider-name">{provider.name || t.providerName}</span>
                       </button>
-                      {providerTestFeedback[provider.id] && (
-                        <span className={`text-[11px] truncate ${providerTestFeedback[provider.id].ok
-                          ? 'text-emerald-600 dark:text-emerald-400'
-                          : 'text-rose-600 dark:text-rose-400'
-                          }`} title={providerTestFeedback[provider.id].message}>
-                          {providerTestFeedback[provider.id].message}
-                        </span>
-                      )}
-                    </div>
-                    )}
-
-                    {/* 已启用模型 */}
-                    <div className="px-4 py-3 space-y-2.5">
-                      <div className="flex justify-between items-center gap-2">
-                        <Label className="!mb-0">{t.registeredModels}</Label>
-                        <div className="flex items-center gap-1">
-                          <Input
-                            className="h-7 w-32 !text-[11px] !py-0"
-                            placeholder={t.manualAddModel}
-                            mono
-                            value={manualInputs[provider.id] || ''}
-                            onChange={(v) => setManualInputs(prev => ({ ...prev, [provider.id]: v }))}
-                            onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                              if (e.key !== 'Enter') return
-                              // IME (拼音 / 假名等) 选词期间的 Enter 用于确认候选词，不应触发添加
-                              if (e.nativeEvent.isComposing || e.keyCode === 229) return
-                              addEnabledModel(provider.id, manualInputs[provider.id] || '')
-                              setManualInputs(prev => ({ ...prev, [provider.id]: '' }))
-                            }}
-                          />
-                          <button
-                            onClick={() => {
-                              addEnabledModel(provider.id, manualInputs[provider.id] || '')
-                              setManualInputs(prev => ({ ...prev, [provider.id]: '' }))
-                            }}
-                            className="text-[10px] text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 px-2 py-1 rounded-md bg-black/[0.04] dark:bg-white/[0.04] hover:bg-black/[0.06] dark:hover:bg-white/[0.06] transition-colors text-nowrap"
-                          >
-                            {t.addModel}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5 min-h-[24px]">
-                        {provider.enabledModels.length === 0 && (
-                          <span className="text-[11px] text-neutral-400 italic">
-                            {lang === 'zh' ? '暂无模型，从下方"可用模型"挑选或手动添加' : 'No models yet — pick from below or add manually'}
-                          </span>
-                        )}
-                        {provider.enabledModels.map(model => (
-                          <span key={model} className="flex items-center gap-1.5 pl-2 pr-1 py-0.5 bg-[#2563eb]/[0.08] dark:bg-blue-400/[0.12] rounded-md text-[11px] text-[#2563eb] dark:text-blue-300 font-mono">
-                            {model}
-                            <button
-                              onClick={() => removeEnabledModel(provider.id, model)}
-                              className="text-[#2563eb]/50 dark:text-blue-300/60 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                            >
-                              <X size={10} />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* 可用模型 — 端上 provider 没有 /models 端点,fetch 无意义,隐藏 */}
-                    {!isOnDevice && (
-                    <div className="px-4 py-3 space-y-2">
-                      <div className="flex justify-between items-center">
-                        <Label className="!mb-0">{t.availableModels}</Label>
-                        <button
-                          onClick={() => fetchModels(provider.id)}
-                          disabled={fetchingProviderId === provider.id}
-                          className={`text-[11px] font-medium flex items-center gap-1 px-2 py-0.5 rounded-md transition-colors ${fetchingProviderId === provider.id
-                            ? 'text-neutral-400 cursor-not-allowed'
-                            : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.04]'
-                            }`}
-                        >
-                          <RefreshCw size={10} className={fetchingProviderId === provider.id ? 'animate-spin' : ''} />
-                          {fetchingProviderId === provider.id ? t.fetching : t.fetchModels}
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
-                        {provider.availableModels.length > 0 ? (
-                          provider.availableModels.map(m => (
-                            <button
-                              key={m}
-                              onClick={() => addEnabledModel(provider.id, m)}
-                              disabled={provider.enabledModels.includes(m)}
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${provider.enabledModels.includes(m)
-                                ? 'bg-transparent text-neutral-400 cursor-default'
-                                : 'bg-black/[0.04] dark:bg-white/[0.04] text-neutral-600 dark:text-neutral-300 hover:bg-[#2563eb]/[0.08] dark:hover:bg-blue-400/[0.12] hover:text-[#2563eb] dark:hover:text-blue-300'
-                                }`}
-                            >
-                              {m}
-                            </button>
-                          ))
-                        ) : (
-                          <span className="text-[11px] text-neutral-400 italic">No models fetched yet</span>
-                        )}
-                      </div>
-                    </div>
-                    )}
-                  </div>
-                </div>
-              </section>
-              )
-            })}
-
-            {/* 快速预设 chip + 自定义按钮 */}
-            <section>
-              <SectionTitle icon={Plus}>{lang === 'zh' ? '添加提供商' : 'Add Provider'}</SectionTitle>
-              <div className="space-y-2">
-                <div className="flex flex-wrap gap-1.5">
-                  {PROVIDER_PRESETS
-                    .filter(preset => !preset.onDevice || isMac)
-                    .map(preset => (
-                    <button
-                      key={preset.name}
-                      type="button"
-                      onClick={() => addProviderFromPreset(preset)}
-                      className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md bg-white dark:bg-[#1C1C1E] text-neutral-700 dark:text-neutral-200 border border-black/[0.06] dark:border-white/[0.07] hover:border-[#2563eb]/30 dark:hover:border-blue-400/30 hover:text-[#2563eb] dark:hover:text-blue-300 hover:bg-[#2563eb]/[0.04] dark:hover:bg-blue-400/[0.06] transition-colors"
-                      style={{ boxShadow: '0 1px 1px rgba(0,0,0,0.02)' }}
-                    >
-                      <Plus size={11} strokeWidth={2.25} />
-                      {preset.name}
-                      {preset.onDevice && (
-                        <span className="text-[9px] font-medium text-emerald-600 dark:text-emerald-400 px-1 py-0.5 rounded bg-emerald-500/10">
-                          {lang === 'zh' ? '本地' : 'Local'}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  onClick={addProvider}
-                  className="w-full py-2.5 border border-dashed border-black/[0.08] dark:border-white/[0.08] rounded-md text-neutral-500 dark:text-neutral-400 hover:text-[#2563eb] dark:hover:text-blue-300 hover:border-[#2563eb]/40 dark:hover:border-blue-400/40 hover:bg-[#2563eb]/[0.03] dark:hover:bg-blue-400/[0.05] transition-colors flex items-center justify-center gap-1.5"
-                >
-                  <Plus size={13} strokeWidth={2} />
-                  <span className="text-[12px] font-medium">{t.addProvider}</span>
-                </button>
-              </div>
-            </section>
-          </div>
-        )}
-
-        {/* ===== 关于标签页 ===== */}
-        {activeTab === 'about' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <section>
-              <div className="flex flex-col items-center justify-center py-6">
-                <div
-                  className="w-16 h-16 rounded-[18px] flex items-center justify-center mb-4 overflow-hidden"
-                  style={{
-                    boxShadow: '0 12px 28px -10px rgba(37,99,235,0.45), 0 2px 6px rgba(37,99,235,0.14)',
-                  }}
-                >
-                  <img src="/icon.png" alt="Kivio" className="w-full h-full object-contain" />
-                </div>
-                <h2 className="text-[16px] font-semibold text-neutral-900 dark:text-white mb-1 tracking-tight">Kivio</h2>
-                <p className="text-[12px] text-neutral-500 dark:text-neutral-400 mb-5">{lang === 'zh' ? '屏幕级 AI 助手' : 'Screen-level AI Assistant'}</p>
-                <div className="settings-card overflow-hidden w-full max-w-sm">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-black/[0.04] dark:border-white/[0.05]">
-                    <span className="text-[13px] text-neutral-700 dark:text-neutral-200">{t.currentVersion}</span>
-                    <span className="text-[12px] text-neutral-500 dark:text-neutral-400 font-mono">v{appVersion}</span>
-                  </div>
-                  <div className="flex items-center justify-between px-4 py-3">
-                    <span className="text-[13px] text-neutral-700 dark:text-neutral-200">{lang === 'zh' ? '开发者' : 'Developer'}</span>
-                    <span className="text-[12px] text-neutral-500 dark:text-neutral-400">ZM</span>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* 自动更新检查（仅检查 + 跳转 GH 下载，不做自动安装） */}
-            <section>
-              <SectionTitle icon={Download}>{t.checkUpdate}</SectionTitle>
-              <div className="settings-card overflow-hidden">
-                <SettingRow
-                  label={t.autoCheckUpdate}
-                  description={t.autoCheckUpdateHint}
-                >
-                  <Toggle
-                    checked={settings?.autoCheckUpdate ?? true}
-                    onChange={(v) => updateSettings({ autoCheckUpdate: v })}
-                  />
-                </SettingRow>
-
-                {/* 检查按钮 + 状态 */}
-                <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-black/[0.04] dark:border-white/[0.05]">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[13px] text-neutral-900 dark:text-neutral-100">{t.checkUpdate}</span>
-                    {updateStatus === 'up-to-date' && (
-                      <span className="text-[11px] text-emerald-600 dark:text-emerald-400">{t.upToDate}</span>
-                    )}
-                  </div>
+                    )
+                  })}
                   <button
                     type="button"
-                    onClick={handleCheckUpdate}
-                    disabled={updateStatus === 'checking'}
-                    className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md border transition-all ${
-                      updateStatus === 'checking'
-                        ? 'text-neutral-400 border-black/5 dark:border-white/5 cursor-not-allowed'
-                        : 'text-neutral-600 dark:text-neutral-300 border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5'
-                    }`}
+                    onClick={addProvider}
+                    className="kv-provider-add"
                     data-tauri-drag-region="false"
                   >
-                    <RefreshCw size={11} className={updateStatus === 'checking' ? 'animate-spin' : ''} />
-                    {updateStatus === 'checking' ? t.checkingUpdate : t.checkUpdate}
+                    <Plus />
+                    {t.addProvider}
                   </button>
                 </div>
 
-                {/* 发现新版本 panel */}
-                {updateStatus === 'available' && updateInfo && (
-                  <div className="px-4 py-4 border-t border-black/[0.04] dark:border-white/[0.05] bg-emerald-50/50 dark:bg-emerald-500/5">
-                    <div className="flex items-baseline gap-2 mb-2">
-                      <span className="text-[13px] font-semibold text-emerald-700 dark:text-emerald-300">{t.updateAvailable}</span>
-                      <span className="text-[12px] font-mono text-emerald-600 dark:text-emerald-400">v{updateInfo.version}</span>
+                <div className="kv-provider-detail">
+                  {selectedProvider ? (() => {
+                    const provider = selectedProvider
+                    const isOnDevice = provider.baseUrl === 'applefoundation://local'
+                    return (
+                      <>
+                        <SettingsGroup title={t.providerName} className="!pt-0">
+                          <SettingRow label={t.providerName} description={lang === 'zh' ? '显示在模型选择器中的名称。' : 'Displayed in model selectors.'}>
+                            <Input
+                              value={provider.name}
+                              onChange={(v) => updateProvider(provider.id, { name: v })}
+                              placeholder="Provider name"
+                            />
+                          </SettingRow>
+                          <SettingRow label={lang === 'zh' ? '状态' : 'Status'} description={isOnDevice ? (lang === 'zh' ? '端上模型，不需要 API Key。' : 'On-device provider; no API key required.') : t.apiKeysHint}>
+                            <span className={`kv-tag ${isOnDevice || provider.apiKeys.some((key) => key.trim()) ? 'ok' : 'warn'}`}>
+                              {isOnDevice ? (lang === 'zh' ? '本地' : 'Local') : provider.apiKeys.some((key) => key.trim()) ? t.connectionOk : t.permissionMissing}
+                            </span>
+                          </SettingRow>
+                          <div className="flex justify-end py-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteProviderId(provider.id)}
+                              className="kv-btn danger sm"
+                              data-tauri-drag-region="false"
+                            >
+                              <Trash2 size={12} />
+                              {t.deleteProvider}
+                            </button>
+                          </div>
+                        </SettingsGroup>
+
+                        {!isOnDevice && (
+                          <SettingsGroup title={t.baseUrl}>
+                            <SettingRow label={t.baseUrl} description={lang === 'zh' ? 'OpenAI 兼容接口地址。' : 'OpenAI-compatible endpoint.'} stack>
+                              <Input
+                                value={provider.baseUrl}
+                                onChange={(v) => updateProvider(provider.id, { baseUrl: v })}
+                                placeholder="https://api.openai.com/v1"
+                                mono
+                              />
+                            </SettingRow>
+                          </SettingsGroup>
+                        )}
+
+                        {!isOnDevice && (
+                          <SettingsGroup title={t.apiKey}>
+                            <SettingRow label={t.apiKey} description={t.apiKeysHint} stack>
+                              <div className="space-y-1.5">
+                                {(provider.apiKeys.length > 0 ? provider.apiKeys : ['']).map((key, idx) => {
+                                  const total = Math.max(provider.apiKeys.length, 1)
+                                  return (
+                                    <div key={`${provider.id}-${total}-${idx}`} className="flex items-center gap-1.5">
+                                      <Input
+                                        type="password"
+                                        value={key}
+                                        mono
+                                        onChange={(v) => {
+                                          const base = provider.apiKeys.length > 0 ? [...provider.apiKeys] : ['']
+                                          base[idx] = v
+                                          updateProvider(provider.id, { apiKeys: base })
+                                        }}
+                                        placeholder={idx === 0 ? `sk-... (${t.apiKeyPrimary})` : `sk-... (${t.apiKeyBackup})`}
+                                      />
+                                      {total > 1 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const next = provider.apiKeys.filter((_, i) => i !== idx)
+                                            updateProvider(provider.id, { apiKeys: next })
+                                          }}
+                                          className="kv-icon-btn danger"
+                                          title={t.removeKey}
+                                          data-tauri-drag-region="false"
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const base = provider.apiKeys.length > 0 ? provider.apiKeys : ['']
+                                  updateProvider(provider.id, { apiKeys: [...base, ''] })
+                                }}
+                                className="kv-btn sm mt-2"
+                                data-tauri-drag-region="false"
+                              >
+                                <Plus size={11} />
+                                {t.addKey}
+                              </button>
+                            </SettingRow>
+
+                            <SettingRow label={t.testConnection} description={providerTestFeedback[provider.id]?.message}>
+                              <button
+                                type="button"
+                                onClick={() => handleTestConnection(provider.id)}
+                                disabled={testingProviderId === provider.id}
+                                className="kv-btn sm"
+                                data-tauri-drag-region="false"
+                              >
+                                <RefreshCw size={10} className={testingProviderId === provider.id ? 'animate-spin' : ''} />
+                                {testingProviderId === provider.id ? t.testingConnection : t.testConnection}
+                              </button>
+                            </SettingRow>
+                          </SettingsGroup>
+                        )}
+
+                        <SettingsGroup title={t.registeredModels}>
+                          <SettingRow label={t.registeredModels} description={lang === 'zh' ? '这些模型会出现在各功能的模型选择器中。' : 'These models appear in feature model selectors.'} stack>
+                            <div className="flex items-center gap-1.5">
+                              <Input
+                                className="h-7 !text-[11px]"
+                                placeholder={t.manualAddModel}
+                                mono
+                                value={manualInputs[provider.id] || ''}
+                                onChange={(v) => setManualInputs(prev => ({ ...prev, [provider.id]: v }))}
+                                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                                  if (e.key !== 'Enter') return
+                                  if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                                  addEnabledModel(provider.id, manualInputs[provider.id] || '')
+                                  setManualInputs(prev => ({ ...prev, [provider.id]: '' }))
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  addEnabledModel(provider.id, manualInputs[provider.id] || '')
+                                  setManualInputs(prev => ({ ...prev, [provider.id]: '' }))
+                                }}
+                                className="kv-btn sm"
+                                data-tauri-drag-region="false"
+                              >
+                                {t.addModel}
+                              </button>
+                            </div>
+                            <div className="kv-chips mt-2 min-h-[24px]">
+                              {provider.enabledModels.length === 0 && (
+                                <span className="kv-row-desc italic">
+                                  {lang === 'zh' ? '暂无模型，从下方可用模型挑选或手动添加。' : 'No models yet. Pick from available models or add one manually.'}
+                                </span>
+                              )}
+                              {provider.enabledModels.map(model => (
+                                <span key={model} className="kv-chip">
+                                  {model}
+                                  <button
+                                    type="button"
+                                    onClick={() => removeEnabledModel(provider.id, model)}
+                                    className="kv-chip-x"
+                                    data-tauri-drag-region="false"
+                                    aria-label={t.removeModel}
+                                  >
+                                    <X size={10} />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          </SettingRow>
+
+                          {!isOnDevice && (
+                            <SettingRow label={t.availableModels} description={lang === 'zh' ? '从供应商接口拉取模型列表。' : 'Fetch models from the provider endpoint.'} stack>
+                              <div className="flex justify-end mb-2">
+                                <button
+                                  type="button"
+                                  onClick={() => fetchModels(provider.id)}
+                                  disabled={fetchingProviderId === provider.id}
+                                  className="kv-btn sm"
+                                  data-tauri-drag-region="false"
+                                >
+                                  <RefreshCw size={10} className={fetchingProviderId === provider.id ? 'animate-spin' : ''} />
+                                  {fetchingProviderId === provider.id ? t.fetching : t.fetchModels}
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-1 custom-scrollbar">
+                                {provider.availableModels.length > 0 ? (
+                                  provider.availableModels.map((model) => (
+                                    <button
+                                      key={model}
+                                      type="button"
+                                      onClick={() => addEnabledModel(provider.id, model)}
+                                      disabled={provider.enabledModels.includes(model)}
+                                      className="kv-chip disabled:opacity-45"
+                                      data-tauri-drag-region="false"
+                                    >
+                                      {model}
+                                    </button>
+                                  ))
+                                ) : (
+                                  <span className="kv-row-desc italic">{lang === 'zh' ? '尚未获取模型。' : 'No models fetched yet.'}</span>
+                                )}
+                              </div>
+                            </SettingRow>
+                          )}
+                        </SettingsGroup>
+
+                        <SettingsGroup title={lang === 'zh' ? '快速预设' : 'Presets'}>
+                          <div className="flex flex-wrap gap-1.5 py-2">
+                            {PROVIDER_PRESETS
+                              .filter(preset => !preset.onDevice || isMac)
+                              .map(preset => (
+                                <button
+                                  key={preset.name}
+                                  type="button"
+                                  onClick={() => addProviderFromPreset(preset)}
+                                  className="kv-btn sm"
+                                  data-tauri-drag-region="false"
+                                >
+                                  <Plus size={11} strokeWidth={2.25} />
+                                  {preset.name}
+                                  {preset.onDevice && (
+                                    <span className="kv-tag ok">{lang === 'zh' ? '本地' : 'Local'}</span>
+                                  )}
+                                </button>
+                              ))}
+                          </div>
+                        </SettingsGroup>
+                      </>
+                    )
+                  })() : (
+                    <div className="kv-panel">
+                      <div className="kv-panel-title">{lang === 'zh' ? '暂无提供商' : 'No providers'}</div>
+                      <div className="kv-panel-body">{lang === 'zh' ? '添加一个模型供应商开始配置。' : 'Add a model provider to start configuring.'}</div>
                     </div>
-                    {updateInfo.body && (
-                      <div className="prose prose-sm dark:prose-invert max-w-none text-[12px] leading-relaxed text-neutral-700 dark:text-neutral-300 max-h-40 overflow-y-auto mb-3 px-2 py-1.5 bg-white/60 dark:bg-black/20 rounded-md">
-                        <ReactMarkdown>{updateInfo.body}</ReactMarkdown>
-                      </div>
-                    )}
+                  )}
+                </div>
+              </div>
+            )}
 
-                    {/* 下载进度条:downloading 时显示 */}
-                    {downloadState === 'downloading' && (
-                      <div className="mb-3">
-                        <div className="flex items-center justify-between text-[11px] text-neutral-600 dark:text-neutral-400 mb-1">
-                          <span>{t.downloading}</span>
-                          <span className="font-mono tabular-nums">{downloadPercent}%</span>
+            {/* ===== 关于标签页 ===== */}
+            {activeTab === 'about' && (
+              <>
+                <SettingsGroup title={lang === 'zh' ? '应用' : 'Application'}>
+                  <div className="kv-panel mb-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-[10px] overflow-hidden shrink-0">
+                        <img src="/icon.png" alt="Kivio" className="w-full h-full object-contain" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="kv-page-title">Kivio</div>
+                        <div className="kv-panel-body">{lang === 'zh' ? '屏幕级 AI 助手' : 'Screen-level AI Assistant'}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <SettingRow label={t.currentVersion}>
+                    <span className="kv-tag">v{appVersion}</span>
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '开发者' : 'Developer'}>
+                    <span className="kv-row-desc">ZM</span>
+                  </SettingRow>
+                </SettingsGroup>
+
+                <SettingsGroup title={t.checkUpdate}>
+                  <SettingRow label={t.autoCheckUpdate} description={t.autoCheckUpdateHint}>
+                    <Toggle
+                      checked={settings?.autoCheckUpdate ?? true}
+                      onChange={(v) => updateSettings({ autoCheckUpdate: v })}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={t.checkUpdate}
+                    description={updateStatus === 'up-to-date' ? t.upToDate : undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={handleCheckUpdate}
+                      disabled={updateStatus === 'checking'}
+                      className="kv-btn sm"
+                      data-tauri-drag-region="false"
+                    >
+                      <RefreshCw size={11} className={updateStatus === 'checking' ? 'animate-spin' : ''} />
+                      {updateStatus === 'checking' ? t.checkingUpdate : t.checkUpdate}
+                    </button>
+                  </SettingRow>
+
+                  {updateStatus === 'available' && updateInfo && (
+                    <div className="kv-panel info mt-2">
+                      <div className="kv-panel-title">
+                        {t.updateAvailable}
+                        <span className="kv-tag accent ml-auto">v{updateInfo.version}</span>
+                      </div>
+                      {updateInfo.body && (
+                        <div className="prose prose-sm dark:prose-invert max-w-none text-[12px] leading-relaxed max-h-40 overflow-y-auto mb-3">
+                          <ReactMarkdown>{updateInfo.body}</ReactMarkdown>
                         </div>
-                        <div className="h-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 overflow-hidden">
-                          <div
-                            className="h-full bg-emerald-500 dark:bg-emerald-400 transition-[width] duration-150 ease-out"
-                            style={{ width: `${downloadPercent}%` }}
-                          />
+                      )}
+
+                      {downloadState === 'downloading' && (
+                        <div className="mb-3">
+                          <div className="flex items-center justify-between kv-panel-body mb-1">
+                            <span>{t.downloading}</span>
+                            <span className="font-mono tabular-nums">{downloadPercent}%</span>
+                          </div>
+                          <div className="kv-progress">
+                            <div style={{ width: `${downloadPercent}%` }} />
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
 
-                    {/* 错误显示 */}
-                    {downloadState === 'failed' && downloadError && (
-                      <div className="mb-3 px-2 py-1.5 rounded-md bg-red-50 dark:bg-red-500/10 text-[11px] text-red-600 dark:text-red-400 break-words">
-                        {t.downloadFailed}: {downloadError}
-                      </div>
-                    )}
+                      {downloadState === 'failed' && downloadError && (
+                        <div className="kv-inline-error mb-3">
+                          {t.downloadFailed}: {downloadError}
+                        </div>
+                      )}
 
-                    <div className="flex gap-2 flex-wrap">
-                      {downloadState === 'idle' && (
-                        <>
+                      <div className="flex gap-2 flex-wrap">
+                        {downloadState === 'idle' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleDownloadAndInstall}
+                              className="kv-btn primary"
+                              data-tauri-drag-region="false"
+                            >
+                              <Download size={12} />
+                              {t.downloadAndInstall}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleOpenReleasePage}
+                              className="kv-btn"
+                              data-tauri-drag-region="false"
+                            >
+                              <ExternalLink size={12} />
+                              {t.downloadFromGithub}
+                            </button>
+                          </>
+                        )}
+                        {downloadState === 'downloading' && (
+                          <button type="button" disabled className="kv-btn">
+                            <RefreshCw size={12} className="animate-spin" />
+                            {t.downloading}
+                          </button>
+                        )}
+                        {downloadState === 'downloaded' && (
                           <button
                             type="button"
-                            onClick={handleDownloadAndInstall}
-                            className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-all"
+                            onClick={handleInstall}
+                            className="kv-btn primary"
                             data-tauri-drag-region="false"
                           >
                             <Download size={12} />
-                            {t.downloadAndInstall}
+                            {t.installAndRestart}
                           </button>
-                          <button
-                            type="button"
-                            onClick={handleOpenReleasePage}
-                            className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md text-neutral-600 dark:text-neutral-400 border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-all"
-                            data-tauri-drag-region="false"
-                          >
-                            <ExternalLink size={12} />
-                            {t.downloadFromGithub}
-                          </button>
-                        </>
-                      )}
-                      {downloadState === 'downloading' && (
+                        )}
+                        {downloadState === 'failed' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleDownloadAndInstall}
+                              className="kv-btn primary"
+                              data-tauri-drag-region="false"
+                            >
+                              <RefreshCw size={12} />
+                              {t.retryDownload}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleOpenReleasePage}
+                              className="kv-btn"
+                              data-tauri-drag-region="false"
+                            >
+                              <ExternalLink size={12} />
+                              {t.downloadFromGithub}
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
-                          disabled
-                          className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md bg-emerald-600/60 text-white cursor-not-allowed"
-                        >
-                          <RefreshCw size={12} className="animate-spin" />
-                          {t.downloading}
-                        </button>
-                      )}
-                      {downloadState === 'downloaded' && (
-                        <button
-                          type="button"
-                          onClick={handleInstall}
-                          className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-all"
+                          onClick={() => {
+                            setUpdateStatus('idle')
+                            setDownloadState('idle')
+                            setDownloadPercent(0)
+                            setDownloadError('')
+                          }}
+                          className="kv-btn ghost"
                           data-tauri-drag-region="false"
                         >
-                          <Download size={12} />
-                          {t.installAndRestart}
+                          {t.updateLater}
                         </button>
-                      )}
-                      {downloadState === 'failed' && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={handleDownloadAndInstall}
-                            className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 transition-all"
-                            data-tauri-drag-region="false"
-                          >
-                            <RefreshCw size={12} />
-                            {t.retryDownload}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleOpenReleasePage}
-                            className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-md text-neutral-600 dark:text-neutral-400 border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-all"
-                            data-tauri-drag-region="false"
-                          >
-                            <ExternalLink size={12} />
-                            {t.downloadFromGithub}
-                          </button>
-                        </>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUpdateStatus('idle')
-                          setDownloadState('idle')
-                          setDownloadPercent(0)
-                          setDownloadError('')
-                        }}
-                        className="text-[12px] font-medium px-3 py-1.5 rounded-md text-neutral-600 dark:text-neutral-400 hover:bg-black/5 dark:hover:bg-white/5 transition-all"
-                        data-tauri-drag-region="false"
-                      >
-                        {t.updateLater}
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            </section>
+                  )}
+                </SettingsGroup>
+              </>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* 底部操作栏 */}
-      <div className="flex justify-between items-center px-5 py-3 border-t border-black/[0.04] dark:border-white/[0.05] bg-white dark:bg-[#1C1C1E] shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          {saveError && (
-            <span
-              className="text-[11px] text-red-500 dark:text-red-400 truncate max-w-[240px]"
-              title={saveError}
+          <div className="kv-savebar">
+            <div className={`kv-savebar-hint ${saveError ? 'error' : hasUnsavedChanges ? 'dirty' : ''}`}>
+              {saveError ? (
+                <>
+                  <span className="dot" />
+                  <span title={saveError}>{saveError}</span>
+                </>
+              ) : saveSuccess ? (
+                <>
+                  <span className="clean-icon"><Check size={13} strokeWidth={2.4} /></span>
+                  <span>{t.saved}</span>
+                </>
+              ) : hasUnsavedChanges ? (
+                <>
+                  <span className="dot" />
+                  <span>{lang === 'zh' ? '有未保存更改。' : 'You have unsaved changes.'}</span>
+                </>
+              ) : (
+                <>
+                  <span className="clean-icon"><Check size={13} strokeWidth={2.4} /></span>
+                  <span>{lang === 'zh' ? '所有更改已保存。' : 'All changes saved.'}</span>
+                </>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseRequest}
+              className="kv-btn"
+              data-tauri-drag-region="false"
             >
-              {saveError}
-            </span>
-          )}
-          {saveSuccess && !saveError && (
-            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-              <span className="w-1 h-1 rounded-full bg-emerald-500" />
-              {t.saved}
-            </span>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleCloseRequest}
-            className="px-3.5 py-1.5 text-[12.5px] font-medium text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-black/[0.04] dark:hover:bg-white/[0.05] rounded-md transition-colors"
-            data-tauri-drag-region="false"
-          >
-            {t.cancel}
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-[#2563eb] hover:bg-[#1d4ed8] dark:bg-blue-500 dark:hover:bg-blue-400 text-white rounded-md text-[12.5px] font-medium disabled:opacity-60 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
-            style={{ boxShadow: '0 1px 2px rgba(37,99,235,0.25), 0 0 0 1px rgba(37,99,235,0.18)' }}
-            data-tauri-drag-region="false"
-          >
-            <Save size={13} strokeWidth={2.25} />
-            {saving ? t.saving : t.save}
-          </button>
-        </div>
+              {t.cancel}
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || !hasUnsavedChanges}
+              className="kv-btn primary"
+              data-tauri-drag-region="false"
+            >
+              {saving ? t.saving : t.save}
+            </button>
+          </div>
+        </main>
       </div>
 
       {/* 未保存更改确认弹窗 */}
       {closeConfirmOpen && (
-        <div className="absolute inset-0 z-50 bg-black/30 backdrop-blur-[1px] flex items-center justify-center p-4" data-tauri-drag-region="false">
-          <div className="w-full max-w-[320px] rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-neutral-900 shadow-lg p-4 space-y-3">
-            <h3 className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">{t.unsavedChanges}</h3>
-            <p className="text-[12px] text-neutral-600 dark:text-neutral-300 leading-relaxed">{t.unsavedChangesDesc}</p>
+        <div className="kv-modal-backdrop" data-tauri-drag-region="false">
+          <div className="kv-modal space-y-3">
+            <h3 className="text-[14px] font-semibold">{t.unsavedChanges}</h3>
+            <p className="kv-panel-body">{t.unsavedChangesDesc}</p>
             <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setCloseConfirmOpen(false)}
-                className="px-3 py-1.5 text-[12px] rounded-md text-neutral-600 dark:text-neutral-300 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                className="kv-btn ghost"
               >
                 {t.continueEditing}
               </button>
               <button
                 type="button"
                 onClick={handleDiscardAndClose}
-                className="px-3 py-1.5 text-[12px] rounded-md text-neutral-700 dark:text-neutral-200 border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                className="kv-btn"
               >
                 {t.discardAndClose}
               </button>
@@ -1808,7 +1821,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                 type="button"
                 onClick={handleSaveAndClose}
                 disabled={saving}
-                className="px-3 py-1.5 text-[12px] rounded-md bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="kv-btn primary"
               >
                 {saving ? t.saving : t.saveAndClose}
               </button>
@@ -1818,15 +1831,15 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
       )}
       {/* 删除提供商确认弹窗 */}
       {confirmDeleteProviderId && (
-        <div className="absolute inset-0 z-50 bg-black/30 backdrop-blur-[1px] flex items-center justify-center p-4" data-tauri-drag-region="false">
-          <div className="w-full max-w-[340px] rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-neutral-900 shadow-lg p-4 space-y-3">
-            <h3 className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">{t.confirmDeleteProvider}</h3>
-            <p className="text-[12px] text-neutral-600 dark:text-neutral-300 leading-relaxed">{t.confirmDeleteProviderDesc}</p>
+        <div className="kv-modal-backdrop" data-tauri-drag-region="false">
+          <div className="kv-modal space-y-3">
+            <h3 className="text-[14px] font-semibold">{t.confirmDeleteProvider}</h3>
+            <p className="kv-panel-body">{t.confirmDeleteProviderDesc}</p>
             <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setConfirmDeleteProviderId(null)}
-                className="px-3 py-1.5 text-[12px] rounded-md text-neutral-600 dark:text-neutral-300 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                className="kv-btn"
                 data-tauri-drag-region="false"
               >
                 {t.cancel}
@@ -1837,7 +1850,7 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
                   if (confirmDeleteProviderId) deleteProvider(confirmDeleteProviderId)
                   setConfirmDeleteProviderId(null)
                 }}
-                className="px-3 py-1.5 text-[12px] rounded-md bg-red-600 hover:bg-red-700 text-white transition-colors"
+                className="kv-btn danger"
                 data-tauri-drag-region="false"
               >
                 {t.deleteProvider}
@@ -1846,7 +1859,6 @@ export default function Settings({ onClose, onSettingsChange }: SettingsProps) {
           </div>
         </div>
       )}
-      </div>
     </div>
   )
 }
