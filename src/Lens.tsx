@@ -18,6 +18,7 @@ import { ANCHOR_GAP, DRAG_THRESHOLD, FLOATING_GAP, FLOATING_PADDING, READY_BAR_H
 import { estimateTokens, formatTokens } from './lens/markdown'
 import { ThinkingBlock } from './lens/ThinkingBlock'
 import { WebSearchBlock } from './lens/WebSearchBlock'
+import { useWindowInteractionFocus } from './utils/windowFocus'
 
 /** 解析 webview hash query：'#lens?mode=translate' → 'translate' */
 function readModeFromHash(): Mode {
@@ -171,6 +172,7 @@ export default function Lens() {
   const stageRef = useRef<Stage>('select')
   const modeRef = useRef<Mode>(mode)
   const historyOpenRef = useRef(false)
+  const drawModeRef = useRef(false)
   const imageIdRef = useRef('')
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const floatingRebaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -199,11 +201,13 @@ export default function Lens() {
   const chatScrollRef = useRef<HTMLDivElement>(null)
   // 浮动模式下保存截图时的全屏 metrics，避免窗口缩小后 answerLayout 被压缩得太小
   const fullscreenMetricsRef = useRef<Metrics | null>(null)
+  const requestWindowFocus = useWindowInteractionFocus()
 
   const t = i18n[lang]
   stageRef.current = stage
   modeRef.current = mode
   historyOpenRef.current = historyOpen
+  drawModeRef.current = drawMode
 
   const finishAnswering = useCallback(() => {
     if (answerFinishedRef.current) return
@@ -725,6 +729,7 @@ export default function Lens() {
     const handler = async (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (preparingSendRef.current) return
+      if (drawModeRef.current) return
       if (stageRef.current === 'answering' && streaming) {
         try { await api.lensCancelStream() } catch (err) { console.error(err) }
         setStreaming(false)
@@ -732,8 +737,8 @@ export default function Lens() {
       }
       await closeAfterReset()
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
   }, [streaming, closeAfterReset])
 
   useEffect(() => {
@@ -1600,6 +1605,9 @@ export default function Lens() {
   return (
     <div
       className="fixed inset-0 select-none"
+      onPointerEnter={requestWindowFocus}
+      onPointerMove={requestWindowFocus}
+      onPointerDownCapture={requestWindowFocus}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

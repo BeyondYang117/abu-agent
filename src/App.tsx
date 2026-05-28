@@ -2,6 +2,7 @@ import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { Settings as SettingsIcon, Cpu } from 'lucide-react'
 import { api } from './api/tauri'
 import { i18n, type Lang } from './settings/i18n'
+import { useWindowInteractionFocus } from './utils/windowFocus'
 import './index.css'
 
 const Settings = lazy(() => import('./Settings'))
@@ -27,6 +28,7 @@ function Translator({
   const resultRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const translateSeq = useRef(0)
+  const requestWindowFocus = useWindowInteractionFocus()
   const t = i18n[lang]
 
   // 输入防抖翻译：600ms 延迟后发送翻译请求
@@ -71,8 +73,8 @@ function Translator({
         }
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
   }, [])
 
   // 结果区域自动滚动到底部
@@ -104,7 +106,12 @@ function Translator({
   }
 
   return (
-    <div className="window-container">
+    <div
+      className="window-container"
+      onPointerEnter={requestWindowFocus}
+      onPointerMove={requestWindowFocus}
+      onPointerDownCapture={requestWindowFocus}
+    >
       {/* 卡片：填满外壳 padding 内区域；圆角 + 阴影都在这层 */}
       <div className="window-frosted h-full w-full flex flex-col select-none overflow-hidden relative group">
         {/* 顶部隐形 drag bar */}

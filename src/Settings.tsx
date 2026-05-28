@@ -12,6 +12,7 @@ import { buildHotkey, formatHotkeyError, getPlatform, stableStringify } from './
 import { PROVIDER_PRESETS, type ProviderPreset } from './settings/providerPresets'
 import { ModelPairSelect } from './settings/ModelPairSelect'
 import { ScreenshotTranslationSettings } from './settings/ScreenshotTranslationSettings'
+import { useWindowInteractionFocus } from './utils/windowFocus'
 import {
   Toggle, Select, Input, TextArea, Label,
   SettingRow, PermissionItem, HotkeyInput, DefaultPrompt,
@@ -78,6 +79,7 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
   // failed 时显示错误 + 重试 + 跳 GitHub 兜底
   const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'downloaded' | 'failed'>('idle')
   const [downloadPercent, setDownloadPercent] = useState(0)
+  const requestWindowFocus = useWindowInteractionFocus()
   const [downloadedPath, setDownloadedPath] = useState('')
   const [downloadError, setDownloadError] = useState('')
   // RapidOCR 离线 OCR 状态:检查 app data 目录里 dylib + 模型 4 个文件齐不齐。
@@ -467,8 +469,8 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
         handleCloseRequest()
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
   }, [handleCloseRequest, recordingTarget])
 
   /**
@@ -951,7 +953,12 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
   const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
 
   return (
-    <div className="kv kv-window">
+    <div
+      className="kv kv-window"
+      onPointerEnter={requestWindowFocus}
+      onPointerMove={requestWindowFocus}
+      onPointerDownCapture={requestWindowFocus}
+    >
       <div className="kv-titlebar" onMouseDown={handleSettingsDragMouseDown}>
         <div className="kv-titlebar-spacer" aria-hidden="true" />
         <div className="kv-title">{t.settings}</div>
