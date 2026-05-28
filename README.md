@@ -31,7 +31,7 @@ Kivio stays in the menu bar and appears only when you press a hotkey.
 
 - 🌐 **Translate text anywhere** — type, translate, press Enter to paste back.
 - 📸 **Translate screenshots or selected text** — capture a window/region, or highlight text and use the selected-text hotkey.
-- 🔍 **Ask Lens about your screen** — capture visual context and chat with the model in a focused floating window.
+- 🔍 **Ask Lens about your screen** — capture visual context, optionally search the web, and chat in a focused floating window.
 
 Small bundle, low memory, no telemetry, and native system OCR where available.
 
@@ -49,7 +49,7 @@ Capture any window or region and get a compact translation card near your select
   <img src="docs/screenshots/lens-formula-extraction.gif" width="720" alt="Lens formula extraction" onerror="this.style.display='none'">
 </p>
 
-Capture a formula, a chart, or a wall of text, then ask follow-up questions with streamed answers and per-image history.
+Capture a formula, a chart, or a wall of text, then ask follow-up questions with streamed answers and per-image history. When a question depends on current facts or unfamiliar on-screen content, Lens can use web search and show the search sources inline.
 
 <p align="center">
   <img src="docs/screenshots/lens-optimize-text.gif" width="720" alt="Lens text optimization" onerror="this.style.display='none'">
@@ -89,6 +89,7 @@ All remappable in Settings.
 
 - **Short screen workflows.** Translate, OCR, and ask without switching context.
 - **Real system OCR.** Apple Vision on macOS, `Windows.Media.Ocr` on Windows.
+- **Web-aware Lens.** Optional Tavily / Exa search helps answer current or ambiguous screen questions with visible sources.
 - **Bring your own model.** Pick different OpenAI-compatible providers for translation, screenshot translation, and Lens.
 - **Multi-key failover.** Add backup keys and Kivio rotates when a key is rate-limited or out of quota.
 - **Quiet and light.** No telemetry, small installer, low idle footprint.
@@ -99,6 +100,7 @@ Open from the menu bar icon. The important bits:
 
 - **Providers** — multi-provider, multi-key, with a one-click test-connection.
 - **Per-feature routing** — translate / screenshot OCR / Lens each pick their own model.
+- **Lens web search** — optional Tavily / Exa search with result count, inline sources, and collapsible details in chat.
 - **Prompts** — every feature has an editable template with `{lang}` and `{text}` placeholders.
 - **Streaming + reasoning** — togglable per feature; off by default for screenshot translate (speed wins).
 
@@ -108,6 +110,8 @@ If you ran v2.4.4 or earlier under the old name **KeyLingo**, your settings, API
 
 ## Changelog
 
+- **v2.6.2** — Added optional web search for Lens with Tavily / Exa providers. Lens can now decide to search for current facts, unfamiliar visible text, product names, errors, docs, dates, and other context that is not knowable from the screenshot alone. Search progress and results are shown inside the conversation as a compact, collapsed-by-default source block, and answers can cite the returned sources. This release also smooths the Settings window opening sequence and tightens the model/provider settings UI.
+- **v2.6.1** — Redesigned the Settings interface with a cleaner sidebar, denser provider/model controls, and improved layout consistency across the core configuration panels.
 - **v2.6.0** — Smoother Lens floating-window animation on macOS. The capture → fly-to-anchor transition no longer drives ~23 IPC calls per 380ms via `requestAnimationFrame` (each one doing two separate AppKit position+size calls, causing coalescing-induced frame drops). It's now a single Tauri command that schedules `NSAnimationContext` + `[window.animator setFrame:display:NO]`, and Core Animation drives the rest on the compositor thread at the display's native refresh rate. The `cubic-bezier(0.22, 1, 0.36, 1)` timing curve is preserved; Windows path is untouched.
 - **v2.5.9** — Stable RapidOCR screenshot-translation release. Windows RapidOCR installation is hardened by extracting `onnxruntime_providers_shared.dll`, preloading ONNX Runtime DLLs from the model directory, replacing invalid zero-byte files on reinstall, and avoiding duplicate downloads of the same runtime archive. Provider presets now leave model selection empty until you fetch and enable models from the provider.
 - **v2.5.8** — Restored the smooth per-frame fly animation in floating-mode Lens (the v2.5.7 snap-at-end approach reintroduced a pre-existing flicker bug). To keep cumulative jitter under control, `lens_set_floating` on Windows now uses a single atomic `SetWindowPos` call instead of separate position+size calls, halving the DWM/WebView2 resize coordination work per frame.
@@ -167,7 +171,7 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
 
 - 🌐 **随处翻译文本** —— 输入、翻译、回车粘回原应用
 - 📸 **截图或选中文本翻译** —— 截窗口/选区，也能直接翻译已选文字
-- 🔍 **用 Lens 问屏幕内容** —— 截取视觉上下文，在浮窗里和模型对话
+- 🔍 **用 Lens 问屏幕内容** —— 截取视觉上下文，可选联网搜索，在浮窗里和模型对话
 
 安装包小、内存占用低、无遥测，并优先使用系统 OCR。
 
@@ -185,7 +189,7 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
   <img src="docs/screenshots/lens-formula-extraction.gif" width="720" alt="Lens 公式提取" onerror="this.style.display='none'">
 </p>
 
-截下公式、图表或大段文字，继续追问。支持独立图片历史、流式回答和可选思考模式。
+截下公式、图表或大段文字，继续追问。支持独立图片历史、流式回答和可选思考模式。遇到依赖实时信息或屏幕上有陌生名称、错误、产品、文档时，Lens 可以联网搜索，并在对话里展示搜索来源。
 
 <p align="center">
   <img src="docs/screenshots/lens-optimize-text.gif" width="720" alt="Lens 文本优化" onerror="this.style.display='none'">
@@ -225,6 +229,7 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
 
 - **屏幕流程短**。翻译、OCR、提问都不需要切走当前应用
 - **真正系统 OCR**。macOS 用 Apple Vision，Windows 用 `Windows.Media.Ocr`
+- **Lens 可联网**。可选 Tavily / Exa 搜索，用来源结果回答实时或含糊的屏幕问题
 - **模型自己选**。翻译、截图翻译、Lens 可分别配置 OpenAI 兼容服务商
 - **多 Key 容灾**。限流或额度耗尽时自动切到备用 Key
 - **安静轻量**。无遥测，小安装包，低空闲占用
@@ -235,6 +240,7 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
 
 - **服务商** —— 多服务商、多 Key、一键测试连接
 - **按功能分配** —— 翻译 / OCR / Lens 各自选自己的模型
+- **Lens 联网搜索** —— 可选 Tavily / Exa，在对话里展示搜索数量、来源和默认折叠的详情
 - **提示词** —— 每个功能都有可编辑的模板，支持 `{lang}` 和 `{text}` 占位符
 - **流式 + 思考模式** —— 按功能开关；截图翻译默认关闭思考（速度优先）
 
@@ -244,6 +250,8 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
 
 ## 更新日志
 
+- **v2.6.2** —— Lens 新增可选联网搜索，支持 Tavily / Exa。模型会在需要实时信息、屏幕中有陌生文字/产品/错误/文档/日期等外部上下文时规划搜索；搜索进度和结果会作为紧凑的来源块显示在对话里，默认折叠，回答可引用搜索来源。本版同时修复设置窗口打开时先露出一小部分再完整显示的问题，并压缩、整理了模型/服务商设置界面。
+- **v2.6.1** —— 重设计设置界面：侧边栏更清晰，服务商和模型配置更紧凑，核心设置面板的布局一致性更好。
 - **v2.6.0** —— macOS 浮窗 Lens 飞入动画更顺滑。截图后对话栏飞向选区附近的过渡不再走 `requestAnimationFrame` 每帧打 IPC（380ms 内 ~23 次,且每帧底层是两次独立的 AppKit 位/尺寸调用,被 dispatcher coalescing 后掉帧明显）;改为单次 Tauri 命令派发 `NSAnimationContext` + `[window.animator setFrame:display:NO]`,余下的帧由 Core Animation 在合成器线程按显示器原生刷新率插值。时间曲线 `cubic-bezier(0.22, 1, 0.36, 1)` 与原 CSS transition 完全一致;Windows 路径未改动。
 - **v2.5.9** —— RapidOCR 截图翻译引擎正式版。强化 Windows 下载安装流程：补齐 `onnxruntime_providers_shared.dll`，从模型目录预加载 ONNX Runtime DLL，重新安装时替换 0 字节无效文件，并避免同一个 runtime 压缩包重复下载。服务商预设不再默认指定模型，需先获取模型列表并手动启用。
 - **v2.5.8** —— 恢复浮动模式 Lens 的逐帧平滑飞入动画（v2.5.7 的"末尾一次性 snap"方案重新引入了之前修过的"到位后闪一下"老毛病）。为防止累积抖动重现，Windows 上的 `lens_set_floating` 改成单次原子 `SetWindowPos`，把每帧的 DWM/WebView2 resize 协调工作砍一半。
