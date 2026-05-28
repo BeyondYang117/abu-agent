@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { flushSync } from 'react-dom'
 import { Loader2, Copy, Check, Square, Image as ImageIcon, ArrowUp, History as HistoryIcon, ChevronDown, MousePointer2, Code, Eye, Globe } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensWindowInfo, type ExplainMessage } from './api/tauri'
+import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
 import ReactMarkdown from 'react-markdown'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -17,6 +17,7 @@ import { HISTORY_MAX, HISTORY_THUMB_SIZE, loadHistoryFromStorage, makeThumbnail,
 import { ANCHOR_GAP, DRAG_THRESHOLD, FLOATING_GAP, FLOATING_PADDING, READY_BAR_H, SELECT_REVEAL_DELAY_MS, TRANSITION_MS, clamp, computeMetrics, computeSelectBar, isMacPlatform } from './lens/layout'
 import { estimateTokens, formatTokens } from './lens/markdown'
 import { ThinkingBlock } from './lens/ThinkingBlock'
+import { WebSearchBlock } from './lens/WebSearchBlock'
 
 /** 解析 webview hash query：'#lens?mode=translate' → 'translate' */
 function readModeFromHash(): Mode {
@@ -618,6 +619,38 @@ export default function Lens() {
       unlisten?.()
     }
   }, [finishAnswering])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    api.onLensWebSearch((payload: LensWebSearchPayload) => {
+      if (payload.imageId !== imageIdRef.current) return
+      setMessages(prev => {
+        const last = prev[prev.length - 1]
+        if (!last || last.role !== 'assistant') return prev
+        return [
+          ...prev.slice(0, -1),
+          {
+            ...last,
+            webSearch: {
+              status: payload.status,
+              query: payload.query,
+              reason: payload.reason,
+              results: payload.results,
+              error: payload.error,
+            },
+          },
+        ]
+      })
+    }).then((dispose) => {
+      if (cancelled) dispose()
+      else unlisten = dispose
+    }).catch(err => console.error(err))
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
 
   // messages 变化时自动滚动：正序滚到底（看新内容），倒序滚到顶（最新在顶）
   useEffect(() => {
@@ -1294,7 +1327,24 @@ export default function Lens() {
           const last = prev[prev.length - 1]
           if (!last || last.role !== 'assistant') return prev
           if (last.content.length > 0) return prev
-          return [...prev.slice(0, -1), { role: 'assistant', content: result.response! }]
+          return [...prev.slice(0, -1), { ...last, content: result.response! }]
+        })
+      }
+      if (result.success && result.webSearchResults?.length) {
+        setMessages(prev => {
+          const last = prev[prev.length - 1]
+          if (!last || last.role !== 'assistant') return prev
+          if (last.webSearch?.results?.length) return prev
+          return [
+            ...prev.slice(0, -1),
+            {
+              ...last,
+              webSearch: {
+                status: 'done',
+                results: result.webSearchResults,
+              },
+            },
+          ]
         })
       }
     } catch (err) {
@@ -1302,7 +1352,7 @@ export default function Lens() {
       setMessages(prev => {
         const last = prev[prev.length - 1]
         if (!last || last.role !== 'assistant') return prev
-        return [...prev.slice(0, -1), { role: 'assistant', content: `${t.lensError}: ${msg}` }]
+        return [...prev.slice(0, -1), { ...last, content: `${t.lensError}: ${msg}` }]
       })
     } finally {
       preparingSendRef.current = false
@@ -2007,6 +2057,13 @@ export default function Lens() {
                   const isUser = m.role === 'user'
                   if (isUser && !m.content.trim()) return null
                   const isLast = origIdx === lastChronoIdx
+                  const webSearch = m.webSearch
+                  const searchInProgress = webSearch?.status === 'searching'
+                  const showWebSearch = Boolean(webSearch && (
+                    webSearch.status !== 'skipped' ||
+                    Boolean(webSearch.error) ||
+                    Boolean(webSearch.results?.length)
+                  ))
                   return (
                     <div key={origIdx} className={`mb-3 ${isUser ? 'flex justify-end' : ''}`}>
                       {isUser ? (
@@ -2023,6 +2080,20 @@ export default function Lens() {
                               thoughtLabel={t.lensThought}
                             />
                           )}
+                          {showWebSearch && webSearch && (
+                            <WebSearchBlock
+                              search={webSearch}
+                              labels={{
+                                searching: t.lensWebSearchSearching,
+                                results: t.lensWebSearchResults,
+                                citations: t.lensWebSearchCitations,
+                                noResults: t.lensWebSearchNoResults,
+                                error: t.lensWebSearchError,
+                                skipped: t.lensWebSearchSkipped,
+                              }}
+                              onOpen={(url) => void api.openExternal(url).catch(err => console.error(err))}
+                            />
+                          )}
                           {m.content ? (
                             sourceMode ? (
                               <pre className="not-prose whitespace-pre-wrap break-words text-[12.5px] leading-6 font-mono bg-neutral-100 dark:bg-neutral-800/60 rounded-lg p-3">
@@ -2033,7 +2104,7 @@ export default function Lens() {
                                 {m.content}
                               </ReactMarkdown>
                             )
-                          ) : isLast && streaming && !m.reasoning ? (
+                          ) : isLast && streaming && !m.reasoning && !searchInProgress ? (
                             <div className="not-prose flex items-center gap-2 text-neutral-500 dark:text-neutral-400">
                               <Loader2 className="animate-spin" size={14} />
                               <span className="text-[12px]">{t.lensAsking}</span>

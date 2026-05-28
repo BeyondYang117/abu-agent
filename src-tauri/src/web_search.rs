@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     api::send_with_retry,
@@ -6,7 +6,8 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebSearchResult {
     pub title: String,
     pub url: String,

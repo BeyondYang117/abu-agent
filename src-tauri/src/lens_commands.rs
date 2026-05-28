@@ -31,7 +31,7 @@ use crate::settings::{self, default_question_prompt, ExplainMessage, OcrMode};
 use crate::shortcuts::{capture_active_selection, get_mouse_position};
 use crate::state::AppState;
 use crate::utils::{language_name, resolve_target_lang};
-use crate::web_search::{format_web_context, search_web};
+use crate::web_search::{format_web_context, search_web, WebSearchResult};
 use crate::windows;
 #[cfg(target_os = "windows")]
 use crate::windows_ocr;
@@ -673,6 +673,7 @@ pub(crate) async fn lens_ask(
     }
 
     let web_search_requested = web_search.unwrap_or(false);
+    let mut web_search_results: Vec<WebSearchResult> = Vec::new();
     let web_context = if web_search_requested && settings.lens.web_search.enabled {
         let user_question = messages
             .iter()
@@ -681,40 +682,71 @@ pub(crate) async fn lens_ask(
             .map(|message| message.content.trim())
             .unwrap_or_default();
         let explicit_search = explicitly_requests_web_search(user_question);
-        let mut plan = plan_lens_web_search_tool_call(
-            &app,
-            &state,
-            &image_id,
-            user_question,
-            &language,
-            retry_attempts,
-            provider_override.as_deref(),
-            model_override.as_deref(),
-        )
-        .await
-        .unwrap_or_else(|err| {
-            eprintln!("[lens-web-search] tool planning failed: {}", err);
+        let mut plan = if explicit_search {
             WebSearchToolPlan {
-                should_search: false,
-                query: String::new(),
-                reason: format!("tool planning failed: {err}"),
-            }
-        });
-        if explicit_search && (!plan.should_search || plan.query.trim().is_empty()) {
-            plan = WebSearchToolPlan {
                 should_search: true,
                 query: cleanup_explicit_search_query(user_question),
                 reason: "User explicitly requested web search".to_string(),
-            };
+            }
+        } else {
+            emit_lens_web_search(
+                &app,
+                &image_id,
+                "searching",
+                "",
+                "Planning web search",
+                &[],
+                None,
+            );
+            plan_lens_web_search_tool_call(
+                &app,
+                &state,
+                &image_id,
+                user_question,
+                &language,
+                retry_attempts,
+                provider_override.as_deref(),
+                model_override.as_deref(),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                eprintln!("[lens-web-search] tool planning failed: {}", err);
+                WebSearchToolPlan {
+                    should_search: false,
+                    query: String::new(),
+                    reason: format!("tool planning failed: {err}"),
+                }
+            })
+        };
+        if plan.should_search && plan.query.trim().is_empty() {
+            plan.query = user_question.trim().chars().take(180).collect();
         }
         if !plan.should_search {
             eprintln!(
                 "[lens-web-search] ai_tool=none reason={:?}",
                 plan.reason
             );
+            emit_lens_web_search(
+                &app,
+                &image_id,
+                "skipped",
+                "",
+                &plan.reason,
+                &[],
+                None,
+            );
             String::new()
         } else if plan.query.trim().is_empty() {
             eprintln!("[lens-web-search] ai_tool=web_search but query is empty");
+            emit_lens_web_search(
+                &app,
+                &image_id,
+                "skipped",
+                "",
+                "Search query is empty",
+                &[],
+                None,
+            );
             String::new()
         } else {
             let now = chrono::Local::now();
@@ -728,6 +760,15 @@ pub(crate) async fn lens_ask(
                 plan.query,
                 plan.reason
             );
+            emit_lens_web_search(
+                &app,
+                &image_id,
+                "searching",
+                &plan.query,
+                &plan.reason,
+                &[],
+                None,
+            );
             match search_web(&state, &settings.lens.web_search, &plan.query, retry_attempts).await {
                 Ok(results) => {
                     let tool_result = if results.is_empty() {
@@ -736,6 +777,17 @@ pub(crate) async fn lens_ask(
                     } else {
                         format_web_context(&results)
                     };
+                    emit_lens_web_search(
+                        &app,
+                        &image_id,
+                        "done",
+                        &plan.query,
+                        &plan.reason,
+                        &results,
+                        None,
+                    );
+                    let result_count = results.len();
+                    web_search_results = results;
                     let context = format!(
                         "{}\n\nTool call:\nweb_search(query: {:?})\n\nTool result:\n{}\n\nUse this tool result when it is relevant. Cite sources with [1], [2], etc. Do not invent sources.",
                         runtime_context,
@@ -744,13 +796,22 @@ pub(crate) async fn lens_ask(
                     );
                     eprintln!(
                         "[lens-web-search] results={} context_chars={}",
-                        results.len(),
+                        result_count,
                         context.chars().count()
                     );
                     context
                 }
                 Err(err) => {
                     eprintln!("[lens-web-search] error={}", err);
+                    emit_lens_web_search(
+                        &app,
+                        &image_id,
+                        "error",
+                        &plan.query,
+                        &plan.reason,
+                        &[],
+                        Some(&err),
+                    );
                     return Ok(serde_json::json!({
                       "success": false,
                       "error": err
@@ -818,9 +879,35 @@ pub(crate) async fn lens_ask(
     )
     .await
     {
-        Ok(response) => Ok(serde_json::json!({ "success": true, "response": response })),
+        Ok(response) => Ok(serde_json::json!({
+            "success": true,
+            "response": response,
+            "webSearchResults": web_search_results,
+        })),
         Err(err) => Ok(serde_json::json!({ "success": false, "error": err })),
     }
+}
+
+fn emit_lens_web_search(
+    app: &AppHandle,
+    image_id: &str,
+    status: &str,
+    query: &str,
+    reason: &str,
+    results: &[WebSearchResult],
+    error: Option<&str>,
+) {
+    let _ = app.emit(
+        "lens-web-search",
+        serde_json::json!({
+            "imageId": image_id,
+            "status": status,
+            "query": query,
+            "reason": reason,
+            "results": results,
+            "error": error,
+        }),
+    );
 }
 
 fn explicitly_requests_web_search(text: &str) -> bool {
@@ -881,12 +968,17 @@ async fn plan_lens_web_search_tool_call(
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z");
     let prompt = format!(
         "You may call exactly one tool before answering the user.\n\n\
-         Current local date/time: {}\n\n\
+         Current local date/time: {}\n\
+         This date/time is for tool planning only. The final answering step will not receive it unless you call web_search, so do not use it to compute an answer inside the planner.\n\n\
          Available tool:\n\
          - web_search(query): search the web for current, external, or identifying information.\n\n\
          Decide whether to call web_search after inspecting the screenshot and the user question.\n\
          If the user explicitly asks to search, look up, google, use the web, 联网, 搜索, 搜一下, or 查一下, you must call web_search.\n\
          Call web_search when the answer depends on current facts, public web knowledge, identifying a visible product/person/place/page/error, prices, docs, news, release info, or anything not fully knowable from the screenshot alone.\n\
+         Treat the screenshot itself as a source of possible search triggers: first inspect visible text, logos, names, titles, errors, code, page/UI labels, citations, and objects. If any important visible item is unfamiliar, ambiguous, branded, named, technical, current, or needs outside context to explain accurately, call web_search.\n\
+         When the user asks about screenshot content, broad questions like 这是什么, 这个什么意思, 怎么回事, 怎么解决, 帮我看看, explain this, what is this, or why is this happening should call web_search if the screenshot contains unfamiliar or ambiguous visible names, terms, abbreviations, logos, titles, citations, claims, error messages/codes, product names, people, places, websites, companies, model names, package/library names, or UI/page text. Do not answer by guessing from the screenshot if a search result could clarify what it is, where it comes from, whether it is current, or why it matters. If you are unsure whether a visible screenshot item needs external context, prefer calling web_search.\n\
+         For screenshot-driven searches, build the query from the most distinctive visible text plus the user's intent, not from generic words like screenshot or image.\n\
+         Current-date and relative-time questions count as current facts: 今天/明天/后天/昨天是几号, 今天星期几, 现在几点, today/tomorrow/yesterday, current date/time, day of week, etc. For these, call web_search with a concise query that includes the original question and relevant locale/date context.\n\
          Do not call it for simple OCR, translation, summarization, UI explanation, or questions answerable directly from the screenshot.\n\n\
          Output strict JSON only, no markdown:\n\
          {{\"tool\":\"web_search\",\"query\":\"concise search query including visible names/text\",\"reason\":\"short reason\"}}\n\

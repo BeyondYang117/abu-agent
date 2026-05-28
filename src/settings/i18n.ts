@@ -214,6 +214,12 @@ export const i18n = {
     lensWebSearchDepth: '搜索深度',
     lensWebSearchToggle: '联网搜索',
     lensWebSearchUnavailable: '请先在设置里启用并填写搜索 API Key',
+    lensWebSearchSearching: '正在搜索...',
+    lensWebSearchResults: '{count} 个搜索结果',
+    lensWebSearchCitations: '{count} 个引用内容',
+    lensWebSearchNoResults: '未找到搜索结果',
+    lensWebSearchError: '搜索失败',
+    lensWebSearchSkipped: '未使用搜索',
   },
   en: {
     settings: 'Settings',
@@ -428,6 +434,12 @@ export const i18n = {
     lensWebSearchDepth: 'Search depth',
     lensWebSearchToggle: 'Web search',
     lensWebSearchUnavailable: 'Enable web search and add a search API key in Settings first',
+    lensWebSearchSearching: 'Searching...',
+    lensWebSearchResults: '{count} search results',
+    lensWebSearchCitations: '{count} referenced sources',
+    lensWebSearchNoResults: 'No search results',
+    lensWebSearchError: 'Search failed',
+    lensWebSearchSkipped: 'Search not used',
   }
 } as const
 

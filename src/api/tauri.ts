@@ -8,9 +8,30 @@ import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 
 // ========== 类型定义 ==========
 
+export type LensWebSearchResult = {
+  title: string
+  url: string
+  content: string
+  publishedDate?: string | null
+  score?: number | null
+}
+
+export type LensWebSearchState = {
+  status: 'searching' | 'done' | 'skipped' | 'error'
+  query?: string
+  reason?: string
+  results?: LensWebSearchResult[]
+  error?: string
+}
+
 // Lens 多轮对话消息类型（视觉模型）
 // reasoning：推理模型（DeepSeek-R1 等）的思维链文本，仅本地展示，不回传后端
-export type ExplainMessage = { role: 'user' | 'assistant'; content: string; reasoning?: string }
+export type ExplainMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  reasoning?: string
+  webSearch?: LensWebSearchState
+}
 
 // Lens 流式输出负载（事件名 lens-stream）
 // reasoningDelta：思维链增量（推理模型才会有）
@@ -22,6 +43,16 @@ export type LensStreamPayload = {
   done?: boolean
   reason?: 'done' | 'cancelled' | 'error'
   full?: string
+}
+
+// Lens 联网搜索状态/结果负载（事件名 lens-web-search）
+export type LensWebSearchPayload = {
+  imageId: string
+  status: 'searching' | 'done' | 'skipped' | 'error'
+  query?: string
+  reason?: string
+  results?: LensWebSearchResult[]
+  error?: string
 }
 
 // 截图翻译流式负载（事件名 lens-translate-stream）
@@ -269,6 +300,8 @@ export const api = {
   // Lens 模式
   onLensStream: (listener: (payload: LensStreamPayload) => void) =>
     on<LensStreamPayload>('lens-stream', (payload) => listener(payload)),
+  onLensWebSearch: (listener: (payload: LensWebSearchPayload) => void) =>
+    on<LensWebSearchPayload>('lens-web-search', (payload) => listener(payload)),
   onLensTranslateStream: (listener: (payload: LensTranslateStreamPayload) => void) =>
     on<LensTranslateStreamPayload>('lens-translate-stream', (payload) => listener(payload)),
   onLensCloseRequest: (listener: () => void) =>
@@ -302,7 +335,7 @@ export const api = {
       'lens_translate_text', { text, requestId }
     ),
   lensAsk: (imageId: string, messages: ExplainMessage[], options?: { webSearch?: boolean }) =>
-    invoke<{ success: boolean; response?: string; error?: string }>('lens_ask', {
+    invoke<{ success: boolean; response?: string; error?: string; webSearchResults?: LensWebSearchResult[] }>('lens_ask', {
       imageId,
       messages,
       webSearch: options?.webSearch,
