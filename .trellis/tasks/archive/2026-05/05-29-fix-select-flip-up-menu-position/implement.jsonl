@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "component patterns and CSS positioning conventions"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useCallback/useLayoutEffect hook patterns"}
