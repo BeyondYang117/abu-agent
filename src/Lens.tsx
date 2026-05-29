@@ -165,6 +165,7 @@ export default function Lens() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyPanelH, setHistoryPanelH] = useState(0)
 
+  const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const historyPanelRef = useRef<HTMLDivElement>(null)
   const historyContentRef = useRef<HTMLDivElement>(null)
@@ -259,15 +260,16 @@ export default function Lens() {
     void loadLensSettings()
   }, [loadLensSettings])
 
-  const focusLensInput = useCallback((delays: number[] = [0, 40, 120, 240, 420]) => {
+  const focusLensSurface = useCallback((delays: number[] = [0, 40, 120, 240, 420]) => {
     const requestId = ++focusReqIdRef.current
-    const canFocus = () => (
-      requestId === focusReqIdRef.current
-      && modeRef.current === 'chat'
-      && !historyOpenRef.current
-      && !capturingRef.current
-      && (stageRef.current === 'select' || stageRef.current === 'ready' || stageRef.current === 'answering')
-    )
+    const canFocus = () => {
+      if (requestId !== focusReqIdRef.current) return false
+      if (historyOpenRef.current || capturingRef.current) return false
+      if (modeRef.current === 'chat') {
+        return stageRef.current === 'select' || stageRef.current === 'ready' || stageRef.current === 'answering'
+      }
+      return stageRef.current === 'select' || stageRef.current === 'translating' || stageRef.current === 'translated'
+    }
 
     const run = async () => {
       if (!canFocus()) return
@@ -277,9 +279,12 @@ export default function Lens() {
         // Native focus can fail briefly while the window is still becoming visible.
       }
       if (!canFocus()) return
-      inputRef.current?.focus({ preventScroll: true })
+      const focusTarget = modeRef.current === 'chat' ? inputRef.current : rootRef.current
+      focusTarget?.focus({ preventScroll: true })
       requestAnimationFrame(() => {
-        if (canFocus()) inputRef.current?.focus({ preventScroll: true })
+        if (!canFocus()) return
+        const nextFocusTarget = modeRef.current === 'chat' ? inputRef.current : rootRef.current
+        nextFocusTarget?.focus({ preventScroll: true })
       })
     }
 
@@ -340,6 +345,7 @@ export default function Lens() {
     selectRevealedRef.current = false
     imageIdRef.current = ''
     translateCardDragRef.current = null
+    focusLensSurface([0, 40, 120])
     if (resetFreezeFrameImageId) {
       void (async () => {
         try {
@@ -371,6 +377,7 @@ export default function Lens() {
     // 仅 chat 模式注入；> 200KB 直接丢弃避免上下文爆炸；trim 后非空才 setSelectionText。
     const myReq = ++selectionReqIdRef.current
     if (curMode === 'translateText') {
+      focusLensSurface()
       void (async () => {
         try {
           const text = await api.takeLensSelection()
@@ -432,7 +439,7 @@ export default function Lens() {
           if (text.length > 200_000) return
           if (text.trim()) {
             setSelectionText(text)
-            focusLensInput([0, 60, 180])
+            focusLensSurface([0, 60, 180])
           }
         } catch (err) {
           console.warn('[lens] take selection failed:', err)
@@ -471,8 +478,8 @@ export default function Lens() {
       console.error('Failed to list windows', err)
       if (motionSeq === motionSeqRef.current) setWindows([])
     }
-    focusLensInput()
-  }, [cancelPendingMotion, focusLensInput, loadLensSettings])
+    focusLensSurface()
+  }, [cancelPendingMotion, focusLensSurface, loadLensSettings])
 
   useEffect(() => {
     void enterSelect()
@@ -490,7 +497,7 @@ export default function Lens() {
     let cancelled = false
     let unlisten: (() => void) | undefined
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (focused) focusLensInput([0, 40, 120])
+      if (focused) focusLensSurface([0, 40, 120])
     }).then((dispose) => {
       if (cancelled) dispose()
       else unlisten = dispose
@@ -499,7 +506,7 @@ export default function Lens() {
       cancelled = true
       unlisten?.()
     }
-  }, [focusLensInput])
+  }, [focusLensSurface])
 
   // viewport resize（拔显示器 / 切分辨率 / DPI 变更，以及浮动模式下 raf 同步动画的逐帧缩放）
   // 都触发 'resize' 事件 → 更新 viewport state，让相对尺寸 metrics 重算。
@@ -674,10 +681,16 @@ export default function Lens() {
     if (stageRef.current !== 'answering' && stageRef.current !== 'ready') return
 
     const id = setTimeout(() => {
-      focusLensInput([0, 60, 160])
+      focusLensSurface([0, 60, 160])
     }, 30)
     return () => clearTimeout(id)
-  }, [streaming, mode, historyOpen, focusLensInput])
+  }, [streaming, mode, historyOpen, focusLensSurface])
+
+  useEffect(() => {
+    if (mode === 'chat') return
+    if (stage !== 'translating' && stage !== 'translated') return
+    focusLensSurface([0, 60, 180])
+  }, [mode, stage, focusLensSurface])
 
   // 关闭前同步重置 state，让 webview surface 在 hide 之前已经是空 select 态。
   // 否则下次 show 时 macOS 会先显示上次的 ready 态 surface 一帧，再被 lens:reset 覆盖 → 闪一下上次内容。
@@ -728,6 +741,8 @@ export default function Lens() {
   useEffect(() => {
     const handler = async (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
       if (preparingSendRef.current) return
       if (drawModeRef.current) return
       if (stageRef.current === 'answering' && streaming) {
@@ -1073,7 +1088,9 @@ export default function Lens() {
       )
     }
     if (mode === 'chat') {
-      focusLensInput([TRANSITION_MS + 20, TRANSITION_MS + 120, TRANSITION_MS + 260])
+      focusLensSurface([TRANSITION_MS + 20, TRANSITION_MS + 120, TRANSITION_MS + 260])
+    } else if (mode === 'translate') {
+      focusLensSurface([0, 80, 180, TRANSITION_MS + 80])
     }
   }
 
@@ -1411,7 +1428,7 @@ export default function Lens() {
     })
     // 老 takeLensSelection promise 失效，避免恢复历史后被新 take 文本污染
     selectionReqIdRef.current++
-    focusLensInput([50, 140, 260])
+    focusLensSurface([50, 140, 260])
   }
 
   // 相对时间字符串（"刚刚" / "3 分钟前"）
@@ -1604,7 +1621,9 @@ export default function Lens() {
 
   return (
     <div
-      className="fixed inset-0 select-none"
+      ref={rootRef}
+      tabIndex={-1}
+      className="fixed inset-0 select-none outline-none"
       onPointerEnter={requestWindowFocus}
       onPointerMove={requestWindowFocus}
       onPointerDownCapture={requestWindowFocus}
