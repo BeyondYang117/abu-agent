@@ -443,13 +443,13 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
   }
 
   // 保存并关闭
-  const handleSaveAndClose = async () => {
+  const handleSaveAndClose = useCallback(async () => {
     const saved = await handleSave()
     if (saved) {
       setCloseConfirmOpen(false)
       onClose()
     }
-  }
+  }, [handleSave, onClose])
 
   const handleSettingsDragMouseDown = useCallback((event: React.MouseEvent<HTMLElement>) => {
     if (event.button !== 0) return
@@ -461,17 +461,54 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
     })
   }, [])
 
-  // Esc 键关闭（带未保存提示）
+  // 全局键盘：Esc 关闭、Cmd/Ctrl+S 保存；弹窗打开时优先处理弹窗内的 Esc/Enter
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (recordingTarget) return
+
+      // 删除供应商弹窗：Esc 取消；不绑定 Enter，避免误触发破坏性删除
+      if (confirmDeleteProviderId) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          setConfirmDeleteProviderId(null)
+        }
+        return
+      }
+
+      // 未保存确认弹窗：Esc = 继续编辑（关弹窗）；Enter = 保存并关闭
+      if (closeConfirmOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          setCloseConfirmOpen(false)
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          e.stopPropagation()
+          if (!saving) void handleSaveAndClose()
+        }
+        return
+      }
+
       if (e.key === 'Escape') {
         handleCloseRequest()
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        if (hasUnsavedChanges && !saving) void handleSave()
       }
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [handleCloseRequest, recordingTarget])
+  }, [
+    handleCloseRequest,
+    recordingTarget,
+    closeConfirmOpen,
+    confirmDeleteProviderId,
+    saving,
+    hasUnsavedChanges,
+    handleSave,
+    handleSaveAndClose,
+  ])
 
   /**
    * 测试提供商连接
@@ -1971,6 +2008,7 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
                 onClick={handleSaveAndClose}
                 disabled={saving}
                 className="kv-btn primary"
+                autoFocus
               >
                 {saving ? t.saving : t.saveAndClose}
               </button>
