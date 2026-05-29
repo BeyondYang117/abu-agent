@@ -659,19 +659,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     settings.screenshot_translation.prompt =
         normalize_optional_prompt(settings.screenshot_translation.prompt.take());
 
-    // 5. 确保必要字段不为空
-    if settings.hotkey.is_empty() {
-        settings.hotkey = "CommandOrControl+Alt+T".to_string();
-    }
-    if settings.screenshot_translation.hotkey.is_empty() {
-        settings.screenshot_translation.hotkey = "CommandOrControl+Shift+A".to_string();
-    }
-    if settings.screenshot_translation.text_hotkey.is_empty() {
-        settings.screenshot_translation.text_hotkey = "CommandOrControl+Shift+T".to_string();
-    }
-    if settings.lens.hotkey.is_empty() {
-        settings.lens.hotkey = "CommandOrControl+Shift+G".to_string();
-    }
+    // 5. 其他字段验证
     if settings.lens.message_order != "asc" && settings.lens.message_order != "desc" {
         settings.lens.message_order = "asc".to_string();
     }

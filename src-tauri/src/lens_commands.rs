@@ -101,6 +101,9 @@ pub(crate) fn explain_read_image(
 /// 任何兜底都比"什么都不做"强 —— 之前的实现这种情况下窗口停留在上次几何，
 /// 用户看到的就是 ready 浮条 / 旧位置，体验远差于跳到 primary。
 fn lens_position_fullscreen(app: &AppHandle, window: &WebviewWindow) -> Option<LensFrame> {
+    // 全屏选区模式下禁止窗口缩放，避免鼠标靠近屏幕边缘时 OS 显示 resize 光标
+    let _ = window.set_resizable(false);
+
     #[cfg(target_os = "macos")]
     {
         match lens_position_fullscreen_macos(window) {
@@ -1892,6 +1895,9 @@ pub(crate) fn lens_set_floating(app: AppHandle, rect: FloatingRect) -> Result<()
     let Some(window) = app.get_webview_window("lens") else {
         return Ok(());
     };
+
+    // 浮动模式需要恢复可缩放，允许后端按需 set_size 调整窗口
+    let _ = window.set_resizable(true);
 
     #[cfg(target_os = "windows")]
     {

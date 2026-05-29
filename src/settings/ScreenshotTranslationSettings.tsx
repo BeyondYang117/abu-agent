@@ -74,7 +74,7 @@ export function ScreenshotTranslationSettings({
             <>
               <SettingRow label={t.screenshotHotkey} description={t.screenshotHotkey} stack>
                 <HotkeyInput
-                  value={screenshot?.hotkey || 'CommandOrControl+Shift+A'}
+                  value={screenshot?.hotkey ?? ''}
                   placeholder="CommandOrControl+Shift+A"
                   recording={recordingTarget === 'screenshotTranslation'}
                   onToggleRecording={() => onToggleRecording('screenshotTranslation')}
@@ -89,7 +89,7 @@ export function ScreenshotTranslationSettings({
 
               <SettingRow label={t.screenshotTextHotkey} description={t.selectedText} stack>
                 <HotkeyInput
-                  value={screenshot?.textHotkey || 'CommandOrControl+Shift+T'}
+                  value={screenshot?.textHotkey ?? ''}
                   placeholder="CommandOrControl+Shift+T"
                   recording={recordingTarget === 'screenshotTranslationText'}
                   onToggleRecording={() => onToggleRecording('screenshotTranslationText')}

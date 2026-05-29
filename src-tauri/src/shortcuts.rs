@@ -463,14 +463,7 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
 
     if settings.screenshot_translation.enabled {
         let hotkey = settings.screenshot_translation.hotkey.trim().to_string();
-        if hotkey.is_empty() {
-            errors.push(HotkeyError {
-                kind: HotkeyErrorKind::Empty,
-                scope: HotkeyScope::Screenshot,
-                hotkey: String::new(),
-                raw: None,
-            });
-        } else {
+        if !hotkey.is_empty() {
             let hotkey_key = hotkey.to_lowercase();
             if !registered.insert(hotkey_key) {
                 errors.push(HotkeyError {
@@ -509,14 +502,7 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
             .text_hotkey
             .trim()
             .to_string();
-        if text_hotkey.is_empty() {
-            errors.push(HotkeyError {
-                kind: HotkeyErrorKind::Empty,
-                scope: HotkeyScope::ScreenshotText,
-                hotkey: String::new(),
-                raw: None,
-            });
-        } else {
+        if !text_hotkey.is_empty() {
             let hotkey_key = text_hotkey.to_lowercase();
             if !registered.insert(hotkey_key) {
                 errors.push(HotkeyError {
@@ -554,14 +540,7 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
 
     if settings.lens.enabled {
         let hotkey = settings.lens.hotkey.trim().to_string();
-        if hotkey.is_empty() {
-            errors.push(HotkeyError {
-                kind: HotkeyErrorKind::Empty,
-                scope: HotkeyScope::Lens,
-                hotkey: String::new(),
-                raw: None,
-            });
-        } else {
+        if !hotkey.is_empty() {
             let hotkey_key = hotkey.to_lowercase();
             if !registered.insert(hotkey_key) {
                 errors.push(HotkeyError {

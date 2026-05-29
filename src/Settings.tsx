@@ -1277,7 +1277,7 @@ export default function Settings({ onClose, onSettingsChange, onReady }: Setting
                     <>
                       <SettingRow label={t.hotkey} description={lang === 'zh' ? '进入 Lens 截图选择模式。' : 'Enter Lens screenshot selection mode.'} stack>
                         <HotkeyInput
-                          value={settings.lens?.hotkey || 'CommandOrControl+Shift+G'}
+                          value={settings.lens?.hotkey ?? ''}
                           placeholder="CommandOrControl+Shift+G"
                           recording={recordingTarget === 'lens'}
                           onToggleRecording={() => toggleRecording('lens')}
