@@ -1060,14 +1060,17 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_settings_falls_back_when_main_hotkey_empty() {
+    fn sanitize_settings_preserves_empty_hotkeys() {
         let mut s = Settings::default();
         s.hotkey = String::new();
+        s.screenshot_translation.hotkey = String::new();
+        s.screenshot_translation.text_hotkey = String::new();
+        s.lens.hotkey = String::new();
         let s = sanitize_settings(s);
-        assert!(
-            !s.hotkey.is_empty(),
-            "empty hotkey should be replaced with default"
-        );
+        assert_eq!(s.hotkey, "");
+        assert_eq!(s.screenshot_translation.hotkey, "");
+        assert_eq!(s.screenshot_translation.text_hotkey, "");
+        assert_eq!(s.lens.hotkey, "");
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

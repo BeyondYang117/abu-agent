@@ -110,6 +110,7 @@ If you ran v2.4.4 or earlier under the old name **KeyLingo**, your settings, API
 
 ## Changelog
 
+- **v2.6.3** — Focused Lens stability release. Escape-to-close now works more reliably in screenshot translation and selected-text translation flows, including cases where macOS focus stayed on the captured screen instead of the Lens webview. Lens answer panels now leave more usable scroll room above the Dock, with tighter bottom padding. Follow-up questions keep the screenshot conversation context without re-injecting the Lens question prompt on every turn, reducing repeated prompt leakage in later replies. Settings shortcut handling also improves Esc/Enter/Cmd+S behavior and supports intentionally clearing feature hotkeys.
 - **v2.6.2** — Added optional web search for Lens with Tavily / Exa providers. Lens can now decide to search for current facts, unfamiliar visible text, product names, errors, docs, dates, and other context that is not knowable from the screenshot alone. Search progress and results are shown inside the conversation as a compact, collapsed-by-default source block, and answers can cite the returned sources. This release also smooths the Settings window opening sequence and tightens the model/provider settings UI.
 - **v2.6.1** — Redesigned the Settings interface with a cleaner sidebar, denser provider/model controls, and improved layout consistency across the core configuration panels.
 - **v2.6.0** — Smoother Lens floating-window animation on macOS. The capture → fly-to-anchor transition no longer drives ~23 IPC calls per 380ms via `requestAnimationFrame` (each one doing two separate AppKit position+size calls, causing coalescing-induced frame drops). It's now a single Tauri command that schedules `NSAnimationContext` + `[window.animator setFrame:display:NO]`, and Core Animation drives the rest on the compositor thread at the display's native refresh rate. The `cubic-bezier(0.22, 1, 0.36, 1)` timing curve is preserved; Windows path is untouched.
@@ -250,6 +251,7 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
 
 ## 更新日志
 
+- **v2.6.3** —— Lens 稳定性修复版。截图翻译和选中文本翻译里的 Esc 关闭更可靠，覆盖 macOS 焦点仍停在被截图画面而不是 Lens webview 的情况。Lens 回答区域在 Dock 上方留出更可用的滚动空间，并收紧底部空白。追问时会保留截图对话上下文，但不再每轮重复注入 Lens 提问提示词，减少后续回答被重复提示词干扰的问题。设置页快捷键也改进了 Esc / Enter / Cmd+S 行为，并支持主动清空功能热键。
 - **v2.6.2** —— Lens 新增可选联网搜索，支持 Tavily / Exa。模型会在需要实时信息、屏幕中有陌生文字/产品/错误/文档/日期等外部上下文时规划搜索；搜索进度和结果会作为紧凑的来源块显示在对话里，默认折叠，回答可引用搜索来源。本版同时修复设置窗口打开时先露出一小部分再完整显示的问题，并压缩、整理了模型/服务商设置界面。
 - **v2.6.1** —— 重设计设置界面：侧边栏更清晰，服务商和模型配置更紧凑，核心设置面板的布局一致性更好。
 - **v2.6.0** —— macOS 浮窗 Lens 飞入动画更顺滑。截图后对话栏飞向选区附近的过渡不再走 `requestAnimationFrame` 每帧打 IPC（380ms 内 ~23 次,且每帧底层是两次独立的 AppKit 位/尺寸调用,被 dispatcher coalescing 后掉帧明显）;改为单次 Tauri 命令派发 `NSAnimationContext` + `[window.animator setFrame:display:NO]`,余下的帧由 Core Animation 在合成器线程按显示器原生刷新率插值。时间曲线 `cubic-bezier(0.22, 1, 0.36, 1)` 与原 CSS transition 完全一致;Windows 路径未改动。
