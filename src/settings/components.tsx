@@ -3,22 +3,34 @@ import { createPortal } from 'react-dom'
 import { Check, ChevronDown, ExternalLink, X, type LucideIcon } from 'lucide-react'
 import { formatHotkey, getPlatform } from './utils'
 
+const MENU_GAP = 6
+const MENU_MARGIN = 8
+const MENU_MAX_HEIGHT = 260
+
 function useSelectMenuRect(
   open: boolean,
   value: string,
   optionsLength: number,
   triggerRef: RefObject<HTMLButtonElement | null>,
 ) {
-  const [menuRect, setMenuRect] = useState({ left: 0, top: 0, width: 0 })
+  const [menuRect, setMenuRect] = useState({ left: 0, top: 0, width: 0, maxHeight: MENU_MAX_HEIGHT })
 
   const updateMenuRect = useCallback(() => {
     const trigger = triggerRef.current
     if (!trigger) return
     const rect = trigger.getBoundingClientRect()
+    const viewportH = window.innerHeight
+    const spaceBelow = viewportH - rect.bottom - MENU_GAP - MENU_MARGIN
+    const spaceAbove = rect.top - MENU_GAP - MENU_MARGIN
+    // 默认向下展开；下方空间不足且上方更宽裕时向上翻转。
+    const flipUp = spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow
+    const available = Math.max(flipUp ? spaceAbove : spaceBelow, 0)
+    const maxHeight = Math.max(Math.min(MENU_MAX_HEIGHT, available), 80)
     setMenuRect({
       left: rect.left,
-      top: rect.bottom + 6,
+      top: flipUp ? rect.top - MENU_GAP - maxHeight : rect.bottom + MENU_GAP,
       width: rect.width,
+      maxHeight,
     })
   }, [triggerRef])
 
@@ -119,8 +131,8 @@ export function Select({ value, onChange, options, className = '' }: {
         <div
           ref={menuRef}
           role="listbox"
-          className="kv-select-menu fixed z-[1000] max-h-[260px] overflow-y-auto custom-scrollbar p-1"
-          style={{ left: menuRect.left, top: menuRect.top, width: menuRect.width }}
+          className="kv-select-menu fixed z-[1000] overflow-y-auto custom-scrollbar p-1"
+          style={{ left: menuRect.left, top: menuRect.top, width: menuRect.width, maxHeight: menuRect.maxHeight }}
           data-tauri-drag-region="false"
         >
           {options.map(opt => {
