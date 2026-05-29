@@ -867,24 +867,27 @@ pub(crate) async fn lens_ask(
         String::new()
     };
 
-    // 多轮对话：保留前面所有历史，仅把最后一条用户提问注入 question_prompt
+    // 多轮对话：保留前面所有历史；截图提示词只放在第一条用户消息,避免追问被重复前缀带偏。
     // question_prompt 为空（纯文本对话）时直接传用户原话，不加前缀
     // 关闭思考时在末尾追加 "/no_think"：Qwen3 hybrid 模型识别后直接关思考；其它模型当无意义文本忽略
     let mut api_messages = messages.clone();
-    if let Some(last) = api_messages.pop() {
-        let original_question = last.content.clone();
-        let mut content = if question_prompt.is_empty() {
-            last.content
-        } else {
-            format!("{}\n\n用户问题：{}", question_prompt, original_question)
-        };
-        if !thinking_enabled {
-            content.push_str(" /no_think");
+    let original_question = api_messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.clone())
+        .unwrap_or_default();
+    if !question_prompt.is_empty() {
+        if let Some(first_user) = api_messages.iter_mut().find(|message| message.role == "user") {
+            first_user.content = format!("{}\n\n用户问题：{}", question_prompt, first_user.content);
         }
-        api_messages.push(ExplainMessage {
-            role: "user".to_string(),
-            content,
-        });
+    }
+    if !thinking_enabled {
+        if let Some(last_user) = api_messages.iter_mut().rev().find(|message| message.role == "user") {
+            last_user.content.push_str(" /no_think");
+        }
+    }
+    if !original_question.is_empty() {
         if !web_context.is_empty() {
             api_messages.push(ExplainMessage {
                 role: "assistant".to_string(),
