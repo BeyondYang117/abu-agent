@@ -6,6 +6,7 @@ use std::{
 
 use base64::{engine::general_purpose, Engine as _};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use uuid::Uuid;
 
 #[cfg(target_os = "windows")]
@@ -33,6 +34,8 @@ use crate::state::AppState;
 use crate::utils::{language_name, resolve_target_lang};
 use crate::web_search::{format_web_context, search_web, WebSearchResult};
 use crate::windows;
+
+const LENS_ESCAPE_SHORTCUT: &str = "Escape";
 #[cfg(target_os = "windows")]
 use crate::windows_ocr;
 
@@ -60,6 +63,34 @@ pub(crate) fn request_lens_close(app: &AppHandle) -> Result<(), String> {
         }
     }
     lens_close(app.clone())
+}
+
+fn register_lens_escape_shortcut(app: &AppHandle) {
+    let shortcuts = app.global_shortcut();
+    if shortcuts.is_registered(LENS_ESCAPE_SHORTCUT) {
+        return;
+    }
+
+    if let Err(err) = shortcuts.on_shortcut(LENS_ESCAPE_SHORTCUT, move |app, _shortcut, event| {
+        if event.state != ShortcutState::Pressed {
+            return;
+        }
+        let Some(window) = app.get_webview_window("lens") else {
+            return;
+        };
+        if window.is_visible().ok().unwrap_or(false) {
+            let _ = app.emit_to("lens", "lens-close-request", ());
+        }
+    }) {
+        eprintln!("[lens-esc] failed to register temporary Escape shortcut: {err}");
+    }
+}
+
+fn unregister_lens_escape_shortcut(app: &AppHandle) {
+    let shortcuts = app.global_shortcut();
+    if shortcuts.is_registered(LENS_ESCAPE_SHORTCUT) {
+        let _ = shortcuts.unregister(LENS_ESCAPE_SHORTCUT);
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -454,6 +485,11 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
     }
     let _ = window.show();
     let _ = window.set_focus();
+    if safe_mode == "translate" || safe_mode == "translateText" {
+        register_lens_escape_shortcut(app);
+    } else {
+        unregister_lens_escape_shortcut(app);
+    }
     let frame = if safe_mode == "translateText" {
         lens_position_text_floating(app, &window);
         None
@@ -1695,6 +1731,7 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
     }
     cleanup_lens_freeze_frame(&app);
     state.lens_busy.store(false, Ordering::SeqCst);
+    unregister_lens_escape_shortcut(&app);
     if let Some(window) = app.get_webview_window("lens") {
         // 先隐藏再复位：避免 visible 状态下从浮动尺寸 resize 到全屏时用户看到闪屏
         // （尤其是 Windows 上 translateText 浮动弹窗点击外部关闭时）。
