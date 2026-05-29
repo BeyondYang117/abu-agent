@@ -2076,7 +2076,11 @@ export default function Lens() {
                 </div>
               )
               return (
-              <div ref={chatScrollRef} className="h-full overflow-y-auto custom-scrollbar px-3.5 py-3">
+              <div
+                ref={chatScrollRef}
+                className="h-full overflow-y-auto custom-scrollbar px-3.5 pt-3"
+                style={{ paddingBottom: answerLayout.placeAbove ? 12 : 96 }}
+              >
                 {/* desc 模式下操作按钮放最前（贴最新答案） */}
                 {messageOrder === 'desc' && showActions && Actions}
                 {ordered.map((m, displayIdx) => {
