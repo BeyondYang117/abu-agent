@@ -4,6 +4,7 @@
 mod api;
 mod apple_intelligence;
 mod capture_geometry;
+mod chat;
 mod commands;
 mod lens;
 mod lens_commands;
@@ -222,7 +223,14 @@ fn main() {
             updates::install_update_and_quit,
             commands::apple_intelligence_available,
             commands::rapidocr_status,
-            commands::rapidocr_install
+            commands::rapidocr_install,
+            // Chat 模块命令
+            chat::commands::chat_get_conversations,
+            chat::commands::chat_get_conversation,
+            chat::commands::chat_create_conversation,
+            chat::commands::chat_send_message,
+            chat::commands::chat_delete_conversation,
+            chat::commands::chat_update_conversation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

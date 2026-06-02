@@ -7,6 +7,7 @@ import './index.css'
 
 const Settings = lazy(() => import('./Settings'))
 const Lens = lazy(() => import('./Lens'))
+const Chat = lazy(() => import('./chat/Chat'))
 
 /**
  * 翻译器主组件
@@ -193,7 +194,14 @@ function App() {
   const getMode = () => {
     const urlParams = new URLSearchParams(window.location.search)
     const hash = window.location.hash.replace('#', '')
-    return urlParams.get('mode') || hash.split('?')[0] || ''
+    const path = urlParams.get('mode') || hash.split('?')[0] || ''
+
+    // 支持 #chat 或 #chat/conversation-id
+    if (path === 'chat' || path.startsWith('chat/')) {
+      return 'chat'
+    }
+
+    return path
   }
 
   const [mode, setMode] = useState(getMode)
@@ -281,6 +289,8 @@ function App() {
     const resize = async () => {
       if (mode === 'settings') {
         await api.resizeWindow(640, 520)
+      } else if (mode === 'chat') {
+        await api.resizeWindow(1280, 800)
       } else if (mode === '' || mode === 'translator') {
         await api.resizeWindow(392, 152)
       }
@@ -323,6 +333,15 @@ function App() {
       <Suspense fallback={null}>
         <Lens />
       </Suspense>
+    )
+  }
+  if (mode === 'chat') {
+    return (
+      <div className="h-screen w-screen overflow-hidden">
+        <Suspense fallback={null}>
+          <Chat onOpenSettings={openSettings} />
+        </Suspense>
+      </div>
     )
   }
   if (mode === 'settings') {

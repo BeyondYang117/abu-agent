@@ -11,9 +11,10 @@ Kivio (formerly KeyLingo through v2.4.4) is a lightweight desktop **screen-level
 Use `npm` (lockfile is `package-lock.json`). Rust tooling is managed by Tauri.
 
 - `npm install` — install Node dependencies.
-- `npm run dev` — run the full Tauri app (Rust backend + Vite UI). This is the standard dev command.
+- `npm run dev` — run the full Tauri app (Rust backend + Vite UI). Automatically builds Swift sidecars on macOS. This is the standard dev command.
 - `npm run dev:ui` — run the Vite UI dev server only (useful for quick UI iteration without compiling Rust).
 - `npm run build` — build the full desktop app bundle via Tauri.
+- `npm run build:swift` — build Swift sidecar binaries (`kivio-ocr-helper` for Apple Vision OCR, `kivio-ai-helper` for Apple Intelligence). macOS only; other platforms generate empty stubs to satisfy Tauri's `externalBin` validation.
 - `npm run build:ui` — build the production UI bundle only (outputs to `dist/`).
 - `npm run preview` — preview the built UI bundle locally.
 - `npm run lint` — run ESLint on `.ts` and `.tsx` files.
@@ -78,9 +79,9 @@ When a request fails with a quota/rate-limit/auth error, the backend automatical
 - **`sanitize_settings`** in `src-tauri/src/settings.rs` handles migration from legacy single-provider configs to the multi-provider system, validates provider existence, and normalizes hotkeys. It also migrates the legacy single `apiKey` field on each `ModelProvider` (read via the `api_key_legacy` field with `#[serde(rename = "apiKey")]`) into `api_keys[0]`. `normalize_hotkey` canonicalizes modifier aliases to `CommandOrControl`, `Control`, `Alt`, `Shift`, `Super` — use these exact strings when constructing hotkeys.
 - Saving settings is transactional: if hotkey registration fails, `restore_runtime_settings` rolls back to the previous state.
 
-### Screenshot Capture (macOS / Windows)
+### Screenshot Capture and OCR
 
-Capture is platform-guarded with `cfg(target_os = ...)`:
+**Capture** is platform-guarded with `cfg(target_os = ...)`:
 
 - **macOS** — `src-tauri/src/sck.rs` uses ScreenCaptureKit (`screencapturekit` crate, `macos_14_0` feature). No `screencapture` shell-out.
 - **Windows** — `xcap` crate captures full-screen / window content (the dependency is `cfg`-gated to Windows in `Cargo.toml`).
@@ -88,6 +89,12 @@ Capture is platform-guarded with `cfg(target_os = ...)`:
 Both platforms route through the **Lens overlay** (`Lens.tsx`): the overlay presents hover-highlighted app windows or a draggable region; user click / drag commits via `lens_capture_window` / `lens_capture_region` Tauri commands. The capture commands receive logical-pixel coordinates from the overlay and call the platform-specific module to produce a PNG in `temp_dir`.
 
 A single busy flag (`AppState.lens_busy`, `AtomicBool`) prevents concurrent overlays. `lens_request_internal` swaps it true on entry; `lens_close` resets it. A reactive self-heal in `lens_request_internal` clears a stale flag if the previous run leaked it (e.g. on panic).
+
+**OCR** for screenshot translation has three implementations:
+
+- **macOS system OCR** (`macos_ocr.rs`) — spawns `kivio-ocr-helper` Swift sidecar that calls Apple Vision. The helper is a persistent subprocess; requests/responses are JSON over stdin/stdout. Built via `npm run build:swift`.
+- **Windows system OCR** (`windows_ocr.rs`) — calls `Windows.Media.Ocr` APIs directly via Windows Runtime bindings.
+- **RapidOCR offline** (`rapidocr.rs`) — cross-platform PaddleOCR ONNX pipeline for users who want fully offline OCR without system dependencies. Downloads ONNX Runtime + models on first use. User-initiated install only; no automatic fallback.
 
 ### Rust Backend Structure
 
@@ -100,6 +107,17 @@ A single busy flag (`AppState.lens_busy`, `AtomicBool`) prevents concurrent over
 - **`lens.rs`** — Lens overlay state machine support: `lens_list_windows` (macOS only; Windows returns `[]`), capture coord helpers.
 - **`windows.rs`** — Window helpers: `ensure_main_window`, `ensure_lens_window`, `get_main_window`, plus `apply_macos_workspace_behavior` for `visibleOnAllWorkspaces`.
 - **`utils.rs`** — Language detection, target language resolution, timestamp helper.
+- **`commands.rs`** — General Tauri command implementations (settings, window management, clipboard, testing).
+- **`lens_commands.rs`** — Lens-specific Tauri commands (capture, explain, streaming, history).
+- **`shortcuts.rs`** — Global hotkey registration and management.
+- **`updates.rs`** — Auto-update check and GitHub release polling.
+- **`prompts.rs`** — Default prompt templates for translator, screenshot translation, and Lens features.
+- **`web_search.rs`** — Lens web search integration (Tavily / Exa providers). Called when Lens decides to search for current facts, unfamiliar visible text, or external context.
+- **`macos_ocr.rs`** — macOS Apple Vision OCR via Swift sidecar (`kivio-ocr-helper`). Persistent subprocess with JSON stdin/stdout protocol.
+- **`windows_ocr.rs`** — Windows system OCR via `Windows.Media.Ocr` APIs.
+- **`rapidocr.rs`** — Cross-platform offline OCR using PaddleOCR ONNX models. Downloads ONNX Runtime + models on user-initiated install.
+- **`apple_intelligence.rs`** — (macOS 26+) Apple Foundation Models integration via Swift sidecar (`kivio-ai-helper`). Optional feature.
+- **`capture_geometry.rs`** — Coordinate transformation helpers for multi-monitor screenshot capture.
 
 Key crate responsibilities from `Cargo.toml`:
 - `enigo` — simulates keyboard paste after translation commit.
@@ -108,6 +126,8 @@ Key crate responsibilities from `Cargo.toml`:
 - `reqwest` — HTTP client for OpenAI-compatible APIs.
 - `screencapturekit` — macOS ScreenCaptureKit binding (used by `sck.rs`).
 - `xcap` — Windows screen / window capture.
+- `oar-ocr` + `ort` — RapidOCR ONNX Runtime bindings for offline OCR.
+- `windows` crate — Windows Runtime bindings for system OCR APIs.
 
 ### Streaming
 
@@ -136,6 +156,10 @@ Manual releases are also supported via `workflow_dispatch`.
 
 ## Important Implementation Details
 
+- **Swift sidecars**: macOS uses two Swift helper binaries built via `scripts/build-swift-sidecar.js`:
+  - `kivio-ocr-helper` — Apple Vision OCR (required for macOS system OCR).
+  - `kivio-ai-helper` — Apple Foundation Models integration (optional, macOS 26+ only).
+  - Non-macOS platforms generate empty stubs to satisfy Tauri's `externalBin` validation.
 - **macOS**: The app hides its Dock icon (`ActivationPolicy::Accessory`) and uses `visibleOnAllWorkspaces` for all windows.
 - **Windows**: Manual launch opens settings by default. Autostart uses a dedicated `--from-autostart` arg to avoid popping up settings. Single-instance guard ensures clicking the app icon focuses the existing instance.
 - **LaTeX math**: Both screenshot result and explain use `react-markdown` + `remark-math` + `rehype-katex` for rendering LaTeX formulas.
