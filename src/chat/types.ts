@@ -16,6 +16,13 @@ export interface Attachment {
   path: string
 }
 
+export interface PendingAttachment {
+  id: string
+  type: 'image' | 'file'
+  name: string
+  path: string
+}
+
 export interface Conversation {
   id: string
   title: string

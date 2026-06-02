@@ -1,6 +1,6 @@
 // Chat API 调用封装
 import { invoke } from '@tauri-apps/api/core'
-import type { Conversation, ConversationListItem } from './types'
+import type { Conversation, ConversationListItem, PendingAttachment } from './types'
 
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -73,7 +73,11 @@ const mockChatApi = {
     return conversation
   },
 
-  async sendMessage(conversationId: string, content: string): Promise<Conversation> {
+  async sendMessage(
+    conversationId: string,
+    content: string,
+    attachments: PendingAttachment[] = [],
+  ): Promise<Conversation> {
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
     if (index < 0) throw new Error('Conversation not found')
@@ -85,6 +89,12 @@ const mockChatApi = {
         id: `msg_dev_${crypto.randomUUID()}`,
         role: 'user',
         content,
+        attachments: attachments.map((attachment) => ({
+          id: attachment.id,
+          type: attachment.type,
+          name: attachment.name,
+          path: attachment.path,
+        })),
         timestamp: now,
       },
       {
@@ -259,12 +269,12 @@ export const chatApi = {
   async sendMessage(
     conversationId: string,
     content: string,
-    attachments: string[] = []
+    attachments: PendingAttachment[] = []
   ): Promise<Conversation> {
-    if (!isTauriRuntime()) return mockChatApi.sendMessage(conversationId, content)
+    if (!isTauriRuntime()) return mockChatApi.sendMessage(conversationId, content, attachments)
     const result = await invoke<{ success: boolean; conversation?: Conversation; error?: string }>(
       'chat_send_message',
-      { conversationId, content, attachments }
+      { conversationId, content, attachments: attachments.map((attachment) => attachment.path) }
     )
     if (!result.success || !result.conversation) {
       throw new Error(result.error || 'Failed to send message')

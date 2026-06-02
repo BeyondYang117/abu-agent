@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { FileText, Image } from 'lucide-react'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
-import type { ChatMessage } from './types'
+import type { Attachment, ChatMessage } from './types'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -8,6 +9,37 @@ interface MessageBubbleProps {
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
+}
+
+function AttachmentList({
+  attachments,
+  variant,
+}: {
+  attachments: Attachment[]
+  variant: 'user' | 'assistant'
+}) {
+  const baseClass =
+    variant === 'user'
+      ? 'bg-black/5 text-neutral-700 dark:bg-white/10 dark:text-neutral-200'
+      : 'border border-neutral-200/80 text-neutral-700 dark:border-neutral-700 dark:text-neutral-200'
+
+  return (
+    <div className="mt-2 space-y-2">
+      {attachments.map((attachment) => {
+        const Icon = attachment.type === 'image' ? Image : FileText
+        return (
+          <div
+            key={attachment.id}
+            className={`flex max-w-full items-center gap-2 rounded-lg p-2 text-sm ${baseClass}`}
+            title={attachment.name}
+          >
+            <Icon size={15} strokeWidth={1.8} className="shrink-0 text-neutral-500" />
+            <span className="min-w-0 truncate">{attachment.name}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 export function MessageBubble({
@@ -19,6 +51,7 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
+  const attachments = message.attachments ?? []
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
@@ -32,21 +65,12 @@ export function MessageBubble({
     return (
       <div className="flex justify-end py-2">
         <div className="max-w-[85%] rounded-[20px] bg-neutral-100 px-4 py-2.5 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
-          <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-            {message.content}
-          </div>
-          {message.attachments && message.attachments.length > 0 && (
-            <div className="mt-2 space-y-2">
-              {message.attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="flex items-center gap-2 rounded-lg bg-black/5 p-2 text-sm dark:bg-white/10"
-                >
-                  {att.type === 'image' ? '🖼️' : '📎'} {att.name}
-                </div>
-              ))}
+          {message.content.trim().length > 0 && (
+            <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+              {message.content}
             </div>
           )}
+          {attachments.length > 0 && <AttachmentList attachments={attachments} variant="user" />}
         </div>
       </div>
     )
@@ -137,17 +161,8 @@ export function MessageBubble({
           />
         )}
 
-        {message.attachments && message.attachments.length > 0 && (
-          <div className="mt-2 space-y-2">
-            {message.attachments.map((att) => (
-              <div
-                key={att.id}
-                className="flex items-center gap-2 rounded-lg border border-neutral-200/80 p-2 text-sm dark:border-neutral-700"
-              >
-                {att.type === 'image' ? '🖼️' : '📎'} {att.name}
-              </div>
-            ))}
-          </div>
+        {attachments.length > 0 && (
+          <AttachmentList attachments={attachments} variant="assistant" />
         )}
       </div>
     </div>

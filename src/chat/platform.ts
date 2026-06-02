@@ -9,8 +9,8 @@ export const chatTitlebarRowClass = usesNativeTitlebar
   ? 'flex h-[52px] shrink-0 items-center gap-2'
   : 'flex h-[52px] shrink-0 items-center gap-2 px-3 pt-2'
 
-/** 窗口左缘交通灯留白（仅侧栏顶栏、收起态主顶栏） */
-export const chatTitlebarMacInsetClass = usesNativeTitlebar ? 'pl-[76px]' : ''
+/** 窗口左缘交通灯留白（仅侧栏顶栏、收起态主顶栏；约 66px 灯区 + 间距） */
+export const chatTitlebarMacInsetClass = usesNativeTitlebar ? 'pl-[92px]' : ''
 
 /** 顶栏内模型选择与图标按钮视觉对齐 */
 export const chatTitlebarModelClass = 'mt-1.5'

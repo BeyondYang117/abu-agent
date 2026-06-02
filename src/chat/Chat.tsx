@@ -7,7 +7,7 @@ import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
 import { chatTitlebarMacInsetClass, chatTitlebarModelClass, chatTitlebarRowClass, usesNativeTitlebar } from './platform'
-import type { ChatMessage, Conversation } from './types'
+import type { ChatMessage, Conversation, PendingAttachment } from './types'
 import { api } from '../api/tauri'
 import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
@@ -288,17 +288,23 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     })
   }, [])
 
-  const handleSendMessage = async (content: string) => {
+  const handleSendMessage = async (content: string, attachments: PendingAttachment[] = []) => {
     if (streaming || sendInFlightRef.current) return
 
     const trimmed = content.trim()
-    if (!trimmed) return
+    if (!trimmed && attachments.length === 0) return
 
     const pendingUserId = `pending-user-${Date.now()}`
     const optimisticUserMessage: ChatMessage = {
       id: pendingUserId,
       role: 'user',
       content: trimmed,
+      attachments: attachments.map((attachment) => ({
+        id: attachment.id,
+        type: attachment.type,
+        name: attachment.name,
+        path: attachment.path,
+      })),
       timestamp: Math.floor(Date.now() / 1000),
     }
 
@@ -324,7 +330,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         syncConversationRoute(conversation.id)
       }
 
-      const updatedConv = await chatApi.sendMessage(conversation!.id, trimmed)
+      const updatedConv = await chatApi.sendMessage(conversation!.id, trimmed, attachments)
       applyAssistantStreamStats(updatedConv)
       setCurrentConversation(updatedConv)
       setPendingUserMessage(null)
@@ -505,6 +511,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           <SettingsShell
             ref={settingsRef}
             variant="embedded"
+            reserveTrafficLightSpace={sidebarCollapsed && usesNativeTitlebar}
             onClose={handleSettingsClose}
             onSettingsChange={handleSettingsChange}
           />
@@ -553,14 +560,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
             <div className="flex min-h-0 flex-1 flex-col">
               {showEmptyHero ? (
-                <div className="flex flex-1 flex-col items-center justify-center px-6">
+                <div className="flex flex-1 flex-col items-center justify-center px-6 pb-16">
                   <div className="w-full max-w-3xl space-y-8">
                     <h2 className="text-center text-[1.75rem] font-semibold leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]">
                       今天我能为您做些什么？
                     </h2>
                     <InputBar
                       layout="inline"
-                      onSend={(content) => void handleSendMessage(content)}
+                      onSend={(content, attachments) => void handleSendMessage(content, attachments)}
                       disabled={streaming || sendInFlightRef.current}
                       onOpenSettings={openEmbeddedSettings}
                       autoFocus
@@ -581,7 +588,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     onDeleteMessage={handleDeleteMessage}
                   />
                   <InputBar
-                    onSend={(content) => void handleSendMessage(content)}
+                    onSend={(content, attachments) => void handleSendMessage(content, attachments)}
                     disabled={streaming || sendInFlightRef.current}
                     onOpenSettings={openEmbeddedSettings}
                     autoFocus

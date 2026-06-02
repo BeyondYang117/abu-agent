@@ -28,6 +28,7 @@ export interface SettingsShellProps {
   onClose: () => void
   onSettingsChange: () => void
   onReady?: () => void
+  reserveTrafficLightSpace?: boolean
 }
 
 export interface SettingsShellHandle {
@@ -60,7 +61,7 @@ function FieldBlock({
  * 设置面板主组件（standalone / embedded 双宿主）
  */
 export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>(function SettingsShell(
-  { variant, onClose, onSettingsChange, onReady },
+  { variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false },
   ref,
 ) {
   const [settings, setSettings] = useState<SettingsData | null>(null)
@@ -2089,7 +2090,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
   if (variant === 'embedded') {
     return (
-      <div className="settings-embedded kv flex min-h-0 min-w-0 flex-1" {...focusHandlers}>
+      <div
+        className={`settings-embedded kv flex min-h-0 min-w-0 flex-1 ${
+          reserveTrafficLightSpace ? 'settings-embedded--traffic-safe' : ''
+        }`}
+        {...focusHandlers}
+      >
         <aside className="settings-embedded-nav">
           <h2 className="settings-embedded-nav-title">{t.settings}</h2>
           {categoryNav}

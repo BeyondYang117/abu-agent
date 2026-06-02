@@ -1,4 +1,7 @@
-use tauri::{window::Color, AppHandle, LogicalPosition, Manager, TitleBarStyle, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    window::Color, AppHandle, LogicalPosition, Manager, TitleBarStyle, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
 #[cfg(target_os = "macos")]
 const CHAT_TRAFFIC_LIGHT_X: f64 = 14.0;
@@ -149,6 +152,7 @@ pub fn ensure_settings_window(app: &AppHandle) -> Result<WebviewWindow, String> 
     WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html#settings".into()))
         .title("Kivio")
         .inner_size(640.0, 520.0)
+        .min_inner_size(520.0, 420.0)
         .resizable(true)
         .decorations(false)
         .transparent(true)
@@ -168,14 +172,15 @@ pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         return Ok(window);
     }
 
-    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html#chat".into()))
-        .title("Kivio")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(860.0, 560.0)
-        .resizable(true)
-        .visible_on_all_workspaces(false)
-        .skip_taskbar(false)
-        .visible(false);
+    let mut builder =
+        WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html#chat".into()))
+            .title("Kivio")
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(860.0, 560.0)
+            .resizable(true)
+            .visible_on_all_workspaces(false)
+            .skip_taskbar(false)
+            .visible(false);
 
     #[cfg(target_os = "macos")]
     {
@@ -193,10 +198,7 @@ pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        builder = builder
-            .decorations(false)
-            .transparent(true)
-            .shadow(false);
+        builder = builder.decorations(false).transparent(true).shadow(false);
     }
 
     builder.build().map_err(|e| e.to_string())

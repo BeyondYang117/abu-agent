@@ -11,9 +11,11 @@ import {
 } from 'lucide-react'
 import type { ConversationListItem } from './types'
 import { ConversationList } from './ConversationList'
+import { ChatSectionMenu } from './ChatSectionMenu'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
 import { chatTitlebarMacInsetClass, chatTitlebarRowClass, isMac } from './platform'
+import type { ConversationMenuAnchor } from './ConversationContextMenu'
 
 const modLabel = isMac ? '⌘' : 'Ctrl'
 
@@ -80,7 +82,9 @@ export function Sidebar({
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
+  const [sectionMenuAnchor, setSectionMenuAnchor] = useState<ConversationMenuAnchor | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const sectionMenuButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     loadConversations()
@@ -132,6 +136,27 @@ export function Sidebar({
       await loadConversations()
     } catch (err) {
       console.error('Failed to move conversation:', err)
+    }
+  }
+
+  const openSectionMenu = () => {
+    const button = sectionMenuButtonRef.current
+    if (!button) return
+    const rect = button.getBoundingClientRect()
+    setSectionMenuAnchor({ left: rect.right - 200, top: rect.bottom + 4 })
+  }
+
+  const handleClearAllConversations = async () => {
+    if (conversations.length === 0) return
+    if (!window.confirm(`确定删除全部 ${conversations.length} 个对话？此操作无法撤销。`)) return
+    try {
+      await Promise.all(conversations.map((conv) => chatApi.deleteConversation(conv.id)))
+      if (currentConversationId) {
+        onConversationDeleted?.(currentConversationId)
+      }
+      await loadConversations()
+    } catch (err) {
+      console.error('Failed to clear conversations:', err)
     }
   }
 
@@ -212,13 +237,30 @@ export function Sidebar({
         <div className="flex items-center justify-between px-4 pb-1">
           <span className="text-[13px] font-medium text-neutral-500 dark:text-neutral-400">聊天</span>
           <button
+            ref={sectionMenuButtonRef}
             type="button"
-            className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-black/[0.05] hover:text-neutral-600 dark:hover:bg-white/[0.08]"
-            aria-label="更多"
+            onClick={openSectionMenu}
+            className={`rounded-md p-1 text-neutral-400 transition-colors hover:bg-black/[0.05] hover:text-neutral-600 dark:hover:bg-white/[0.08] ${
+              sectionMenuAnchor ? 'bg-black/[0.05] text-neutral-600 dark:bg-white/[0.08]' : ''
+            }`}
+            aria-label="聊天列表操作"
+            aria-haspopup="menu"
+            aria-expanded={sectionMenuAnchor !== null}
           >
             <MoreHorizontal size={16} />
           </button>
         </div>
+
+        {sectionMenuAnchor && (
+          <ChatSectionMenu
+            anchor={sectionMenuAnchor}
+            hasConversations={conversations.length > 0}
+            onNewConversation={onNewConversation}
+            onOpenSearch={() => onSearchOpenChange(true)}
+            onClearAll={() => void handleClearAllConversations()}
+            onClose={() => setSectionMenuAnchor(null)}
+          />
+        )}
 
         {searchOpen && (
           <div className="px-3 pb-2">
