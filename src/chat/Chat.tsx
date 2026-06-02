@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PanelLeftOpen } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { MessageList } from './MessageList'
@@ -6,6 +6,7 @@ import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
+import type { ChatMessage } from './types'
 import { api } from '../api/tauri'
 import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
@@ -37,10 +38,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamError, setStreamError] = useState('')
+  /** 发送中待显示的用户消息（与 conversation 分离，避免 route reload 冲掉） */
+  const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null)
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
   const currentConversationIdRef = useRef<string | null>(null)
+  const sendInFlightRef = useRef(false)
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
   const requestWindowFocus = useWindowInteractionFocus()
@@ -116,6 +120,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [loadDefaultModel, onSettingsChange])
 
   const reloadConversation = useCallback(async (conversationId: string) => {
+    if (sendInFlightRef.current) return
     try {
       const conv = await chatApi.getConversation(conversationId)
       setCurrentConversation(conv)
@@ -126,10 +131,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
     let unlisten: (() => void) | undefined
 
     const setupListener = async () => {
       unlisten = await api.onChatStream((payload) => {
+        if (cancelled) return
         if (payload.reasoningDelta) {
           setStreamingReasoning((prev) => prev + payload.reasoningDelta)
         }
@@ -144,16 +151,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             setStreamError('回复生成失败，请稍后重试。')
           }
           const conversationId = currentConversationIdRef.current
-          if (conversationId && payload.reason !== 'cancelled') {
+          // sendMessage 进行中时磁盘尚无本轮消息，reload 会冲掉乐观更新的用户气泡
+          if (conversationId && payload.reason !== 'cancelled' && !sendInFlightRef.current) {
             void reloadConversation(conversationId)
             refreshSidebar()
           }
         }
       })
+      if (cancelled) {
+        unlisten()
+      }
     }
 
     setupListener()
     return () => {
+      cancelled = true
       unlisten?.()
     }
   }, [refreshSidebar, reloadConversation])
@@ -184,6 +196,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         return
       }
       setChatView('conversation')
+      if (sendInFlightRef.current) return
       const conversationId = getRouteConversationId()
       if (!conversationId) {
         setCurrentConversation(null)
@@ -245,11 +258,24 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const handleSendMessage = async (content: string) => {
     if (streaming) return
 
+    const trimmed = content.trim()
+    if (!trimmed) return
+
+    const pendingUserId = `pending-user-${Date.now()}`
+    const optimisticUserMessage: ChatMessage = {
+      id: pendingUserId,
+      role: 'user',
+      content: trimmed,
+      timestamp: Math.floor(Date.now() / 1000),
+    }
+
+    setPendingUserMessage(optimisticUserMessage)
     setStreaming(true)
     setStreamingContent('')
     setStreamingReasoning('')
     setStreamError('')
 
+    sendInFlightRef.current = true
     try {
       let conversation = currentConversation
       if (!conversation) {
@@ -257,21 +283,27 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           activeProviderId || undefined,
           activeModel || undefined
         )
+        currentConversationIdRef.current = conversation.id
         setCurrentConversation(conversation)
         syncConversationRoute(conversation.id)
       }
-      const updatedConv = await chatApi.sendMessage(conversation.id, content)
+
+      const updatedConv = await chatApi.sendMessage(conversation!.id, trimmed)
       setCurrentConversation(updatedConv)
+      setPendingUserMessage(null)
       setStreaming(false)
       setStreamingContent('')
       setStreamingReasoning('')
       refreshSidebar()
     } catch (err) {
       console.error('Failed to send message:', err)
+      setPendingUserMessage(null)
       setStreaming(false)
       setStreamingContent('')
       setStreamingReasoning('')
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '发送失败')
+    } finally {
+      sendInFlightRef.current = false
     }
   }
 
@@ -294,7 +326,20 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }
 
-  const hasMessages = (currentConversation?.messages.length ?? 0) > 0
+  const displayMessages = useMemo(() => {
+    const stored = currentConversation?.messages ?? []
+    if (!pendingUserMessage) return stored
+    const alreadyStored = stored.some(
+      (message) =>
+        message.id === pendingUserMessage.id ||
+        (message.role === 'user' &&
+          message.content === pendingUserMessage.content &&
+          message.timestamp >= pendingUserMessage.timestamp - 2),
+    )
+    return alreadyStored ? stored : [...stored, pendingUserMessage]
+  }, [currentConversation?.messages, pendingUserMessage])
+
+  const hasMessages = displayMessages.length > 0
   const showEmptyHero = chatView === 'conversation' && !hasMessages && !streaming && !streamError
 
   return (
@@ -381,7 +426,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
               {(hasMessages || streaming || streamError) && (
                 <MessageList
-                  messages={currentConversation?.messages || []}
+                  messages={displayMessages}
                   streaming={streaming}
                   streamingContent={streamingContent}
                   streamingReasoning={streamingReasoning}

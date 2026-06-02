@@ -115,6 +115,8 @@ pub(crate) async fn chat_send_message(
     };
 
     conversation.messages.push(user_message.clone());
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
 
     // 转换为 ExplainMessage 格式
     let api_messages: Vec<ExplainMessage> = conversation

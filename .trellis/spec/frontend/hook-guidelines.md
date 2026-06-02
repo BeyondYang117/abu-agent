@@ -46,6 +46,30 @@ Questions to answer:
 
 ## Common Mistakes
 
-<!-- Hook-related mistakes your team has made -->
+### Async Tauri Event Listeners
 
-(To be filled by the team)
+**Problem**: Tauri event listener helpers return `Promise<UnlistenFn>`. In React StrictMode, an effect can be mounted, cleaned up, and mounted again before the first promise resolves. If cleanup only calls `unlisten?.()`, the unresolved listener survives and future stream events are handled multiple times.
+
+**Rule**: Any `useEffect` that registers an async Tauri listener must use a `cancelled` flag and dispose the listener immediately if the promise resolves after cleanup.
+
+```tsx
+useEffect(() => {
+  let cancelled = false
+  let unlisten: (() => void) | undefined
+
+  api.onChatStream((payload) => {
+    if (cancelled) return
+    // handle payload
+  }).then((dispose) => {
+    unlisten = dispose
+    if (cancelled) dispose()
+  })
+
+  return () => {
+    cancelled = true
+    unlisten?.()
+  }
+}, [])
+```
+
+**Applies to**: `api.onChatStream`, `api.onLensStream`, `api.onLensTranslateStream`, `api.onOpenSettings`, and any future Tauri event listener wrapper used inside React effects.

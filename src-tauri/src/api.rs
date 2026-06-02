@@ -688,6 +688,59 @@ pub async fn call_vision_api(
   Ok(content.trim().to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamTextMode {
+  Delta,
+  Snapshot,
+}
+
+fn extract_sse_chat_text(value: &serde_json::Value) -> Option<(&str, StreamTextMode)> {
+  let choice = value.get("choices").and_then(|choices| choices.get(0))?;
+
+  if let Some(content) = choice
+    .get("delta")
+    .and_then(|delta| delta.get("content"))
+    .and_then(|content| content.as_str())
+    .filter(|content| !content.is_empty())
+  {
+    return Some((content, StreamTextMode::Delta));
+  }
+
+  choice
+    .get("message")
+    .and_then(|message| message.get("content"))
+    .and_then(|content| content.as_str())
+    .filter(|content| !content.is_empty())
+    .map(|content| (content, StreamTextMode::Snapshot))
+}
+
+fn append_stream_text(full: &mut String, text: &str, mode: StreamTextMode) -> Option<String> {
+  if text.is_empty() {
+    return None;
+  }
+
+  match mode {
+    StreamTextMode::Delta => {
+      full.push_str(text);
+      Some(text.to_string())
+    }
+    StreamTextMode::Snapshot => {
+      if text == full || full.starts_with(text) {
+        return None;
+      }
+      if text.starts_with(full.as_str()) {
+        let delta = text[full.len()..].to_string();
+        full.clear();
+        full.push_str(text);
+        return if delta.is_empty() { None } else { Some(delta) };
+      }
+
+      full.push_str(text);
+      Some(text.to_string())
+    }
+  }
+}
+
 fn parse_sse_chat_content(raw: &str) -> Option<String> {
   let mut full = String::new();
   for line in raw.lines() {
@@ -703,22 +756,9 @@ fn parse_sse_chat_content(raw: &str) -> Option<String> {
       Ok(value) => value,
       Err(_) => continue,
     };
-    let content = value
-      .get("choices")
-      .and_then(|choices| choices.get(0))
-      .and_then(|choice| {
-        choice
-          .get("delta")
-          .and_then(|delta| delta.get("content"))
-          .or_else(|| {
-            choice
-              .get("message")
-              .and_then(|message| message.get("content"))
-          })
-      })
-      .and_then(|content| content.as_str())
-      .unwrap_or_default();
-    full.push_str(content);
+    if let Some((content, mode)) = extract_sse_chat_text(&value) {
+      let _ = append_stream_text(&mut full, content, mode);
+    }
   }
   let full = full.trim();
   if full.is_empty() {
@@ -963,6 +1003,7 @@ pub async fn stream_translate_combined(
 
   let mut sse_buf = String::new();
   let mut tail = String::new();
+  let mut streamed_content = String::new();
   let mut translated = String::new();
   let mut original = String::new();
   let mut sep_seen = false;
@@ -1049,12 +1090,11 @@ pub async fn stream_translate_combined(
         );
       }
 
-      let content = delta_obj
-        .and_then(|d| d.get("content"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty());
-
-      let Some(c) = content else { continue };
+      let Some((content, mode)) = extract_sse_chat_text(&value) else { continue };
+      let Some(content_delta) = append_stream_text(&mut streamed_content, content, mode) else {
+        continue;
+      };
+      let c = content_delta.as_str();
 
       if sep_seen {
         original.push_str(c);
@@ -1140,6 +1180,7 @@ pub async fn stream_vision_response(
 ) -> Result<String, String> {
   let mut buffer = String::new();
   let mut full = String::new();
+  let mut reasoning_full = String::new();
 
   let emit_done = |reason: &str, full_text: &str| {
     let _ = app.emit(
@@ -1206,27 +1247,29 @@ pub async fn stream_vision_response(
         .filter(|s| !s.is_empty());
 
       if let Some(r) = reasoning {
+        let Some(reasoning_delta) =
+          append_stream_text(&mut reasoning_full, r, StreamTextMode::Delta)
+        else {
+          continue;
+        };
         let _ = app.emit(
           event_name,
           serde_json::json!({
             "imageId": image_id,
             "kind": kind,
             "delta": "",
-            "reasoningDelta": r,
+            "reasoningDelta": reasoning_delta,
           }),
         );
       }
 
-      let content = delta_obj
-        .and_then(|d| d.get("content"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty());
-
-      if let Some(content) = content {
-        full.push_str(content);
+      if let Some((content, mode)) = extract_sse_chat_text(&value) {
+        let Some(delta) = append_stream_text(&mut full, content, mode) else {
+          continue;
+        };
         let _ = app.emit(
           event_name,
-          serde_json::json!({ "imageId": image_id, "kind": kind, "delta": content }),
+          serde_json::json!({ "imageId": image_id, "kind": kind, "delta": delta }),
         );
       }
     }
@@ -1347,5 +1390,54 @@ mod tests {
     assert!(prompt.contains("User:\nQuestion"));
     assert!(prompt.contains("Assistant:\nEarlier answer"));
     assert!(prompt.ends_with("Assistant:"));
+  }
+
+  #[test]
+  fn append_stream_text_emits_delta_chunks_as_is() {
+    let mut full = String::new();
+
+    assert_eq!(
+      append_stream_text(&mut full, "你", StreamTextMode::Delta),
+      Some("你".to_string())
+    );
+    assert_eq!(
+      append_stream_text(&mut full, "好", StreamTextMode::Delta),
+      Some("好".to_string())
+    );
+    assert_eq!(full, "你好");
+  }
+
+  #[test]
+  fn append_stream_text_converts_snapshots_to_suffix_deltas() {
+    let mut full = String::new();
+
+    assert_eq!(
+      append_stream_text(&mut full, "你", StreamTextMode::Snapshot),
+      Some("你".to_string())
+    );
+    assert_eq!(
+      append_stream_text(&mut full, "你好", StreamTextMode::Snapshot),
+      Some("好".to_string())
+    );
+    assert_eq!(
+      append_stream_text(&mut full, "你好", StreamTextMode::Snapshot),
+      None
+    );
+    assert_eq!(full, "你好");
+  }
+
+  #[test]
+  fn parse_sse_chat_content_handles_cumulative_message_snapshots() {
+    let raw = r#"
+data: {"choices":[{"message":{"content":"你"}}]}
+data: {"choices":[{"message":{"content":"你好"}}]}
+data: {"choices":[{"message":{"content":"你好，世界"}}]}
+data: [DONE]
+"#;
+
+    assert_eq!(
+      parse_sse_chat_content(raw),
+      Some("你好，世界".to_string())
+    );
   }
 }
