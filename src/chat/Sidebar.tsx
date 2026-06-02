@@ -22,6 +22,7 @@ interface SidebarProps {
   currentConversationId?: string
   onSelectConversation: (id: string) => void
   onNewConversation: () => void
+  onConversationDeleted?: (id: string) => void
   onOpenSettings: () => void
   settingsActive?: boolean
   collapsed: boolean
@@ -68,6 +69,7 @@ export function Sidebar({
   currentConversationId,
   onSelectConversation,
   onNewConversation,
+  onConversationDeleted,
   onOpenSettings,
   settingsActive = false,
   collapsed,
@@ -100,6 +102,37 @@ export function Sidebar({
       console.error('Failed to load conversations:', err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleRenameConversation = async (id: string, title: string) => {
+    try {
+      await chatApi.updateConversation(id, { title })
+      await loadConversations()
+    } catch (err) {
+      console.error('Failed to rename conversation:', err)
+    }
+  }
+
+  const handleDeleteConversation = async (id: string) => {
+    if (!window.confirm('确定删除此对话？此操作无法撤销。')) return
+    try {
+      await chatApi.deleteConversation(id)
+      if (currentConversationId === id) {
+        onConversationDeleted?.(id)
+      }
+      await loadConversations()
+    } catch (err) {
+      console.error('Failed to delete conversation:', err)
+    }
+  }
+
+  const handleMoveConversationToFolder = async (id: string, folder: string | undefined) => {
+    try {
+      await chatApi.updateConversation(id, { folder })
+      await loadConversations()
+    } catch (err) {
+      console.error('Failed to move conversation:', err)
     }
   }
 
@@ -221,6 +254,9 @@ export function Sidebar({
               conversations={filteredConversations}
               currentConversationId={currentConversationId}
               onSelectConversation={onSelectConversation}
+              onRenameConversation={handleRenameConversation}
+              onDeleteConversation={handleDeleteConversation}
+              onMoveConversationToFolder={handleMoveConversationToFolder}
             />
           )}
         </div>

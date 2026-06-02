@@ -133,6 +133,78 @@ const mockChatApi = {
     saveMockConversations(conversations)
     return conversation
   },
+
+  async updateMessage(
+    conversationId: string,
+    messageId: string,
+    content: string,
+  ): Promise<Conversation> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const trimmed = content.trim()
+    if (!trimmed) throw new Error('消息内容不能为空')
+    const conversation = { ...conversations[index] }
+    const messageIndex = conversation.messages.findIndex((message) => message.id === messageId)
+    if (messageIndex < 0) throw new Error('Message not found')
+    if (conversation.messages[messageIndex].role !== 'assistant') {
+      throw new Error('仅支持编辑助手回复')
+    }
+    conversation.messages = conversation.messages.map((message, i) =>
+      i === messageIndex
+        ? { ...message, content: trimmed, timestamp: nowSeconds() }
+        : message,
+    )
+    conversation.updated_at = nowSeconds()
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return conversation
+  },
+
+  async deleteMessage(conversationId: string, messageId: string): Promise<Conversation> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const conversation = { ...conversations[index] }
+    const target = conversation.messages.find((message) => message.id === messageId)
+    if (!target) throw new Error('Message not found')
+    if (target.role !== 'assistant') throw new Error('仅支持删除助手回复')
+    conversation.messages = conversation.messages.filter((message) => message.id !== messageId)
+    conversation.updated_at = nowSeconds()
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return conversation
+  },
+
+  async regenerateMessage(conversationId: string, messageId: string): Promise<Conversation> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const conversation = { ...conversations[index] }
+    const messageIndex = conversation.messages.findIndex((message) => message.id === messageId)
+    if (messageIndex < 0) throw new Error('Message not found')
+    if (conversation.messages[messageIndex].role !== 'assistant') {
+      throw new Error('仅支持重新生成助手回复')
+    }
+    const kept = conversation.messages.slice(0, messageIndex)
+    const lastUser = kept[kept.length - 1]
+    if (!lastUser || lastUser.role !== 'user') {
+      throw new Error('缺少对应的用户消息，无法重新生成')
+    }
+    conversation.messages = [
+      ...kept,
+      {
+        id: `msg_dev_${crypto.randomUUID()}`,
+        role: 'assistant',
+        content: `（重新生成预览）${lastUser.content.slice(0, 80)}`,
+        timestamp: nowSeconds(),
+      },
+    ]
+    conversation.updated_at = nowSeconds()
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return conversation
+  },
 }
 
 export const chatApi = {
@@ -236,6 +308,55 @@ export const chatApi = {
     )
     if (!result.success) {
       throw new Error('Failed to update conversation')
+    }
+    return result.conversation
+  },
+
+  async updateMessage(
+    conversationId: string,
+    messageId: string,
+    content: string,
+  ): Promise<Conversation> {
+    if (!isTauriRuntime()) {
+      return mockChatApi.updateMessage(conversationId, messageId, content)
+    }
+    const result = await invoke<{
+      success: boolean
+      conversation?: Conversation
+      error?: string
+    }>('chat_update_message', { conversationId, messageId, content })
+    if (!result.success || !result.conversation) {
+      throw new Error(result.error || 'Failed to update message')
+    }
+    return result.conversation
+  },
+
+  async deleteMessage(conversationId: string, messageId: string): Promise<Conversation> {
+    if (!isTauriRuntime()) {
+      return mockChatApi.deleteMessage(conversationId, messageId)
+    }
+    const result = await invoke<{
+      success: boolean
+      conversation?: Conversation
+      error?: string
+    }>('chat_delete_message', { conversationId, messageId })
+    if (!result.success || !result.conversation) {
+      throw new Error(result.error || 'Failed to delete message')
+    }
+    return result.conversation
+  },
+
+  async regenerateMessage(conversationId: string, messageId: string): Promise<Conversation> {
+    if (!isTauriRuntime()) {
+      return mockChatApi.regenerateMessage(conversationId, messageId)
+    }
+    const result = await invoke<{
+      success: boolean
+      conversation?: Conversation
+      error?: string
+    }>('chat_regenerate_message', { conversationId, messageId })
+    if (!result.success || !result.conversation) {
+      throw new Error(result.error || 'Failed to regenerate message')
     }
     return result.conversation
   },

@@ -1,6 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
+
+export interface AssistantStreamStats {
+  messageId: string
+  tokensPerSec: number
+}
 
 interface MessageListProps {
   messages: ChatMessage[]
@@ -8,6 +13,10 @@ interface MessageListProps {
   streamingContent?: string
   streamingReasoning?: string
   error?: string
+  lastAssistantStreamStats?: AssistantStreamStats | null
+  onUpdateMessage?: (messageId: string, content: string) => Promise<void>
+  onRegenerateMessage?: (messageId: string) => Promise<void>
+  onDeleteMessage?: (messageId: string) => Promise<void>
 }
 
 export function MessageList({
@@ -16,8 +25,19 @@ export function MessageList({
   streamingContent = '',
   streamingReasoning = '',
   error,
+  lastAssistantStreamStats = null,
+  onUpdateMessage,
+  onRegenerateMessage,
+  onDeleteMessage,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i].id
+    }
+    return null
+  }, [messages])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -27,9 +47,22 @@ export function MessageList({
 
   return (
     <div ref={scrollRef} className="custom-scrollbar flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl space-y-1 px-6 py-4">
+      <div className="mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            tokensPerSec={
+              msg.role === 'assistant' &&
+              msg.id === lastAssistantId &&
+              lastAssistantStreamStats?.messageId === msg.id
+                ? lastAssistantStreamStats.tokensPerSec
+                : undefined
+            }
+            onUpdateMessage={msg.role === 'assistant' ? onUpdateMessage : undefined}
+            onRegenerateMessage={msg.role === 'assistant' ? onRegenerateMessage : undefined}
+            onDeleteMessage={msg.role === 'assistant' ? onDeleteMessage : undefined}
+          />
         ))}
 
         {streaming && (streamingContent || streamingReasoning) && (
@@ -45,25 +78,23 @@ export function MessageList({
         )}
 
         {streaming && !streamingContent && !streamingReasoning && (
-          <div className="flex justify-start py-2">
-            <div className="rounded-2xl border border-neutral-200/80 bg-white px-4 py-3 dark:border-neutral-700 dark:bg-neutral-900">
-              <div className="flex items-center gap-2">
-                <span className="flex gap-1">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0.2s]" />
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0.4s]" />
-                </span>
-                <span className="text-sm text-neutral-500">正在思考…</span>
-              </div>
+          <div className="flex justify-start py-3">
+            <div className="flex items-center gap-2 text-sm text-neutral-400">
+              <span className="flex gap-1">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0.2s]" />
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0.4s]" />
+              </span>
+              <span>正在思考…</span>
             </div>
           </div>
         )}
 
         {error && (
-          <div className="flex justify-start py-2">
-            <div className="max-w-[85%] rounded-2xl border border-red-200/80 bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+          <div className="flex justify-start py-3">
+            <p className="max-w-[85%] text-sm leading-relaxed text-red-600 dark:text-red-400">
               {error}
-            </div>
+            </p>
           </div>
         )}
       </div>

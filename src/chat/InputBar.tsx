@@ -6,9 +6,17 @@ interface InputBarProps {
   disabled?: boolean
   onOpenSettings?: () => void
   autoFocus?: boolean
+  /** footer：贴底（有消息时）；inline：嵌入居中区域（空对话欢迎页） */
+  layout?: 'footer' | 'inline'
 }
 
-export function InputBar({ onSend, disabled, onOpenSettings, autoFocus }: InputBarProps) {
+export function InputBar({
+  onSend,
+  disabled,
+  onOpenSettings,
+  autoFocus,
+  layout = 'footer',
+}: InputBarProps) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -42,9 +50,16 @@ export function InputBar({ onSend, disabled, onOpenSettings, autoFocus }: InputB
 
   const canSend = Boolean(input.trim()) && !disabled
 
+  const wrapperClass =
+    layout === 'inline'
+      ? 'w-full'
+      : 'shrink-0 px-6 pb-8 pt-2'
+
+  const innerClass = layout === 'inline' ? 'w-full' : 'mx-auto w-full max-w-3xl'
+
   return (
-    <div className="shrink-0 px-6 pb-8 pt-2">
-      <div className="mx-auto w-full max-w-3xl">
+    <div className={wrapperClass}>
+      <div className={innerClass}>
         <div className="flex items-end gap-2 rounded-[28px] border border-neutral-200/90 bg-white px-3 py-2.5 shadow-[0_2px_12px_rgba(0,0,0,0.06)] dark:border-neutral-700 dark:bg-neutral-900 dark:shadow-none">
           <button
             type="button"

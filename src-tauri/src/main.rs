@@ -246,6 +246,9 @@ fn main() {
             chat::commands::chat_send_message,
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
+            chat::commands::chat_update_message,
+            chat::commands::chat_delete_message,
+            chat::commands::chat_regenerate_message,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

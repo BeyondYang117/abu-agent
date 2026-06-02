@@ -8,11 +8,6 @@ interface ModelSelectorProps {
   onModelChange: (providerId: string, model: string) => void
 }
 
-function providerBadge(provider: ModelProvider | undefined, model: string) {
-  const label = provider?.name?.trim() || model?.trim() || '?'
-  return label.charAt(0).toUpperCase()
-}
-
 export function ModelSelector({
   currentProviderId,
   currentModel,
@@ -46,18 +41,14 @@ export function ModelSelector({
 
   const currentProvider = providers.find((p) => p.id === currentProviderId)
   const displayName = currentModel || currentProvider?.enabledModels[0] || '选择模型'
-  const badge = providerBadge(currentProvider, displayName)
 
   return (
     <div className="relative" data-tauri-drag-region="false">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-2 rounded-full border border-neutral-200/90 bg-white px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+        className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200/90 bg-white px-3 py-1.5 text-sm shadow-sm transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-neutral-900 text-[11px] font-semibold text-white dark:bg-neutral-100 dark:text-neutral-900">
-          {badge}
-        </span>
         <span className="max-w-[200px] truncate font-medium text-neutral-800 dark:text-neutral-200">
           {displayName}
         </span>

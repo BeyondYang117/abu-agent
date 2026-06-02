@@ -102,7 +102,6 @@ pub(crate) async fn chat_send_message(
     _attachments: Vec<String>, // attachment IDs; Phase 2 will wire image/file handling.
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
-    let settings = state.settings_read().clone();
 
     // 创建用户消息
     let user_message = ChatMessage {
@@ -118,7 +117,27 @@ pub(crate) async fn chat_send_message(
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(&app, &conversation)?;
 
-    // 转换为 ExplainMessage 格式
+    match complete_assistant_reply(&app, &state, &mut conversation, Some(content.as_str())).await
+    {
+        Ok(()) => Ok(serde_json::json!({
+            "success": true,
+            "conversation": conversation,
+        })),
+        Err(err) => Ok(serde_json::json!({
+            "success": false,
+            "error": err,
+        })),
+    }
+}
+
+async fn complete_assistant_reply(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    title_from_first_user: Option<&str>,
+) -> Result<(), String> {
+    let settings = state.settings_read().clone();
+
     let api_messages: Vec<ExplainMessage> = conversation
         .messages
         .iter()
@@ -128,7 +147,6 @@ pub(crate) async fn chat_send_message(
         })
         .collect();
 
-    // 调用 API（复用 call_vision_api）
     let language = if !settings.lens.default_language.is_empty() {
         settings.lens.default_language.clone()
     } else {
@@ -143,57 +161,145 @@ pub(crate) async fn chat_send_message(
         0
     };
 
-    // TODO: 支持附件（image_id）
     let image_id = String::new();
 
-    match call_vision_api(
-        &app,
-        &state,
+    let response = call_vision_api(
+        app,
+        state,
         &image_id,
         api_messages,
         &language,
         retry_attempts,
         stream_enabled,
         "answer",
-        "chat-stream", // 使用 chat-stream 事件
+        "chat-stream",
         Some(&conversation.provider_id),
         Some(&conversation.model),
-        None, // system_prompt
+        None,
         thinking_enabled,
     )
-    .await
-    {
-        Ok(response) => {
-            // 创建 AI 回复消息
-            let assistant_message = ChatMessage {
-                id: format!("msg_{}", Uuid::new_v4()),
-                role: "assistant".to_string(),
-                content: response,
-                attachments: vec![],
-                reasoning: None,
-                timestamp: chrono::Local::now().timestamp(),
-            };
+    .await?;
 
-            conversation.messages.push(assistant_message);
+    let assistant_message = ChatMessage {
+        id: format!("msg_{}", Uuid::new_v4()),
+        role: "assistant".to_string(),
+        content: response,
+        attachments: vec![],
+        reasoning: None,
+        timestamp: chrono::Local::now().timestamp(),
+    };
 
-            // 自动生成标题（如果是第一次对话）
-            if conversation.messages.len() == 2 && conversation.title == "新对话" {
-                conversation.title = generate_title(&content);
-            }
+    conversation.messages.push(assistant_message);
 
-            conversation.updated_at = chrono::Local::now().timestamp();
-            save_conversation(&app, &conversation)?;
-
-            Ok(serde_json::json!({
-                "success": true,
-                "conversation": conversation,
-            }))
+    if let Some(user_content) = title_from_first_user {
+        if conversation.messages.len() == 2 && conversation.title == "新对话" {
+            conversation.title = generate_title(user_content);
         }
+    }
+
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(app, conversation)?;
+    Ok(())
+}
+
+fn find_message_index(conversation: &Conversation, message_id: &str) -> Result<usize, String> {
+    conversation
+        .messages
+        .iter()
+        .position(|m| m.id == message_id)
+        .ok_or_else(|| "消息不存在".to_string())
+}
+
+/// 更新单条消息（仅助手回复）
+#[tauri::command]
+pub(crate) fn chat_update_message(
+    app: AppHandle,
+    conversation_id: String,
+    message_id: String,
+    content: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Err("消息内容不能为空".to_string());
+    }
+
+    let idx = find_message_index(&conversation, &message_id)?;
+    if conversation.messages[idx].role != "assistant" {
+        return Err("仅支持编辑助手回复".to_string());
+    }
+
+    conversation.messages[idx].content = trimmed.to_string();
+    conversation.messages[idx].timestamp = chrono::Local::now().timestamp();
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+    }))
+}
+
+/// 重新生成助手回复（移除该条及之后的消息，再基于此前上下文请求新回复）
+#[tauri::command]
+pub(crate) async fn chat_regenerate_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+    message_id: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    let idx = find_message_index(&conversation, &message_id)?;
+    if conversation.messages[idx].role != "assistant" {
+        return Err("仅支持重新生成助手回复".to_string());
+    }
+
+    conversation.messages.truncate(idx);
+    if conversation
+        .messages
+        .last()
+        .map(|m| m.role.as_str())
+        != Some("user")
+    {
+        return Err("缺少对应的用户消息，无法重新生成".to_string());
+    }
+
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+
+    match complete_assistant_reply(&app, &state, &mut conversation, None).await {
+        Ok(()) => Ok(serde_json::json!({
+            "success": true,
+            "conversation": conversation,
+        })),
         Err(err) => Ok(serde_json::json!({
             "success": false,
             "error": err,
         })),
     }
+}
+
+/// 删除单条消息
+#[tauri::command]
+pub(crate) fn chat_delete_message(
+    app: AppHandle,
+    conversation_id: String,
+    message_id: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    let idx = find_message_index(&conversation, &message_id)?;
+    if conversation.messages[idx].role != "assistant" {
+        return Err("仅支持删除助手回复".to_string());
+    }
+
+    conversation.messages.remove(idx);
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+    }))
 }
 
 /// 删除对话

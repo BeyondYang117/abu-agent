@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PanelLeftOpen } from 'lucide-react'
 import { Sidebar } from './Sidebar'
-import { MessageList } from './MessageList'
+import { MessageList, type AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
-import type { ChatMessage } from './types'
+import type { ChatMessage, Conversation } from './types'
 import { api } from '../api/tauri'
 import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
+import { estimateTokens } from '../lens/markdown'
 
 type ChatView = 'conversation' | 'settings'
 
@@ -40,11 +41,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [streamError, setStreamError] = useState('')
   /** 发送中待显示的用户消息（与 conversation 分离，避免 route reload 冲掉） */
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null)
+  const [lastAssistantStreamStats, setLastAssistantStreamStats] =
+    useState<AssistantStreamStats | null>(null)
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
   const currentConversationIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
+  const streamStartedAtRef = useRef<number | null>(null)
+  const streamingContentRef = useRef('')
+  const streamingReasoningRef = useRef('')
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
   const requestWindowFocus = useWindowInteractionFocus()
@@ -138,12 +144,18 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       unlisten = await api.onChatStream((payload) => {
         if (cancelled) return
         if (payload.reasoningDelta) {
+          streamingReasoningRef.current += payload.reasoningDelta
           setStreamingReasoning((prev) => prev + payload.reasoningDelta)
         }
         if (payload.delta) {
+          streamingContentRef.current += payload.delta
           setStreamingContent((prev) => prev + payload.delta)
         }
         if (payload.done) {
+          // invoke 未完成前不要清 streaming / reload：否则输入框会解锁，
+          // 用户可在 regenerate/send 仍写盘时发新消息，导致旧助手回复被合并回来。
+          if (sendInFlightRef.current) return
+
           setStreaming(false)
           setStreamingContent('')
           setStreamingReasoning('')
@@ -151,8 +163,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             setStreamError('回复生成失败，请稍后重试。')
           }
           const conversationId = currentConversationIdRef.current
-          // sendMessage 进行中时磁盘尚无本轮消息，reload 会冲掉乐观更新的用户气泡
-          if (conversationId && payload.reason !== 'cancelled' && !sendInFlightRef.current) {
+          if (conversationId && payload.reason !== 'cancelled') {
             void reloadConversation(conversationId)
             refreshSidebar()
           }
@@ -210,6 +221,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [getRouteConversationId, reloadConversation])
 
   const handleSelectConversation = async (conversationId: string) => {
+    setLastAssistantStreamStats(null)
     try {
       const conv = await chatApi.getConversation(conversationId)
       setCurrentConversation(conv)
@@ -222,6 +234,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }
 
   const handleNewConversation = useCallback(async () => {
+    setLastAssistantStreamStats(null)
     try {
       const conv = await chatApi.createConversation(
         activeProviderId || undefined,
@@ -255,8 +268,27 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [chatView, handleNewConversation])
 
+  const applyAssistantStreamStats = useCallback((updatedConv: Conversation) => {
+    const lastAssistant = [...updatedConv.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant')
+    if (!lastAssistant || !streamStartedAtRef.current) return
+
+    const elapsedSec = Math.max((Date.now() - streamStartedAtRef.current) / 1000, 0.1)
+    const streamedText = `${streamingContentRef.current}${streamingReasoningRef.current ? `\n${streamingReasoningRef.current}` : ''}`
+    const tokenEstimate = estimateTokens(
+      streamedText.trim().length > 0
+        ? streamedText
+        : `${lastAssistant.content}${lastAssistant.reasoning ? `\n${lastAssistant.reasoning}` : ''}`,
+    )
+    setLastAssistantStreamStats({
+      messageId: lastAssistant.id,
+      tokensPerSec: tokenEstimate / elapsedSec,
+    })
+  }, [])
+
   const handleSendMessage = async (content: string) => {
-    if (streaming) return
+    if (streaming || sendInFlightRef.current) return
 
     const trimmed = content.trim()
     if (!trimmed) return
@@ -274,6 +306,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setStreamingContent('')
     setStreamingReasoning('')
     setStreamError('')
+    streamStartedAtRef.current = Date.now()
+    streamingContentRef.current = ''
+    streamingReasoningRef.current = ''
 
     sendInFlightRef.current = true
     try {
@@ -289,11 +324,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
 
       const updatedConv = await chatApi.sendMessage(conversation!.id, trimmed)
+      applyAssistantStreamStats(updatedConv)
       setCurrentConversation(updatedConv)
       setPendingUserMessage(null)
       setStreaming(false)
       setStreamingContent('')
       setStreamingReasoning('')
+      streamStartedAtRef.current = null
+      streamingContentRef.current = ''
+      streamingReasoningRef.current = ''
       refreshSidebar()
     } catch (err) {
       console.error('Failed to send message:', err)
@@ -301,11 +340,94 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreaming(false)
       setStreamingContent('')
       setStreamingReasoning('')
+      streamStartedAtRef.current = null
+      streamingContentRef.current = ''
+      streamingReasoningRef.current = ''
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '发送失败')
     } finally {
       sendInFlightRef.current = false
     }
   }
+
+  const handleUpdateMessage = useCallback(
+    async (messageId: string, content: string) => {
+      if (!currentConversation) return
+      try {
+        const updated = await chatApi.updateMessage(currentConversation.id, messageId, content)
+        setCurrentConversation(updated)
+        refreshSidebar()
+      } catch (err) {
+        console.error('Failed to update message:', err)
+        setStreamError(typeof err === 'string' ? err : (err as Error).message || '保存失败')
+      }
+    },
+    [currentConversation, refreshSidebar],
+  )
+
+  const handleDeleteMessage = useCallback(
+    async (messageId: string) => {
+      if (!currentConversation) return
+      if (!window.confirm('确定删除这条助手回复吗？')) return
+      try {
+        const updated = await chatApi.deleteMessage(currentConversation.id, messageId)
+        setCurrentConversation(updated)
+        setLastAssistantStreamStats((prev) =>
+          prev?.messageId === messageId ? null : prev,
+        )
+        refreshSidebar()
+      } catch (err) {
+        console.error('Failed to delete message:', err)
+        setStreamError(typeof err === 'string' ? err : (err as Error).message || '删除失败')
+      }
+    },
+    [currentConversation, refreshSidebar],
+  )
+
+  const handleRegenerateMessage = useCallback(
+    async (messageId: string) => {
+      if (!currentConversation || streaming || sendInFlightRef.current) return
+
+      const conversationId = currentConversation.id
+      const messageIndex = currentConversation.messages.findIndex(
+        (message) => message.id === messageId,
+      )
+      if (messageIndex < 0) return
+
+      setCurrentConversation({
+        ...currentConversation,
+        messages: currentConversation.messages.slice(0, messageIndex),
+      })
+      setLastAssistantStreamStats(null)
+      setStreaming(true)
+      setStreamingContent('')
+      setStreamingReasoning('')
+      setStreamError('')
+      streamStartedAtRef.current = Date.now()
+      streamingContentRef.current = ''
+      streamingReasoningRef.current = ''
+      sendInFlightRef.current = true
+
+      try {
+        const updated = await chatApi.regenerateMessage(conversationId, messageId)
+        applyAssistantStreamStats(updated)
+        setCurrentConversation(updated)
+        refreshSidebar()
+      } catch (err) {
+        console.error('Failed to regenerate message:', err)
+        setStreamError(typeof err === 'string' ? err : (err as Error).message || '重新生成失败')
+        void reloadConversation(conversationId)
+      } finally {
+        setStreaming(false)
+        setStreamingContent('')
+        setStreamingReasoning('')
+        streamStartedAtRef.current = null
+        streamingContentRef.current = ''
+        streamingReasoningRef.current = ''
+        sendInFlightRef.current = false
+      }
+    },
+    [applyAssistantStreamStats, currentConversation, refreshSidebar, reloadConversation, streaming],
+  )
 
   const handleModelChange = async (providerId: string, model: string) => {
     setDraftProviderId(providerId)
@@ -357,6 +479,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           }}
           onNewConversation={() => {
             runAfterLeavingSettings(() => void handleNewConversation())
+          }}
+          onConversationDeleted={() => {
+            setCurrentConversation(null)
+            syncConversationRoute(null)
+            refreshSidebar()
           }}
           onOpenSettings={openEmbeddedSettings}
           settingsActive={chatView === 'settings'}
@@ -416,31 +543,43 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col">
-              {showEmptyHero && (
-                <div className="flex flex-1 items-center justify-center px-6 pb-4">
-                  <h2 className="text-center text-[2rem] font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
-                    今天我能为您做些什么？
-                  </h2>
+              {showEmptyHero ? (
+                <div className="flex flex-1 flex-col items-center justify-center px-6">
+                  <div className="w-full max-w-3xl space-y-8">
+                    <h2 className="text-center text-[1.75rem] font-semibold leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]">
+                      今天我能为您做些什么？
+                    </h2>
+                    <InputBar
+                      layout="inline"
+                      onSend={(content) => void handleSendMessage(content)}
+                      disabled={streaming || sendInFlightRef.current}
+                      onOpenSettings={openEmbeddedSettings}
+                      autoFocus
+                    />
+                  </div>
                 </div>
-              )}
-
-              {(hasMessages || streaming || streamError) && (
-                <MessageList
-                  messages={displayMessages}
-                  streaming={streaming}
-                  streamingContent={streamingContent}
-                  streamingReasoning={streamingReasoning}
-                  error={streamError}
-                />
+              ) : (
+                <>
+                  <MessageList
+                    messages={displayMessages}
+                    streaming={streaming}
+                    streamingContent={streamingContent}
+                    streamingReasoning={streamingReasoning}
+                    error={streamError}
+                    lastAssistantStreamStats={lastAssistantStreamStats}
+                    onUpdateMessage={handleUpdateMessage}
+                    onRegenerateMessage={handleRegenerateMessage}
+                    onDeleteMessage={handleDeleteMessage}
+                  />
+                  <InputBar
+                    onSend={(content) => void handleSendMessage(content)}
+                    disabled={streaming || sendInFlightRef.current}
+                    onOpenSettings={openEmbeddedSettings}
+                    autoFocus
+                  />
+                </>
               )}
             </div>
-
-            <InputBar
-              onSend={(content) => void handleSendMessage(content)}
-              disabled={streaming}
-              onOpenSettings={openEmbeddedSettings}
-              autoFocus
-            />
           </div>
         )}
       </div>
