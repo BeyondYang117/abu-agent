@@ -8,6 +8,8 @@ import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 
 // ========== 类型定义 ==========
 
+const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
 export type LensWebSearchResult = {
   title: string
   url: string
@@ -320,8 +322,10 @@ export const api = {
   // Lens 模式
   onLensStream: (listener: (payload: LensStreamPayload) => void) =>
     on<LensStreamPayload>('lens-stream', (payload) => listener(payload)),
-  onChatStream: (listener: (payload: ChatStreamPayload) => void) =>
-    on<ChatStreamPayload>('chat-stream', (payload) => listener(payload)),
+  onChatStream: (listener: (payload: ChatStreamPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatStreamPayload>('chat-stream', (payload) => listener(payload))
+  },
   onLensWebSearch: (listener: (payload: LensWebSearchPayload) => void) =>
     on<LensWebSearchPayload>('lens-web-search', (payload) => listener(payload)),
   onLensTranslateStream: (listener: (payload: LensTranslateStreamPayload) => void) =>

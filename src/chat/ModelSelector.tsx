@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 
@@ -16,18 +16,28 @@ export function ModelSelector({
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
 
-  useEffect(() => {
-    loadProviders()
-  }, [])
-
-  const loadProviders = async () => {
+  const loadProviders = useCallback(async () => {
     try {
       const settings = await api.getSettings()
       setProviders(settings.providers || [])
     } catch (err) {
       console.error('Failed to load providers:', err)
+      setProviders([
+        {
+          id: currentProviderId || 'dev-provider',
+          name: 'Preview',
+          apiKeys: [],
+          baseUrl: '',
+          availableModels: currentModel ? [currentModel] : ['dev-model'],
+          enabledModels: currentModel ? [currentModel] : ['dev-model'],
+        },
+      ])
     }
-  }
+  }, [currentModel, currentProviderId])
+
+  useEffect(() => {
+    loadProviders()
+  }, [loadProviders])
 
   const currentProvider = providers.find((p) => p.id === currentProviderId)
   const displayName = currentModel || currentProvider?.enabledModels[0] || '选择模型'

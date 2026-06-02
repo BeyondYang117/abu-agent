@@ -130,7 +130,7 @@ export default function Chat({ onOpenSettings }: ChatProps) {
 
   // 发送消息
   const handleSendMessage = async (content: string) => {
-    if (!currentConversation || streaming) return
+    if (streaming) return
 
     setStreaming(true)
     setStreamingContent('')
@@ -138,8 +138,17 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     setStreamError('')
 
     try {
-      const updatedConv = await chatApi.sendMessage(currentConversation.id, content)
+      let conversation = currentConversation
+      if (!conversation) {
+        conversation = await chatApi.createConversation()
+        setCurrentConversation(conversation)
+        syncRoute(conversation.id)
+      }
+      const updatedConv = await chatApi.sendMessage(conversation.id, content)
       setCurrentConversation(updatedConv)
+      setStreaming(false)
+      setStreamingContent('')
+      setStreamingReasoning('')
       refreshSidebar()
     } catch (err) {
       console.error('Failed to send message:', err)
@@ -216,31 +225,27 @@ export default function Chat({ onOpenSettings }: ChatProps) {
           error={streamError}
         />
 
-        {/* 输入栏 */}
-        {currentConversation && (
-          <InputBar
-            onSend={handleSendMessage}
-            disabled={streaming}
-            onTriggerScreenshot={handleTriggerScreenshot}
-          />
-        )}
-
         {/* 空状态（无对话选中） */}
         {!currentConversation && (
-          <div className="flex-1 flex items-center justify-center">
+          <div className="flex-1 flex items-center justify-center px-6">
             <div className="text-center">
-              <h2 className="text-3xl font-medium text-neutral-900 dark:text-neutral-100 mb-4">
+              <h2 className="text-3xl font-medium text-neutral-900 dark:text-neutral-100 mb-3">
                 今天我能为您做些什么？
               </h2>
-              <button
-                onClick={handleNewConversation}
-                className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-medium transition-colors"
-              >
-                开始新对话
-              </button>
+              <p className="text-sm text-neutral-500 dark:text-neutral-400">
+                直接在下方输入问题，Kivio 会自动创建新对话。
+              </p>
             </div>
           </div>
         )}
+
+        {/* 输入栏 */}
+        <InputBar
+          onSend={handleSendMessage}
+          disabled={streaming}
+          onTriggerScreenshot={currentConversation ? handleTriggerScreenshot : undefined}
+          autoFocus
+        />
       </div>
     </div>
   )

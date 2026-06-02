@@ -5,9 +5,10 @@ interface InputBarProps {
   onSend: (content: string) => void
   disabled?: boolean
   onTriggerScreenshot?: () => void
+  autoFocus?: boolean
 }
 
-export function InputBar({ onSend, disabled, onTriggerScreenshot }: InputBarProps) {
+export function InputBar({ onSend, disabled, onTriggerScreenshot, autoFocus }: InputBarProps) {
   const [input, setInput] = useState('')
 
   const handleSend = () => {
@@ -54,6 +55,7 @@ export function InputBar({ onSend, disabled, onTriggerScreenshot }: InputBarProp
 
           {/* 输入框 */}
           <textarea
+            autoFocus={autoFocus}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}

@@ -27,15 +27,7 @@ export function MessageList({
   }, [messages, streaming, streamingContent, streamingReasoning, error])
 
   if (messages.length === 0 && !streaming && !error) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <h2 className="text-3xl font-medium text-neutral-900 dark:text-neutral-100 mb-8">
-            今天我能为您做些什么？
-          </h2>
-        </div>
-      </div>
-    )
+    return <div className="flex-1" />
   }
 
   return (
