@@ -92,9 +92,17 @@ fn main() {
                 let _ = window.hide();
                 #[cfg(target_os = "macos")]
                 if window.label() == "main" {
-                    let _ = window
-                        .app_handle()
-                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                    // 翻译浮窗（矮窗口）关闭后回到 Accessory；AI 客户端保持 Regular，便于 Dock 再次点开
+                    let is_translator = window
+                        .inner_size()
+                        .map(|size| size.height < 300)
+                        .unwrap_or(false);
+                    let policy = if is_translator {
+                        tauri::ActivationPolicy::Accessory
+                    } else {
+                        tauri::ActivationPolicy::Regular
+                    };
+                    let _ = window.app_handle().set_activation_policy(policy);
                 }
             }
             tauri::WindowEvent::Focused(true) => {
@@ -109,7 +117,7 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                // 隐藏 Dock 图标，将应用设置为 accessory 激活策略
+                // 启动瞬间先 Accessory，open_chat_window 会切到 Regular
                 let _ = app
                     .handle()
                     .set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -239,6 +247,28 @@ fn main() {
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                let main_hidden = app_handle
+                    .get_webview_window("main")
+                    .and_then(|window| window.is_visible().ok())
+                    .map(|visible| !visible)
+                    .unwrap_or(true);
+                if !has_visible_windows || main_hidden {
+                    if let Err(err) = open_chat_window(app_handle) {
+                        eprintln!("Failed to open chat on dock reopen: {err}");
+                    }
+                } else if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }

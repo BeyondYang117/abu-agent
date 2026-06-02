@@ -1,97 +1,99 @@
-import { useState } from 'react'
-import { Plus, Send, Camera } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowUp, Plus, SlidersHorizontal } from 'lucide-react'
 
 interface InputBarProps {
   onSend: (content: string) => void
   disabled?: boolean
-  onTriggerScreenshot?: () => void
+  onOpenSettings?: () => void
   autoFocus?: boolean
 }
 
-export function InputBar({ onSend, disabled, onTriggerScreenshot, autoFocus }: InputBarProps) {
+export function InputBar({ onSend, disabled, onOpenSettings, autoFocus }: InputBarProps) {
   const [input, setInput] = useState('')
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const handleSend = () => {
     const trimmed = input.trim()
     if (!trimmed || disabled) return
     onSend(trimmed)
     setInput('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter 发送，Shift+Enter 换行
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
   }
 
+  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value)
+    const el = e.target
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }
+
+  useEffect(() => {
+    if (autoFocus) textareaRef.current?.focus()
+  }, [autoFocus])
+
+  const canSend = Boolean(input.trim()) && !disabled
+
   return (
-    <div className="border-t border-neutral-200 dark:border-neutral-800 p-4 bg-white dark:bg-neutral-900">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-end gap-2">
-          {/* 附件按钮 */}
+    <div className="shrink-0 px-6 pb-8 pt-2">
+      <div className="mx-auto w-full max-w-3xl">
+        <div className="flex items-end gap-2 rounded-[28px] border border-neutral-200/90 bg-white px-3 py-2.5 shadow-[0_2px_12px_rgba(0,0,0,0.06)] dark:border-neutral-700 dark:bg-neutral-900 dark:shadow-none">
           <button
             type="button"
             disabled={disabled}
-            className="p-2.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="mb-0.5 shrink-0 rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
             title="添加附件"
+            aria-label="添加附件"
           >
-            <Plus size={20} className="text-neutral-600 dark:text-neutral-400" />
+            <Plus size={20} strokeWidth={1.75} />
           </button>
 
-          {/* 截图按钮 */}
-          {onTriggerScreenshot && (
+          {onOpenSettings && (
             <button
               type="button"
-              onClick={onTriggerScreenshot}
+              onClick={onOpenSettings}
               disabled={disabled}
-              className="p-2.5 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              title="截图"
+              className="mb-0.5 shrink-0 rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
+              title="设置"
+              aria-label="设置"
             >
-              <Camera size={20} className="text-neutral-600 dark:text-neutral-400" />
+              <SlidersHorizontal size={18} strokeWidth={1.75} />
             </button>
           )}
 
-          {/* 输入框 */}
           <textarea
-            autoFocus={autoFocus}
+            ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={handleInput}
             onKeyDown={handleKeyDown}
             disabled={disabled}
             placeholder="随便问我什么..."
             rows={1}
-            className="flex-1 resize-none px-4 py-3 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl text-[15px] text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{
-              maxHeight: '200px',
-              height: 'auto',
-              overflowY: input.split('\n').length > 3 ? 'auto' : 'hidden',
-            }}
+            className="mb-0.5 max-h-40 min-h-[28px] flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
           />
 
-          {/* 发送按钮 */}
           <button
             type="button"
             onClick={handleSend}
-            disabled={!input.trim() || disabled}
-            className="p-2.5 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:bg-neutral-300 dark:disabled:bg-neutral-700 transition-colors disabled:cursor-not-allowed"
+            disabled={!canSend}
+            className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all ${
+              canSend
+                ? 'bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585]'
+                : 'bg-neutral-200 text-neutral-400 dark:bg-neutral-700 dark:text-neutral-500'
+            }`}
             title="发送"
+            aria-label="发送"
           >
-            <Send
-              size={20}
-              className={
-                input.trim() && !disabled
-                  ? 'text-white'
-                  : 'text-neutral-400 dark:text-neutral-500'
-              }
-            />
+            <ArrowUp size={18} strokeWidth={2.25} />
           </button>
-        </div>
-
-        {/* 提示文字 */}
-        <div className="mt-2 text-xs text-neutral-400 dark:text-neutral-500 text-center">
-          按 Enter 发送，Shift + Enter 换行
         </div>
       </div>
     </div>

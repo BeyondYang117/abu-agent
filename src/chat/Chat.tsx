@@ -1,36 +1,71 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { PanelLeftOpen } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { MessageList } from './MessageList'
 import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
+import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
 import { api } from '../api/tauri'
-import type { Conversation } from './types'
+import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
+import { useWindowInteractionFocus } from '../utils/windowFocus'
+
+type ChatView = 'conversation' | 'settings'
 
 interface ChatProps {
-  onOpenSettings: () => void
+  onSettingsChange: () => void
 }
 
-export default function Chat({ onOpenSettings }: ChatProps) {
-  const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null)
-  const sidebarCollapsed = false
+function hashPath(): string {
+  return window.location.hash.replace('#', '').split('?')[0]
+}
+
+function isChatSettingsPath(path: string): boolean {
+  return path === 'chat/settings' || path.startsWith('chat/settings/')
+}
+
+export default function Chat({ onSettingsChange }: ChatProps) {
+  const [chatView, setChatView] = useState<ChatView>(() =>
+    isChatSettingsPath(hashPath()) ? 'settings' : 'conversation',
+  )
+  const [currentConversation, setCurrentConversation] = useState<Awaited<
+    ReturnType<typeof chatApi.getConversation>
+  > | null>(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamError, setStreamError] = useState('')
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
+  const [draftProviderId, setDraftProviderId] = useState('')
+  const [draftModel, setDraftModel] = useState('')
   const currentConversationIdRef = useRef<string | null>(null)
+  const settingsRef = useRef<SettingsShellHandle>(null)
+  const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
+  const requestWindowFocus = useWindowInteractionFocus()
+
+  const activeProviderId = currentConversation?.provider_id || draftProviderId
+  const activeModel = currentConversation?.model || draftModel
 
   const getRouteConversationId = useCallback(() => {
-    const hash = window.location.hash.replace('#', '').split('?')[0]
-    if (!hash.startsWith('chat/')) return null
-    return decodeURIComponent(hash.slice('chat/'.length))
+    const path = hashPath()
+    if (!path.startsWith('chat/')) return null
+    const rest = path.slice('chat/'.length)
+    if (rest === 'settings' || rest.startsWith('settings/')) return null
+    return decodeURIComponent(rest)
   }, [])
 
-  const syncRoute = useCallback((conversationId: string | null) => {
+  const syncConversationRoute = useCallback((conversationId: string | null) => {
     const nextHash = conversationId ? `#chat/${encodeURIComponent(conversationId)}` : '#chat'
     if (window.location.hash !== nextHash) {
       window.location.hash = nextHash
+    }
+  }, [])
+
+  const syncSettingsRoute = useCallback(() => {
+    if (window.location.hash !== '#chat/settings') {
+      window.location.hash = '#chat/settings'
     }
   }, [])
 
@@ -38,7 +73,48 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     setSidebarRefreshKey((key) => key + 1)
   }, [])
 
-  // 重新加载对话
+  const loadDefaultModel = useCallback(async () => {
+    try {
+      const settings = await api.getSettings()
+      setDraftProviderId(settings.chatProviderId || settings.translatorProviderId || '')
+      setDraftModel(settings.chatModel || settings.translatorModel || '')
+    } catch {
+      setDraftProviderId('dev-provider')
+      setDraftModel('dev-model')
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadDefaultModel()
+  }, [loadDefaultModel])
+
+  const openEmbeddedSettings = useCallback(() => {
+    setChatView('settings')
+    syncSettingsRoute()
+  }, [syncSettingsRoute])
+
+  const handleSettingsClose = useCallback(() => {
+    setChatView('conversation')
+    syncConversationRoute(currentConversationIdRef.current)
+    const pending = pendingAfterSettingsCloseRef.current
+    pendingAfterSettingsCloseRef.current = null
+    pending?.()
+  }, [syncConversationRoute])
+
+  const runAfterLeavingSettings = useCallback((action: () => void) => {
+    if (chatView !== 'settings') {
+      action()
+      return
+    }
+    pendingAfterSettingsCloseRef.current = action
+    settingsRef.current?.requestClose()
+  }, [chatView])
+
+  const handleSettingsChange = useCallback(() => {
+    onSettingsChange()
+    void loadDefaultModel()
+  }, [loadDefaultModel, onSettingsChange])
+
   const reloadConversation = useCallback(async (conversationId: string) => {
     try {
       const conv = await chatApi.getConversation(conversationId)
@@ -49,7 +125,6 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     }
   }, [])
 
-  // 监听流式响应事件
   useEffect(() => {
     let unlisten: (() => void) | undefined
 
@@ -88,7 +163,27 @@ export default function Chat({ onOpenSettings }: ChatProps) {
   }, [currentConversation?.id])
 
   useEffect(() => {
+    let cleanup: (() => void) | undefined
+    api.onOpenSettings(() => {
+      const path = hashPath()
+      if (!path.startsWith('chat')) return
+      openEmbeddedSettings()
+    }).then((unlisten) => {
+      cleanup = unlisten
+    })
+    return () => {
+      cleanup?.()
+    }
+  }, [openEmbeddedSettings])
+
+  useEffect(() => {
     const loadFromRoute = () => {
+      const path = hashPath()
+      if (isChatSettingsPath(path)) {
+        setChatView('settings')
+        return
+      }
+      setChatView('conversation')
       const conversationId = getRouteConversationId()
       if (!conversationId) {
         setCurrentConversation(null)
@@ -101,12 +196,11 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     return () => window.removeEventListener('hashchange', loadFromRoute)
   }, [getRouteConversationId, reloadConversation])
 
-  // 选择对话
   const handleSelectConversation = async (conversationId: string) => {
     try {
       const conv = await chatApi.getConversation(conversationId)
       setCurrentConversation(conv)
-      syncRoute(conversationId)
+      syncConversationRoute(conversationId)
       setStreamError('')
     } catch (err) {
       console.error('Failed to load conversation:', err)
@@ -114,21 +208,40 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     }
   }
 
-  // 新建对话
-  const handleNewConversation = async () => {
+  const handleNewConversation = useCallback(async () => {
     try {
-      const conv = await chatApi.createConversation()
+      const conv = await chatApi.createConversation(
+        activeProviderId || undefined,
+        activeModel || undefined
+      )
       setCurrentConversation(conv)
-      syncRoute(conv.id)
+      syncConversationRoute(conv.id)
       refreshSidebar()
       setStreamError('')
     } catch (err) {
       console.error('Failed to create conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
     }
-  }
+  }, [activeModel, activeProviderId, refreshSidebar, syncConversationRoute])
 
-  // 发送消息
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (chatView === 'settings') return
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault()
+        void handleNewConversation()
+      }
+      if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault()
+        setSearchOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [chatView, handleNewConversation])
+
   const handleSendMessage = async (content: string) => {
     if (streaming) return
 
@@ -140,9 +253,12 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     try {
       let conversation = currentConversation
       if (!conversation) {
-        conversation = await chatApi.createConversation()
+        conversation = await chatApi.createConversation(
+          activeProviderId || undefined,
+          activeModel || undefined
+        )
         setCurrentConversation(conversation)
-        syncRoute(conversation.id)
+        syncConversationRoute(conversation.id)
       }
       const updatedConv = await chatApi.sendMessage(conversation.id, content)
       setCurrentConversation(updatedConv)
@@ -159,8 +275,10 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     }
   }
 
-  // 切换模型
   const handleModelChange = async (providerId: string, model: string) => {
+    setDraftProviderId(providerId)
+    setDraftModel(model)
+
     if (!currentConversation) return
 
     try {
@@ -176,76 +294,110 @@ export default function Chat({ onOpenSettings }: ChatProps) {
     }
   }
 
-  // 触发截图
-  const handleTriggerScreenshot = async () => {
-    try {
-      await api.lensRequest()
-    } catch (err) {
-      console.error('Failed to trigger screenshot:', err)
-    }
-  }
+  const hasMessages = (currentConversation?.messages.length ?? 0) > 0
+  const showEmptyHero = chatView === 'conversation' && !hasMessages && !streaming && !streamError
 
   return (
-    <div className="flex h-screen bg-white dark:bg-neutral-900">
-      {/* 左侧边栏 */}
-      <Sidebar
-        currentConversationId={currentConversation?.id}
-        onSelectConversation={handleSelectConversation}
-        onNewConversation={handleNewConversation}
-        onOpenSettings={onOpenSettings}
-        collapsed={sidebarCollapsed}
-        refreshKey={sidebarRefreshKey}
-      />
+    <div
+      className="chat-window-shell"
+      onPointerEnter={requestWindowFocus}
+      onPointerMove={requestWindowFocus}
+      onPointerDownCapture={requestWindowFocus}
+    >
+      <div className="flex h-full min-h-0 w-full">
+        <Sidebar
+          currentConversationId={currentConversation?.id}
+          onSelectConversation={(id) => {
+            runAfterLeavingSettings(() => void handleSelectConversation(id))
+          }}
+          onNewConversation={() => {
+            runAfterLeavingSettings(() => void handleNewConversation())
+          }}
+          onOpenSettings={openEmbeddedSettings}
+          settingsActive={chatView === 'settings'}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed(true)}
+          refreshKey={sidebarRefreshKey}
+          searchOpen={searchOpen}
+          onSearchOpenChange={(open) => {
+            if (open) {
+              runAfterLeavingSettings(() => setSearchOpen(true))
+              return
+            }
+            setSearchOpen(false)
+          }}
+        />
 
-      {/* 主内容区 */}
-      <div className="flex-1 flex flex-col">
-        {/* 顶部栏 */}
-        {currentConversation && (
-          <div className="h-14 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between px-4">
-            {/* 对话标题 */}
-            <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-              {currentConversation.title}
+        {chatView === 'settings' ? (
+          <SettingsShell
+            ref={settingsRef}
+            variant="embedded"
+            onClose={handleSettingsClose}
+            onSettingsChange={handleSettingsChange}
+          />
+        ) : (
+          <div className="relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
+            {sidebarCollapsed && (
+              <div
+                className="flex h-[52px] shrink-0 items-center gap-2 px-4 pt-2"
+                data-tauri-drag-region
+              >
+                <WindowControls />
+                <button
+                  type="button"
+                  onClick={() => setSidebarCollapsed(false)}
+                  className="rounded-md p-2 text-neutral-500 transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
+                  title="展开侧栏"
+                  aria-label="展开侧栏"
+                  data-tauri-drag-region="false"
+                >
+                  <PanelLeftOpen size={17} strokeWidth={1.75} />
+                </button>
+                <div className="min-w-0 flex-1" data-tauri-drag-region />
+              </div>
+            )}
+
+            <header
+              className={`flex shrink-0 items-center px-6 pb-2 ${sidebarCollapsed ? 'pt-2' : 'pt-4'}`}
+              data-tauri-drag-region
+            >
+              <div data-tauri-drag-region="false">
+                <ModelSelector
+                  currentProviderId={activeProviderId}
+                  currentModel={activeModel}
+                  onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
+                />
+              </div>
+            </header>
+
+            <div className="flex min-h-0 flex-1 flex-col">
+              {showEmptyHero && (
+                <div className="flex flex-1 items-center justify-center px-6 pb-4">
+                  <h2 className="text-center text-[2rem] font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">
+                    今天我能为您做些什么？
+                  </h2>
+                </div>
+              )}
+
+              {(hasMessages || streaming || streamError) && (
+                <MessageList
+                  messages={currentConversation?.messages || []}
+                  streaming={streaming}
+                  streamingContent={streamingContent}
+                  streamingReasoning={streamingReasoning}
+                  error={streamError}
+                />
+              )}
             </div>
 
-            {/* 模型选择器 */}
-            <ModelSelector
-              currentProviderId={currentConversation.provider_id}
-              currentModel={currentConversation.model}
-              onModelChange={handleModelChange}
+            <InputBar
+              onSend={(content) => void handleSendMessage(content)}
+              disabled={streaming}
+              onOpenSettings={openEmbeddedSettings}
+              autoFocus
             />
           </div>
         )}
-
-        {/* 消息列表 */}
-        <MessageList
-          messages={currentConversation?.messages || []}
-          streaming={streaming}
-          streamingContent={streamingContent}
-          streamingReasoning={streamingReasoning}
-          error={streamError}
-        />
-
-        {/* 空状态（无对话选中） */}
-        {!currentConversation && (
-          <div className="flex-1 flex items-center justify-center px-6">
-            <div className="text-center">
-              <h2 className="text-3xl font-medium text-neutral-900 dark:text-neutral-100 mb-3">
-                今天我能为您做些什么？
-              </h2>
-              <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                直接在下方输入问题，Kivio 会自动创建新对话。
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* 输入栏 */}
-        <InputBar
-          onSend={handleSendMessage}
-          disabled={streaming}
-          onTriggerScreenshot={currentConversation ? handleTriggerScreenshot : undefined}
-          autoFocus
-        />
       </div>
     </div>
   )

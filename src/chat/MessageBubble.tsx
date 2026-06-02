@@ -8,52 +8,37 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user'
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
+    <div className={`flex py-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-[70%] rounded-2xl px-4 py-3 ${
+        className={`max-w-[85%] rounded-2xl px-4 py-3 ${
           isUser
-            ? 'bg-blue-500 text-white'
-            : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
+            ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+            : 'border border-neutral-200/80 bg-white text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100'
         }`}
       >
-        {/* 推理内容（如果有） */}
         {message.reasoning && !isUser && (
-          <div className="mb-2 pb-2 border-b border-neutral-300 dark:border-neutral-700">
-            <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-1">思考过程</div>
-            <div className="text-sm opacity-80 whitespace-pre-wrap">{message.reasoning}</div>
+          <div className="mb-2 border-b border-neutral-200 pb-2 dark:border-neutral-700">
+            <div className="mb-1 text-xs text-neutral-500">思考过程</div>
+            <div className="whitespace-pre-wrap text-sm opacity-80">{message.reasoning}</div>
           </div>
         )}
 
-        {/* 消息内容 */}
-        <div className="text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+        <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
           {message.content}
         </div>
 
-        {/* 附件显示 */}
         {message.attachments && message.attachments.length > 0 && (
           <div className="mt-2 space-y-2">
             {message.attachments.map((att) => (
               <div
                 key={att.id}
-                className="flex items-center gap-2 p-2 rounded bg-black/10 dark:bg-white/10 text-sm"
+                className="flex items-center gap-2 rounded-lg bg-black/5 p-2 text-sm dark:bg-white/10"
               >
                 {att.type === 'image' ? '🖼️' : '📎'} {att.name}
               </div>
             ))}
           </div>
         )}
-
-        {/* 时间戳 */}
-        <div
-          className={`text-xs mt-1 ${
-            isUser ? 'text-blue-100' : 'text-neutral-400 dark:text-neutral-500'
-          }`}
-        >
-          {new Date(message.timestamp * 1000).toLocaleTimeString('zh-CN', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </div>
       </div>
     </div>
   )

@@ -924,8 +924,10 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 Err(err) => eprintln!("Failed to ensure main window: {}", err),
             },
             "settings" => {
-                if let Err(err) = open_settings_window(app) {
-                    eprintln!("Failed to open settings window: {}", err);
+                if let Err(err) = open_chat_window(app) {
+                    eprintln!("Failed to open chat window for settings: {}", err);
+                } else {
+                    let _ = app.emit_to("main", "open-settings", ());
                 }
             }
             "quit" => {

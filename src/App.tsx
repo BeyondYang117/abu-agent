@@ -269,6 +269,8 @@ function App() {
     let cleanup: (() => void) | undefined
     api.onOpenSettings(() => {
       const currentHash = window.location.hash.replace('#', '').split('?')[0]
+      // Chat 内嵌设置由 Chat 组件监听同一事件处理
+      if (currentHash.startsWith('chat')) return
       if (currentHash !== '' && currentHash !== 'translator' && currentHash !== 'settings') return
       settingsOpenPendingRef.current = true
       window.location.hash = '#settings'
@@ -337,9 +339,9 @@ function App() {
   }
   if (mode === 'chat') {
     return (
-      <div className="h-screen w-screen overflow-hidden">
+      <div className="window-container h-full w-full">
         <Suspense fallback={null}>
-          <Chat onOpenSettings={openSettings} />
+          <Chat onSettingsChange={applyTheme} />
         </Suspense>
       </div>
     )

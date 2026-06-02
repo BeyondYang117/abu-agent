@@ -19,58 +19,54 @@ export function MessageList({
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // 自动滚动到底部
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages, streaming, streamingContent, streamingReasoning, error])
 
-  if (messages.length === 0 && !streaming && !error) {
-    return <div className="flex-1" />
-  }
-
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4">
-      {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} />
-      ))}
+    <div ref={scrollRef} className="custom-scrollbar flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl space-y-1 px-6 py-4">
+        {messages.map((msg) => (
+          <MessageBubble key={msg.id} message={msg} />
+        ))}
 
-      {/* 流式加载指示器 */}
-      {streaming && (streamingContent || streamingReasoning) && (
-        <MessageBubble
-          message={{
-            id: 'streaming-assistant',
-            role: 'assistant',
-            content: streamingContent,
-            reasoning: streamingReasoning || undefined,
-            timestamp: Math.floor(Date.now() / 1000),
-          }}
-        />
-      )}
+        {streaming && (streamingContent || streamingReasoning) && (
+          <MessageBubble
+            message={{
+              id: 'streaming-assistant',
+              role: 'assistant',
+              content: streamingContent,
+              reasoning: streamingReasoning || undefined,
+              timestamp: Math.floor(Date.now() / 1000),
+            }}
+          />
+        )}
 
-      {streaming && !streamingContent && !streamingReasoning && (
-        <div className="flex justify-start mb-4">
-          <div className="bg-neutral-100 dark:bg-neutral-800 rounded-2xl px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="flex gap-1">
-                <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse" />
-                <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse [animation-delay:0.2s]" />
-                <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse [animation-delay:0.4s]" />
-              </span>
-              <span className="text-sm text-neutral-500">正在思考...</span>
+        {streaming && !streamingContent && !streamingReasoning && (
+          <div className="flex justify-start py-2">
+            <div className="rounded-2xl border border-neutral-200/80 bg-white px-4 py-3 dark:border-neutral-700 dark:bg-neutral-900">
+              <div className="flex items-center gap-2">
+                <span className="flex gap-1">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0.2s]" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:0.4s]" />
+                </span>
+                <span className="text-sm text-neutral-500">正在思考…</span>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {error && (
-        <div className="flex justify-start mb-4">
-          <div className="max-w-[70%] rounded-2xl px-4 py-3 bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 border border-red-100 dark:border-red-900/50">
-            <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">{error}</div>
+        {error && (
+          <div className="flex justify-start py-2">
+            <div className="max-w-[85%] rounded-2xl border border-red-200/80 bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+              {error}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

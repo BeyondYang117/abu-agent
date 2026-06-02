@@ -1,17 +1,67 @@
-import { useState, useEffect } from 'react'
-import { MessageSquare, Search, Plus, FolderOpen, Box, Settings as SettingsIcon } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  Download,
+  FolderPlus,
+  LayoutGrid,
+  MoreHorizontal,
+  PanelLeftClose,
+  Search,
+  Settings as SettingsIcon,
+  SquarePen,
+} from 'lucide-react'
 import type { ConversationListItem } from './types'
 import { ConversationList } from './ConversationList'
+import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
-import { groupConversationsByTime } from './utils'
+
+const isMac =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+const modLabel = isMac ? '⌘' : 'Ctrl'
 
 interface SidebarProps {
   currentConversationId?: string
   onSelectConversation: (id: string) => void
   onNewConversation: () => void
   onOpenSettings: () => void
+  settingsActive?: boolean
   collapsed: boolean
+  onToggleCollapsed: () => void
   refreshKey: number
+  searchOpen: boolean
+  onSearchOpenChange: (open: boolean) => void
+}
+
+interface NavRowProps {
+  icon: React.ReactNode
+  label: string
+  shortcut?: string
+  onClick?: () => void
+  disabled?: boolean
+}
+
+function NavRow({ icon, label, shortcut, onClick, disabled, active }: NavRowProps & { active?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors disabled:cursor-default disabled:opacity-40 ${
+        active
+          ? 'bg-black/[0.06] font-medium text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-50'
+          : 'text-neutral-800 hover:bg-black/[0.04] dark:text-neutral-200 dark:hover:bg-white/[0.06]'
+      }`}
+    >
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 dark:text-neutral-400">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+      {shortcut && (
+        <span className="shrink-0 text-[11px] text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100 dark:text-neutral-500">
+          {shortcut}
+        </span>
+      )}
+    </button>
+  )
 }
 
 export function Sidebar({
@@ -19,17 +69,27 @@ export function Sidebar({
   onSelectConversation,
   onNewConversation,
   onOpenSettings,
+  settingsActive = false,
   collapsed,
+  onToggleCollapsed,
   refreshKey,
+  searchOpen,
+  onSearchOpenChange,
 }: SidebarProps) {
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // 加载对话列表
   useEffect(() => {
     loadConversations()
   }, [refreshKey])
+
+  useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus()
+    }
+  }, [searchOpen])
 
   const loadConversations = async () => {
     setLoading(true)
@@ -43,7 +103,6 @@ export function Sidebar({
     }
   }
 
-  // 搜索过滤
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   const filteredConversations = normalizedSearchQuery
     ? conversations.filter(
@@ -53,79 +112,119 @@ export function Sidebar({
       )
     : conversations
 
-  const groups = groupConversationsByTime(filteredConversations)
-
   if (collapsed) {
     return null
   }
 
   return (
-    <div className="w-80 h-screen flex flex-col bg-neutral-50 dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800">
-      {/* 顶部工具栏 */}
-      <div className="p-3 border-b border-neutral-200 dark:border-neutral-800 space-y-2">
-        <button
-          onClick={onNewConversation}
-          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition-colors font-medium text-sm"
-        >
-          <Plus size={18} strokeWidth={2} />
-          <span>新建聊天</span>
-        </button>
-
-        {/* 搜索框 */}
-        <div className="relative">
-          <Search
-            size={16}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400"
-          />
-          <input
-            type="text"
-            placeholder="搜索"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
-          />
+    <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-neutral-200/80 bg-[#f7f7f8] dark:border-neutral-800 dark:bg-[#1c1c1e]">
+      {/* 顶栏：交通灯 + 拖拽区 + 侧栏操作 */}
+      <div
+        className="flex h-[52px] shrink-0 items-center gap-2 px-3 pt-2"
+        data-tauri-drag-region
+      >
+        <WindowControls />
+        <div className="min-w-0 flex-1" data-tauri-drag-region />
+        <div className="flex items-center gap-0.5" data-tauri-drag-region="false">
+          <button
+            type="button"
+            className="rounded-md p-2 text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-800 dark:hover:bg-white/[0.08] dark:hover:text-neutral-200"
+            title="导出"
+            aria-label="导出"
+          >
+            <Download size={17} strokeWidth={1.75} />
+          </button>
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="rounded-md p-2 text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-800 dark:hover:bg-white/[0.08] dark:hover:text-neutral-200"
+            title="收起侧栏"
+            aria-label="收起侧栏"
+          >
+            <PanelLeftClose size={17} strokeWidth={1.75} />
+          </button>
         </div>
       </div>
 
-      {/* 快捷入口 */}
-      <div className="px-3 py-2 border-b border-neutral-200 dark:border-neutral-800">
-        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-neutral-700 dark:text-neutral-300 text-sm">
-          <MessageSquare size={18} />
-          <span>ChatGPT</span>
-        </button>
-        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-neutral-700 dark:text-neutral-300 text-sm">
-          <FolderOpen size={18} />
-          <span>库</span>
-        </button>
-        <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-neutral-700 dark:text-neutral-300 text-sm">
-          <Box size={18} />
-          <span>GPT</span>
-        </button>
-      </div>
-
-      {/* 对话列表 */}
-      <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="p-4 text-center text-sm text-neutral-500">加载中...</div>
-        ) : (
-          <ConversationList
-            groups={groups}
-            currentConversationId={currentConversationId}
-            onSelectConversation={onSelectConversation}
-          />
-        )}
-      </div>
-
-      {/* 底部设置按钮 */}
-      <div className="p-3 border-t border-neutral-200 dark:border-neutral-800">
-        <button
+      <nav className="shrink-0 space-y-0.5 px-2 pb-2" data-tauri-drag-region="false">
+        <NavRow
+          icon={<SquarePen size={17} strokeWidth={1.75} />}
+          label="新建聊天"
+          shortcut={`${modLabel}N`}
+          onClick={onNewConversation}
+        />
+        <NavRow
+          icon={<FolderPlus size={17} strokeWidth={1.75} />}
+          label="新建项目"
+          shortcut={`${modLabel}P`}
+          disabled
+        />
+        <NavRow
+          icon={<Search size={17} strokeWidth={1.75} />}
+          label="搜索"
+          shortcut={`${modLabel}K`}
+          onClick={() => onSearchOpenChange(!searchOpen)}
+        />
+        <NavRow icon={<LayoutGrid size={17} strokeWidth={1.75} />} label="中心" disabled />
+        <NavRow
+          icon={<SettingsIcon size={17} strokeWidth={1.75} />}
+          label="设置"
+          active={settingsActive}
           onClick={onOpenSettings}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-neutral-700 dark:text-neutral-300 text-sm"
-        >
-          <SettingsIcon size={18} />
-          <span>设置</span>
-        </button>
+        />
+      </nav>
+
+      <div className="mx-3 border-t border-neutral-200/90 dark:border-neutral-800" />
+
+      <div className="flex min-h-0 flex-1 flex-col pt-2" data-tauri-drag-region="false">
+        <div className="flex items-center justify-between px-4 pb-1">
+          <span className="text-[13px] font-medium text-neutral-500 dark:text-neutral-400">聊天</span>
+          <button
+            type="button"
+            className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-black/[0.05] hover:text-neutral-600 dark:hover:bg-white/[0.08]"
+            aria-label="更多"
+          >
+            <MoreHorizontal size={16} />
+          </button>
+        </div>
+
+        {searchOpen && (
+          <div className="px-3 pb-2">
+            <div className="relative">
+              <Search
+                size={15}
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400"
+              />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    onSearchOpenChange(false)
+                    setSearchQuery('')
+                  }
+                }}
+                placeholder="搜索对话"
+                className="w-full rounded-lg border border-neutral-200/90 bg-white py-2 pl-8 pr-3 text-[13px] text-neutral-900 outline-none ring-0 placeholder:text-neutral-400 focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="custom-scrollbar flex-1 overflow-y-auto px-2 pb-3">
+          {loading ? (
+            <div className="px-3 py-6 text-center text-[13px] text-neutral-400">加载中…</div>
+          ) : (
+            <ConversationList
+              conversations={filteredConversations}
+              currentConversationId={currentConversationId}
+              onSelectConversation={onSelectConversation}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </aside>
   )
 }

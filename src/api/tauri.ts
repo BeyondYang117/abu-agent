@@ -295,6 +295,14 @@ export const api = {
     const win = getCurrentWindow()
     await win.hide()
   },
+  minimizeWindow: async () => {
+    const win = getCurrentWindow()
+    await win.minimize()
+  },
+  toggleMaximizeWindow: async () => {
+    const win = getCurrentWindow()
+    await win.toggleMaximize()
+  },
   showWindow: async () => {
     const win = getCurrentWindow()
     await win.show()

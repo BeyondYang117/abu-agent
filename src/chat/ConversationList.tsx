@@ -1,54 +1,44 @@
-import type { ConversationGroup } from './types'
-import { formatRelativeTime } from './utils'
+import type { ConversationListItem } from './types'
 
 interface ConversationListProps {
-  groups: ConversationGroup[]
+  conversations: ConversationListItem[]
   currentConversationId?: string
   onSelectConversation: (id: string) => void
 }
 
 export function ConversationList({
-  groups,
+  conversations,
   currentConversationId,
   onSelectConversation,
 }: ConversationListProps) {
+  if (conversations.length === 0) {
+    return (
+      <div className="px-3 py-10 text-center text-[13px] text-neutral-400 dark:text-neutral-500">
+        暂无对话
+      </div>
+    )
+  }
+
   return (
-    <div className="px-3 py-2">
-      {groups.map((group) => (
-        <div key={group.title} className="mb-4">
-          {/* 分组标题 */}
-          <div className="px-3 py-1.5 text-xs font-semibold text-neutral-500 dark:text-neutral-400">
-            {group.title}
-          </div>
-
-          {/* 对话列表 */}
-          {group.conversations.map((conv) => (
-            <button
-              key={conv.id}
-              onClick={() => onSelectConversation(conv.id)}
-              className={`w-full text-left px-3 py-2.5 rounded-lg mb-1 transition-colors ${
-                currentConversationId === conv.id
-                  ? 'bg-neutral-200 dark:bg-neutral-800'
-                  : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
-              }`}
-            >
-              <div className="text-sm font-medium text-neutral-900 dark:text-neutral-100 truncate mb-0.5">
-                {conv.title}
-              </div>
-              <div className="text-xs text-neutral-500 dark:text-neutral-400 truncate">
-                {conv.preview || '开始对话...'}
-              </div>
-              <div className="text-xs text-neutral-400 dark:text-neutral-500 mt-1">
-                {formatRelativeTime(conv.updated_at)}
-              </div>
-            </button>
-          ))}
-        </div>
-      ))}
-
-      {groups.length === 0 && (
-        <div className="text-center py-8 text-sm text-neutral-500">暂无对话</div>
-      )}
+    <div className="space-y-0.5 py-1">
+      {conversations.map((conv) => {
+        const active = currentConversationId === conv.id
+        return (
+          <button
+            key={conv.id}
+            type="button"
+            onClick={() => onSelectConversation(conv.id)}
+            className={`w-full truncate rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
+              active
+                ? 'bg-black/[0.06] font-medium text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-100'
+                : 'text-neutral-700 hover:bg-black/[0.04] dark:text-neutral-300 dark:hover:bg-white/[0.06]'
+            }`}
+            title={conv.title}
+          >
+            {conv.title}
+          </button>
+        )
+      })}
     </div>
   )
 }
