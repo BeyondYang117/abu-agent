@@ -3,6 +3,7 @@ import { Settings as SettingsIcon, Cpu } from 'lucide-react'
 import { api } from './api/tauri'
 import { i18n, type Lang } from './settings/i18n'
 import { useWindowInteractionFocus } from './utils/windowFocus'
+import { usesNativeTitlebar } from './chat/platform'
 import './index.css'
 
 const Settings = lazy(() => import('./Settings'))
@@ -339,7 +340,7 @@ function App() {
   }
   if (mode === 'chat') {
     return (
-      <div className="window-container h-full w-full">
+      <div className={usesNativeTitlebar ? 'h-full w-full' : 'window-container h-full w-full'}>
         <Suspense fallback={null}>
           <Chat onSettingsChange={applyTheme} />
         </Suspense>

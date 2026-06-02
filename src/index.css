@@ -220,6 +220,17 @@ body {
     0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
+/* macOS 原生 Overlay 标题栏：去掉自绘圆角边框，交给系统窗口壳 */
+.chat-window-shell--native-titlebar {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.dark .chat-window-shell--native-titlebar {
+  box-shadow: none;
+}
+
 /* ===== Chat 内嵌设置（对齐 Chat 侧栏 + Jan 卡片详情区） ===== */
 .chat-window-shell .settings-embedded {
   --bg: #ffffff;

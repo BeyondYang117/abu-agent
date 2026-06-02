@@ -11,7 +11,10 @@ use crate::lens_commands::{
 };
 use crate::settings::Settings;
 use crate::state::AppState;
-use crate::windows::{ensure_chat_window, ensure_main_window, ensure_settings_window};
+use crate::windows::{
+    apply_chat_window_chrome, apply_frameless_window_chrome, apply_macos_traffic_light_position,
+    ensure_chat_window, ensure_main_window, ensure_settings_window,
+};
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
 /// 用于 Lens 启动时把前台 App 的选中文本拷进剪贴板。
@@ -765,6 +768,7 @@ pub(crate) fn send_paste_shortcut() {
 /// 调整窗口大小为 640x520 并切到设置页；实际 show/focus 等前端 Settings 加载完成后执行。
 pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     let window = ensure_settings_window(app)?;
+    apply_frameless_window_chrome(&window);
     let _ = window.hide();
     let _ = window.set_always_on_top(false);
     let _ = window.set_size(tauri::LogicalSize::new(640.0, 520.0));
@@ -787,6 +791,7 @@ pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
 /// 打开 AI 客户端主窗口。
 pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
     let window = ensure_chat_window(app)?;
+    apply_chat_window_chrome(&window);
     let _ = window.set_always_on_top(false);
     let _ = window.set_skip_taskbar(false);
     let _ = window.set_size(tauri::LogicalSize::new(1280.0, 800.0));
@@ -803,6 +808,9 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
     });
     let _ = window.show();
     let _ = window.set_focus();
+
+    #[cfg(target_os = "macos")]
+    apply_macos_traffic_light_position(&window);
 
     Ok(())
 }
@@ -914,6 +922,7 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
             }
             "show" => match ensure_main_window(app) {
                 Ok(window) => {
+                    apply_frameless_window_chrome(&window);
                     let _ = window.set_always_on_top(true);
                     let _ = window.eval(
                         "window.location.hash = '#translator'; window.dispatchEvent(new HashChangeEvent('hashchange'));",

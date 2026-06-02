@@ -6,6 +6,7 @@ import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
+import { chatTitlebarMacInsetClass, chatTitlebarModelClass, chatTitlebarRowClass, usesNativeTitlebar } from './platform'
 import type { ChatMessage, Conversation } from './types'
 import { api } from '../api/tauri'
 import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
@@ -466,7 +467,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   return (
     <div
-      className="chat-window-shell"
+      className={`chat-window-shell${usesNativeTitlebar ? ' chat-window-shell--native-titlebar' : ''}`}
       onPointerEnter={requestWindowFocus}
       onPointerMove={requestWindowFocus}
       onPointerDownCapture={requestWindowFocus}
@@ -509,12 +510,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           />
         ) : (
           <div className="relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
-            {sidebarCollapsed && (
+            {sidebarCollapsed ? (
               <div
-                className="flex h-[52px] shrink-0 items-center gap-2 px-4 pt-2"
+                className={`${chatTitlebarRowClass} ${chatTitlebarMacInsetClass} pr-4`}
                 data-tauri-drag-region
               >
-                <WindowControls />
+                {!usesNativeTitlebar && <WindowControls />}
                 <button
                   type="button"
                   onClick={() => setSidebarCollapsed(false)}
@@ -525,22 +526,30 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 >
                   <PanelLeftOpen size={17} strokeWidth={1.75} />
                 </button>
+                <div className={chatTitlebarModelClass} data-tauri-drag-region="false">
+                  <ModelSelector
+                    currentProviderId={activeProviderId}
+                    currentModel={activeModel}
+                    onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
+                  />
+                </div>
                 <div className="min-w-0 flex-1" data-tauri-drag-region />
               </div>
+            ) : (
+              <header
+                className={`${chatTitlebarRowClass} px-6`}
+                data-tauri-drag-region
+              >
+                <div className={chatTitlebarModelClass} data-tauri-drag-region="false">
+                  <ModelSelector
+                    currentProviderId={activeProviderId}
+                    currentModel={activeModel}
+                    onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
+                  />
+                </div>
+                <div className="min-w-0 flex-1" data-tauri-drag-region />
+              </header>
             )}
-
-            <header
-              className={`flex shrink-0 items-center px-6 pb-2 ${sidebarCollapsed ? 'pt-2' : 'pt-4'}`}
-              data-tauri-drag-region
-            >
-              <div data-tauri-drag-region="false">
-                <ModelSelector
-                  currentProviderId={activeProviderId}
-                  currentModel={activeModel}
-                  onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
-                />
-              </div>
-            </header>
 
             <div className="flex min-h-0 flex-1 flex-col">
               {showEmptyHero ? (

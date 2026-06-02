@@ -1,4 +1,108 @@
-use tauri::{window::Color, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{window::Color, AppHandle, LogicalPosition, Manager, TitleBarStyle, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+
+#[cfg(target_os = "macos")]
+const CHAT_TRAFFIC_LIGHT_X: f64 = 14.0;
+
+/// 与侧栏顶栏图标（52px 行高居中）垂直对齐。
+#[cfg(target_os = "macos")]
+const CHAT_TRAFFIC_LIGHT_Y: f64 = 29.0;
+
+#[cfg(target_os = "macos")]
+pub(crate) fn apply_macos_traffic_light_position(window: &WebviewWindow) {
+    use cocoa::base::id;
+
+    let window_for_main = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let Ok(ptr) = window_for_main.ns_window() else {
+            return;
+        };
+        if ptr.is_null() {
+            return;
+        }
+        unsafe {
+            hide_macos_window_title(ptr as id);
+            inset_traffic_lights(ptr as id, CHAT_TRAFFIC_LIGHT_X, CHAT_TRAFFIC_LIGHT_Y);
+        }
+    });
+}
+
+/// NSWindowTitleHidden — 隐藏 Overlay 标题栏中的窗口标题文字。
+#[cfg(target_os = "macos")]
+unsafe fn hide_macos_window_title(window: cocoa::base::id) {
+    use objc::{msg_send, sel, sel_impl};
+
+    const NS_WINDOW_TITLE_HIDDEN: u64 = 1;
+    let _: () = msg_send![window, setTitleVisibility: NS_WINDOW_TITLE_HIDDEN];
+}
+
+/// 与 wry `inset_traffic_lights` 相同逻辑，用于运行时微调原生交通灯位置。
+#[cfg(target_os = "macos")]
+unsafe fn inset_traffic_lights(window: cocoa::base::id, x: f64, y: f64) {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSRect;
+    use objc::{msg_send, sel, sel_impl};
+
+    let close: id = msg_send![window, standardWindowButton: 0u64];
+    if close == nil {
+        return;
+    }
+    let miniaturize: id = msg_send![window, standardWindowButton: 1u64];
+    if miniaturize == nil {
+        return;
+    }
+    let zoom: id = msg_send![window, standardWindowButton: 2u64];
+
+    let title_bar_container_view: id = msg_send![close, superview];
+    let title_bar_container_view: id = msg_send![title_bar_container_view, superview];
+
+    let close_rect: NSRect = msg_send![close, frame];
+    let title_bar_frame_height = close_rect.size.height + y;
+    let mut title_bar_rect: NSRect = msg_send![title_bar_container_view, frame];
+    title_bar_rect.size.height = title_bar_frame_height;
+    let window_frame: NSRect = msg_send![window, frame];
+    title_bar_rect.origin.y = window_frame.size.height - title_bar_frame_height;
+    let _: () = msg_send![title_bar_container_view, setFrame: title_bar_rect];
+
+    let miniaturize_rect: NSRect = msg_send![miniaturize, frame];
+    let space_between = miniaturize_rect.origin.x - close_rect.origin.x;
+
+    let mut buttons = vec![close, miniaturize];
+    if zoom != nil {
+        buttons.push(zoom);
+    }
+
+    for (i, button) in buttons.into_iter().enumerate() {
+        let mut rect: NSRect = msg_send![button, frame];
+        rect.origin.x = x + (i as f64 * space_between);
+        let _: () = msg_send![button, setFrameOrigin: rect.origin];
+    }
+}
+
+/// macOS Chat：系统 Overlay 标题栏 + 原生交通灯；其他平台保持无边框自绘控件。
+pub fn apply_chat_window_chrome(window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.set_decorations(true);
+        let _ = window.set_title_bar_style(TitleBarStyle::Overlay);
+        let _ = window.set_shadow(true);
+        apply_macos_traffic_light_position(window);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_decorations(false);
+        let _ = window.set_shadow(false);
+    }
+}
+
+/// 翻译器 / 设置等悬浮小窗：无边框透明壳。
+pub fn apply_frameless_window_chrome(window: &WebviewWindow) {
+    let _ = window.set_decorations(false);
+    let _ = window.set_shadow(false);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.set_title_bar_style(TitleBarStyle::Visible);
+    }
+}
 
 /**
  * 获取主窗口
@@ -64,19 +168,38 @@ pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         return Ok(window);
     }
 
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html#chat".into()))
+    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html#chat".into()))
         .title("Kivio")
         .inner_size(1280.0, 800.0)
         .min_inner_size(860.0, 560.0)
         .resizable(true)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
         .visible_on_all_workspaces(false)
         .skip_taskbar(false)
-        .visible(false)
-        .build()
-        .map_err(|e| e.to_string())
+        .visible(false);
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .decorations(true)
+            .title_bar_style(TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(LogicalPosition::new(
+                CHAT_TRAFFIC_LIGHT_X,
+                CHAT_TRAFFIC_LIGHT_Y,
+            ))
+            .transparent(false)
+            .shadow(true);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder
+            .decorations(false)
+            .transparent(true)
+            .shadow(false);
+    }
+
+    builder.build().map_err(|e| e.to_string())
 }
 
 /**

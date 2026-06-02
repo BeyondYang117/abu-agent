@@ -13,9 +13,8 @@ import type { ConversationListItem } from './types'
 import { ConversationList } from './ConversationList'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
+import { chatTitlebarMacInsetClass, chatTitlebarRowClass, isMac } from './platform'
 
-const isMac =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
 const modLabel = isMac ? '⌘' : 'Ctrl'
 
 interface SidebarProps {
@@ -153,10 +152,10 @@ export function Sidebar({
     <aside className="flex h-full w-[260px] shrink-0 flex-col border-r border-neutral-200/80 bg-[#f7f7f8] dark:border-neutral-800 dark:bg-[#1c1c1e]">
       {/* 顶栏：交通灯 + 拖拽区 + 侧栏操作 */}
       <div
-        className="flex h-[52px] shrink-0 items-center gap-2 px-3 pt-2"
+        className={`${chatTitlebarRowClass} ${chatTitlebarMacInsetClass} pr-3`}
         data-tauri-drag-region
       >
-        <WindowControls />
+        {!isMac && <WindowControls />}
         <div className="min-w-0 flex-1" data-tauri-drag-region />
         <div className="flex items-center gap-0.5" data-tauri-drag-region="false">
           <button
