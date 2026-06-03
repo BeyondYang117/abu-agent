@@ -14,6 +14,7 @@ import { SettingsShell, type SettingsShellHandle, type SettingsTab } from '../se
 import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { estimateTokens } from '../lens/markdown'
 import { forgetRememberedChatRoute } from './persistence'
+import { runPythonInSandbox } from './pyodideRunner'
 
 type ChatView = 'conversation' | 'settings'
 
@@ -486,6 +487,30 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           return
         }
         setPendingToolConfirm(payload)
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
+      unlisten = await api.onChatRunPython((payload) => {
+        if (cancelled) return
+        void (async () => {
+          const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs)
+          await api.chatPythonComplete(payload.runId, outcome.content, outcome.isError)
+        })()
       })
       if (cancelled) {
         unlisten()

@@ -12,6 +12,7 @@ mod lens_commands;
 #[cfg(target_os = "macos")]
 mod macos_ocr;
 mod mcp;
+mod native_tools;
 mod prompts;
 mod rapidocr;
 #[cfg(target_os = "macos")]
@@ -142,6 +143,7 @@ fn main() {
                 explain_stream_generation: AtomicU64::new(0),
                 chat_stream_generations: Mutex::new(HashMap::new()),
                 pending_chat_tool_approvals: Mutex::new(HashMap::new()),
+                pending_python_runs: Mutex::new(HashMap::new()),
                 chat_tool_list_cache: Mutex::new(HashMap::new()),
                 pending_selection: Mutex::new(None),
                 lens_freeze_frame_image_id: Mutex::new(None),
@@ -252,6 +254,7 @@ fn main() {
             chat::commands::chat_send_message,
             chat::commands::chat_cancel_stream,
             chat::commands::chat_confirm_tool_call,
+            chat::commands::chat_python_complete,
             chat::commands::chat_read_attachment,
             chat::commands::chat_open_attachment,
             chat::commands::chat_delete_conversation,

@@ -112,11 +112,19 @@ function getToolName(toolCall: ToolCallRecord): string {
   if (raw === 'skill_activate') return '激活 Skill'
   if (raw === 'skill_read_file') return '读取 Skill 文件'
   if (raw === 'skill_run_script') return '执行 Skill 脚本'
+  if (raw === 'read_file') return '读取文件'
+  if (raw === 'write_file') return '写入文件'
+  if (raw === 'edit_file') return '编辑文件'
+  if (raw === 'run_command') return '终端命令'
+  if (raw === 'run_python') return 'Python'
+  if (raw === 'web_search') return '联网搜索'
+  if (raw === 'web_fetch') return '网页抓取'
   return raw
 }
 
 function getSource(toolCall: ToolCallRecord): string {
   if (toolCall.source === 'skill') return 'Skill'
+  if (toolCall.source === 'native') return 'Kivio'
   return (
     toolCall.server_name ||
     toolCall.serverName ||

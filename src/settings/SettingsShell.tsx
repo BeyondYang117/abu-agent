@@ -16,7 +16,9 @@ import {
   type UpdateInfo,
   type ChatMcpServer,
   type ChatToolsConfig,
+  type ChatNativeToolsConfig,
   type ChatToolDefinition,
+  defaultNativeTools,
   type SkillMeta,
   type SkillDetail,
 } from '../api/tauri'
@@ -95,7 +97,7 @@ function defaultChatTools(): ChatToolsConfig {
     toolTimeoutMs: 60_000,
     maxToolOutputChars: 12_000,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
-    nativeTools: { webSearch: false, skillRuntime: true },
+    nativeTools: defaultNativeTools(),
   }
 }
 
@@ -726,6 +728,24 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       if (!prev) return prev
       const current = prev.chatTools || defaultChatTools()
       return { ...prev, chatTools: { ...current, ...updates } }
+    })
+  }, [])
+
+  const updateNativeTools = useCallback((updates: Partial<ChatNativeToolsConfig>) => {
+    setSettings((prev) => {
+      if (!prev) return prev
+      const chatTools = prev.chatTools || defaultChatTools()
+      return {
+        ...prev,
+        chatTools: {
+          ...chatTools,
+          nativeTools: {
+            ...defaultNativeTools(),
+            ...chatTools.nativeTools,
+            ...updates,
+          },
+        },
+      }
     })
   }, [])
 
@@ -1915,11 +1935,11 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     <button
                       type="button"
                       className="kv-btn sm"
-                      onClick={() => setActiveTab('webSearch')}
+                      onClick={() => setActiveTab('mcp')}
                       data-tauri-drag-region="false"
                     >
-                      <Globe size={11} />
-                      {t.chatOpenWebSearch}
+                      <Wrench size={11} />
+                      {lang === 'zh' ? '内置工具' : 'Built-in tools'}
                     </button>
                     <button
                       type="button"
@@ -1969,6 +1989,164 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== MCP 标签页 ===== */}
             {activeTab === 'mcp' && (
               <>
+                <SettingsGroup title={lang === 'zh' ? 'Kivio 内置工具' : 'Kivio built-in tools'}>
+                  <p className="kv-row-desc mb-2">
+                    {lang === 'zh'
+                      ? 'Chat 原生工具。未配置工作区根目录时，文件与终端命令可访问用户主目录；配置后仅限所列目录。'
+                      : 'Native Chat tools. Without workspace roots, file and shell tools may access the user home directory; configured roots restrict access further.'}
+                  </p>
+                  <SettingRow label={lang === 'zh' ? '读取文件' : 'Read file'} description={lang === 'zh' ? 'read_file，无需确认' : 'read_file, no approval'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.readFile === true}
+                      onChange={(readFile) => updateNativeTools({ readFile })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '写入文件' : 'Write file'} description={lang === 'zh' ? 'write_file，默认需确认' : 'write_file, approval by default'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.writeFile === true}
+                      onChange={(writeFile) => updateNativeTools({ writeFile })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '编辑文件' : 'Edit file'} description={lang === 'zh' ? 'edit_file，默认需确认' : 'edit_file, approval by default'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.editFile === true}
+                      onChange={(editFile) => updateNativeTools({ editFile })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '终端命令' : 'Terminal command'} description={lang === 'zh' ? 'run_command，默认需确认' : 'run_command, approval by default'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.runCommand === true}
+                      onChange={(runCommand) => updateNativeTools({ runCommand })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? 'Python (Pyodide)' : 'Python (Pyodide)'} description={lang === 'zh' ? 'run_python 沙盒，首次加载较慢' : 'run_python sandbox; first load is slow'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.runPython === true}
+                      onChange={(runPython) => updateNativeTools({ runPython })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? 'Skill 运行时' : 'Skill runtime'} description={lang === 'zh' ? 'skill_activate / read_file / run_script' : 'skill_activate / read_file / run_script'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.skillRuntime !== false}
+                      onChange={(skillRuntime) => updateNativeTools({ skillRuntime })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.webSearchChatToggle} description={t.webSearchChatHint}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.webSearch === true}
+                      onChange={(webSearch) => {
+                        if (!chatProviderSupportsTools) {
+                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用联网搜索。' : 'The current Chat provider does not support tools, so web search cannot be enabled.')
+                          return
+                        }
+                        updateNativeTools({ webSearch })
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '网页抓取' : 'Web fetch'} description={lang === 'zh' ? 'web_fetch，HTTPS 只读' : 'web_fetch, HTTPS read-only'}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.webFetch === true}
+                      onChange={(webFetch) => updateNativeTools({ webFetch })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.webSearchApiSection} stack>
+                    <div className="flex w-full flex-col gap-2">
+                      <Select
+                        className="w-full"
+                        value={settings.lens?.webSearch?.provider || 'tavily'}
+                        onChange={(provider) => updateLensWebSearch({ provider: provider as 'tavily' | 'exa' })}
+                        options={[
+                          { value: 'tavily', label: 'Tavily' },
+                          { value: 'exa', label: 'Exa' },
+                        ]}
+                      />
+                      <Input
+                        type="password"
+                        value={settings.lens?.webSearch?.provider === 'exa'
+                          ? settings.lens?.webSearch?.exaApiKey || ''
+                          : settings.lens?.webSearch?.tavilyApiKey || ''}
+                        onChange={(value) => {
+                          if (settings.lens?.webSearch?.provider === 'exa') {
+                            updateLensWebSearch({ exaApiKey: value })
+                          } else {
+                            updateLensWebSearch({ tavilyApiKey: value })
+                          }
+                        }}
+                        placeholder={settings.lens?.webSearch?.provider === 'exa' ? 'exa-...' : 'tvly-...'}
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <FieldBlock label={lang === 'zh' ? '最大结果数' : 'Max results'}>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={10}
+                            value={String(settings.lens?.webSearch?.maxResults ?? 5)}
+                            onChange={(value) => updateLensWebSearch({
+                              maxResults: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 5)),
+                            })}
+                          />
+                        </FieldBlock>
+                        {settings.lens?.webSearch?.provider !== 'exa' && (
+                          <FieldBlock label={lang === 'zh' ? '搜索深度' : 'Search depth'}>
+                            <Select
+                              value={settings.lens?.webSearch?.searchDepth || 'basic'}
+                              onChange={(searchDepth) => updateLensWebSearch({
+                                searchDepth: searchDepth as 'basic' | 'advanced',
+                              })}
+                              options={[
+                                { value: 'basic', label: 'basic' },
+                                { value: 'advanced', label: 'advanced' },
+                              ]}
+                            />
+                          </FieldBlock>
+                        )}
+                      </div>
+                    </div>
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '工作区根目录（可选）' : 'Workspace roots (optional)'} stack>
+                    <div className="flex w-full flex-col gap-2">
+                      {(chatTools.nativeTools?.workspaceRoots ?? []).map((path, index) => (
+                        <div key={`${path}-${index}`} className="flex gap-2">
+                          <Input
+                            className="min-w-0 flex-1"
+                            value={path}
+                            onChange={(value) => {
+                              const roots = [...(chatTools.nativeTools?.workspaceRoots ?? [])]
+                              roots[index] = value
+                              updateNativeTools({ workspaceRoots: roots })
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="kv-btn sm shrink-0"
+                            onClick={() => {
+                              const roots = (chatTools.nativeTools?.workspaceRoots ?? []).filter((_, i) => i !== index)
+                              updateNativeTools({ workspaceRoots: roots })
+                            }}
+                            data-tauri-drag-region="false"
+                          >
+                            <Minus size={11} />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="kv-btn sm self-start"
+                        onClick={async () => {
+                          const selected = await open({ directory: true, multiple: false })
+                          if (!selected || typeof selected !== 'string') return
+                          const roots = [...(chatTools.nativeTools?.workspaceRoots ?? []), selected]
+                          updateNativeTools({ workspaceRoots: roots })
+                        }}
+                        data-tauri-drag-region="false"
+                      >
+                        <FolderOpen size={11} />
+                        {lang === 'zh' ? '添加工作区目录' : 'Add workspace folder'}
+                      </button>
+                    </div>
+                  </SettingRow>
+                </SettingsGroup>
+
                 <SettingsGroup title={lang === 'zh' ? '工具运行' : 'Tool Runtime'}>
                   <SettingRow
                     label={lang === 'zh' ? '启用 MCP' : 'Enable MCP'}
@@ -2341,17 +2519,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     </div>
                   </SettingRow>
                   <SettingRow
-                    label={lang === 'zh' ? 'Skill 运行时' : 'Skill runtime'}
-                    description={lang === 'zh' ? '启用 skill_activate / skill_read_file / skill_run_script 原生工具' : 'Enable native skill_activate, skill_read_file, and skill_run_script tools'}
-                  >
-                    <Toggle
-                      checked={chatTools.nativeTools?.skillRuntime !== false}
-                      onChange={(skillRuntime) => updateChatTools({
-                        nativeTools: { ...(chatTools.nativeTools || { webSearch: false }), skillRuntime },
-                      })}
-                    />
-                  </SettingRow>
-                  <SettingRow
                     label={lang === 'zh' ? '自动匹配 Skill' : 'Auto-match skills'}
                     description={lang === 'zh' ? '允许模型根据 description 自动 activate skill' : 'Allow the model to activate skills from the catalog automatically'}
                   >
@@ -2529,22 +2696,11 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </SettingRow>
                 </SettingsGroup>
 
-                <SettingsGroup title={t.webSearchChatSection}>
-                  <SettingRow label={t.webSearchChatToggle} description={t.webSearchChatHint}>
-                    <Toggle
-                      checked={chatTools.nativeTools?.webSearch === true}
-                      onChange={(webSearch) => {
-                        if (!chatProviderSupportsTools) {
-                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用联网搜索工具。' : 'The current Chat provider does not support tools, so web search cannot be enabled.')
-                          return
-                        }
-                        updateChatTools({
-                          nativeTools: { ...(chatTools.nativeTools || { webSearch: false, skillRuntime: true }), webSearch },
-                        })
-                      }}
-                    />
-                  </SettingRow>
-                </SettingsGroup>
+                <p className="kv-row-desc px-1 py-2">
+                  {lang === 'zh'
+                    ? 'Chat 的 web_search / web_fetch 开关在「MCP」→「Kivio 内置工具」中配置。'
+                    : 'Chat web_search / web_fetch toggles live under MCP → Kivio built-in tools.'}
+                </p>
               </>
             )}
 

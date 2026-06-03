@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::settings::ChatMcpServer;
+use crate::settings::{ChatMcpServer, ChatNativeToolsConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,6 +185,157 @@ pub fn native_skill_tools() -> Vec<ChatToolDefinition> {
     ]
 }
 
+pub fn native_read_file_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__read_file".to_string(),
+        name: "read_file".to_string(),
+        description: "Read a text file under the user home directory. Optional offset/limit are 1-based line numbers.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute or home-relative file path" },
+                "offset": { "type": "integer", "description": "1-based start line (optional)" },
+                "limit": { "type": "integer", "description": "Max lines to return (optional)" }
+            },
+            "required": ["path"]
+        }),
+        sensitive: false,
+    }
+}
+
+pub fn native_write_file_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__write_file".to_string(),
+        name: "write_file".to_string(),
+        description: "Write or overwrite a text file under the user home directory.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "content": { "type": "string" }
+            },
+            "required": ["path", "content"]
+        }),
+        sensitive: true,
+    }
+}
+
+pub fn native_edit_file_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__edit_file".to_string(),
+        name: "edit_file".to_string(),
+        description: "Replace old_string with new_string in a text file. Fails if old_string is missing or appears multiple times unless replace_all is true.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "old_string": { "type": "string" },
+                "new_string": { "type": "string" },
+                "replace_all": { "type": "boolean" }
+            },
+            "required": ["path", "old_string", "new_string"]
+        }),
+        sensitive: true,
+    }
+}
+
+pub fn native_run_command_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__run_command".to_string(),
+        name: "run_command".to_string(),
+        description: "Run a shell command (build, test, etc.) in a working directory under the user home. Requires user approval.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "Shell command" },
+                "cwd": { "type": "string", "description": "Working directory (optional)" },
+                "timeout_ms": { "type": "integer", "description": "Timeout in ms (optional)" }
+            },
+            "required": ["command"]
+        }),
+        sensitive: true,
+    }
+}
+
+pub fn native_run_python_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__run_python".to_string(),
+        name: "run_python".to_string(),
+        description: "Execute Python code in a Pyodide sandbox (no host filesystem or network). stdout/stderr are returned.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "code": { "type": "string", "description": "Python source code" }
+            },
+            "required": ["code"]
+        }),
+        sensitive: false,
+    }
+}
+
+pub fn native_web_fetch_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__web_fetch".to_string(),
+        name: "web_fetch".to_string(),
+        description: "Fetch readable text from an HTTPS URL (HTML is stripped to plain text).".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": { "type": "string", "description": "HTTPS URL" }
+            },
+            "required": ["url"]
+        }),
+        sensitive: false,
+    }
+}
+
+pub fn list_native_builtin_tool_defs(
+    native: &ChatNativeToolsConfig,
+    web_search_configured: bool,
+) -> Vec<ChatToolDefinition> {
+    let mut tools = Vec::new();
+    if native.web_search && web_search_configured {
+        tools.push(native_web_search_tool());
+    }
+    if native.web_fetch {
+        tools.push(native_web_fetch_tool());
+    }
+    if native.read_file {
+        tools.push(native_read_file_tool());
+    }
+    if native.write_file {
+        tools.push(native_write_file_tool());
+    }
+    if native.edit_file {
+        tools.push(native_edit_file_tool());
+    }
+    if native.run_command {
+        tools.push(native_run_command_tool());
+    }
+    if native.run_python {
+        tools.push(native_run_python_tool());
+    }
+    tools
+}
+
 pub fn sanitize_openai_tool_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {
@@ -247,6 +398,16 @@ mod tests {
         assert!(!native_skill_activate_tool().sensitive);
         assert!(!native_skill_read_file_tool().sensitive);
         assert!(!native_skill_run_script_tool().sensitive);
+    }
+
+    #[test]
+    fn native_file_and_web_tools_have_expected_sensitivity() {
+        assert!(!native_read_file_tool().sensitive);
+        assert!(!native_web_fetch_tool().sensitive);
+        assert!(!native_run_python_tool().sensitive);
+        assert!(native_write_file_tool().sensitive);
+        assert!(native_edit_file_tool().sensitive);
+        assert!(native_run_command_tool().sensitive);
     }
 
     #[test]

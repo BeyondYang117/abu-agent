@@ -128,7 +128,34 @@ export type ChatMcpServer = {
 
 export type ChatNativeToolsConfig = {
   webSearch: boolean
+  webFetch?: boolean
   skillRuntime?: boolean
+  readFile?: boolean
+  writeFile?: boolean
+  editFile?: boolean
+  runCommand?: boolean
+  runPython?: boolean
+  workspaceRoots?: string[]
+}
+
+export type ChatRunPythonPayload = {
+  runId: string
+  code: string
+  timeoutMs: number
+}
+
+export function defaultNativeTools(): ChatNativeToolsConfig {
+  return {
+    webSearch: false,
+    webFetch: false,
+    skillRuntime: true,
+    readFile: false,
+    writeFile: false,
+    editFile: false,
+    runCommand: false,
+    runPython: false,
+    workspaceRoots: [],
+  }
 }
 
 export type SkillFileEntry = {
@@ -366,8 +393,11 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     maxToolOutputChars: current.maxToolOutputChars ?? 12_000,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     nativeTools: {
-      webSearch: current.nativeTools?.webSearch ?? false,
-      skillRuntime: current.nativeTools?.skillRuntime ?? true,
+      ...defaultNativeTools(),
+      ...current.nativeTools,
+      workspaceRoots: Array.isArray(current.nativeTools?.workspaceRoots)
+        ? current.nativeTools.workspaceRoots
+        : [],
     },
   }
 }
@@ -604,6 +634,12 @@ export const api = {
     invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>
     invoke<void>('chat_confirm_tool_call', { toolCallId, approved }),
+  chatPythonComplete: (runId: string, content: string, isError: boolean) =>
+    invoke<void>('chat_python_complete', { runId, content, isError }),
+  onChatRunPython: (listener: (payload: ChatRunPythonPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatRunPythonPayload>('chat-run-python', (payload) => listener(payload))
+  },
   onLensWebSearch: (listener: (payload: LensWebSearchPayload) => void) =>
     on<LensWebSearchPayload>('lens-web-search', (payload) => listener(payload)),
   onLensTranslateStream: (listener: (payload: LensTranslateStreamPayload) => void) =>

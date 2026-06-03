@@ -2,7 +2,8 @@ use std::{collections::HashMap, fs, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::oneshot;
 
 use crate::{
     settings::{ChatMcpServer, WebSearchProvider},
@@ -13,11 +14,10 @@ use crate::{
 use super::{
     client::{StdioMcpClient, StreamableHttpMcpClient},
     types::{
-        native_skill_tools, native_web_search_tool, tool_definition_from_mcp, ChatToolDefinition,
-        McpToolCallResult,
+        list_native_builtin_tool_defs, native_skill_tools, tool_definition_from_mcp,
+        ChatToolDefinition, McpToolCallResult,
     },
 };
-use tauri::AppHandle;
 
 const TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
@@ -94,11 +94,10 @@ pub async fn list_enabled_tool_defs(state: &AppState) -> Result<Vec<ChatToolDefi
         return Ok(tools);
     }
 
-    let mut tools = Vec::new();
-
-    if settings.chat_tools.native_tools.web_search && web_search_configured(&settings) {
-        tools.push(native_web_search_tool());
-    }
+    let mut tools = list_native_builtin_tool_defs(
+        &settings.chat_tools.native_tools,
+        web_search_configured(&settings),
+    );
 
     if settings.chat_tools.enabled {
         for server in settings
@@ -196,31 +195,8 @@ pub async fn call_tool(
     arguments: Value,
     skill_cache: Option<&mut crate::skills::SkillRunCache>,
 ) -> Result<McpToolCallResult, String> {
-    if tool.source == "native" && tool.name == "web_search" {
-        let settings = state.settings_read().clone();
-        let query = arguments
-            .get("query")
-            .and_then(|query| query.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if query.is_empty() {
-            return Err("web_search query is empty".to_string());
-        }
-        let retry_attempts = if settings.retry_enabled {
-            settings.retry_attempts as usize
-        } else {
-            1
-        };
-        let results =
-            web_search::search_web(state, &settings.lens.web_search, &query, retry_attempts)
-                .await?;
-        let content = web_search::format_web_context(&results);
-        return Ok(McpToolCallResult {
-            content,
-            is_error: false,
-            raw: serde_json::to_value(results).unwrap_or(Value::Null),
-        });
+    if tool.source == "native" {
+        return call_native_tool(app, state, tool, arguments).await;
     }
 
     if tool.source == "skill" {
@@ -383,5 +359,132 @@ pub fn list_skill_tool_defs(settings: &crate::settings::Settings) -> Vec<ChatToo
         native_skill_tools()
     } else {
         Vec::new()
+    }
+}
+
+async fn call_native_tool(
+    app: &AppHandle,
+    state: &AppState,
+    tool: &ChatToolDefinition,
+    arguments: Value,
+) -> Result<McpToolCallResult, String> {
+    let settings = state.settings_read().clone();
+    let roots = &settings.chat_tools.native_tools.workspace_roots;
+
+    let content = match tool.name.as_str() {
+        "web_search" => {
+            let query = arguments
+                .get("query")
+                .and_then(|query| query.as_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if query.is_empty() {
+                return Err("web_search query is empty".to_string());
+            }
+            let retry_attempts = if settings.retry_enabled {
+                settings.retry_attempts as usize
+            } else {
+                1
+            };
+            let results =
+                web_search::search_web(state, &settings.lens.web_search, &query, retry_attempts)
+                    .await?;
+            let raw = serde_json::to_value(&results).unwrap_or(Value::Null);
+            return Ok(McpToolCallResult {
+                content: web_search::format_web_context(&results),
+                is_error: false,
+                raw,
+            });
+        }
+        "web_fetch" => {
+            crate::native_tools::web_fetch(&state.http, &arguments).await?
+        }
+        "read_file" => crate::native_tools::read_file(roots, &arguments)?,
+        "write_file" => crate::native_tools::write_file(roots, &arguments)?,
+        "edit_file" => crate::native_tools::edit_file(roots, &arguments)?,
+        "run_command" => {
+            crate::native_tools::run_command(
+                roots,
+                settings.chat_tools.tool_timeout_ms,
+                &arguments,
+            )
+            .await?
+        }
+        "run_python" => run_python_via_pyodide(app, state, &settings, &arguments).await?,
+        other => return Err(format!("Unknown native tool: {other}")),
+    };
+
+    Ok(McpToolCallResult {
+        content,
+        is_error: false,
+        raw: Value::Null,
+    })
+}
+
+async fn run_python_via_pyodide(
+    app: &AppHandle,
+    state: &AppState,
+    settings: &crate::settings::Settings,
+    arguments: &Value,
+) -> Result<String, String> {
+    let code = arguments
+        .get("code")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "run_python requires code".to_string())?;
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+    {
+        let mut pending = state
+            .pending_python_runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pending.insert(run_id.clone(), tx);
+    }
+
+    let timeout_ms = settings.chat_tools.tool_timeout_ms.min(300_000);
+    let emit_result = app.emit(
+        "chat-run-python",
+        serde_json::json!({
+            "runId": run_id,
+            "code": code,
+            "timeoutMs": timeout_ms,
+        }),
+    );
+    if let Err(err) = emit_result {
+        let mut pending = state
+            .pending_python_runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pending.remove(&run_id);
+        return Err(format!("Failed to start Python runner: {err}"));
+    }
+
+    let wait = tokio::time::timeout(
+        Duration::from_millis(timeout_ms.saturating_add(5_000)),
+        rx,
+    )
+    .await;
+
+    match wait {
+        Ok(Ok((content, is_error))) => {
+            if is_error {
+                Err(content)
+            } else {
+                Ok(content)
+            }
+        }
+        Ok(Err(_)) => Err("Python runner channel closed".to_string()),
+        Err(_) => {
+            let mut pending = state
+                .pending_python_runs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&run_id);
+            Err(format!("Python execution timed out after {timeout_ms}ms"))
+        }
     }
 }

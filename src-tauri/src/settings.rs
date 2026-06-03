@@ -467,14 +467,48 @@ impl Default for ChatMcpServer {
 #[serde(rename_all = "camelCase", default)]
 pub struct ChatNativeToolsConfig {
     pub web_search: bool,
+    #[serde(default)]
+    pub web_fetch: bool,
     pub skill_runtime: bool,
+    #[serde(default)]
+    pub read_file: bool,
+    #[serde(default)]
+    pub write_file: bool,
+    #[serde(default)]
+    pub edit_file: bool,
+    #[serde(default)]
+    pub run_command: bool,
+    #[serde(default)]
+    pub run_python: bool,
+    #[serde(default)]
+    pub workspace_roots: Vec<String>,
+}
+
+impl ChatNativeToolsConfig {
+    pub fn any_enabled(&self) -> bool {
+        self.web_search
+            || self.web_fetch
+            || self.skill_runtime
+            || self.read_file
+            || self.write_file
+            || self.edit_file
+            || self.run_command
+            || self.run_python
+    }
 }
 
 impl Default for ChatNativeToolsConfig {
     fn default() -> Self {
         Self {
             web_search: false,
+            web_fetch: false,
             skill_runtime: true,
+            read_file: false,
+            write_file: false,
+            edit_file: false,
+            run_command: false,
+            run_python: false,
+            workspace_roots: Vec::new(),
         }
     }
 }
@@ -677,6 +711,10 @@ impl Default for Settings {
  * 4. 规范化快捷键字符串
  * 5. 确保必要字段不为空
  */
+pub fn chat_native_tools_enabled(chat_tools: &ChatToolsConfig) -> bool {
+    chat_tools.native_tools.any_enabled()
+}
+
 pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
     let skill_id = skill_id.trim();
     if skill_id.is_empty() {
@@ -987,6 +1025,20 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect();
+    settings.chat_tools.native_tools.workspace_roots = settings
+        .chat_tools
+        .native_tools
+        .workspace_roots
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+    let mut seen_roots = std::collections::HashSet::new();
+    settings
+        .chat_tools
+        .native_tools
+        .workspace_roots
+        .retain(|path| seen_roots.insert(path.clone()));
     for server in &mut settings.chat_tools.servers {
         server.id = server.id.trim().to_string();
         if server.id.is_empty() {

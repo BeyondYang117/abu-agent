@@ -219,14 +219,18 @@ export function Sidebar({
       <div className="mx-3 border-t border-neutral-200/90 dark:border-neutral-800" />
 
       <div className="flex min-h-0 flex-1 flex-col pt-2" data-tauri-drag-region="false">
-        <div className="flex items-center justify-between px-4 pb-1">
-          <span className="text-[13px] font-medium text-neutral-500 dark:text-neutral-400">聊天</span>
+        <div className="flex min-w-0 items-center rounded-lg px-2 pb-1">
+          <span className="min-w-0 flex-1 px-3 py-2 text-[13px] font-medium text-neutral-500 dark:text-neutral-400">
+            聊天
+          </span>
           <button
             ref={sectionMenuButtonRef}
             type="button"
             onClick={openSectionMenu}
-            className={`rounded-md p-1 text-neutral-400 transition-colors hover:bg-black/[0.05] hover:text-neutral-600 dark:hover:bg-white/[0.08] ${
-              sectionMenuAnchor ? 'bg-black/[0.05] text-neutral-600 dark:bg-white/[0.08]' : ''
+            className={`mr-1 shrink-0 rounded-md p-1 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+              sectionMenuAnchor
+                ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200'
+                : ''
             }`}
             aria-label="聊天列表操作"
             aria-haspopup="menu"

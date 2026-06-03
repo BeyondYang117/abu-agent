@@ -218,6 +218,25 @@ pub(crate) fn chat_confirm_tool_call(
     Ok(())
 }
 
+/// 前端 Pyodide 执行完成后回传结果。
+#[tauri::command]
+pub(crate) fn chat_python_complete(
+    state: State<AppState>,
+    run_id: String,
+    content: String,
+    is_error: bool,
+) -> Result<(), String> {
+    let sender = state
+        .pending_python_runs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&run_id);
+    if let Some(sender) = sender {
+        let _ = sender.send((content, is_error));
+    }
+    Ok(())
+}
+
 const MAX_ATTACHMENT_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
 
 /// 读取附件为 data URL，供前端 `<img>` 预览。`conversation_id` 为空时按本机绝对路径读取（发送前预览）。
@@ -615,9 +634,7 @@ async fn complete_assistant_reply(
     let mut tool_records = Vec::new();
     let mut planning_reasoning_parts: Vec<String> = Vec::new();
     let mut tools = if provider.supports_tools
-        && (settings.chat_tools.enabled
-            || settings.chat_tools.native_tools.web_search
-            || settings.chat_tools.native_tools.skill_runtime)
+        && (settings.chat_tools.enabled || crate::settings::chat_native_tools_enabled(&settings.chat_tools))
     {
         let tools = mcp::registry::list_enabled_tool_defs(state.inner())
             .await
@@ -1040,9 +1057,7 @@ fn chat_tools_capable(
     chat_tools: &crate::settings::ChatToolsConfig,
 ) -> bool {
     provider.supports_tools
-        && (chat_tools.enabled
-            || chat_tools.native_tools.web_search
-            || chat_tools.native_tools.skill_runtime)
+        && (chat_tools.enabled || crate::settings::chat_native_tools_enabled(chat_tools))
 }
 
 fn resolve_chat_active_skill_id(
@@ -1099,6 +1114,7 @@ fn build_chat_system_prompt(
                 " If the user only asks for today/tomorrow/weekday derivable from the system local time above, answer directly without skill_activate or web_search.",
             );
         }
+        append_native_tools_prompt(&mut prompt, chat_tools, language);
     }
 
     let include_catalog = chat_tools.skill_auto_match
@@ -1175,10 +1191,54 @@ fn is_native_skill_tool_name(name: &str) -> bool {
     )
 }
 
-/// Kivio 内置工具（Skill 三件套 + 原生联网搜索）始终自动执行，不走审批弹窗。
+/// Kivio 内置工具（Skill 三件套 + 只读联网）始终自动执行，不走审批弹窗。
 fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
     (tool.source == "skill" && is_native_skill_tool_name(&tool.name))
-        || (tool.source == "native" && tool.name == "web_search")
+        || (tool.source == "native"
+            && matches!(tool.name.as_str(), "web_search" | "web_fetch"))
+}
+
+fn append_native_tools_prompt(prompt: &mut String, chat_tools: &crate::settings::ChatToolsConfig, language: &str) {
+    let native = &chat_tools.native_tools;
+    let mut lines: Vec<&str> = Vec::new();
+    if native.read_file {
+        lines.push("read_file");
+    }
+    if native.write_file {
+        lines.push("write_file");
+    }
+    if native.edit_file {
+        lines.push("edit_file");
+    }
+    if native.run_command {
+        lines.push("run_command");
+    }
+    if native.run_python {
+        lines.push("run_python");
+    }
+    if native.web_search {
+        lines.push("web_search");
+    }
+    if native.web_fetch {
+        lines.push("web_fetch");
+    }
+    if lines.is_empty() {
+        return;
+    }
+    let list = lines.join(", ");
+    if language.starts_with("zh") {
+        prompt.push_str("\n\nKivio 内置工具（已启用）：");
+        prompt.push_str(&list);
+        prompt.push_str(
+            "。文件路径须在用户主目录内；可选工作区根目录进一步收紧。write_file、edit_file、run_command 会请求用户确认；run_python 在 Pyodide 沙盒中运行。",
+        );
+    } else {
+        prompt.push_str("\n\nKivio built-in tools enabled: ");
+        prompt.push_str(&list);
+        prompt.push_str(
+            ". Paths must stay under the user home directory (optional workspace roots further restrict). write_file, edit_file, and run_command require user approval; run_python runs in a Pyodide sandbox.",
+        );
+    }
 }
 
 fn apply_provider_tools_fallback(
