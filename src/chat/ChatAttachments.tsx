@@ -1,0 +1,167 @@
+import { useEffect, useState } from 'react'
+import { FileText, Loader2 } from 'lucide-react'
+import { loadAttachmentDataUrl, openAttachment, type DisplayAttachment } from './attachmentPreview'
+
+type ChatAttachmentsProps = {
+  attachments: DisplayAttachment[]
+  conversationId?: string | null
+  variant: 'user' | 'assistant' | 'composer'
+  onRemove?: (id: string) => void
+}
+
+function ImagePreview({
+  attachment,
+  conversationId,
+  variant,
+}: {
+  attachment: DisplayAttachment
+  conversationId?: string | null
+  variant: ChatAttachmentsProps['variant']
+}) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setFailed(false)
+    setSrc(null)
+
+    void loadAttachmentDataUrl(attachment, conversationId).then((dataUrl) => {
+      if (cancelled) return
+      if (dataUrl) {
+        setSrc(dataUrl)
+      } else {
+        setFailed(true)
+      }
+      setLoading(false)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [attachment.path, attachment.name, attachment.type, conversationId])
+
+  const loadingClass =
+    variant === 'composer'
+      ? 'flex min-h-[72px] min-w-[120px] items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800'
+      : 'flex min-h-[72px] min-w-[120px] items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.06]'
+
+  return (
+    <div className="relative inline-block max-w-full">
+      {loading && (
+        <div className={loadingClass}>
+          <Loader2 size={14} className="animate-spin text-neutral-400" />
+        </div>
+      )}
+      {!loading && src && (
+        <img
+          src={src}
+          alt=""
+          className="block max-h-72 max-w-[min(100%,420px)] rounded-xl object-contain"
+          loading="lazy"
+        />
+      )}
+      {!loading && failed && (
+        <div className={`${loadingClass} px-4 text-center text-[12px] text-neutral-400`}>
+          图片无法预览
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FileAttachmentChip({
+  attachment,
+  conversationId,
+  variant,
+  onRemove,
+}: {
+  attachment: DisplayAttachment
+  conversationId?: string | null
+  variant: ChatAttachmentsProps['variant']
+  onRemove?: (id: string) => void
+}) {
+  const chipClass =
+    variant === 'composer'
+      ? 'flex max-w-full items-center gap-2 rounded-full border border-neutral-200/90 bg-neutral-50 px-2.5 py-1.5 text-[12px] text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200'
+      : variant === 'user'
+        ? 'flex max-w-full items-center gap-2 rounded-lg bg-black/[0.05] px-2.5 py-2 text-sm text-neutral-700 dark:bg-white/[0.08] dark:text-neutral-200'
+        : 'flex max-w-full items-center gap-2 rounded-lg border border-neutral-200/80 px-2.5 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-200'
+
+  return (
+    <div className={chipClass}>
+      <button
+        type="button"
+        onClick={() => void openAttachment(attachment, conversationId)}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
+        title={attachment.name}
+      >
+        <FileText size={15} strokeWidth={1.8} className="shrink-0 text-neutral-500" />
+        <span className="min-w-0 truncate">{attachment.name}</span>
+      </button>
+      {onRemove ? (
+        <button
+          type="button"
+          onClick={() => onRemove(attachment.id)}
+          className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-black/[0.06] hover:text-neutral-700 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100"
+        >
+          移除
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+export function ChatAttachments({
+  attachments,
+  conversationId,
+  variant,
+  onRemove,
+}: ChatAttachmentsProps) {
+  if (attachments.length === 0) return null
+
+  const images = attachments.filter((item) => item.type === 'image')
+  const files = attachments.filter((item) => item.type !== 'image')
+
+  return (
+    <div className={variant === 'composer' ? 'space-y-2' : 'mt-2 space-y-2'}>
+      {images.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {images.map((attachment) => (
+            <div key={attachment.id} className="relative">
+              <ImagePreview
+                attachment={attachment}
+                conversationId={conversationId}
+                variant={variant}
+              />
+              {onRemove ? (
+                <button
+                  type="button"
+                  onClick={() => onRemove(attachment.id)}
+                  className="absolute right-2 top-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm hover:bg-black/65"
+                >
+                  移除
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          {files.map((attachment) => (
+            <FileAttachmentChip
+              key={attachment.id}
+              attachment={attachment}
+              conversationId={conversationId}
+              variant={variant}
+              onRemove={onRemove}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

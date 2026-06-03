@@ -1,15 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import {
-  ArrowUp,
-  FileText,
-  Image,
-  Plus,
-  SlidersHorizontal,
-  Square,
-  X,
-} from 'lucide-react'
+import { ArrowUp, Plus, SlidersHorizontal, Square } from 'lucide-react'
+import { ChatAttachments } from './ChatAttachments'
 import type { ChatToolDefinition } from '../api/tauri'
 import type { PendingAttachment } from './types'
 
@@ -307,29 +300,12 @@ export function InputBar({
             </div>
           )}
           {attachments.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-1.5 px-1">
-              {attachments.map((attachment) => {
-                const Icon = attachment.type === 'image' ? Image : FileText
-                return (
-                  <div
-                    key={attachment.id}
-                    className="flex max-w-[220px] items-center gap-1.5 rounded-full border border-neutral-200/90 bg-neutral-50 px-2.5 py-1 text-[12px] text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-                    title={attachment.name}
-                  >
-                    <Icon size={13} strokeWidth={1.8} className="shrink-0 text-neutral-500" />
-                    <span className="min-w-0 truncate">{attachment.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeAttachment(attachment.id)}
-                      disabled={disabled}
-                      className="-mr-1 rounded-full p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-700 disabled:opacity-40 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100"
-                      aria-label={`移除附件 ${attachment.name}`}
-                    >
-                      <X size={12} strokeWidth={2} />
-                    </button>
-                  </div>
-                )
-              })}
+            <div className="mb-2 px-1">
+              <ChatAttachments
+                attachments={attachments}
+                variant="composer"
+                onRemove={disabled ? undefined : removeAttachment}
+              />
             </div>
           )}
           {attachmentError && (

@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { FileText, Image } from 'lucide-react'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
+import { ChatAttachments } from './ChatAttachments'
 import { ChatMarkdown } from './ChatMarkdown'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
-import type { Attachment, ChatMessage } from './types'
+import type { ChatMessage } from './types'
 
 interface MessageBubbleProps {
   message: ChatMessage
+  conversationId?: string | null
   tokensPerSec?: number
   /** 思维链正在流式写入 */
   reasoningStreaming?: boolean
@@ -16,39 +17,9 @@ interface MessageBubbleProps {
   onDeleteMessage?: (messageId: string) => Promise<void>
 }
 
-function AttachmentList({
-  attachments,
-  variant,
-}: {
-  attachments: Attachment[]
-  variant: 'user' | 'assistant'
-}) {
-  const baseClass =
-    variant === 'user'
-      ? 'bg-black/5 text-neutral-700 dark:bg-white/10 dark:text-neutral-200'
-      : 'border border-neutral-200/80 text-neutral-700 dark:border-neutral-700 dark:text-neutral-200'
-
-  return (
-    <div className="mt-2 space-y-2">
-      {attachments.map((attachment) => {
-        const Icon = attachment.type === 'image' ? Image : FileText
-        return (
-          <div
-            key={attachment.id}
-            className={`flex max-w-full items-center gap-2 rounded-lg p-2 text-sm ${baseClass}`}
-            title={attachment.name}
-          >
-            <Icon size={15} strokeWidth={1.8} className="shrink-0 text-neutral-500" />
-            <span className="min-w-0 truncate">{attachment.name}</span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 export function MessageBubble({
   message,
+  conversationId,
   tokensPerSec,
   reasoningStreaming = false,
   onUpdateMessage,
@@ -69,15 +40,24 @@ export function MessageBubble({
   }, [message.id, message.content])
 
   if (isUser) {
+    const hasText = message.content.trim().length > 0
     return (
       <div className="flex justify-end py-2">
-        <div className="max-w-[85%] rounded-[20px] bg-neutral-100 px-4 py-2.5 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
-          {message.content.trim().length > 0 && (
-            <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-              {message.content}
+        <div className="flex max-w-[85%] flex-col items-end gap-2">
+          {attachments.length > 0 && (
+            <ChatAttachments
+              attachments={attachments}
+              conversationId={conversationId}
+              variant="user"
+            />
+          )}
+          {hasText && (
+            <div className="rounded-[20px] bg-neutral-100 px-4 py-2.5 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
+              <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+                {message.content}
+              </div>
             </div>
           )}
-          {attachments.length > 0 && <AttachmentList attachments={attachments} variant="user" />}
         </div>
       </div>
     )
@@ -188,7 +168,11 @@ export function MessageBubble({
         )}
 
         {attachments.length > 0 && (
-          <AttachmentList attachments={attachments} variant="assistant" />
+          <ChatAttachments
+            attachments={attachments}
+            conversationId={conversationId}
+            variant="assistant"
+          />
         )}
       </div>
     </div>

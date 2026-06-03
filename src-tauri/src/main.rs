@@ -252,6 +252,8 @@ fn main() {
             chat::commands::chat_send_message,
             chat::commands::chat_cancel_stream,
             chat::commands::chat_confirm_tool_call,
+            chat::commands::chat_read_attachment,
+            chat::commands::chat_open_attachment,
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
             chat::commands::chat_update_message,

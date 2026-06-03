@@ -951,6 +951,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
               ) : (
                 <>
                   <MessageList
+                    conversationId={currentConversation?.id}
                     messages={displayMessages}
                     streaming={streaming}
                     streamingContent={streamingContent}

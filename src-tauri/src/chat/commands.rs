@@ -7,6 +7,7 @@ use std::{
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_shell::ShellExt;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
@@ -215,6 +216,103 @@ pub(crate) fn chat_confirm_tool_call(
         let _ = sender.send(approved);
     }
     Ok(())
+}
+
+const MAX_ATTACHMENT_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
+
+/// 读取附件为 data URL，供前端 `<img>` 预览。`conversation_id` 为空时按本机绝对路径读取（发送前预览）。
+#[tauri::command]
+pub(crate) fn chat_read_attachment(
+    app: AppHandle,
+    conversation_id: Option<String>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let full = resolve_attachment_file_path(&app, conversation_id.as_deref(), &path)?;
+    let data_url = read_attachment_as_data_url(&full)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "data": data_url,
+    }))
+}
+
+/// 用系统默认应用打开附件。
+#[tauri::command]
+#[allow(deprecated)]
+pub(crate) fn chat_open_attachment(
+    app: AppHandle,
+    conversation_id: Option<String>,
+    path: String,
+) -> Result<(), String> {
+    let full = resolve_attachment_file_path(&app, conversation_id.as_deref(), &path)?;
+    let path_str = full.to_string_lossy().into_owned();
+    app.shell()
+        .open(path_str, None)
+        .map_err(|e| e.to_string())
+}
+
+fn resolve_attachment_file_path(
+    app: &AppHandle,
+    conversation_id: Option<&str>,
+    path: &str,
+) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("附件路径为空".to_string());
+    }
+
+    if let Some(conversation_id) = conversation_id {
+        if path.contains('/') || path.contains('\\') {
+            return Err("无效的附件路径".to_string());
+        }
+        let dir = conversation_attachments_dir(app, conversation_id)?;
+        let full = dir.join(path);
+        if !full.is_file() {
+            return Err(format!("附件不存在: {path}"));
+        }
+        return Ok(full);
+    }
+
+    let full = PathBuf::from(path);
+    if !full.is_file() {
+        return Err(format!("文件不存在: {path}"));
+    }
+    Ok(full)
+}
+
+fn mime_type_for_attachment(name: &str) -> &'static str {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        _ => "application/octet-stream",
+    }
+}
+
+fn read_attachment_as_data_url(path: &Path) -> Result<String, String> {
+    let metadata = fs::metadata(path).map_err(|e| format!("读取附件信息失败: {e}"))?;
+    if metadata.len() > MAX_ATTACHMENT_PREVIEW_BYTES {
+        return Err("附件过大，无法在界面内预览".to_string());
+    }
+    let bytes = fs::read(path).map_err(|e| format!("读取附件失败: {e}"))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+    let mime = mime_type_for_attachment(file_name);
+    let encoded = general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
 }
 
 fn save_message_attachments(

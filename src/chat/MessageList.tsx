@@ -8,6 +8,7 @@ export interface AssistantStreamStats {
 }
 
 interface MessageListProps {
+  conversationId?: string | null
   messages: ChatMessage[]
   streaming?: boolean
   streamingContent?: string
@@ -22,6 +23,7 @@ interface MessageListProps {
 }
 
 export function MessageList({
+  conversationId,
   messages,
   streaming,
   streamingContent = '',
@@ -56,6 +58,7 @@ export function MessageList({
           <MessageBubble
             key={msg.id}
             message={msg}
+            conversationId={conversationId}
             tokensPerSec={
               msg.role === 'assistant' &&
               msg.id === lastAssistantId &&
@@ -79,6 +82,7 @@ export function MessageList({
               tool_calls: streamingToolCalls,
               timestamp: Math.floor(Date.now() / 1000),
             }}
+            conversationId={conversationId}
             reasoningStreaming={reasoningStreaming}
           />
         )}
