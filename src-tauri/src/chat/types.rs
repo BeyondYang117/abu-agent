@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// 工具调用状态（保存在 assistant message metadata 中）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +53,13 @@ pub struct ChatMessage {
     pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallRecord>,
+    /// Hidden OpenAI-compatible transcript messages produced while answering this UI message.
+    ///
+    /// Tool calls stay rendered as metadata in `tool_calls`, but strict tool-calling
+    /// providers such as DeepSeek need the original assistant `tool_calls` messages
+    /// and matching `role: tool` results replayed in later requests.
+    #[serde(default)]
+    pub api_messages: Vec<Value>,
     #[serde(default)]
     pub active_skill_id: Option<String>,
     pub timestamp: i64,
@@ -117,11 +125,7 @@ impl From<&Conversation> for ConversationListItem {
             .find(|m| m.role == "user" || m.role == "assistant")
             .map(|m| {
                 let text = m.content.trim();
-                if text.len() > 100 {
-                    format!("{}...", &text[..100])
-                } else {
-                    text.to_string()
-                }
+                truncate_preview(text, 100)
             })
             .unwrap_or_default();
 
@@ -138,4 +142,12 @@ impl From<&Conversation> for ConversationListItem {
             folder: conv.folder.clone(),
         }
     }
+}
+
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    let mut out: String = text.chars().take(max_chars).collect();
+    if text.chars().count() > max_chars {
+        out.push_str("...");
+    }
+    out
 }

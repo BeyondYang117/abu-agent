@@ -10,7 +10,7 @@ use tokio::process::Command;
 
 use super::{
     discover::build_registry,
-    types::{SkillRecord, SkillRegistry, SkillFileKind},
+    types::{SkillFileKind, SkillRecord, SkillRegistry},
 };
 use tauri::AppHandle;
 
@@ -219,7 +219,10 @@ pub fn lookup_skill<'a>(registry: &'a SkillRegistry, name: &str) -> Option<&'a S
     registry.find(name)
 }
 
-pub fn build_registry_for_app(app: &AppHandle, scan_paths: &[String]) -> Result<SkillRegistry, String> {
+pub fn build_registry_for_app(
+    app: &AppHandle,
+    scan_paths: &[String],
+) -> Result<SkillRegistry, String> {
     build_registry(app, scan_paths)
 }
 
@@ -278,8 +281,8 @@ fn skill_file_kind_label(kind: SkillFileKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::{SkillMeta, SkillRecord};
+    use super::*;
     use std::{fs, path::PathBuf};
 
     #[test]
@@ -357,6 +360,40 @@ mod tests {
         let second = cache.read_file_with_cache(&record, "guide.md").unwrap();
         assert!(second.starts_with("[cached]"));
         assert!(second.contains("cached content"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skill_run_script_rejects_paths_outside_scripts_dir() {
+        let dir = std::env::temp_dir().join(format!("kivio-skill-script-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let record = SkillRecord {
+            meta: SkillMeta {
+                id: "demo".to_string(),
+                name: "demo".to_string(),
+                description: "Demo".to_string(),
+                source: "user".to_string(),
+                path: None,
+                recommended_tools: vec![],
+                disable_model_invocation: false,
+                files: vec![],
+            },
+            location: dir.join("SKILL.md"),
+            base_dir: dir.clone(),
+            body: String::new(),
+            allowed_tools: vec![],
+        };
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_skill_script(
+                &record,
+                "references/guide.md",
+                &[],
+                1_000,
+                &["python3".to_string()],
+            ))
+            .expect_err("should reject non-scripts path");
+        assert!(err.contains("scripts/"));
         let _ = fs::remove_dir_all(dir);
     }
 }

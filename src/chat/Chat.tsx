@@ -117,6 +117,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const currentConversationIdRef = useRef<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
+  const pendingStreamDoneRef = useRef<(() => void) | null>(null)
   const streamStartedAtRef = useRef<number | null>(null)
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
@@ -263,6 +264,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         if (result.error) {
           console.warn('Some chat skills could not be loaded:', result.error)
         }
+      } else {
+        setSkills([])
+        console.error('Failed to load chat skills:', result.error)
       }
     } catch (err) {
       console.error('Failed to load chat skills:', err)
@@ -288,10 +292,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const handleSettingsClose = useCallback(() => {
     setChatView('conversation')
     syncConversationRoute(currentConversationIdRef.current)
+    void loadSkills()
+    void refreshToolIndicator()
     const pending = pendingAfterSettingsCloseRef.current
     pendingAfterSettingsCloseRef.current = null
     pending?.()
-  }, [syncConversationRoute])
+  }, [loadSkills, refreshToolIndicator, syncConversationRoute])
 
   const runAfterLeavingSettings = useCallback((action: () => void) => {
     if (chatView !== 'settings') {
@@ -327,6 +333,35 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }, [syncConversationRoute])
 
+  const finishStreamingRun = useCallback(
+    (payload: { reason?: string; conversationId?: string }) => {
+      setStreaming(false)
+      setCancellingStream(false)
+      setStreamingContent('')
+      setStreamingReasoning('')
+      setStreamingToolCalls([])
+      activeRunIdRef.current = null
+      streamStartedAtRef.current = null
+      streamingContentRef.current = ''
+      streamingReasoningRef.current = ''
+      if (payload.reason === 'error') {
+        setStreamError('回复生成失败，请稍后重试。')
+      }
+      const conversationId = currentConversationIdRef.current
+      if (conversationId && payload.reason !== 'cancelled') {
+        void reloadConversation(conversationId)
+        refreshSidebar()
+      }
+    },
+    [refreshSidebar, reloadConversation],
+  )
+
+  const flushPendingStreamDone = useCallback(() => {
+    const pending = pendingStreamDoneRef.current
+    pendingStreamDoneRef.current = null
+    pending?.()
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     let unlisten: (() => void) | undefined
@@ -351,24 +386,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           setStreamingContent((prev) => prev + payload.delta)
         }
         if (payload.done) {
-          // invoke 未完成前不要清 streaming / reload：否则输入框会解锁，
-          // 用户可在 regenerate/send 仍写盘时发新消息，导致旧助手回复被合并回来。
-          if (sendInFlightRef.current) return
-
-          setStreaming(false)
-          setCancellingStream(false)
-          setStreamingContent('')
-          setStreamingReasoning('')
-          setStreamingToolCalls([])
-          activeRunIdRef.current = null
-          if (payload.reason === 'error') {
-            setStreamError('回复生成失败，请稍后重试。')
+          // invoke 未完成前不要 reload；延后到 flushPendingStreamDone，避免与 send 写盘竞态。
+          if (sendInFlightRef.current) {
+            pendingStreamDoneRef.current = () => finishStreamingRun(payload)
+            return
           }
-          const conversationId = currentConversationIdRef.current
-          if (conversationId && payload.reason !== 'cancelled') {
-            void reloadConversation(conversationId)
-            refreshSidebar()
-          }
+          finishStreamingRun(payload)
         }
       })
       if (cancelled) {
@@ -381,7 +404,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [refreshSidebar, reloadConversation])
+  }, [finishStreamingRun, refreshSidebar, reloadConversation])
 
   useEffect(() => {
     let cancelled = false
@@ -394,6 +417,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         if (!currentConversationId || payload.conversationId !== currentConversationId) {
           return
         }
+        // 忽略 invoke 结束后的迟到 tool 事件，否则会重新 setStreaming(true) 卡死输入栏。
+        if (!sendInFlightRef.current) return
         if (payload.runId) {
           if (activeRunIdRef.current && activeRunIdRef.current !== payload.runId) return
           activeRunIdRef.current = payload.runId
@@ -648,6 +673,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       streamingReasoningRef.current = ''
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '发送失败')
     } finally {
+      flushPendingStreamDone()
       sendInFlightRef.current = false
     }
   }
@@ -723,6 +749,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setStreamError(typeof err === 'string' ? err : (err as Error).message || '重新生成失败')
         void reloadConversation(conversationId)
       } finally {
+        flushPendingStreamDone()
         setStreaming(false)
         setCancellingStream(false)
         setStreamingContent('')
@@ -735,7 +762,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         sendInFlightRef.current = false
       }
     },
-    [applyAssistantStreamStats, currentConversation, refreshSidebar, reloadConversation, streaming],
+    [applyAssistantStreamStats, currentConversation, flushPendingStreamDone, refreshSidebar, reloadConversation, streaming],
   )
 
   const handleModelChange = async (providerId: string, model: string) => {
@@ -766,8 +793,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       await chatApi.cancelStream(conversationId)
     } catch (err) {
       console.error('Failed to cancel chat stream:', err)
-      setCancellingStream(false)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '停止生成失败')
+    } finally {
+      setCancellingStream(false)
     }
   }, [cancellingStream, streaming])
 
@@ -932,6 +960,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       skillsLoading={skillsLoading}
                       onSkillChange={(skillId) => void handleSkillChange(skillId)}
                       onPreviewSkill={(skill) => void handlePreviewSkill(skill)}
+                      onRefreshSkills={() => void loadSkills()}
                       autoFocus
                     />
                   </div>
@@ -968,6 +997,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     skillsLoading={skillsLoading}
                     onSkillChange={(skillId) => void handleSkillChange(skillId)}
                     onPreviewSkill={(skill) => void handlePreviewSkill(skill)}
+                    onRefreshSkills={() => void loadSkills()}
                     autoFocus
                   />
                 </>

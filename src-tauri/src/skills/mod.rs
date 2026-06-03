@@ -12,8 +12,8 @@ pub use runtime::{
     read_skill_file, run_skill_script, SkillRunCache,
 };
 pub use types::{
-    SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,
-    SkillReadResult, SkillRecord, SkillRegistry, slugify,
+    slugify, SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,
+    SkillReadResult, SkillRecord, SkillRegistry,
 };
 
 use std::{
@@ -183,13 +183,7 @@ fn import_skill_dir(source: &Path, skills_dir: &Path) -> Result<SkillMeta, Strin
         fs::read_to_string(&skill_file).map_err(|err| format!("Read SKILL.md failed: {err}"))?;
     let files = discover::index_skill_files(source)?;
     let mut warnings = Vec::new();
-    let parsed = parse::parse_skill_record(
-        &skill_file,
-        &raw,
-        "user",
-        files,
-        &mut warnings,
-    )?;
+    let parsed = parse::parse_skill_record(&skill_file, &raw, "user", files, &mut warnings)?;
     let dest = skills_dir.join(&parsed.meta.id);
     copy_dir_recursive(source, &dest)?;
     Ok(SkillMeta {
@@ -294,7 +288,10 @@ allowed-tools: Bash(git:*)
         let parsed = parse_skill_markdown("test-skill", raw, "user", None, Vec::new()).unwrap();
 
         assert!(parsed.meta.recommended_tools.contains(&"fetch".to_string()));
-        assert!(parsed.meta.recommended_tools.contains(&"web_search".to_string()));
+        assert!(parsed
+            .meta
+            .recommended_tools
+            .contains(&"web_search".to_string()));
         assert!(parsed
             .meta
             .recommended_tools

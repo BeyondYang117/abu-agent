@@ -132,18 +132,26 @@ api.onChatStream((payload) => {
 ### 3. Contracts
 - Settings JSON remains camelCase. Add new settings under one Chat tools block such as `chatTools`, not as many unrelated top-level fields.
 - Conversation JSON remains Rust snake_case. Persist conversation-level Skill as `active_skill_id`; persist assistant tool traces as message `tool_calls`.
+- Strict tool-calling provider transcript is stored separately from the visible timeline. When an assistant response includes tool calls, persist message `api_messages` with the raw assistant `tool_calls` message, each matching `role: "tool"` result, and the final assistant message.
+- Preserve provider reasoning payloads only in the hidden transcript when protocol replay requires them. DeepSeek thinking-mode tool calls need `reasoning_content` replayed with the assistant tool-call message; plain no-tool answers should not create hidden `api_messages`.
 - Frontend TypeScript converts persisted snake_case fields at the bridge/type boundary or explicitly models existing snake_case fields, matching current Chat conventions.
 - Tool traces are metadata on the related assistant message, not standalone `role: 'tool'` timeline messages in the UI.
 - Skill selection is conversation-pinned and user-switchable. Sending a message snapshots the active Skill ID onto the generated assistant message.
+- Claude-style Skills use progressive loading: list metadata in the catalog, load `SKILL.md` through `skill_activate`, read supporting files through `skill_read_file`, and run bundled scripts through `skill_run_script`.
+- Native and Skill runtime tools must expose prompt-facing OpenAI names (`web_search`, `skill_activate`, `skill_read_file`, `skill_run_script`). MCP tools must keep namespaced OpenAI names such as `mcp__server_id__tool_name` to avoid collisions.
 - Tool approval policy defaults to read-only tools auto-running and sensitive tools requiring confirmation.
+- `skill_run_script` is sensitive by default, only accepts paths under `scripts/`, and must run through the Rust-owned Skill runtime. `skill_activate`, `skill_read_file`, and `web_search` are read-like and may run automatically under the default policy.
 - MCP stdio process control is Rust-owned. Frontend must not use `@tauri-apps/plugin-shell` to spawn MCP servers or require `shell:*` capability for this feature.
+- MCP discovery and invocation follow the protocol boundary: list tools with `tools/list`, invoke with `tools/call`, and return MCP `isError` tool results back to the model as tool content rather than converting them into visible timeline messages.
 - Streamable HTTP MCP responses may be `text/event-stream`; backend must read chunks under timeout and accept only the JSON-RPC event whose `id` matches the request, skipping notifications/progress/mismatched responses.
 - Native `web_search` is a native tool, not an MCP server, but uses the same UI/event/status model as MCP tools.
 
 ### 4. Validation & Error Matrix
 - Missing or disabled MCP config -> no `tools` are sent to the model; Skill-only prompt injection still works.
 - Provider lacks or rejects `tools` -> surface a user-visible Chat tool status and disable tool-dependent sends when a selected Skill recommends unavailable tools; do not break plain Chat or prompt-only Skill use.
-- Old conversation JSON missing `active_skill_id` or `tool_calls` -> deserialize with defaults and render normally.
+- Provider returns an assistant message with no `tool_calls` during the tool loop -> finalize that exact assistant response immediately. Do not discard it and make a second plain request.
+- Active Skill `allowed-tools` filtering -> always retain the internal Skill runtime tools (`skill_activate`, `skill_read_file`, `skill_run_script`) so the selected Skill can load itself.
+- Old conversation JSON missing `active_skill_id`, `tool_calls`, or `api_messages` -> deserialize with defaults and render normally.
 - MCP server imported from config -> keep disabled until the user explicitly enables it.
 - MCP env values shown in UI/logs -> redact secret-looking values; never include full env secrets in tool previews.
 - Tool run exceeds max rounds, timeout, or cancellation -> emit final `chat-tool` status and a `chat-stream` completion/error reason with the same `runId`.
@@ -151,13 +159,15 @@ api.onChatStream((payload) => {
 ### 5. Good/Base/Bad Cases
 - Good: `MessageBubble` renders `ToolCallBlock` above assistant content by reading `message.toolCalls`.
 - Good: `chat-tool` events patch only the matching `{ conversationId, runId }`, preventing stale events from another run updating the visible conversation.
+- Good: after a tool-assisted response, later model requests replay hidden `api_messages` so OpenAI-compatible providers see the exact `assistant tool_calls -> tool -> assistant` sequence.
 - Base: a conversation with no Skill and MCP disabled behaves exactly like current Chat.
 - Bad: inserting tool results as visible user/assistant messages; this corrupts previews, editing, deletion, and regeneration semantics.
+- Bad: exposing Skill tools as `skill__activate` in the OpenAI schema while the system prompt instructs the model to call `skill_activate`.
 - Bad: adding frontend shell permissions so the webview can spawn arbitrary user-configured MCP commands.
 
 ### 6. Tests Required
 - TypeScript typecheck must cover the new `ChatStreamPayload`, `ChatToolProgressPayload`, `ToolCallRecord`, `SkillMeta`, and settings types.
-- Rust tests must cover settings defaults/sanitization, old conversation deserialization with missing new fields, tool max-round stopping, timeout/cancel behavior, and tool-result message construction.
+- Rust tests must cover settings defaults/sanitization, old conversation deserialization with missing new fields, tool max-round stopping, timeout/cancel behavior, hidden tool transcript replay, Skill runtime tool naming, sensitive script approval, and tool-result message construction.
 - Rust tests for Streamable HTTP MCP must cover notification/progress events before the response and mismatched JSON-RPC ids before the matching id.
 - UI smoke tests must cover live tool progress, persisted tool trace rendering after reload, Skill switch/clear persistence, and provider-without-tools fallback.
 - Capability review must confirm no frontend `shell:*` permission is added when MCP stdio stays Rust-owned.
@@ -180,4 +190,21 @@ const nextAssistant: ChatMessage = {
   ...assistant,
   toolCalls: [...(assistant.toolCalls ?? []), toolCallRecord],
 }
+```
+
+#### Wrong
+```rust
+// Dropping the provider transcript breaks strict tool callers on the next turn.
+messages.push(json!({ "role": "assistant", "content": visible_answer }));
+```
+
+#### Correct
+```rust
+// UI stays clean, while the next API request can replay the strict transcript.
+assistant.tool_calls = tool_records;
+assistant.api_messages = vec![
+    assistant_tool_call_message,
+    tool_result_message,
+    final_assistant_message,
+];
 ```

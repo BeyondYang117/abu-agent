@@ -39,6 +39,7 @@ interface InputBarProps {
   skillsLoading?: boolean
   onSkillChange?: (skillId: string | null, skill?: SkillMeta) => void
   onPreviewSkill?: (skill: SkillMeta) => void
+  onRefreshSkills?: () => void
   autoFocus?: boolean
   /** footer：贴底（有消息时）；inline：嵌入居中区域（空对话欢迎页） */
   layout?: 'footer' | 'inline'
@@ -74,6 +75,7 @@ export function InputBar({
   skillsLoading = false,
   onSkillChange,
   onPreviewSkill,
+  onRefreshSkills,
   autoFocus,
   layout = 'footer',
 }: InputBarProps) {
@@ -558,7 +560,13 @@ export function InputBar({
             {onOpenSettings && (
               <button
                 type="button"
-                onClick={() => setToolPanelOpen((open) => !open)}
+                onClick={() => {
+                  setToolPanelOpen((open) => {
+                    const next = !open
+                    if (next) onRefreshSkills?.()
+                    return next
+                  })
+                }}
                 disabled={disabled}
                 className={`mb-0.5 shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
                   toolPanelOpen || activeSkill || hasToolProblem || (toolCount ?? 0) > 0

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FileText, Image } from 'lucide-react'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
+import { ChatMarkdown } from './ChatMarkdown'
 import { ToolCallBlock } from './ToolCallBlock'
 import type { Attachment, ChatMessage } from './types'
 
@@ -161,9 +162,7 @@ export function MessageBubble({
                   回答
                 </div>
               )}
-              <div className="whitespace-pre-wrap break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100">
-                {message.content}
-              </div>
+              <ChatMarkdown content={message.content} />
             </section>
           )
         )}

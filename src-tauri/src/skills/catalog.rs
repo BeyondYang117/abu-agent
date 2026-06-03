@@ -28,7 +28,7 @@ pub fn format_catalog(
     skills.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
 
     let header = if tools_available {
-        "The following Agent Skills provide specialized instructions. When a task matches a skill description, call skill_activate with the skill name before following its workflow. Use skill_read_file for referenced files and skill_run_script only for files under scripts/.\n\n"
+        "The following Agent Skills provide specialized instructions. When a task matches a skill description: (1) call skill_activate with the skill name, (2) use skill_read_file for referenced files, (3) use skill_run_script to execute bundled scripts under scripts/ — do not merely describe shell commands when a script exists.\n\n"
     } else {
         "The following Agent Skills are available for reference. The current model does not support tools, so skill_activate, skill_read_file, and skill_run_script are unavailable. Use the catalog only as guidance, switch to a tools-capable provider for progressive loading, or set Skill fallback to SKILL.md only when a skill is selected.\n\n"
     };
@@ -37,7 +37,10 @@ pub fn format_catalog(
     out.push_str("<available_skills>\n");
     for record in skills {
         out.push_str("  <skill>\n");
-        out.push_str(&format!("    <name>{}</name>\n", xml_escape(&record.meta.name)));
+        out.push_str(&format!(
+            "    <name>{}</name>\n",
+            xml_escape(&record.meta.name)
+        ));
         out.push_str(&format!(
             "    <description>{}</description>\n",
             xml_escape(&record.meta.description)

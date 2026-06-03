@@ -138,6 +138,7 @@ pub(crate) async fn chat_send_message(
         attachments: message_attachments,
         reasoning: None,
         tool_calls: Vec::new(),
+        api_messages: Vec::new(),
         active_skill_id: None,
         timestamp: chrono::Local::now().timestamp(),
     };
@@ -423,9 +424,7 @@ async fn complete_assistant_reply(
     let skill_id = active_skill_id.filter(|id| !id.trim().is_empty());
     let skill_registry =
         skills::build_registry(app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
-    let active_skill_record = skill_id
-        .and_then(|id| skill_registry.find(id))
-        .cloned();
+    let active_skill_record = skill_id.and_then(|id| skill_registry.find(id)).cloned();
     let active_skill_detail = skill_id.and_then(|id| {
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
@@ -496,6 +495,7 @@ async fn complete_assistant_reply(
             response,
             None,
             Vec::new(),
+            Vec::new(),
             skill_id,
             title_from_first_user,
         )?;
@@ -509,6 +509,7 @@ async fn complete_assistant_reply(
         last_user_api_content,
         last_user_image_paths,
     )?;
+    let mut generated_api_messages = Vec::new();
     let mut tool_records = Vec::new();
     let mut planning_reasoning_parts: Vec<String> = Vec::new();
     let mut tools = if provider.supports_tools
@@ -527,6 +528,7 @@ async fn complete_assistant_reply(
         if !skill.allowed_tools.is_empty() {
             tools.retain(|tool| {
                 tool.source == "skill"
+                    || is_native_skill_tool_name(&tool.name)
                     || skill
                         .allowed_tools
                         .iter()
@@ -535,10 +537,10 @@ async fn complete_assistant_reply(
         }
     }
     let max_rounds = settings.chat_tools.max_tool_rounds.max(1);
+    let mut provider_tools_unsupported = false;
 
     if !tools.is_empty() {
-        let mut finalize_after_tool_loop = false;
-        let mut provider_tools_unsupported = false;
+        let mut tried_skill_only_tools = false;
         let mut skill_cache = skills::SkillRunCache::default();
         for round in 0..max_rounds {
             if !state.is_chat_generation_active(&conversation.id, run_generation) {
@@ -558,6 +560,7 @@ async fn complete_assistant_reply(
                         String::new(),
                         None,
                         tool_records,
+                        generated_api_messages,
                         skill_id,
                         title_from_first_user,
                     )?;
@@ -592,6 +595,7 @@ async fn complete_assistant_reply(
                             String::new(),
                             None,
                             tool_records,
+                            generated_api_messages,
                             skill_id,
                             title_from_first_user,
                         )?;
@@ -602,8 +606,25 @@ async fn complete_assistant_reply(
             let message = match planning_result {
                 Ok(message) => message,
                 Err(err) if is_tools_unsupported_error(&err) => {
+                    let skill_only: Vec<ChatToolDefinition> = tools
+                        .iter()
+                        .filter(|tool| tool.source == "skill")
+                        .cloned()
+                        .collect();
+                    if !tried_skill_only_tools
+                        && skill_only.len() < tools.len()
+                        && !skill_only.is_empty()
+                    {
+                        eprintln!(
+                            "Chat provider {} rejected tools; retrying with skill-native tools only",
+                            provider.id
+                        );
+                        tools = skill_only;
+                        tried_skill_only_tools = true;
+                        continue;
+                    }
                     eprintln!(
-                        "Chat provider {} rejected tools; falling back to skill-only plain chat",
+                        "Chat provider {} rejected tools; falling back to plain chat",
                         provider.id
                     );
                     provider_tools_unsupported = true;
@@ -624,11 +645,45 @@ async fn complete_assistant_reply(
             }
             let tool_calls = extract_tool_calls(&message);
             if tool_calls.is_empty() {
-                finalize_after_tool_loop = true;
-                break;
+                let response = assistant_content_from_api_message(&message);
+                let reasoning = merge_reasoning(&planning_reasoning_parts, None);
+                if !response.is_empty() {
+                    emit_chat_stream_delta(
+                        app,
+                        &conversation.id,
+                        &run_id,
+                        &assistant_message_id,
+                        &response,
+                        None,
+                    );
+                }
+                emit_chat_stream_done(
+                    app,
+                    &conversation.id,
+                    &run_id,
+                    &assistant_message_id,
+                    "done",
+                    &response,
+                );
+                if !generated_api_messages.is_empty() {
+                    generated_api_messages.push(message);
+                }
+                push_assistant_message(
+                    app,
+                    conversation,
+                    assistant_message_id,
+                    response,
+                    reasoning,
+                    tool_records,
+                    generated_api_messages,
+                    skill_id,
+                    title_from_first_user,
+                )?;
+                return Ok(());
             }
 
             runtime_messages.push(message);
+            generated_api_messages.push(runtime_messages.last().cloned().unwrap_or(Value::Null));
             for tool_call in tool_calls {
                 let Some(tool) = match_tool_call(&tools, &tool_call.function_name) else {
                     let error = format!("Unknown tool requested: {}", tool_call.function_name);
@@ -640,16 +695,18 @@ async fn complete_assistant_reply(
                         &assistant_message_id,
                         &record,
                     );
-                    runtime_messages.push(serde_json::json!({
+                    let tool_message = serde_json::json!({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "content": record.error.clone().unwrap_or_default(),
-                    }));
+                    });
+                    runtime_messages.push(tool_message.clone());
+                    generated_api_messages.push(tool_message);
                     tool_records.push(record);
                     continue;
                 };
                 let tool_call_id = tool_call.id.clone();
-                let record = execute_chat_tool_call(
+                let (record, tool_content) = execute_chat_tool_call(
                     app,
                     state.inner(),
                     &conversation.id,
@@ -662,15 +719,17 @@ async fn complete_assistant_reply(
                     &mut skill_cache,
                 )
                 .await;
-                runtime_messages.push(serde_json::json!({
+                let tool_message = serde_json::json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": record.result_preview.clone().or(record.error.clone()).unwrap_or_default(),
-                }));
+                    "content": tool_content,
+                });
+                runtime_messages.push(tool_message.clone());
+                generated_api_messages.push(tool_message);
                 tool_records.push(record);
             }
         }
-        if !finalize_after_tool_loop && !provider_tools_unsupported {
+        if !provider_tools_unsupported {
             let message = "工具调用达到最大轮次，已停止。".to_string();
             emit_chat_stream_done(
                 app,
@@ -680,6 +739,9 @@ async fn complete_assistant_reply(
                 "error",
                 &message,
             );
+            if !generated_api_messages.is_empty() {
+                generated_api_messages.push(final_assistant_api_message(&message, None));
+            }
             push_assistant_message(
                 app,
                 conversation,
@@ -687,11 +749,25 @@ async fn complete_assistant_reply(
                 message,
                 None,
                 tool_records,
+                generated_api_messages,
                 skill_id,
                 title_from_first_user,
             )?;
             return Ok(());
         }
+    }
+
+    if provider_tools_unsupported {
+        apply_provider_tools_fallback(
+            &mut runtime_messages,
+            &language,
+            !last_user_image_paths.is_empty(),
+            thinking_enabled,
+            &skill_registry,
+            &mut effective_chat_tools,
+            skill_id,
+            active_skill_detail.as_ref(),
+        );
     }
 
     let (response, reasoning) = if stream_enabled {
@@ -711,27 +787,42 @@ async fn complete_assistant_reply(
         .await?;
         if stream.cancelled {
             if !tool_records.is_empty() {
+                let stored_content = if stream.content.trim().is_empty() {
+                    "已停止生成。".to_string()
+                } else {
+                    stream.content.clone()
+                };
+                let final_reasoning_for_api = stream.reasoning.clone();
+                let reasoning = merge_reasoning(&planning_reasoning_parts, stream.reasoning);
+                if !generated_api_messages.is_empty() {
+                    generated_api_messages.push(final_assistant_api_message(
+                        &stored_content,
+                        final_reasoning_for_api.as_deref(),
+                    ));
+                }
                 push_assistant_message(
                     app,
                     conversation,
                     assistant_message_id,
-                    if stream.content.trim().is_empty() {
-                        "已停止生成。".to_string()
-                    } else {
-                        stream.content.clone()
-                    },
-                    merge_reasoning(&planning_reasoning_parts, stream.reasoning),
+                    stored_content,
+                    reasoning,
                     tool_records,
+                    generated_api_messages,
                     skill_id,
                     title_from_first_user,
                 )?;
             }
             return Err("cancelled".to_string());
         }
-        (
-            stream.content,
-            merge_reasoning(&planning_reasoning_parts, stream.reasoning),
-        )
+        let final_reasoning_for_api = stream.reasoning.clone();
+        let reasoning = merge_reasoning(&planning_reasoning_parts, stream.reasoning);
+        if !generated_api_messages.is_empty() {
+            generated_api_messages.push(final_assistant_api_message(
+                &stream.content,
+                final_reasoning_for_api.as_deref(),
+            ));
+        }
+        (stream.content, reasoning)
     } else {
         let message = tokio::select! {
             result = call_chat_completion_message(
@@ -782,6 +873,9 @@ async fn complete_assistant_reply(
             "done",
             &response,
         );
+        if !generated_api_messages.is_empty() {
+            generated_api_messages.push(message);
+        }
         (response, reasoning)
     };
 
@@ -792,6 +886,7 @@ async fn complete_assistant_reply(
         response,
         reasoning,
         tool_records,
+        generated_api_messages,
         skill_id,
         title_from_first_user,
     )?;
@@ -805,6 +900,7 @@ fn push_assistant_message(
     content: String,
     reasoning: Option<String>,
     tool_calls: Vec<ToolCallRecord>,
+    api_messages: Vec<Value>,
     active_skill_id: Option<&str>,
     title_from_first_user: Option<&str>,
 ) -> Result<(), String> {
@@ -815,6 +911,7 @@ fn push_assistant_message(
         attachments: vec![],
         reasoning,
         tool_calls,
+        api_messages,
         active_skill_id: active_skill_id.map(|id| id.to_string()),
         timestamp: chrono::Local::now().timestamp(),
     });
@@ -828,6 +925,26 @@ fn push_assistant_message(
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(app, conversation)?;
     Ok(())
+}
+
+fn final_assistant_api_message(content: &str, reasoning: Option<&str>) -> Value {
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": content,
+    });
+    if let Some(reasoning) = reasoning.map(str::trim).filter(|value| !value.is_empty()) {
+        message["reasoning_content"] = Value::String(reasoning.to_string());
+    }
+    message
+}
+
+fn assistant_content_from_api_message(message: &Value) -> String {
+    message
+        .get("content")
+        .and_then(|content| content.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 fn chat_tools_capable(
@@ -864,7 +981,8 @@ fn build_chat_system_prompt(
     }
 
     if !chat_tools.skill_auto_match {
-        prompt.push_str("\n\nOnly activate a skill when the user explicitly selected one in the UI.");
+        prompt
+            .push_str("\n\nOnly activate a skill when the user explicitly selected one in the UI.");
     }
 
     let fallback = chat_tools.skill_fallback_mode.as_str();
@@ -872,7 +990,7 @@ fn build_chat_system_prompt(
         prompt.push_str("\n\nUser explicitly selected skill: ");
         prompt.push_str(skill_id);
         if tools_available {
-            prompt.push_str(". Activate it with skill_activate before proceeding.");
+            prompt.push_str(". Activate it with skill_activate before proceeding. Run bundled scripts via skill_run_script (paths under scripts/).");
         } else if matches!(fallback, "skill_md_only" | "legacy_full_body") {
             prompt.push_str(". Follow the Active Skill instructions below.");
         } else {
@@ -912,6 +1030,47 @@ fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommended: &str) -
             .unwrap_or(false)
 }
 
+fn is_native_skill_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "skill_activate" | "skill_read_file" | "skill_run_script"
+    )
+}
+
+fn apply_provider_tools_fallback(
+    runtime_messages: &mut [Value],
+    language: &str,
+    has_image: bool,
+    thinking_enabled: bool,
+    registry: &skills::SkillRegistry,
+    chat_tools: &mut crate::settings::ChatToolsConfig,
+    active_skill_id: Option<&str>,
+    active_skill_detail: Option<&skills::SkillDetail>,
+) {
+    if active_skill_id.is_some() && chat_tools.skill_fallback_mode == "progressive" {
+        chat_tools.skill_fallback_mode = "skill_md_only".to_string();
+    }
+    let fallback_prompt = build_chat_system_prompt(
+        language,
+        has_image,
+        thinking_enabled,
+        registry,
+        chat_tools,
+        false,
+        active_skill_id,
+        active_skill_detail,
+    );
+    patch_system_message(runtime_messages, &fallback_prompt);
+}
+
+fn patch_system_message(messages: &mut [Value], prompt: &str) {
+    if let Some(first) = messages.first_mut() {
+        if first.get("role").and_then(|role| role.as_str()) == Some("system") {
+            first["content"] = Value::String(prompt.to_string());
+        }
+    }
+}
+
 fn build_chat_api_messages(
     system_prompt: &str,
     conversation: &Conversation,
@@ -945,6 +1104,10 @@ fn build_chat_api_messages(
                 "role": message.role,
                 "content": content,
             }));
+        }
+        if message.role == "assistant" && !message.api_messages.is_empty() {
+            messages.pop();
+            messages.extend(message.api_messages.iter().cloned());
         }
     }
 
@@ -1319,7 +1482,10 @@ fn match_tool_call<'a>(
 }
 
 fn is_tools_unsupported_error(err: &str) -> bool {
-    if !matches!(extract_status_code(err), Some(400 | 404 | 422)) {
+    let Some(code) = extract_status_code(err) else {
+        return false;
+    };
+    if !matches!(code, 400 | 404 | 422 | 501) {
         return false;
     }
     let lower = err.to_ascii_lowercase();
@@ -1328,6 +1494,9 @@ fn is_tools_unsupported_error(err: &str) -> bool {
         || lower.contains("tool_calls")
         || lower.contains("function calling")
         || lower.contains("function_call")
+        || lower.contains("function call")
+        || lower.contains("not support")
+        || (code == 400 && lower.contains("tool"))
 }
 
 fn unknown_tool_record(call: &PendingToolCall, round: u8, error: String) -> ToolCallRecord {
@@ -1361,7 +1530,7 @@ async fn execute_chat_tool_call(
     tool: &ChatToolDefinition,
     call: PendingToolCall,
     skill_cache: &mut skills::SkillRunCache,
-) -> ToolCallRecord {
+) -> (ToolCallRecord, String) {
     let now = chrono::Local::now().timestamp();
     let mut record = ToolCallRecord {
         id: call.id.clone(),
@@ -1402,7 +1571,8 @@ async fn execute_chat_tool_call(
             record.completed_at = Some(chrono::Local::now().timestamp());
             record.error = Some("Tool call was not approved".to_string());
             emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-            return record;
+            let content = record.error.clone().unwrap_or_default();
+            return (record, content);
         }
     }
 
@@ -1421,34 +1591,40 @@ async fn execute_chat_tool_call(
             record.completed_at = Some(chrono::Local::now().timestamp());
             record.error = Some("Tool call cancelled".to_string());
             emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-            return record;
+            let content = record.error.clone().unwrap_or_default();
+            return (record, content);
         }
     };
     record.duration_ms = Some(started.elapsed().as_millis() as u64);
     record.completed_at = Some(chrono::Local::now().timestamp());
-    match result {
+    let tool_content = match result {
         Ok(Ok(output)) if !output.is_error => {
             record.status = ToolCallStatus::Success;
             record.result_preview = Some(truncate_chars(
                 &output.content,
                 settings.chat_tools.max_tool_output_chars,
             ));
+            output.content
         }
         Ok(Ok(output)) => {
             record.status = ToolCallStatus::Error;
             record.error = Some(truncate_chars(&output.content, 1000));
+            output.content
         }
         Ok(Err(err)) => {
             record.status = ToolCallStatus::Error;
-            record.error = Some(err);
+            record.error = Some(err.clone());
+            err
         }
         Err(_) => {
             record.status = ToolCallStatus::Error;
-            record.error = Some("Tool call timed out".to_string());
+            let err = "Tool call timed out".to_string();
+            record.error = Some(err.clone());
+            err
         }
-    }
+    };
     emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-    record
+    (record, tool_content)
 }
 
 async fn request_tool_approval(
@@ -1906,5 +2082,183 @@ mod tests {
 
         assert!(title.ends_with("..."));
         assert!(title.chars().count() <= 33);
+    }
+
+    #[test]
+    fn is_tools_unsupported_error_detects_provider_rejection_messages() {
+        assert!(is_tools_unsupported_error(
+            "Chat tools planning Error: 400 Bad Request - tools not supported (attempt 1/3)"
+        ));
+        assert!(is_tools_unsupported_error(
+            "Chat tools planning Error: 422 Unprocessable Entity - invalid tool_choice (attempt 1/1)"
+        ));
+        assert!(is_tools_unsupported_error(
+            "Chat tools planning Error: 400 Bad Request - function call is not supported (attempt 1/3)"
+        ));
+        assert!(!is_tools_unsupported_error(
+            "Chat tools planning Error: 429 Too Many Requests - rate limited (attempt 1/3)"
+        ));
+        assert!(!is_tools_unsupported_error("network timeout"));
+    }
+
+    #[test]
+    fn is_native_skill_tool_name_matches_runtime_tools() {
+        assert!(is_native_skill_tool_name("skill_activate"));
+        assert!(is_native_skill_tool_name("skill_run_script"));
+        assert!(!is_native_skill_tool_name("web_search"));
+    }
+
+    #[test]
+    fn patch_system_message_replaces_first_system_entry() {
+        let mut messages = vec![
+            serde_json::json!({ "role": "system", "content": "old" }),
+            serde_json::json!({ "role": "user", "content": "hi" }),
+        ];
+        patch_system_message(&mut messages, "new prompt");
+        assert_eq!(
+            messages[0].get("content").and_then(|value| value.as_str()),
+            Some("new prompt")
+        );
+    }
+
+    #[test]
+    fn final_assistant_api_message_omits_reasoning_without_tool_calls() {
+        let message = final_assistant_api_message("done", None);
+
+        assert_eq!(
+            message.get("role").and_then(|value| value.as_str()),
+            Some("assistant")
+        );
+        assert_eq!(
+            message.get("content").and_then(|value| value.as_str()),
+            Some("done")
+        );
+        assert!(message.get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn final_assistant_api_message_keeps_reasoning_when_requested() {
+        let message = final_assistant_api_message("done", Some(" thinking "));
+
+        assert_eq!(
+            message
+                .get("reasoning_content")
+                .and_then(|value| value.as_str()),
+            Some("thinking")
+        );
+    }
+
+    #[test]
+    fn assistant_content_from_api_message_trims_missing_or_null_content() {
+        assert_eq!(
+            assistant_content_from_api_message(&serde_json::json!({
+                "role": "assistant",
+                "content": " answer "
+            })),
+            "answer"
+        );
+        assert_eq!(
+            assistant_content_from_api_message(&serde_json::json!({
+                "role": "assistant",
+                "content": null
+            })),
+            ""
+        );
+    }
+
+    #[test]
+    fn build_chat_api_messages_replays_hidden_tool_transcript() {
+        let conversation = Conversation {
+            id: "conv_test".to_string(),
+            title: "test".to_string(),
+            provider_id: "provider".to_string(),
+            model: "model".to_string(),
+            messages: vec![
+                ChatMessage {
+                    id: "msg_user_1".to_string(),
+                    role: "user".to_string(),
+                    content: "use a skill".to_string(),
+                    attachments: Vec::new(),
+                    reasoning: None,
+                    tool_calls: Vec::new(),
+                    api_messages: Vec::new(),
+                    active_skill_id: None,
+                    timestamp: 1,
+                },
+                ChatMessage {
+                    id: "msg_assistant_1".to_string(),
+                    role: "assistant".to_string(),
+                    content: "visible answer".to_string(),
+                    attachments: Vec::new(),
+                    reasoning: Some("hidden thinking".to_string()),
+                    tool_calls: Vec::new(),
+                    api_messages: vec![
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": null,
+                            "reasoning_content": "plan",
+                            "tool_calls": [{
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "skill_activate",
+                                    "arguments": "{\"name\":\"doc\"}"
+                                }
+                            }]
+                        }),
+                        serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": "call_1",
+                            "content": "Skill body"
+                        }),
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": "visible answer",
+                            "reasoning_content": "final"
+                        }),
+                    ],
+                    active_skill_id: Some("doc".to_string()),
+                    timestamp: 2,
+                },
+            ],
+            active_skill_id: Some("doc".to_string()),
+            created_at: 1,
+            updated_at: 2,
+            pinned: false,
+            folder: None,
+        };
+
+        let messages = build_chat_api_messages("system", &conversation, None, None, &[])
+            .expect("messages should build");
+
+        assert_eq!(messages.len(), 5);
+        assert_eq!(
+            messages[0].get("role").and_then(|value| value.as_str()),
+            Some("system")
+        );
+        assert_eq!(
+            messages[1].get("role").and_then(|value| value.as_str()),
+            Some("user")
+        );
+        assert_eq!(
+            messages[2]
+                .get("tool_calls")
+                .and_then(|value| value.as_array())
+                .and_then(|calls| calls.first())
+                .and_then(|call| call.get("function"))
+                .and_then(|function| function.get("name"))
+                .and_then(|value| value.as_str()),
+            Some("skill_activate")
+        );
+        assert_eq!(
+            messages[3].get("role").and_then(|value| value.as_str()),
+            Some("tool")
+        );
+        assert_eq!(
+            messages[4]
+                .get("reasoning_content")
+                .and_then(|value| value.as_str()),
+            Some("final")
+        );
     }
 }

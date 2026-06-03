@@ -90,6 +90,8 @@ export interface ChatMessage {
   reasoning?: string
   tool_calls?: ToolCallRecord[]
   toolCalls?: ToolCallRecord[]
+  api_messages?: unknown[]
+  apiMessages?: unknown[]
   active_skill_id?: string | null
   activeSkillId?: string | null
   timestamp: number

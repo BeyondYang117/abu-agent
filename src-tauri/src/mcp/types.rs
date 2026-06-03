@@ -17,7 +17,12 @@ pub struct ChatToolDefinition {
 
 impl ChatToolDefinition {
     pub fn openai_tool_name(&self) -> String {
-        sanitize_openai_tool_name(&self.id)
+        match self.source.as_str() {
+            // Native and Skill tools are model-facing APIs owned by Kivio. Keep their names
+            // aligned with the system prompt so models can call exactly what we instruct.
+            "native" | "skill" => sanitize_openai_tool_name(&self.name),
+            _ => sanitize_openai_tool_name(&self.id),
+        }
     }
 
     pub fn to_openai_tool(&self) -> serde_json::Value {
@@ -97,7 +102,7 @@ pub fn native_skill_activate_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "skill__activate".to_string(),
         name: "skill_activate".to_string(),
-        description: "Activate an Agent Skill by name. Loads SKILL.md instructions and lists bundled resources.".to_string(),
+        description: "Activate an Agent Skill by name. Always call this first when a task matches a skill. Loads SKILL.md instructions and lists bundled scripts and reference files.".to_string(),
         source: "skill".to_string(),
         server_id: None,
         server_name: Some("Skill".to_string()),
@@ -119,7 +124,7 @@ pub fn native_skill_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "skill__read_file".to_string(),
         name: "skill_read_file".to_string(),
-        description: "Read a file from an activated skill directory using a path relative to the skill root.".to_string(),
+        description: "Read a file from a skill directory (references/, secrets/, etc.) using a path relative to the skill root. Call skill_activate first.".to_string(),
         source: "skill".to_string(),
         server_id: None,
         server_name: Some("Skill".to_string()),
@@ -145,7 +150,7 @@ pub fn native_skill_run_script_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "skill__run_script".to_string(),
         name: "skill_run_script".to_string(),
-        description: "Run a bundled script from scripts/ inside a skill. Only script stdout/stderr are returned.".to_string(),
+        description: "Execute a bundled script under scripts/ (e.g. scripts/tavily_cli.py). Pass CLI args via args. Use this instead of describing commands when a skill provides scripts.".to_string(),
         source: "skill".to_string(),
         server_id: None,
         server_name: Some("Skill".to_string()),
@@ -163,7 +168,7 @@ pub fn native_skill_run_script_tool() -> ChatToolDefinition {
                 "args": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional script arguments"
+                    "description": "Optional script arguments passed after the script path"
                 }
             },
             "required": ["name", "relative_path"]
@@ -222,5 +227,51 @@ mod tests {
         }
         assert!(!looks_sensitive_tool("read_file"));
         assert!(!looks_sensitive_tool("web_search"));
+    }
+
+    #[test]
+    fn skill_and_native_tools_use_prompt_facing_names() {
+        assert_eq!(
+            native_skill_activate_tool().openai_tool_name(),
+            "skill_activate"
+        );
+        assert_eq!(
+            native_skill_read_file_tool().openai_tool_name(),
+            "skill_read_file"
+        );
+        assert_eq!(native_web_search_tool().openai_tool_name(), "web_search");
+    }
+
+    #[test]
+    fn skill_run_script_requires_confirmation_by_default() {
+        assert!(native_skill_run_script_tool().sensitive);
+    }
+
+    #[test]
+    fn mcp_tools_keep_namespaced_openai_names() {
+        let server = ChatMcpServer {
+            id: "server.one".to_string(),
+            name: "Server One".to_string(),
+            enabled: true,
+            transport: "stdio".to_string(),
+            url: String::new(),
+            command: "demo".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            cwd: None,
+            enabled_tools: Vec::new(),
+        };
+        let tool = tool_definition_from_mcp(
+            &server,
+            McpTool {
+                name: "search.web".to_string(),
+                description: String::new(),
+                input_schema: serde_json::json!({ "type": "object" }),
+            },
+        );
+
+        assert_eq!(tool.openai_tool_name(), "mcp__server_one__search_web");
+        assert_ne!(tool.openai_tool_name(), tool.name);
     }
 }

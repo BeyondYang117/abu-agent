@@ -108,7 +108,10 @@ impl SkillRegistry {
     }
 
     pub fn metas(&self) -> Vec<SkillMeta> {
-        self.records.iter().map(|record| record.meta.clone()).collect()
+        self.records
+            .iter()
+            .map(|record| record.meta.clone())
+            .collect()
     }
 }
 
@@ -133,7 +136,11 @@ pub fn slugify(value: &str) -> String {
 
 pub fn parse_bool(value: Option<&str>) -> bool {
     matches!(
-        value.map(str::trim).unwrap_or_default().to_ascii_lowercase().as_str(),
+        value
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
         "true" | "1" | "yes"
     )
 }

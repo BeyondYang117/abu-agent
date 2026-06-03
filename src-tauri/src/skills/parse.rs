@@ -102,13 +102,12 @@ pub fn parse_skill_markdown(
         .filter(|desc| !desc.trim().is_empty())
         .ok_or_else(|| "Skill description is required".to_string())?;
     let recommended_tools = parse_allowed_tools(&frontmatter);
-    let disable_model_invocation = parse_bool(frontmatter.get("disable-model-invocation").map(String::as_str));
-    let id = slugify(
+    let disable_model_invocation = parse_bool(
         frontmatter
-            .get("id")
-            .map(String::as_str)
-            .unwrap_or(&name),
+            .get("disable-model-invocation")
+            .map(String::as_str),
     );
+    let id = slugify(frontmatter.get("id").map(String::as_str).unwrap_or(&name));
     let _ = fallback_id;
     Ok(SkillDetail {
         meta: SkillMeta {
@@ -148,7 +147,8 @@ pub fn parse_skill_record(
         Some(skill_md_path.display().to_string()),
         files,
     )?;
-    if slugify(folder_name) != detail.meta.id && slugify(&detail.meta.name) != slugify(folder_name) {
+    if slugify(folder_name) != detail.meta.id && slugify(&detail.meta.name) != slugify(folder_name)
+    {
         warnings.push(format!(
             "Skill folder {folder_name} does not match frontmatter name {}",
             detail.meta.name

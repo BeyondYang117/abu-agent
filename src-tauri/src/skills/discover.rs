@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 
 use super::{
     parse::parse_skill_record,
-    types::{SkillFileEntry, SkillFileKind, SkillRegistry, slugify},
+    types::{slugify, SkillFileEntry, SkillFileKind, SkillRegistry},
 };
 
 const MAX_SCAN_DEPTH: usize = 6;
@@ -48,7 +48,9 @@ pub fn build_registry(app: &AppHandle, extra_paths: &[String]) -> Result<SkillRe
         collect_skill_files(root, 0, &mut registry, &source)?;
     }
 
-    registry.records.sort_by(|a, b| a.meta.name.to_lowercase().cmp(&b.meta.name.to_lowercase()));
+    registry
+        .records
+        .sort_by(|a, b| a.meta.name.to_lowercase().cmp(&b.meta.name.to_lowercase()));
     dedup_records(&mut registry.records, &mut registry.warnings);
     Ok(registry)
 }
@@ -85,10 +87,9 @@ fn collect_skill_files(
     if skill_md.is_file() {
         match load_skill_at(&skill_md, source) {
             Ok(record) => registry.records.push(record),
-            Err(err) => registry.warnings.push(format!(
-                "Parse skill {} failed: {err}",
-                skill_md.display()
-            )),
+            Err(err) => registry
+                .warnings
+                .push(format!("Parse skill {} failed: {err}", skill_md.display())),
         }
         return Ok(());
     }
