@@ -1,67 +1,31 @@
+mod catalog;
+mod discover;
+mod parse;
+mod runtime;
+mod types;
+
+pub use catalog::format_catalog;
+pub use discover::{build_registry, user_skills_dir};
+pub use parse::parse_skill_markdown;
+pub use runtime::{
+    activate_skill, extract_relative_path, extract_script_args, extract_skill_name, lookup_skill,
+    read_skill_file, run_skill_script, SkillRunCache,
+};
+pub use types::{
+    SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,
+    SkillReadResult, SkillRecord, SkillRegistry, slugify,
+};
+
 use std::{
     fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::ShellExt;
 
 use crate::state::AppState;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillMeta {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub source: String,
-    pub path: Option<String>,
-    pub recommended_tools: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillDetail {
-    #[serde(flatten)]
-    pub meta: SkillMeta,
-    pub body: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillListResult {
-    pub success: bool,
-    pub skills: Vec<SkillMeta>,
-    #[serde(default)]
-    pub warnings: Vec<String>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillReadResult {
-    pub success: bool,
-    pub skill: Option<SkillDetail>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillImportResult {
-    pub success: bool,
-    pub skill: Option<SkillMeta>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillOpenFolderResult {
-    pub success: bool,
-    pub path: Option<String>,
-    pub error: Option<String>,
-}
 
 #[tauri::command]
 pub fn chat_skills_list(
@@ -71,16 +35,16 @@ pub fn chat_skills_list(
 ) -> SkillListResult {
     let paths = skill_scan_paths
         .unwrap_or_else(|| state.settings_read().chat_tools.skill_scan_paths.clone());
-    match collect_skills(&app, &paths) {
-        Ok((skills, warnings)) => SkillListResult {
+    match build_registry(&app, &paths) {
+        Ok(registry) => SkillListResult {
             success: true,
-            skills,
-            error: if warnings.is_empty() {
+            skills: registry.metas(),
+            error: if registry.warnings.is_empty() {
                 None
             } else {
-                Some(warnings.join("\n"))
+                Some(registry.warnings.join("\n"))
             },
-            warnings,
+            warnings: registry.warnings,
         },
         Err(err) => SkillListResult {
             success: false,
@@ -115,7 +79,6 @@ pub fn chat_skills_read(
     }
 }
 
-/// 在系统文件管理器中打开用户 Skill 目录（不存在则创建）。
 #[tauri::command]
 #[allow(deprecated)]
 pub fn chat_skills_open_folder(app: AppHandle) -> SkillOpenFolderResult {
@@ -189,203 +152,26 @@ pub fn read_skill_detail(
     extra_paths: &[String],
     skill_id: &str,
 ) -> Result<SkillDetail, String> {
-    for path in scan_roots(app, extra_paths)? {
-        for skill_path in skill_files_under(&path)? {
-            let raw = fs::read_to_string(&skill_path)
-                .map_err(|err| format!("Read skill {} failed: {err}", skill_path.display()))?;
-            let id = skill_id_for_path(&skill_path);
-            let parsed =
-                parse_skill_markdown(&id, &raw, "user", Some(skill_path.display().to_string()))?;
-            if parsed.meta.id == skill_id {
-                return Ok(parsed);
-            }
-        }
-    }
-
-    Err(format!("Skill not found: {skill_id}"))
-}
-
-fn collect_skills(
-    app: &AppHandle,
-    extra_paths: &[String],
-) -> Result<(Vec<SkillMeta>, Vec<String>), String> {
-    let mut skills = Vec::new();
-    let mut warnings = Vec::new();
-
-    for path in scan_roots(app, extra_paths)? {
-        for skill_path in skill_files_under(&path)? {
-            let raw = match fs::read_to_string(&skill_path) {
-                Ok(raw) => raw,
-                Err(err) => {
-                    warnings.push(format!("Read skill {} failed: {err}", skill_path.display()));
-                    continue;
-                }
-            };
-            let id = skill_id_for_path(&skill_path);
-            match parse_skill_markdown(&id, &raw, "user", Some(skill_path.display().to_string())) {
-                Ok(parsed) => skills.push(parsed.meta),
-                Err(err) => warnings.push(format!(
-                    "Parse skill {} failed: {err}",
-                    skill_path.display()
-                )),
-            }
-        }
-    }
-
-    skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    skills.dedup_by(|a, b| a.id == b.id);
-    Ok((skills, warnings))
-}
-
-fn scan_roots(app: &AppHandle, extra_paths: &[String]) -> Result<Vec<PathBuf>, String> {
-    let mut roots = vec![user_skills_dir(app)?];
-    roots.extend(
-        extra_paths
-            .iter()
-            .map(PathBuf::from)
-            .filter(|path| path.is_dir()),
-    );
-    Ok(roots)
-}
-
-fn user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("app_data_dir unavailable: {err}"))?
-        .join("skills");
-    fs::create_dir_all(&dir).map_err(|err| format!("create skills dir failed: {err}"))?;
-    Ok(dir)
-}
-
-fn skill_files_under(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    if !root.is_dir() {
-        return Ok(out);
-    }
-    for entry in fs::read_dir(root).map_err(|err| format!("read skills dir failed: {err}"))? {
-        let entry = entry.map_err(|err| err.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            let candidate = path.join("SKILL.md");
-            if candidate.is_file() {
-                out.push(candidate);
-            }
-        } else if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name == "SKILL.md")
-            .unwrap_or(false)
-        {
-            out.push(path);
-        }
-    }
-    Ok(out)
-}
-
-fn parse_skill_markdown(
-    fallback_id: &str,
-    raw: &str,
-    source: &str,
-    path: Option<String>,
-) -> Result<SkillDetail, String> {
-    let (frontmatter, body) = split_frontmatter(raw);
-    let name = frontmatter
-        .get("name")
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| "Skill name is required".to_string())?;
-    let description = frontmatter
-        .get("description")
-        .cloned()
-        .ok_or_else(|| "Skill description is required".to_string())?;
-    let mut recommended_tools = parse_list_value(frontmatter.get("recommended-tools"));
-    recommended_tools.extend(parse_list_value(frontmatter.get("mcp-tools")));
-    recommended_tools.sort();
-    recommended_tools.dedup();
-    let id = slugify(
-        frontmatter
-            .get("id")
-            .map(String::as_str)
-            .unwrap_or(fallback_id),
-    );
+    let registry = build_registry(app, extra_paths)?;
+    let record = registry
+        .find(skill_id)
+        .ok_or_else(|| format!("Skill not found: {skill_id}"))?;
     Ok(SkillDetail {
-        meta: SkillMeta {
-            id,
-            name,
-            description,
-            source: source.to_string(),
-            path,
-            recommended_tools,
-        },
-        body: body.trim().to_string(),
+        meta: record.meta.clone(),
+        body: record.body.clone(),
     })
 }
 
-fn split_frontmatter(raw: &str) -> (std::collections::HashMap<String, String>, &str) {
-    let mut map = std::collections::HashMap::new();
-    let trimmed = raw.trim_start();
-    if !trimmed.starts_with("---") {
-        return (map, raw);
-    }
-    let rest = &trimmed[3..];
-    let Some(end) = rest.find("\n---") else {
-        return (map, raw);
-    };
-    let fm = &rest[..end];
-    let body = &rest[end + 4..];
-    let mut current_key: Option<String> = None;
-    let mut current_items: Vec<String> = Vec::new();
-    for line in fm.lines() {
-        let line = line.trim_end();
-        if let Some(item) = line.trim_start().strip_prefix("- ") {
-            if current_key.is_some() {
-                current_items.push(item.trim().to_string());
-            }
-            continue;
-        }
-        if let Some(key) = current_key.take() {
-            if !current_items.is_empty() {
-                map.insert(key, current_items.join(","));
-                current_items.clear();
-            }
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let key = key.trim().to_string();
-        let value = value
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
-        if value.is_empty() {
-            current_key = Some(key);
-        } else {
-            map.insert(key, value);
-        }
-    }
-    if let Some(key) = current_key {
-        if !current_items.is_empty() {
-            map.insert(key, current_items.join(","));
-        }
-    }
-    (map, body)
-}
-
-fn parse_list_value(value: Option<&String>) -> Vec<String> {
-    value
-        .map(|value| {
-            value
-                .trim()
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .split(',')
-                .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
-                .filter(|item| !item.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+pub fn read_skill_record(
+    app: &AppHandle,
+    extra_paths: &[String],
+    skill_id: &str,
+) -> Result<SkillRecord, String> {
+    let registry = build_registry(app, extra_paths)?;
+    registry
+        .find(skill_id)
+        .cloned()
+        .ok_or_else(|| format!("Skill not found: {skill_id}"))
 }
 
 fn import_skill_dir(source: &Path, skills_dir: &Path) -> Result<SkillMeta, String> {
@@ -395,14 +181,14 @@ fn import_skill_dir(source: &Path, skills_dir: &Path) -> Result<SkillMeta, Strin
     }
     let raw =
         fs::read_to_string(&skill_file).map_err(|err| format!("Read SKILL.md failed: {err}"))?;
-    let parsed = parse_skill_markdown(
-        source
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("skill"),
+    let files = discover::index_skill_files(source)?;
+    let mut warnings = Vec::new();
+    let parsed = parse::parse_skill_record(
+        &skill_file,
         &raw,
         "user",
-        None,
+        files,
+        &mut warnings,
     )?;
     let dest = skills_dir.join(&parsed.meta.id);
     copy_dir_recursive(source, &dest)?;
@@ -431,7 +217,13 @@ fn import_skill_zip(source: &Path, skills_dir: &Path) -> Result<SkillMeta, Strin
     if skill_raw.trim().is_empty() {
         return Err("Zip does not contain SKILL.md".to_string());
     }
-    let parsed = parse_skill_markdown("skill", &skill_raw, "user", None)?;
+    let dest_name = skill_path
+        .split('/')
+        .rev()
+        .nth(1)
+        .map(slugify)
+        .unwrap_or_else(|| "skill".to_string());
+    let parsed = parse_skill_markdown(&dest_name, &skill_raw, "user", None, Vec::new())?;
     let dest = skills_dir.join(&parsed.meta.id);
     fs::create_dir_all(&dest).map_err(|err| format!("create skill dir failed: {err}"))?;
     for i in 0..archive.len() {
@@ -480,33 +272,6 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn skill_id_for_path(path: &Path) -> String {
-    path.parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .map(slugify)
-        .unwrap_or_else(|| "skill".to_string())
-}
-
-fn slugify(value: &str) -> String {
-    let mut out = String::new();
-    for c in value.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if c == '-' || c == '_' || c.is_whitespace() {
-            if !out.ends_with('-') {
-                out.push('-');
-            }
-        }
-    }
-    let out = out.trim_matches('-').to_string();
-    if out.is_empty() {
-        format!("skill-{}", uuid::Uuid::new_v4())
-    } else {
-        out
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,23 +279,27 @@ mod tests {
     #[test]
     fn parse_skill_supports_recommended_tools_and_mcp_tools_alias() {
         let raw = r#"---
-name: Test Skill
+name: test-skill
 description: Uses selected tools.
 recommended-tools:
   - web_search
 mcp-tools:
   - fetch
   - web_search
+allowed-tools: Bash(git:*)
 ---
 # Body
 "#;
 
-        let parsed = parse_skill_markdown("test-skill", raw, "user", None).unwrap();
+        let parsed = parse_skill_markdown("test-skill", raw, "user", None, Vec::new()).unwrap();
 
-        assert_eq!(
-            parsed.meta.recommended_tools,
-            vec!["fetch".to_string(), "web_search".to_string()]
-        );
+        assert!(parsed.meta.recommended_tools.contains(&"fetch".to_string()));
+        assert!(parsed.meta.recommended_tools.contains(&"web_search".to_string()));
+        assert!(parsed
+            .meta
+            .recommended_tools
+            .iter()
+            .any(|tool| tool.contains("Bash")));
     }
 
     #[test]
@@ -544,9 +313,28 @@ description: Missing name.
 "#,
             "user",
             None,
+            Vec::new(),
         )
         .expect_err("missing name should be rejected");
 
         assert!(err.contains("name"));
+    }
+
+    #[test]
+    fn disable_model_invocation_parses_from_frontmatter() {
+        let parsed = parse_skill_markdown(
+            "manual-only",
+            r#"---
+name: manual-only
+description: Only when invoked explicitly.
+disable-model-invocation: true
+---
+"#,
+            "user",
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(parsed.meta.disable_model_invocation);
     }
 }

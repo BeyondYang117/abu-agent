@@ -93,6 +93,93 @@ pub fn native_web_search_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn native_skill_activate_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "skill__activate".to_string(),
+        name: "skill_activate".to_string(),
+        description: "Activate an Agent Skill by name. Loads SKILL.md instructions and lists bundled resources.".to_string(),
+        source: "skill".to_string(),
+        server_id: None,
+        server_name: Some("Skill".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name from available_skills"
+                }
+            },
+            "required": ["name"]
+        }),
+        sensitive: false,
+    }
+}
+
+pub fn native_skill_read_file_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "skill__read_file".to_string(),
+        name: "skill_read_file".to_string(),
+        description: "Read a file from an activated skill directory using a path relative to the skill root.".to_string(),
+        source: "skill".to_string(),
+        server_id: None,
+        server_name: Some("Skill".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name"
+                },
+                "relative_path": {
+                    "type": "string",
+                    "description": "Path relative to the skill root, e.g. references/guide.md"
+                }
+            },
+            "required": ["name", "relative_path"]
+        }),
+        sensitive: false,
+    }
+}
+
+pub fn native_skill_run_script_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "skill__run_script".to_string(),
+        name: "skill_run_script".to_string(),
+        description: "Run a bundled script from scripts/ inside a skill. Only script stdout/stderr are returned.".to_string(),
+        source: "skill".to_string(),
+        server_id: None,
+        server_name: Some("Skill".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name"
+                },
+                "relative_path": {
+                    "type": "string",
+                    "description": "Script path relative to the skill root, must start with scripts/"
+                },
+                "args": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional script arguments"
+                }
+            },
+            "required": ["name", "relative_path"]
+        }),
+        sensitive: true,
+    }
+}
+
+pub fn native_skill_tools() -> Vec<ChatToolDefinition> {
+    vec![
+        native_skill_activate_tool(),
+        native_skill_read_file_tool(),
+        native_skill_run_script_tool(),
+    ]
+}
+
 pub fn sanitize_openai_tool_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {

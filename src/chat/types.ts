@@ -20,7 +20,18 @@ export interface SkillMeta {
   path?: string
   recommended_tools?: string[]
   recommendedTools?: string[]
+  disable_model_invocation?: boolean
+  disableModelInvocation?: boolean
+  files?: SkillFileEntry[]
   enabled?: boolean
+}
+
+export interface SkillFileEntry {
+  relative_path?: string
+  relativePath?: string
+  kind?: string
+  size_bytes?: number
+  sizeBytes?: number
 }
 
 export interface SkillDetail extends SkillMeta {

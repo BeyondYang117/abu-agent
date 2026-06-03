@@ -107,10 +107,15 @@ function getDuration(toolCall: ToolCallRecord): number | undefined {
 }
 
 function getToolName(toolCall: ToolCallRecord): string {
-  return toolCall.tool_name || toolCall.toolName || toolCall.name || 'Tool'
+  const raw = toolCall.tool_name || toolCall.toolName || toolCall.name || 'Tool'
+  if (raw === 'skill_activate') return '激活 Skill'
+  if (raw === 'skill_read_file') return '读取 Skill 文件'
+  if (raw === 'skill_run_script') return '执行 Skill 脚本'
+  return raw
 }
 
 function getSource(toolCall: ToolCallRecord): string {
+  if (toolCall.source === 'skill') return 'Skill'
   return (
     toolCall.server_name ||
     toolCall.serverName ||

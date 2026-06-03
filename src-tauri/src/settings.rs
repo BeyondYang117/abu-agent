@@ -419,12 +419,33 @@ impl Default for ChatMcpServer {
 #[serde(rename_all = "camelCase", default)]
 pub struct ChatNativeToolsConfig {
     pub web_search: bool,
+    pub skill_runtime: bool,
 }
 
 impl Default for ChatNativeToolsConfig {
     fn default() -> Self {
-        Self { web_search: false }
+        Self {
+            web_search: false,
+            skill_runtime: true,
+        }
     }
+}
+
+fn default_skill_auto_match() -> bool {
+    true
+}
+
+fn default_skill_fallback_mode() -> String {
+    "progressive".to_string()
+}
+
+fn default_skill_script_allowlist() -> Vec<String> {
+    vec![
+        "python3".to_string(),
+        "bash".to_string(),
+        "sh".to_string(),
+        "node".to_string(),
+    ]
 }
 
 fn default_chat_max_tool_rounds() -> u8 {
@@ -452,6 +473,12 @@ pub struct ChatToolsConfig {
     pub enabled: bool,
     pub servers: Vec<ChatMcpServer>,
     pub skill_scan_paths: Vec<String>,
+    #[serde(default = "default_skill_auto_match")]
+    pub skill_auto_match: bool,
+    #[serde(default = "default_skill_fallback_mode")]
+    pub skill_fallback_mode: String,
+    #[serde(default = "default_skill_script_allowlist")]
+    pub skill_script_allowlist: Vec<String>,
     #[serde(default = "default_chat_max_tool_rounds")]
     pub max_tool_rounds: u8,
     #[serde(default = "default_chat_tool_timeout_ms")]
@@ -469,6 +496,9 @@ impl Default for ChatToolsConfig {
             enabled: false,
             servers: Vec::new(),
             skill_scan_paths: Vec::new(),
+            skill_auto_match: default_skill_auto_match(),
+            skill_fallback_mode: default_skill_fallback_mode(),
+            skill_script_allowlist: default_skill_script_allowlist(),
             max_tool_rounds: default_chat_max_tool_rounds(),
             tool_timeout_ms: default_chat_tool_timeout_ms(),
             max_tool_output_chars: default_chat_max_tool_output_chars(),
@@ -844,6 +874,22 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .map(|path| path.trim().to_string())
         .filter(|path| !path.is_empty())
         .collect();
+    if !matches!(
+        settings.chat_tools.skill_fallback_mode.trim(),
+        "progressive" | "skill_md_only" | "legacy_full_body"
+    ) {
+        settings.chat_tools.skill_fallback_mode = default_skill_fallback_mode();
+    }
+    settings.chat_tools.skill_script_allowlist = settings
+        .chat_tools
+        .skill_script_allowlist
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect();
+    if settings.chat_tools.skill_script_allowlist.is_empty() {
+        settings.chat_tools.skill_script_allowlist = default_skill_script_allowlist();
+    }
     for server in &mut settings.chat_tools.servers {
         server.id = server.id.trim().to_string();
         if server.id.is_empty() {

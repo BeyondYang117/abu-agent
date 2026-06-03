@@ -421,14 +421,30 @@ async fn complete_assistant_reply(
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
     let skill_id = active_skill_id.filter(|id| !id.trim().is_empty());
-    let active_skill = skill_id
-        .map(|id| skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id))
-        .transpose()?;
+    let skill_registry =
+        skills::build_registry(app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
+    let active_skill_record = skill_id
+        .and_then(|id| skill_registry.find(id))
+        .cloned();
+    let active_skill_detail = skill_id.and_then(|id| {
+        skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
+    });
+    let mut effective_chat_tools = settings.chat_tools.clone();
+    let tools_capable = chat_tools_capable(&provider, &effective_chat_tools);
+    if !tools_capable && effective_chat_tools.skill_fallback_mode == "progressive" {
+        if skill_id.is_some() {
+            effective_chat_tools.skill_fallback_mode = "skill_md_only".to_string();
+        }
+    }
     let system_prompt = build_chat_system_prompt(
         &language,
         !last_user_image_paths.is_empty(),
         thinking_enabled,
-        active_skill.as_ref(),
+        &skill_registry,
+        &effective_chat_tools,
+        tools_capable,
+        skill_id,
+        active_skill_detail.as_ref(),
     );
 
     if provider_is_apple {
@@ -496,22 +512,25 @@ async fn complete_assistant_reply(
     let mut tool_records = Vec::new();
     let mut planning_reasoning_parts: Vec<String> = Vec::new();
     let mut tools = if provider.supports_tools
-        && (settings.chat_tools.enabled || settings.chat_tools.native_tools.web_search)
+        && (settings.chat_tools.enabled
+            || settings.chat_tools.native_tools.web_search
+            || settings.chat_tools.native_tools.skill_runtime)
     {
-        mcp::registry::list_enabled_tool_defs(state.inner())
+        let tools = mcp::registry::list_enabled_tool_defs(state.inner())
             .await
-            .unwrap_or_default()
+            .unwrap_or_default();
+        tools
     } else {
         Vec::new()
     };
-    if let Some(skill) = active_skill.as_ref() {
-        if !skill.meta.recommended_tools.is_empty() {
+    if let Some(skill) = active_skill_record.as_ref() {
+        if !skill.allowed_tools.is_empty() {
             tools.retain(|tool| {
-                skill
-                    .meta
-                    .recommended_tools
-                    .iter()
-                    .any(|recommended| tool_matches_recommended_name(tool, recommended))
+                tool.source == "skill"
+                    || skill
+                        .allowed_tools
+                        .iter()
+                        .any(|recommended| tool_matches_recommended_name(tool, recommended))
             });
         }
     }
@@ -520,6 +539,7 @@ async fn complete_assistant_reply(
     if !tools.is_empty() {
         let mut finalize_after_tool_loop = false;
         let mut provider_tools_unsupported = false;
+        let mut skill_cache = skills::SkillRunCache::default();
         for round in 0..max_rounds {
             if !state.is_chat_generation_active(&conversation.id, run_generation) {
                 emit_chat_stream_done(
@@ -639,6 +659,7 @@ async fn complete_assistant_reply(
                     round + 1,
                     tool,
                     tool_call,
+                    &mut skill_cache,
                 )
                 .await;
                 runtime_messages.push(serde_json::json!({
@@ -809,19 +830,67 @@ fn push_assistant_message(
     Ok(())
 }
 
+fn chat_tools_capable(
+    provider: &crate::settings::ModelProvider,
+    chat_tools: &crate::settings::ChatToolsConfig,
+) -> bool {
+    provider.supports_tools
+        && (chat_tools.enabled
+            || chat_tools.native_tools.web_search
+            || chat_tools.native_tools.skill_runtime)
+}
+
 fn build_chat_system_prompt(
     language: &str,
     has_image: bool,
     thinking_enabled: bool,
-    active_skill: Option<&skills::SkillDetail>,
+    registry: &skills::SkillRegistry,
+    chat_tools: &crate::settings::ChatToolsConfig,
+    tools_available: bool,
+    active_skill_id: Option<&str>,
+    active_skill_detail: Option<&skills::SkillDetail>,
 ) -> String {
     let mut prompt = default_system_prompt(language, has_image);
-    if let Some(skill) = active_skill {
-        if !skill.body.trim().is_empty() {
-            prompt.push_str("\n\nActive Skill:\n");
-            prompt.push_str(&skill.body);
+
+    let include_catalog = chat_tools.skill_auto_match
+        || active_skill_id.is_some()
+        || chat_tools.skill_fallback_mode != "legacy_full_body";
+    if include_catalog {
+        let catalog = skills::format_catalog(registry, active_skill_id, tools_available);
+        if !catalog.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&catalog);
         }
     }
+
+    if !chat_tools.skill_auto_match {
+        prompt.push_str("\n\nOnly activate a skill when the user explicitly selected one in the UI.");
+    }
+
+    let fallback = chat_tools.skill_fallback_mode.as_str();
+    if let Some(skill_id) = active_skill_id.filter(|id| !id.trim().is_empty()) {
+        prompt.push_str("\n\nUser explicitly selected skill: ");
+        prompt.push_str(skill_id);
+        if tools_available {
+            prompt.push_str(". Activate it with skill_activate before proceeding.");
+        } else if matches!(fallback, "skill_md_only" | "legacy_full_body") {
+            prompt.push_str(". Follow the Active Skill instructions below.");
+        } else {
+            prompt.push_str(
+                ". Progressive skill loading requires tool support; switch provider or set fallback to SKILL.md only.",
+            );
+        }
+    }
+
+    if matches!(fallback, "skill_md_only" | "legacy_full_body") {
+        if let Some(skill) = active_skill_detail {
+            if !skill.body.trim().is_empty() {
+                prompt.push_str("\n\nActive Skill:\n");
+                prompt.push_str(&skill.body);
+            }
+        }
+    }
+
     if !thinking_enabled {
         prompt.push_str(no_think_instruction(language));
     }
@@ -1291,6 +1360,7 @@ async fn execute_chat_tool_call(
     round: u8,
     tool: &ChatToolDefinition,
     call: PendingToolCall,
+    skill_cache: &mut skills::SkillRunCache,
 ) -> ToolCallRecord {
     let now = chrono::Local::now().timestamp();
     let mut record = ToolCallRecord {
@@ -1343,7 +1413,7 @@ async fn execute_chat_tool_call(
     let result = tokio::select! {
         result = timeout(
             Duration::from_millis(timeout_ms),
-            mcp::registry::call_tool(state, tool, call.arguments.clone()),
+            mcp::registry::call_tool(app, state, tool, call.arguments.clone(), Some(skill_cache)),
         ) => result,
         _ = wait_for_chat_cancel(state, conversation_id, generation) => {
             record.status = ToolCallStatus::Cancelled;

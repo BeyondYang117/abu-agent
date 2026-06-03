@@ -128,12 +128,22 @@ export type ChatMcpServer = {
 
 export type ChatNativeToolsConfig = {
   webSearch: boolean
+  skillRuntime?: boolean
+}
+
+export type SkillFileEntry = {
+  relativePath: string
+  kind: 'skillmd' | 'reference' | 'script' | 'asset' | 'other' | string
+  sizeBytes: number
 }
 
 export type ChatToolsConfig = {
   enabled: boolean
   servers: ChatMcpServer[]
   skillScanPaths: string[]
+  skillAutoMatch?: boolean
+  skillFallbackMode?: 'progressive' | 'skill_md_only' | 'legacy_full_body' | string
+  skillScriptAllowlist?: string[]
   maxToolRounds: number
   toolTimeoutMs: number
   maxToolOutputChars: number
@@ -148,6 +158,8 @@ export type SkillMeta = {
   source: string
   path?: string | null
   recommendedTools: string[]
+  disableModelInvocation?: boolean
+  files?: SkillFileEntry[]
 }
 
 export type SkillDetail = SkillMeta & {
@@ -331,12 +343,18 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     enabled: current.enabled ?? false,
     servers: Array.isArray(current.servers) ? current.servers : [],
     skillScanPaths: Array.isArray(current.skillScanPaths) ? current.skillScanPaths : [],
+    skillAutoMatch: current.skillAutoMatch ?? true,
+    skillFallbackMode: current.skillFallbackMode || 'progressive',
+    skillScriptAllowlist: Array.isArray(current.skillScriptAllowlist) && current.skillScriptAllowlist.length > 0
+      ? current.skillScriptAllowlist
+      : ['python3', 'bash', 'sh', 'node'],
     maxToolRounds: current.maxToolRounds ?? 5,
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
     maxToolOutputChars: current.maxToolOutputChars ?? 12_000,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     nativeTools: {
       webSearch: current.nativeTools?.webSearch ?? false,
+      skillRuntime: current.nativeTools?.skillRuntime ?? true,
     },
   }
 }

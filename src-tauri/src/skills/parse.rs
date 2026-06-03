@@ -1,0 +1,165 @@
+use std::{collections::HashMap, path::Path};
+
+use super::types::{parse_bool, slugify, SkillDetail, SkillMeta, SkillRecord};
+
+pub fn split_frontmatter(raw: &str) -> (HashMap<String, String>, &str) {
+    let mut map = HashMap::new();
+    let trimmed = raw.trim_start();
+    if !trimmed.starts_with("---") {
+        return (map, raw);
+    }
+    let rest = &trimmed[3..];
+    let Some(end) = rest.find("\n---") else {
+        return (map, raw);
+    };
+    let fm = &rest[..end];
+    let body = &rest[end + 4..];
+    let mut current_key: Option<String> = None;
+    let mut current_items: Vec<String> = Vec::new();
+    for line in fm.lines() {
+        let line = line.trim_end();
+        if let Some(item) = line.trim_start().strip_prefix("- ") {
+            if current_key.is_some() {
+                current_items.push(item.trim().to_string());
+            }
+            continue;
+        }
+        if let Some(key) = current_key.take() {
+            if !current_items.is_empty() {
+                map.insert(key, current_items.join(","));
+                current_items.clear();
+            }
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_string();
+        let value = value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+        if value.is_empty() {
+            current_key = Some(key);
+        } else {
+            map.insert(key, value);
+        }
+    }
+    if let Some(key) = current_key {
+        if !current_items.is_empty() {
+            map.insert(key, current_items.join(","));
+        }
+    }
+    (map, body)
+}
+
+pub fn parse_list_value(value: Option<&String>) -> Vec<String> {
+    value
+        .map(|value| {
+            value
+                .trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
+                .filter(|item| !item.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn parse_allowed_tools(frontmatter: &HashMap<String, String>) -> Vec<String> {
+    let mut tools = parse_list_value(frontmatter.get("recommended-tools"));
+    tools.extend(parse_list_value(frontmatter.get("mcp-tools")));
+    if let Some(raw) = frontmatter.get("allowed-tools") {
+        tools.extend(
+            raw.split_whitespace()
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty()),
+        );
+    }
+    tools.sort();
+    tools.dedup();
+    tools
+}
+
+pub fn parse_skill_markdown(
+    fallback_id: &str,
+    raw: &str,
+    source: &str,
+    path: Option<String>,
+    files: Vec<super::types::SkillFileEntry>,
+) -> Result<SkillDetail, String> {
+    let (frontmatter, body) = split_frontmatter(raw);
+    let name = frontmatter
+        .get("name")
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "Skill name is required".to_string())?;
+    let description = frontmatter
+        .get("description")
+        .cloned()
+        .filter(|desc| !desc.trim().is_empty())
+        .ok_or_else(|| "Skill description is required".to_string())?;
+    let recommended_tools = parse_allowed_tools(&frontmatter);
+    let disable_model_invocation = parse_bool(frontmatter.get("disable-model-invocation").map(String::as_str));
+    let id = slugify(
+        frontmatter
+            .get("id")
+            .map(String::as_str)
+            .unwrap_or(&name),
+    );
+    let _ = fallback_id;
+    Ok(SkillDetail {
+        meta: SkillMeta {
+            id,
+            name,
+            description,
+            source: source.to_string(),
+            path,
+            recommended_tools,
+            disable_model_invocation,
+            files,
+        },
+        body: body.trim().to_string(),
+    })
+}
+
+pub fn parse_skill_record(
+    skill_md_path: &Path,
+    raw: &str,
+    source: &str,
+    files: Vec<super::types::SkillFileEntry>,
+    warnings: &mut Vec<String>,
+) -> Result<SkillRecord, String> {
+    let base_dir = skill_md_path
+        .parent()
+        .ok_or_else(|| "Skill path has no parent directory".to_string())?
+        .to_path_buf();
+    let folder_name = base_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("skill");
+    let fallback_id = slugify(folder_name);
+    let detail = parse_skill_markdown(
+        &fallback_id,
+        raw,
+        source,
+        Some(skill_md_path.display().to_string()),
+        files,
+    )?;
+    if slugify(folder_name) != detail.meta.id && slugify(&detail.meta.name) != slugify(folder_name) {
+        warnings.push(format!(
+            "Skill folder {folder_name} does not match frontmatter name {}",
+            detail.meta.name
+        ));
+    }
+    let allowed_tools = detail.meta.recommended_tools.clone();
+    Ok(SkillRecord {
+        meta: detail.meta,
+        location: skill_md_path.to_path_buf(),
+        base_dir,
+        body: detail.body,
+        allowed_tools,
+    })
+}

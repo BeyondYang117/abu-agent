@@ -63,6 +63,8 @@ function normalizeSkill(skill: import('../api/tauri').SkillMeta): SkillMeta {
     source: skill.source,
     path: skill.path ?? undefined,
     recommendedTools: skill.recommendedTools,
+    disableModelInvocation: skill.disableModelInvocation,
+    files: skill.files,
   }
 }
 
@@ -149,7 +151,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       const provider = settings.providers.find((item) => item.id === activeProviderId)
       const anyMcpEnabled = settings.chatTools.enabled && settings.chatTools.servers.some((server) => server.enabled)
       const anyNativeEnabled = Boolean(settings.chatTools.nativeTools?.webSearch)
-      const requested = anyMcpEnabled || anyNativeEnabled
+      const skillRuntimeEnabled = Boolean(settings.chatTools.nativeTools?.skillRuntime)
+      const requested = anyMcpEnabled || anyNativeEnabled || skillRuntimeEnabled
       setToolsRequested(requested)
       if (!requested) {
         setEnabledTools([])
@@ -160,7 +163,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       if (provider?.supportsTools === false) {
         setEnabledTools([])
         setEnabledToolCount(0)
-        setToolsDisabledReason('当前模型不支持 tools')
+        if (skillRuntimeEnabled && activeSkillId) {
+          setToolsDisabledReason('当前模型不支持 tools；已选 Skill 时将注入 SKILL.md')
+        } else if (skillRuntimeEnabled) {
+          setToolsDisabledReason('Skill 渐进式加载需要 tools 支持；已选 Skill 时将注入 SKILL.md')
+        } else {
+          setToolsDisabledReason('当前模型不支持 tools')
+        }
         return
       }
       const result = await api.chatMcpListTools()
@@ -174,7 +183,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setEnabledToolCount(null)
       setToolsDisabledReason(err instanceof Error ? err.message : String(err))
     }
-  }, [activeProviderId])
+  }, [activeProviderId, activeSkillId])
 
   const unavailableRecommendedTools = useMemo(
     () =>
@@ -186,6 +195,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const toolStatusHint = useMemo(() => {
     if (toolsDisabledReason && (enabledToolCount ?? 0) === 0 && (toolsRequested || activeSkillRecommendedTools.length > 0)) {
+      if (toolsDisabledReason.includes('不支持 tools') && activeSkillId) {
+        return toolsDisabledReason
+      }
       return activeSkillRecommendedTools.length > 0
         ? `当前 Skill 需要工具，但${toolsDisabledReason}`
         : toolsDisabledReason
@@ -197,7 +209,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       return `当前 Skill 推荐的工具不可用：${unavailableRecommendedTools.slice(0, 3).join(', ')}`
     }
     return ''
-  }, [activeSkillRecommendedTools.length, enabledToolCount, toolsDisabledReason, toolsRequested, unavailableRecommendedTools])
+  }, [activeSkillId, activeSkillRecommendedTools.length, enabledToolCount, toolsDisabledReason, toolsRequested, unavailableRecommendedTools])
 
   const sendDisabledReason = activeSkillRecommendedTools.length > 0 ? toolStatusHint : ''
 

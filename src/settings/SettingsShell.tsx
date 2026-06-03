@@ -74,11 +74,14 @@ function defaultChatTools(): ChatToolsConfig {
     enabled: false,
     servers: [],
     skillScanPaths: [],
+    skillAutoMatch: true,
+    skillFallbackMode: 'progressive',
+    skillScriptAllowlist: ['python3', 'bash', 'sh', 'node'],
     maxToolRounds: 5,
     toolTimeoutMs: 60_000,
     maxToolOutputChars: 12_000,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
-    nativeTools: { webSearch: false },
+    nativeTools: { webSearch: false, skillRuntime: true },
   }
 }
 
@@ -2204,6 +2207,47 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       </button>
                     </div>
                   </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? 'Skill 运行时' : 'Skill runtime'}
+                    description={lang === 'zh' ? '启用 skill_activate / skill_read_file / skill_run_script 原生工具' : 'Enable native skill_activate, skill_read_file, and skill_run_script tools'}
+                  >
+                    <Toggle
+                      checked={chatTools.nativeTools?.skillRuntime !== false}
+                      onChange={(skillRuntime) => updateChatTools({
+                        nativeTools: { ...(chatTools.nativeTools || { webSearch: false }), skillRuntime },
+                      })}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? '自动匹配 Skill' : 'Auto-match skills'}
+                    description={lang === 'zh' ? '允许模型根据 description 自动 activate skill' : 'Allow the model to activate skills from the catalog automatically'}
+                  >
+                    <Toggle
+                      checked={chatTools.skillAutoMatch !== false}
+                      onChange={(skillAutoMatch) => updateChatTools({ skillAutoMatch })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '无 Tools 降级模式' : 'Fallback without tools'} stack>
+                    <Select
+                      value={chatTools.skillFallbackMode || 'progressive'}
+                      onChange={(skillFallbackMode) => updateChatTools({ skillFallbackMode })}
+                      options={[
+                        { value: 'progressive', label: lang === 'zh' ? '渐进式（仅 catalog）' : 'Progressive (catalog only)' },
+                        { value: 'skill_md_only', label: lang === 'zh' ? '仅 SKILL.md' : 'SKILL.md only' },
+                        { value: 'legacy_full_body', label: lang === 'zh' ? '旧版全量注入' : 'Legacy full body' },
+                      ]}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '脚本解释器白名单' : 'Script interpreter allowlist'} stack>
+                    <Input
+                      mono
+                      value={(chatTools.skillScriptAllowlist || []).join(', ')}
+                      onChange={(value) => updateChatTools({
+                        skillScriptAllowlist: value.split(',').map((item) => item.trim()).filter(Boolean),
+                      })}
+                      placeholder="python3, bash, sh, node"
+                    />
+                  </SettingRow>
                   {skillError && <div className="kv-inline-error">{skillError}</div>}
                   <div className="space-y-2 py-2">
                     {skills.map((skill) => (
@@ -2222,6 +2266,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                               <span className="kv-tag ml-2">{skill.source}</span>
                             </div>
                             <div className="kv-panel-body">{skill.description}</div>
+                            {(skill.files?.length ?? 0) > 0 && (
+                              <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                                {skill.files?.length} {lang === 'zh' ? '个附属文件' : 'bundled files'}
+                              </div>
+                            )}
+                            {skill.disableModelInvocation && (
+                              <div className="mt-1">
+                                <span className="kv-chip">{lang === 'zh' ? '仅手动触发' : 'Manual only'}</span>
+                              </div>
+                            )}
                             {skill.recommendedTools.length > 0 && (
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {skill.recommendedTools.map((tool) => (

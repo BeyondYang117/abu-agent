@@ -13,9 +13,11 @@ use crate::{
 use super::{
     client::{StdioMcpClient, StreamableHttpMcpClient},
     types::{
-        native_web_search_tool, tool_definition_from_mcp, ChatToolDefinition, McpToolCallResult,
+        native_skill_tools, native_web_search_tool, tool_definition_from_mcp, ChatToolDefinition,
+        McpToolCallResult,
     },
 };
+use tauri::AppHandle;
 
 const TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
@@ -117,6 +119,8 @@ pub async fn list_enabled_tool_defs(state: &AppState) -> Result<Vec<ChatToolDefi
         }
     }
 
+    tools.extend(list_skill_tool_defs(&settings));
+
     state.set_cached_chat_tools(cache_key, tools.clone());
     Ok(tools)
 }
@@ -186,9 +190,11 @@ pub fn chat_mcp_import_json(path: String) -> McpImportResult {
 }
 
 pub async fn call_tool(
+    app: &AppHandle,
     state: &AppState,
     tool: &ChatToolDefinition,
     arguments: Value,
+    skill_cache: Option<&mut crate::skills::SkillRunCache>,
 ) -> Result<McpToolCallResult, String> {
     if tool.source == "native" && tool.name == "web_search" {
         let settings = state.settings_read().clone();
@@ -215,6 +221,10 @@ pub async fn call_tool(
             is_error: false,
             raw: serde_json::to_value(results).unwrap_or(Value::Null),
         });
+    }
+
+    if tool.source == "skill" {
+        return call_skill_tool(app, state, tool, arguments, skill_cache).await;
     }
 
     let server_id = tool
@@ -307,5 +317,68 @@ fn web_search_configured(settings: &crate::settings::Settings) -> bool {
     match settings.lens.web_search.provider {
         WebSearchProvider::Tavily => !settings.lens.web_search.tavily_api_key.trim().is_empty(),
         WebSearchProvider::Exa => !settings.lens.web_search.exa_api_key.trim().is_empty(),
+    }
+}
+
+async fn call_skill_tool(
+    app: &AppHandle,
+    state: &AppState,
+    tool: &ChatToolDefinition,
+    arguments: Value,
+    skill_cache: Option<&mut crate::skills::SkillRunCache>,
+) -> Result<McpToolCallResult, String> {
+    let settings = state.settings_read().clone();
+    let registry = crate::skills::build_registry(app, &settings.chat_tools.skill_scan_paths)?;
+    let skill_name = crate::skills::extract_skill_name(&arguments)?;
+    let record = crate::skills::lookup_skill(&registry, &skill_name)
+        .ok_or_else(|| format!("Skill not found: {skill_name}"))?;
+
+    let content = match tool.name.as_str() {
+        "skill_activate" => {
+            if let Some(cache) = skill_cache {
+                cache.activate_with_cache(record)
+            } else {
+                crate::skills::activate_skill(record)
+            }
+        }
+        "skill_read_file" => {
+            let relative_path = crate::skills::extract_relative_path(&arguments)?;
+            if let Some(cache) = skill_cache {
+                cache.read_file_with_cache(record, &relative_path)?
+            } else {
+                crate::skills::read_skill_file(record, &relative_path)?
+            }
+        }
+        "skill_run_script" => {
+            let relative_path = crate::skills::extract_relative_path(&arguments)?;
+            let args = crate::skills::extract_script_args(&arguments);
+            crate::skills::run_skill_script(
+                record,
+                &relative_path,
+                &args,
+                settings.chat_tools.tool_timeout_ms,
+                &settings.chat_tools.skill_script_allowlist,
+            )
+            .await?
+        }
+        other => return Err(format!("Unknown skill tool: {other}")),
+    };
+
+    Ok(McpToolCallResult {
+        content,
+        is_error: false,
+        raw: Value::Null,
+    })
+}
+
+pub fn skill_runtime_tools_enabled(settings: &crate::settings::Settings) -> bool {
+    settings.chat_tools.native_tools.skill_runtime
+}
+
+pub fn list_skill_tool_defs(settings: &crate::settings::Settings) -> Vec<ChatToolDefinition> {
+    if skill_runtime_tools_enabled(settings) {
+        native_skill_tools()
+    } else {
+        Vec::new()
     }
 }

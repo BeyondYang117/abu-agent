@@ -259,8 +259,17 @@ export function InputBar({
   const activeSkill = skills.find((skill) => skill.id === activeSkillId) ?? null
   const activeSkillTools = recommendedTools(activeSkill)
   const hasToolProblem = Boolean(toolsDisabledReason || toolStatusHint || sendDisabledReason)
+  const skillToolCount = enabledTools.filter((tool) => tool.source === 'skill').length
+  const mcpToolCount = enabledTools.filter((tool) => tool.source !== 'skill').length
   const toolSummary = toolsDisabledReason
-    || (toolCount !== undefined && toolCount > 0 ? `已启用 ${toolCount} 个工具` : '未启用工具')
+    || (toolCount !== undefined && toolCount > 0
+      ? (() => {
+          const parts: string[] = []
+          if (skillToolCount > 0) parts.push(`Skill ${skillToolCount}`)
+          if (mcpToolCount > 0) parts.push(`MCP ${mcpToolCount}`)
+          return parts.length > 0 ? `已启用 ${parts.join(' · ')}` : `已启用 ${toolCount} 个工具`
+        })()
+      : '未启用工具')
 
   return (
     <div className={wrapperClass}>
