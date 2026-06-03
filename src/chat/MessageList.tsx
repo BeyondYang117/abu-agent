@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type { ChatMessage } from './types'
+import type { ChatMessage, ToolCallRecord } from './types'
 import { MessageBubble } from './MessageBubble'
 
 export interface AssistantStreamStats {
@@ -12,6 +12,7 @@ interface MessageListProps {
   streaming?: boolean
   streamingContent?: string
   streamingReasoning?: string
+  streamingToolCalls?: ToolCallRecord[]
   error?: string
   lastAssistantStreamStats?: AssistantStreamStats | null
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
@@ -24,6 +25,7 @@ export function MessageList({
   streaming,
   streamingContent = '',
   streamingReasoning = '',
+  streamingToolCalls = [],
   error,
   lastAssistantStreamStats = null,
   onUpdateMessage,
@@ -43,7 +45,7 @@ export function MessageList({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages, streaming, streamingContent, streamingReasoning, error])
+  }, [messages, streaming, streamingContent, streamingReasoning, streamingToolCalls, error])
 
   return (
     <div ref={scrollRef} className="custom-scrollbar flex-1 overflow-y-auto">
@@ -65,19 +67,20 @@ export function MessageList({
           />
         ))}
 
-        {streaming && (streamingContent || streamingReasoning) && (
+        {streaming && (streamingContent || streamingReasoning || streamingToolCalls.length > 0) && (
           <MessageBubble
             message={{
               id: 'streaming-assistant',
               role: 'assistant',
               content: streamingContent,
               reasoning: streamingReasoning || undefined,
+              tool_calls: streamingToolCalls,
               timestamp: Math.floor(Date.now() / 1000),
             }}
           />
         )}
 
-        {streaming && !streamingContent && !streamingReasoning && (
+        {streaming && !streamingContent && !streamingReasoning && streamingToolCalls.length === 0 && (
           <div className="flex justify-start py-3">
             <div className="flex items-center gap-2 text-sm text-neutral-400">
               <span className="flex gap-1">

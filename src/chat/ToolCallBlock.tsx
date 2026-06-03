@@ -1,0 +1,263 @@
+import { useMemo, useState } from 'react'
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  CircleSlash,
+  Loader2,
+  Wrench,
+  XCircle,
+} from 'lucide-react'
+import type { ToolCallRecord, ToolCallStatus } from './types'
+
+export interface ToolCallBlockLabels {
+  pending: string
+  running: string
+  success: string
+  completed: string
+  error: string
+  skipped: string
+  cancelled: string
+  arguments: string
+  result: string
+  source: string
+  tool: string
+}
+
+export interface ToolCallBlockProps {
+  toolCall: ToolCallRecord
+  defaultOpen?: boolean
+  labels?: Partial<ToolCallBlockLabels>
+}
+
+const defaultLabels: ToolCallBlockLabels = {
+  pending: '等待调用',
+  running: '调用中',
+  success: '已完成',
+  completed: '已完成',
+  error: '调用失败',
+  skipped: '已跳过',
+  cancelled: '已取消',
+  arguments: '参数',
+  result: '结果',
+  source: '来源',
+  tool: '工具',
+}
+
+function compactText(text: string, max = 220): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim()
+  if (cleaned.length <= max) return cleaned
+  return `${cleaned.slice(0, max).trimEnd()}...`
+}
+
+function previewValue(value: unknown, max = 220): string {
+  if (value == null) return ''
+  if (typeof value === 'string') return compactText(value, max)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return compactText(JSON.stringify(value, null, 2), max)
+  } catch {
+    return compactText(String(value), max)
+  }
+}
+
+function normalizeStatus(status?: string): ToolCallStatus {
+  switch (status) {
+    case 'running':
+    case 'in_progress':
+    case 'calling':
+    case 'executing':
+      return 'running'
+    case 'completed':
+    case 'success':
+    case 'succeeded':
+      return 'completed'
+    case 'error':
+    case 'failed':
+      return 'error'
+    case 'skipped':
+      return 'skipped'
+    case 'cancelled':
+    case 'canceled':
+      return 'cancelled'
+    case 'pending':
+    case 'queued':
+    default:
+      return 'pending'
+  }
+}
+
+function formatDuration(ms?: number): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.round(ms / 1000)}s`
+}
+
+function getDuration(toolCall: ToolCallRecord): number | undefined {
+  if (toolCall.duration_ms != null) return toolCall.duration_ms
+  if (toolCall.durationMs != null) return toolCall.durationMs
+
+  const startedAt = toolCall.started_at ?? toolCall.startedAt
+  const completedAt = toolCall.completed_at ?? toolCall.completedAt
+  if (startedAt == null || completedAt == null) return undefined
+
+  const delta = completedAt - startedAt
+  return delta > 0 && delta < 10_000 ? delta * 1000 : delta
+}
+
+function getToolName(toolCall: ToolCallRecord): string {
+  return toolCall.tool_name || toolCall.toolName || toolCall.name || 'Tool'
+}
+
+function getSource(toolCall: ToolCallRecord): string {
+  return (
+    toolCall.server_name ||
+    toolCall.serverName ||
+    toolCall.source ||
+    toolCall.server_id ||
+    toolCall.serverId ||
+    ''
+  )
+}
+
+function getArgumentPreview(toolCall: ToolCallRecord): string {
+  return (
+    toolCall.argument_preview ||
+    toolCall.argumentPreview ||
+    toolCall.argumentsPreview ||
+    previewValue(toolCall.arguments ?? toolCall.args ?? toolCall.input)
+  )
+}
+
+function getResultPreview(toolCall: ToolCallRecord): string {
+  return (
+    toolCall.result_preview ||
+    toolCall.resultPreview ||
+    previewValue(toolCall.result ?? toolCall.output)
+  )
+}
+
+function StatusIcon({ status }: { status: ToolCallStatus }) {
+  if (status === 'running') {
+    return <Loader2 className="shrink-0 animate-spin" size={12} />
+  }
+  if (status === 'completed') {
+    return (
+      <CheckCircle2
+        className="shrink-0 text-[#C56646] dark:text-[#E39A78]"
+        size={12}
+        strokeWidth={1.9}
+      />
+    )
+  }
+  if (status === 'error') {
+    return <AlertCircle className="shrink-0 text-red-500" size={12} strokeWidth={1.9} />
+  }
+  if (status === 'skipped') {
+    return <CircleSlash className="shrink-0" size={12} strokeWidth={1.9} />
+  }
+  if (status === 'cancelled') {
+    return <XCircle className="shrink-0" size={12} strokeWidth={1.9} />
+  }
+  return <Wrench className="shrink-0" size={12} strokeWidth={1.85} />
+}
+
+export function ToolCallBlock({
+  toolCall,
+  defaultOpen = false,
+  labels,
+}: ToolCallBlockProps) {
+  const mergedLabels = { ...defaultLabels, ...labels }
+  const status = normalizeStatus(toolCall.status)
+  const [open, setOpen] = useState(defaultOpen || status === 'error')
+
+  const toolName = getToolName(toolCall)
+  const source = getSource(toolCall)
+  const duration = formatDuration(getDuration(toolCall))
+  const argumentPreview = useMemo(() => getArgumentPreview(toolCall), [toolCall])
+  const resultPreview = useMemo(() => getResultPreview(toolCall), [toolCall])
+  const error = toolCall.error ? compactText(toolCall.error, 260) : ''
+  const rowPreview = error || resultPreview || argumentPreview
+  const hasDetails = Boolean(argumentPreview || resultPreview || error)
+
+  return (
+    <div className="not-prose mb-2 text-[11.5px] leading-5 text-neutral-500 dark:text-neutral-400">
+      <button
+        type="button"
+        onClick={() => {
+          if (hasDetails) setOpen((value) => !value)
+        }}
+        className={`max-w-full min-w-0 inline-flex items-center gap-1.5 rounded-md py-0.5 transition-colors ${
+          hasDetails
+            ? 'hover:text-neutral-700 dark:hover:text-neutral-200'
+            : 'cursor-default'
+        }`}
+      >
+        <StatusIcon status={status} />
+        <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
+          {toolName || mergedLabels.tool}
+        </span>
+        {source && (
+          <span className="min-w-0 truncate text-neutral-400 dark:text-neutral-500">
+            · {source}
+          </span>
+        )}
+        <span className="shrink-0 text-neutral-400 dark:text-neutral-500">
+          · {mergedLabels[status]}
+        </span>
+        {duration && (
+          <span className="shrink-0 tabular-nums text-neutral-400 dark:text-neutral-500">
+            · {duration}
+          </span>
+        )}
+        {rowPreview && (
+          <span
+            className={`min-w-0 truncate ${
+              error ? 'text-red-500' : 'text-neutral-400 dark:text-neutral-500'
+            }`}
+          >
+            · {rowPreview}
+          </span>
+        )}
+        {hasDetails && (
+          <ChevronDown
+            size={11}
+            strokeWidth={2}
+            className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+          />
+        )}
+      </button>
+
+      {open && hasDetails && (
+        <div className="mt-1.5 ml-1.5 space-y-1.5 border-l border-black/[0.08] pl-2.5 dark:border-white/[0.1]">
+          {argumentPreview && (
+            <div>
+              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+                {mergedLabels.arguments}
+              </div>
+              <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
+                {argumentPreview}
+              </div>
+            </div>
+          )}
+          {resultPreview && (
+            <div>
+              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+                {mergedLabels.result}
+              </div>
+              <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
+                {resultPreview}
+              </div>
+            </div>
+          )}
+          {error && (
+            <div className="whitespace-pre-wrap break-words text-red-500">
+              {error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

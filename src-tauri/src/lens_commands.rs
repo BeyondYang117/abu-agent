@@ -761,19 +761,8 @@ pub(crate) async fn lens_ask(
             plan.query = user_question.trim().chars().take(180).collect();
         }
         if !plan.should_search {
-            eprintln!(
-                "[lens-web-search] ai_tool=none reason={:?}",
-                plan.reason
-            );
-            emit_lens_web_search(
-                &app,
-                &image_id,
-                "skipped",
-                "",
-                &plan.reason,
-                &[],
-                None,
-            );
+            eprintln!("[lens-web-search] ai_tool=none reason={:?}", plan.reason);
+            emit_lens_web_search(&app, &image_id, "skipped", "", &plan.reason, &[], None);
             String::new()
         } else if plan.query.trim().is_empty() {
             eprintln!("[lens-web-search] ai_tool=web_search but query is empty");
@@ -795,9 +784,7 @@ pub(crate) async fn lens_ask(
             );
             eprintln!(
                 "[lens-web-search] ai_tool=web_search provider={:?} query={:?} reason={:?}",
-                settings.lens.web_search.provider,
-                plan.query,
-                plan.reason
+                settings.lens.web_search.provider, plan.query, plan.reason
             );
             emit_lens_web_search(
                 &app,
@@ -808,7 +795,14 @@ pub(crate) async fn lens_ask(
                 &[],
                 None,
             );
-            match search_web(&state, &settings.lens.web_search, &plan.query, retry_attempts).await {
+            match search_web(
+                &state,
+                &settings.lens.web_search,
+                &plan.query,
+                retry_attempts,
+            )
+            .await
+            {
                 Ok(results) => {
                     let tool_result = if results.is_empty() {
                         "Web search was requested, but the search provider returned no results. Do not claim current web facts from search."
@@ -860,9 +854,7 @@ pub(crate) async fn lens_ask(
         }
     } else {
         if web_search_requested {
-            eprintln!(
-                "[lens-web-search] requested=true but disabled in settings"
-            );
+            eprintln!("[lens-web-search] requested=true but disabled in settings");
         }
         String::new()
     };
@@ -878,12 +870,19 @@ pub(crate) async fn lens_ask(
         .map(|message| message.content.clone())
         .unwrap_or_default();
     if !question_prompt.is_empty() {
-        if let Some(first_user) = api_messages.iter_mut().find(|message| message.role == "user") {
+        if let Some(first_user) = api_messages
+            .iter_mut()
+            .find(|message| message.role == "user")
+        {
             first_user.content = format!("{}\n\n用户问题：{}", question_prompt, first_user.content);
         }
     }
     if !thinking_enabled {
-        if let Some(last_user) = api_messages.iter_mut().rev().find(|message| message.role == "user") {
+        if let Some(last_user) = api_messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.role == "user")
+        {
             last_user.content.push_str(" /no_think");
         }
     }
@@ -969,8 +968,21 @@ fn explicitly_requests_web_search(text: &str) -> bool {
 fn cleanup_explicit_search_query(text: &str) -> String {
     let mut query = text.trim().to_string();
     for marker in [
-        "帮我", "请", "搜索一下", "搜索", "搜一下", "查一下", "联网查一下", "联网查", "上网查一下",
-        "上网查", "web search", "search the web", "search web", "look up", "google",
+        "帮我",
+        "请",
+        "搜索一下",
+        "搜索",
+        "搜一下",
+        "查一下",
+        "联网查一下",
+        "联网查",
+        "上网查一下",
+        "上网查",
+        "web search",
+        "search the web",
+        "search web",
+        "look up",
+        "google",
     ] {
         query = query.replace(marker, " ");
     }
@@ -1060,10 +1072,18 @@ async fn plan_lens_web_search_tool_call(
 }
 
 fn parse_web_search_tool_plan(raw: &str) -> Result<WebSearchToolPlan, String> {
-    let json_text = extract_first_json_object(raw)
-        .ok_or_else(|| format!("tool planner returned non-JSON: {}", raw.chars().take(300).collect::<String>()))?;
-    let value: serde_json::Value = serde_json::from_str(&json_text)
-        .map_err(|err| format!("tool planner JSON parse failed: {err}; body: {}", raw.chars().take(300).collect::<String>()))?;
+    let json_text = extract_first_json_object(raw).ok_or_else(|| {
+        format!(
+            "tool planner returned non-JSON: {}",
+            raw.chars().take(300).collect::<String>()
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&json_text).map_err(|err| {
+        format!(
+            "tool planner JSON parse failed: {err}; body: {}",
+            raw.chars().take(300).collect::<String>()
+        )
+    })?;
     let tool = value.get("tool").and_then(|v| v.as_str()).unwrap_or("none");
     let query = value
         .get("query")

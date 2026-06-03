@@ -1,14 +1,28 @@
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { Settings as SettingsIcon, Cpu } from 'lucide-react'
+import { listen } from '@tauri-apps/api/event'
 import { api } from './api/tauri'
 import { i18n, type Lang } from './settings/i18n'
 import { useWindowInteractionFocus } from './utils/windowFocus'
 import { usesNativeTitlebar } from './chat/platform'
+import {
+  getRememberedChatRoute,
+  getRememberedChatSize,
+  hashPath,
+  isChatPath,
+  isChatSettingsPath,
+  rememberChatSize,
+  rememberCurrentChatRoute,
+} from './chat/persistence'
 import './index.css'
 
 const Settings = lazy(() => import('./Settings'))
 const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
+
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
 
 /**
  * 翻译器主组件
@@ -198,7 +212,7 @@ function App() {
     const path = urlParams.get('mode') || hash.split('?')[0] || ''
 
     // 支持 #chat 或 #chat/conversation-id
-    if (path === 'chat' || path.startsWith('chat/')) {
+    if (isChatPath(path)) {
       return 'chat'
     }
 
@@ -211,6 +225,21 @@ function App() {
   const [lang, setLang] = useState<Lang>('zh')
   const settingsOpenPendingRef = useRef(mode === 'settings')
   const settingsReadyRef = useRef(false)
+
+  useEffect(() => {
+    const path = hashPath()
+    if (path === 'chat') {
+      const rememberedRoute = getRememberedChatRoute()
+      if (rememberedRoute && rememberedRoute !== window.location.hash) {
+        window.location.hash = rememberedRoute
+        setMode('chat')
+      }
+      return
+    }
+    if (isChatPath(path)) {
+      rememberCurrentChatRoute()
+    }
+  }, [])
 
   // 应用主题设置
   const applyTheme = async () => {
@@ -241,15 +270,90 @@ function App() {
   // 监听 hash 变化切换模式
   useEffect(() => {
     const handler = () => {
+      const path = hashPath()
       const nextMode = getMode()
       if (nextMode === 'settings') {
         settingsOpenPendingRef.current = true
+      }
+      if (isChatPath(path)) {
+        rememberCurrentChatRoute()
       }
       setMode(nextMode)
     }
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    let cleanup: (() => void) | undefined
+
+    listen('chat-open-request', () => {
+      const path = hashPath()
+      if (isChatPath(path) && path !== 'chat' && !isChatSettingsPath(path)) return
+      const rememberedRoute = getRememberedChatRoute()
+      if (rememberedRoute && rememberedRoute !== window.location.hash) {
+        window.location.hash = rememberedRoute
+        setMode('chat')
+      }
+    }).then((unlisten) => {
+      if (cancelled) {
+        unlisten()
+      } else {
+        cleanup = unlisten
+      }
+    }).catch((err) => {
+      console.error('[App] Failed to listen for chat open requests:', err)
+    })
+
+    return () => {
+      cancelled = true
+      cleanup?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (mode !== 'chat') return
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    let readyToRemember = false
+
+    const setup = async () => {
+      try {
+        const win = (await import('@tauri-apps/api/window')).getCurrentWindow()
+        const rememberedSize = getRememberedChatSize()
+        await api.resizeWindow(rememberedSize.width, rememberedSize.height)
+        const scaleFactor = await win.scaleFactor()
+        await new Promise(resolve => window.setTimeout(resolve, 0))
+        const size = await win.innerSize()
+        if (!cancelled) {
+          const logical = size.toLogical(scaleFactor)
+          rememberChatSize(logical.width, logical.height)
+          readyToRemember = true
+        }
+        const handler = await win.onResized(({ payload }) => {
+          if (!readyToRemember) return
+          const logical = payload.toLogical(scaleFactor)
+          rememberChatSize(logical.width, logical.height)
+        })
+        if (cancelled) {
+          handler()
+        } else {
+          unlisten = handler
+        }
+      } catch (err) {
+        console.error('[App] Failed to remember chat window size:', err)
+      }
+    }
+
+    void setup()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [mode])
 
   const revealSettingsWindow = useCallback(async () => {
     if (!settingsOpenPendingRef.current) return
@@ -292,8 +396,6 @@ function App() {
     const resize = async () => {
       if (mode === 'settings') {
         await api.resizeWindow(640, 520)
-      } else if (mode === 'chat') {
-        await api.resizeWindow(1280, 800)
       } else if (mode === '' || mode === 'translator') {
         await api.resizeWindow(392, 152)
       }

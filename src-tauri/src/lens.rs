@@ -7,159 +7,160 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowInfo {
-  pub id: u32,
-  pub owner: String,
-  pub title: String,
-  pub x: f64,
-  pub y: f64,
-  pub width: f64,
-  pub height: f64,
+    pub id: u32,
+    pub owner: String,
+    pub title: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[cfg(target_os = "macos")]
 pub fn list_windows() -> Vec<WindowInfo> {
-  use core_foundation::array::{CFArray, CFArrayRef};
-  use core_foundation::base::{CFType, TCFType};
-  use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-  use core_graphics::window::{
-    kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
-    CGWindowListCopyWindowInfo,
-  };
-
-  let info_ref: CFArrayRef = unsafe {
-    CGWindowListCopyWindowInfo(
-      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
-      kCGNullWindowID,
-    )
-  };
-  if info_ref.is_null() {
-    return Vec::new();
-  }
-  // 数组元素类型为 untyped CFType；每个元素本身是一个 CFDictionary。
-  let array: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(info_ref) };
-
-  let mut out = Vec::new();
-  for item in array.iter() {
-    let dict_ref = item.as_CFTypeRef() as CFDictionaryRef;
-    if dict_ref.is_null() {
-      continue;
-    }
-    let dict: CFDictionary = unsafe { CFDictionary::wrap_under_get_rule(dict_ref) };
-
-    let layer = read_dict_i64(&dict, "kCGWindowLayer").unwrap_or(-1);
-    let alpha = read_dict_f64(&dict, "kCGWindowAlpha").unwrap_or(1.0);
-    let id = read_dict_i64(&dict, "kCGWindowNumber").unwrap_or(0);
-    let owner = read_dict_string(&dict, "kCGWindowOwnerName").unwrap_or_default();
-    let title = read_dict_string(&dict, "kCGWindowName").unwrap_or_default();
-
-    let bounds_dict = read_dict_subdict(&dict, "kCGWindowBounds");
-    let (bx, by, bw, bh) = if let Some(b) = bounds_dict {
-      (
-        read_dict_f64(&b, "X").unwrap_or(0.0),
-        read_dict_f64(&b, "Y").unwrap_or(0.0),
-        read_dict_f64(&b, "Width").unwrap_or(0.0),
-        read_dict_f64(&b, "Height").unwrap_or(0.0),
-      )
-    } else {
-      (0.0, 0.0, 0.0, 0.0)
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_graphics::window::{
+        kCGNullWindowID, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
+        CGWindowListCopyWindowInfo,
     };
 
-    let mut reason: Option<&str> = None;
-    if id <= 0 {
-      reason = Some("no-id");
-    } else if layer != 0 {
-      reason = Some("layer!=0");
-    } else if alpha < 0.05 {
-      reason = Some("alpha~0");
-    } else if owner == "Kivio" || owner == "kivio" || owner == "KeyLingo" || owner == "keylingo" {
-      // 同时匹配新名 Kivio 和旧名 KeyLingo —— 旧版本仍在运行的 macOS 实例可能 owner 是 KeyLingo
-      reason = Some("self");
-    } else if bw < 60.0 || bh < 40.0 {
-      reason = Some("too-small");
+    let info_ref: CFArrayRef = unsafe {
+        CGWindowListCopyWindowInfo(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+    };
+    if info_ref.is_null() {
+        return Vec::new();
     }
+    // 数组元素类型为 untyped CFType；每个元素本身是一个 CFDictionary。
+    let array: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(info_ref) };
 
-    if reason.is_some() {
-      continue;
+    let mut out = Vec::new();
+    for item in array.iter() {
+        let dict_ref = item.as_CFTypeRef() as CFDictionaryRef;
+        if dict_ref.is_null() {
+            continue;
+        }
+        let dict: CFDictionary = unsafe { CFDictionary::wrap_under_get_rule(dict_ref) };
+
+        let layer = read_dict_i64(&dict, "kCGWindowLayer").unwrap_or(-1);
+        let alpha = read_dict_f64(&dict, "kCGWindowAlpha").unwrap_or(1.0);
+        let id = read_dict_i64(&dict, "kCGWindowNumber").unwrap_or(0);
+        let owner = read_dict_string(&dict, "kCGWindowOwnerName").unwrap_or_default();
+        let title = read_dict_string(&dict, "kCGWindowName").unwrap_or_default();
+
+        let bounds_dict = read_dict_subdict(&dict, "kCGWindowBounds");
+        let (bx, by, bw, bh) = if let Some(b) = bounds_dict {
+            (
+                read_dict_f64(&b, "X").unwrap_or(0.0),
+                read_dict_f64(&b, "Y").unwrap_or(0.0),
+                read_dict_f64(&b, "Width").unwrap_or(0.0),
+                read_dict_f64(&b, "Height").unwrap_or(0.0),
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+
+        let mut reason: Option<&str> = None;
+        if id <= 0 {
+            reason = Some("no-id");
+        } else if layer != 0 {
+            reason = Some("layer!=0");
+        } else if alpha < 0.05 {
+            reason = Some("alpha~0");
+        } else if owner == "Kivio" || owner == "kivio" || owner == "KeyLingo" || owner == "keylingo"
+        {
+            // 同时匹配新名 Kivio 和旧名 KeyLingo —— 旧版本仍在运行的 macOS 实例可能 owner 是 KeyLingo
+            reason = Some("self");
+        } else if bw < 60.0 || bh < 40.0 {
+            reason = Some("too-small");
+        }
+
+        if reason.is_some() {
+            continue;
+        }
+        out.push(WindowInfo {
+            id: id as u32,
+            owner,
+            title,
+            x: bx,
+            y: by,
+            width: bw,
+            height: bh,
+        });
     }
-    out.push(WindowInfo {
-      id: id as u32,
-      owner,
-      title,
-      x: bx,
-      y: by,
-      width: bw,
-      height: bh,
-    });
-  }
-  out
+    out
 }
 
 #[cfg(target_os = "macos")]
 fn read_dict_value(
-  dict: &core_foundation::dictionary::CFDictionary,
-  key: &str,
+    dict: &core_foundation::dictionary::CFDictionary,
+    key: &str,
 ) -> Option<core_foundation::base::CFType> {
-  use core_foundation::base::{CFType, TCFType};
-  use core_foundation::string::CFString;
-  let cfk = CFString::new(key);
-  unsafe {
-    let raw = dict.find(cfk.as_CFTypeRef() as *const _);
-    raw.map(|r| CFType::wrap_under_get_rule(*r))
-  }
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::string::CFString;
+    let cfk = CFString::new(key);
+    unsafe {
+        let raw = dict.find(cfk.as_CFTypeRef() as *const _);
+        raw.map(|r| CFType::wrap_under_get_rule(*r))
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn read_dict_i64(dict: &core_foundation::dictionary::CFDictionary, key: &str) -> Option<i64> {
-  use core_foundation::number::CFNumber;
-  read_dict_value(dict, key)
-    .and_then(|v| v.downcast::<CFNumber>())
-    .and_then(|n| n.to_i64())
+    use core_foundation::number::CFNumber;
+    read_dict_value(dict, key)
+        .and_then(|v| v.downcast::<CFNumber>())
+        .and_then(|n| n.to_i64())
 }
 
 #[cfg(target_os = "macos")]
 fn read_dict_f64(dict: &core_foundation::dictionary::CFDictionary, key: &str) -> Option<f64> {
-  use core_foundation::number::CFNumber;
-  read_dict_value(dict, key)
-    .and_then(|v| v.downcast::<CFNumber>())
-    .and_then(|n| n.to_f64())
+    use core_foundation::number::CFNumber;
+    read_dict_value(dict, key)
+        .and_then(|v| v.downcast::<CFNumber>())
+        .and_then(|n| n.to_f64())
 }
 
 #[cfg(target_os = "macos")]
 fn read_dict_string(dict: &core_foundation::dictionary::CFDictionary, key: &str) -> Option<String> {
-  use core_foundation::string::CFString;
-  read_dict_value(dict, key)
-    .and_then(|v| v.downcast::<CFString>())
-    .map(|s| s.to_string())
+    use core_foundation::string::CFString;
+    read_dict_value(dict, key)
+        .and_then(|v| v.downcast::<CFString>())
+        .map(|s| s.to_string())
 }
 
 #[cfg(target_os = "macos")]
 fn read_dict_subdict(
-  dict: &core_foundation::dictionary::CFDictionary,
-  key: &str,
+    dict: &core_foundation::dictionary::CFDictionary,
+    key: &str,
 ) -> Option<core_foundation::dictionary::CFDictionary> {
-  use core_foundation::base::TCFType;
-  use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-  let v = read_dict_value(dict, key)?;
-  let r = v.as_CFTypeRef() as CFDictionaryRef;
-  if r.is_null() {
-    return None;
-  }
-  Some(unsafe { CFDictionary::wrap_under_get_rule(r) })
+    use core_foundation::base::TCFType;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    let v = read_dict_value(dict, key)?;
+    let r = v.as_CFTypeRef() as CFDictionaryRef;
+    if r.is_null() {
+        return None;
+    }
+    Some(unsafe { CFDictionary::wrap_under_get_rule(r) })
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn list_windows() -> Vec<WindowInfo> {
-  Vec::new()
+    Vec::new()
 }
 
 /// 单窗口截图（macOS 14+）：走 ScreenCaptureKit (SCScreenshotManager)。
 /// 取代旧的 `screencapture -l` CLI 调用：消除几十–几百 ms 子进程冷启动 + 消除屏幕白闪。
 #[cfg(target_os = "macos")]
 pub fn capture_window(window_id: u32) -> Result<std::path::PathBuf, String> {
-  crate::sck::capture_window(window_id)
+    crate::sck::capture_window(window_id)
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn capture_window(_window_id: u32) -> Result<std::path::PathBuf, String> {
-  Err("Window capture not supported on this platform".to_string())
+    Err("Window capture not supported on this platform".to_string())
 }

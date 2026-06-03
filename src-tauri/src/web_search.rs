@@ -141,7 +141,11 @@ async fn search_tavily(
         })
         .collect();
 
-    if let Some(answer) = parsed.answer.as_deref().filter(|answer| !answer.trim().is_empty()) {
+    if let Some(answer) = parsed
+        .answer
+        .as_deref()
+        .filter(|answer| !answer.trim().is_empty())
+    {
         results.insert(
             0,
             WebSearchResult {

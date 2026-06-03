@@ -2,11 +2,23 @@ import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useM
 import {
   X, Check, Plus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Camera,
-  Cloud, Info, Aperture, ExternalLink, Download, ChevronRight
+  Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
-import { api, type Settings as SettingsType, type ModelProvider, type DefaultPromptTemplates, type PermissionStatus, type UpdateInfo } from '../api/tauri'
+import {
+  api,
+  type Settings as SettingsType,
+  type ModelProvider,
+  type DefaultPromptTemplates,
+  type PermissionStatus,
+  type UpdateInfo,
+  type ChatMcpServer,
+  type ChatToolsConfig,
+  type ChatToolDefinition,
+  type SkillMeta,
+  type SkillDetail,
+} from '../api/tauri'
 import { i18n } from './i18n'
 import { buildHotkey, formatHotkeyError, getPlatform, stableStringify } from './utils'
 import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
@@ -19,7 +31,7 @@ import {
   SettingsGroup,
 } from './components'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'mcp' | 'skill' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 
@@ -57,6 +69,65 @@ function FieldBlock({
   )
 }
 
+function defaultChatTools(): ChatToolsConfig {
+  return {
+    enabled: false,
+    servers: [],
+    skillScanPaths: [],
+    maxToolRounds: 5,
+    toolTimeoutMs: 60_000,
+    maxToolOutputChars: 12_000,
+    approvalPolicy: 'readonly_auto_sensitive_confirm',
+    nativeTools: { webSearch: false },
+  }
+}
+
+function newMcpServer(): ChatMcpServer {
+  return {
+    id: `mcp-${Date.now()}`,
+    name: 'New MCP Server',
+    enabled: false,
+    transport: 'stdio',
+    url: '',
+    command: '',
+    args: [],
+    env: {},
+    headers: {},
+    cwd: null,
+    enabledTools: [],
+  }
+}
+
+function envToText(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n')
+}
+
+function textToEnv(text: string): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const normalized = line.replace(/\r$/, '')
+    if (!normalized.trim()) continue
+    const separator = normalized.indexOf('=')
+    const key = (separator >= 0 ? normalized.slice(0, separator) : normalized).trim()
+    if (!key) continue
+    env[key] = separator >= 0 ? normalized.slice(separator + 1) : ''
+  }
+  return env
+}
+
+function argsToText(args: string[]): string {
+  return args.join('\n')
+}
+
+function textToArgs(text: string): string[] {
+  return text
+    .split('\n')
+    .map((arg) => arg.replace(/\r$/, ''))
+    .filter((arg) => arg !== '')
+}
+
 /**
  * 设置面板主组件（standalone / embedded 双宿主）
  */
@@ -82,6 +153,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null)
   const [providerTestFeedback, setProviderTestFeedback] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [selectedProviderId, setSelectedProviderId] = useState('')
+  const [testingMcpServerId, setTestingMcpServerId] = useState<string | null>(null)
+  const [mcpTestFeedback, setMcpTestFeedback] = useState<Record<string, { ok: boolean; message: string; tools: ChatToolDefinition[] }>>({})
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [skills, setSkills] = useState<SkillMeta[]>([])
+  const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillDetail | null>(null)
+  const [skillError, setSkillError] = useState('')
   // 更新检查状态：'idle' / 'checking' / 'up-to-date' / 'available'
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available'>('idle')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -611,6 +688,182 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
+  const updateChatTools = useCallback((updates: Partial<ChatToolsConfig>) => {
+    setSettings((prev) => {
+      if (!prev) return prev
+      const current = prev.chatTools || defaultChatTools()
+      return { ...prev, chatTools: { ...current, ...updates } }
+    })
+  }, [])
+
+  const updateMcpServer = useCallback((serverId: string, updates: Partial<ChatMcpServer>) => {
+    setSettings((prev) => {
+      if (!prev) return prev
+      const chatTools = prev.chatTools || defaultChatTools()
+      return {
+        ...prev,
+        chatTools: {
+          ...chatTools,
+          servers: chatTools.servers.map((server) =>
+            server.id === serverId ? { ...server, ...updates } : server,
+          ),
+        },
+      }
+    })
+  }, [])
+
+  const refreshChatSkills = useCallback(async () => {
+    setSkillsLoading(true)
+    setSkillError('')
+    try {
+      const result = await api.chatSkillsList(settings?.chatTools?.skillScanPaths)
+      if (result.success) {
+        setSkills(result.skills)
+        if (result.error) {
+          setSkillError(result.error)
+        }
+      } else {
+        setSkillError(result.error || (lang === 'zh' ? 'Skill 列表加载失败' : 'Failed to load skills'))
+      }
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [lang, settings?.chatTools?.skillScanPaths])
+
+  const handleTestMcpServer = useCallback(async (server: ChatMcpServer) => {
+    setTestingMcpServerId(server.id)
+    setMcpTestFeedback((prev) => {
+      const next = { ...prev }
+      delete next[server.id]
+      return next
+    })
+    try {
+      const result = await api.chatMcpTestServer(server, settings?.chatTools?.toolTimeoutMs)
+      if (result.success) {
+        setMcpTestFeedback((prev) => ({
+          ...prev,
+          [server.id]: {
+            ok: true,
+            message: lang === 'zh' ? `连接成功，发现 ${result.tools.length} 个工具。` : `Connected. ${result.tools.length} tools found.`,
+            tools: result.tools,
+          },
+        }))
+      } else {
+        setMcpTestFeedback((prev) => ({
+          ...prev,
+          [server.id]: {
+            ok: false,
+            message: result.error || (lang === 'zh' ? '连接失败' : 'Connection failed'),
+            tools: [],
+          },
+        }))
+      }
+    } catch (err) {
+      setMcpTestFeedback((prev) => ({
+        ...prev,
+        [server.id]: {
+          ok: false,
+          message: err instanceof Error ? err.message : String(err),
+          tools: [],
+        },
+      }))
+    } finally {
+      setTestingMcpServerId(null)
+    }
+  }, [lang, settings?.chatTools?.toolTimeoutMs])
+
+  const handleImportMcpJson = useCallback(async () => {
+    if (!settings) return
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [{ name: 'MCP JSON', extensions: ['json'] }],
+      })
+      if (typeof selected !== 'string') return
+      const result = await api.chatMcpImportJson(selected)
+      if (!result.success) {
+        setSaveError(result.error || (lang === 'zh' ? '导入 mcp.json 失败' : 'Failed to import mcp.json'))
+        return
+      }
+      const chatTools = settings.chatTools || defaultChatTools()
+      updateChatTools({ servers: [...chatTools.servers, ...result.servers] })
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
+  }, [lang, settings, updateChatTools])
+
+  const handleImportSkill = useCallback(async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      })
+      if (typeof selected !== 'string') return
+      const result = await api.chatSkillsImport(selected)
+      if (!result.success) {
+        setSkillError(result.error || (lang === 'zh' ? '导入 Skill 失败' : 'Failed to import skill'))
+        return
+      }
+      await refreshChatSkills()
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : String(err))
+    }
+  }, [lang, refreshChatSkills])
+
+  const handleImportSkillZip = useCallback(async () => {
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [{ name: 'Skill Zip', extensions: ['zip'] }],
+      })
+      if (typeof selected !== 'string') return
+      const result = await api.chatSkillsImport(selected)
+      if (!result.success) {
+        setSkillError(result.error || (lang === 'zh' ? '导入 Skill 失败' : 'Failed to import skill'))
+        return
+      }
+      await refreshChatSkills()
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : String(err))
+    }
+  }, [lang, refreshChatSkills])
+
+  const handleOpenSkillFolder = useCallback(async () => {
+    setSkillError('')
+    try {
+      const result = await api.chatSkillsOpenFolder()
+      if (!result.success) {
+        setSkillError(result.error || (lang === 'zh' ? '打开 Skill 文件夹失败' : 'Failed to open skill folder'))
+      }
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : String(err))
+    }
+  }, [lang])
+
+  const handlePreviewSkill = useCallback(async (skillId: string) => {
+    setSkillError('')
+    try {
+      const result = await api.chatSkillsRead(skillId)
+      if (result.success && result.skill) {
+        setSelectedSkillPreview(result.skill)
+      } else {
+        setSkillError(result.error || (lang === 'zh' ? '读取 Skill 失败' : 'Failed to read skill'))
+      }
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : String(err))
+    }
+  }, [lang])
+
+  useEffect(() => {
+    if (activeTab === 'skill') {
+      void refreshChatSkills()
+    }
+  }, [activeTab, refreshChatSkills])
+
   /**
    * 更新指定提供商配置
    */
@@ -636,7 +889,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       apiKeys: [],
       baseUrl: 'https://api.openai.com/v1',
       availableModels: [],
-      enabledModels: []
+      enabledModels: [],
+      supportsTools: true,
     }
     setSettings({
       ...settings,
@@ -657,6 +911,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       baseUrl: preset.baseUrl,
       availableModels: [],
       enabledModels: [],
+      supportsTools: !preset.onDevice,
     }
     setSettings({
       ...settings,
@@ -977,6 +1232,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'translate' as const, label: t.tabTranslate, icon: Languages },
     { id: 'screenshot' as const, label: t.tabScreenshot, icon: Camera },
     { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
+    { id: 'mcp' as const, label: 'MCP', icon: Wrench },
+    { id: 'skill' as const, label: 'Skill', icon: Sparkles },
     { id: 'providers' as const, label: t.tabModels, icon: Cloud },
   ]
   const pageMeta: Record<typeof activeTab, { title: string; subtitle: string; right?: string }> = {
@@ -996,6 +1253,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       title: t.lensTabLabel,
       subtitle: lang === 'zh' ? '视觉问答的快捷键、响应方式和提示词。' : 'Shortcut, response behavior, and prompts for visual Q&A.',
     },
+    mcp: {
+      title: 'MCP',
+      subtitle: lang === 'zh' ? '管理 MCP 服务器、原生工具和工具审批。' : 'Manage MCP servers, native tools, and tool approvals.',
+    },
+    skill: {
+      title: 'Skill',
+      subtitle: lang === 'zh' ? '管理用户导入与本地 Skill 库。' : 'Manage imported and local Skills.',
+    },
     providers: {
       title: t.tabModels,
       subtitle: lang === 'zh' ? '管理 OpenAI 兼容供应商、密钥和启用模型。' : 'Manage OpenAI-compatible providers, keys, and enabled models.',
@@ -1006,6 +1271,11 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     },
   }
   const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
+  const chatTools = settings.chatTools || defaultChatTools()
+  const chatProvider = settings.providers.find((provider) => provider.id === settings.chatProviderId)
+    ?? settings.providers.find((provider) => provider.id === settings.lens?.providerId)
+    ?? settings.providers.find((provider) => provider.id === settings.translatorProviderId)
+  const chatProviderSupportsTools = chatProvider?.supportsTools !== false
 
   const categoryNav =
     variant === 'embedded' ? (
@@ -1543,6 +1813,439 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               </>
             )}
 
+            {/* ===== MCP 标签页 ===== */}
+            {activeTab === 'mcp' && (
+              <>
+                <SettingsGroup title={lang === 'zh' ? '工具运行' : 'Tool Runtime'}>
+                  <SettingRow
+                    label={lang === 'zh' ? '启用 MCP' : 'Enable MCP'}
+                    description={
+                      chatProviderSupportsTools
+                        ? (lang === 'zh' ? '开启后，Chat 会向支持 tools 的模型暴露已启用的 MCP 工具。' : 'When enabled, Chat exposes enabled MCP tools to models that support tools.')
+                        : (lang === 'zh' ? '当前 Chat 模型供应商标记为不支持 tools；Skill 仍会作为提示词生效。' : 'The current Chat provider is marked as not supporting tools; Skills still work as prompt injection.')
+                    }
+                  >
+                    <Toggle
+                      checked={chatTools.enabled}
+                      onChange={(enabled) => {
+                        if (!chatProviderSupportsTools) {
+                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用 MCP。' : 'The current Chat provider does not support tools, so MCP cannot be enabled.')
+                          return
+                        }
+                        updateChatTools({ enabled })
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? '原生联网搜索' : 'Native web search'}
+                    description={lang === 'zh' ? '复用 Lens 联网搜索配置，作为 Chat 中的统一工具展示。' : 'Reuses the Lens web search config and shows as a unified Chat tool.'}
+                  >
+                    <Toggle
+                      checked={chatTools.nativeTools?.webSearch === true}
+                      onChange={(webSearch) => {
+                        if (!chatProviderSupportsTools) {
+                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用原生工具。' : 'The current Chat provider does not support tools, so native tools cannot be enabled.')
+                          return
+                        }
+                        updateChatTools({
+                          nativeTools: { ...(chatTools.nativeTools || { webSearch: false }), webSearch },
+                        })
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '审批策略' : 'Approval policy'}>
+                    <Select
+                      className="w-56"
+                      value={chatTools.approvalPolicy || 'readonly_auto_sensitive_confirm'}
+                      onChange={(approvalPolicy) => updateChatTools({ approvalPolicy })}
+                      options={[
+                        {
+                          value: 'readonly_auto_sensitive_confirm',
+                          label: lang === 'zh' ? '读类自动，敏感确认' : 'Read auto, sensitive confirm',
+                        },
+                        { value: 'always_confirm', label: lang === 'zh' ? '每次确认' : 'Always confirm' },
+                        { value: 'auto', label: lang === 'zh' ? '全部自动' : 'Auto approve' },
+                      ]}
+                    />
+                  </SettingRow>
+                  <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-3">
+                    <FieldBlock label={lang === 'zh' ? '最大工具轮次' : 'Max tool rounds'}>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={String(chatTools.maxToolRounds ?? 5)}
+                        onChange={(value) => updateChatTools({
+                          maxToolRounds: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 1)),
+                        })}
+                      />
+                    </FieldBlock>
+                    <FieldBlock label={lang === 'zh' ? '工具超时 ms' : 'Tool timeout ms'}>
+                      <Input
+                        type="number"
+                        min={1000}
+                        max={60000}
+                        value={String(chatTools.toolTimeoutMs ?? 60_000)}
+                        onChange={(value) => updateChatTools({
+                          toolTimeoutMs: Math.min(60_000, Math.max(1_000, Number.parseInt(value, 10) || 1_000)),
+                        })}
+                      />
+                    </FieldBlock>
+                    <FieldBlock label={lang === 'zh' ? '结果截断字符' : 'Output chars'}>
+                      <Input
+                        type="number"
+                        min={1000}
+                        max={50000}
+                        value={String(chatTools.maxToolOutputChars ?? 12_000)}
+                        onChange={(value) => updateChatTools({
+                          maxToolOutputChars: Math.min(50_000, Math.max(1_000, Number.parseInt(value, 10) || 1_000)),
+                        })}
+                      />
+                    </FieldBlock>
+                  </div>
+                </SettingsGroup>
+
+                <SettingsGroup title={lang === 'zh' ? 'MCP 服务器' : 'MCP Servers'}>
+                  <div className="flex flex-wrap gap-2 py-2">
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => updateChatTools({ servers: [...chatTools.servers, newMcpServer()] })}
+                      data-tauri-drag-region="false"
+                    >
+                      <Plus size={11} />
+                      {lang === 'zh' ? '添加服务器' : 'Add server'}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => void handleImportMcpJson()}
+                      data-tauri-drag-region="false"
+                    >
+                      <FolderOpen size={11} />
+                      {lang === 'zh' ? '导入 mcp.json' : 'Import mcp.json'}
+                    </button>
+                  </div>
+
+                  {chatTools.servers.length === 0 && (
+                    <div className="kv-panel">
+                      <div className="kv-panel-title">{lang === 'zh' ? '暂无 MCP 服务器' : 'No MCP servers'}</div>
+                      <div className="kv-panel-body">
+                        {lang === 'zh' ? '添加或导入服务器后，需要手动启用才会暴露给模型。' : 'Added or imported servers stay disabled until you enable them.'}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-3 py-2">
+                    {chatTools.servers.map((server) => {
+                      const feedback = mcpTestFeedback[server.id]
+                      const knownTools = [
+                        ...(feedback?.tools ?? []),
+                        ...server.enabledTools
+                          .filter((toolName) => !(feedback?.tools ?? []).some((tool) => tool.name === toolName))
+                          .map((toolName) => ({
+                            id: `${server.id}-${toolName}`,
+                            name: toolName,
+                            description: lang === 'zh' ? '已保存的工具限制；重新测试连接可刷新描述。' : 'Saved tool limit; test the server to refresh description.',
+                            source: 'mcp',
+                            serverId: server.id,
+                            serverName: server.name,
+                            inputSchema: {},
+                            sensitive: false,
+                          } satisfies ChatToolDefinition)),
+                      ]
+                      const isHttpTransport = server.transport === 'streamable_http'
+                      return (
+                        <div key={server.id} className="kv-panel">
+                          <div className="mb-2 flex items-center gap-2">
+                            <span className={`kv-provider-dot ${server.enabled ? 'on' : 'warn'}`} />
+                            <Input
+                              value={server.name}
+                              onChange={(name) => updateMcpServer(server.id, { name })}
+                              placeholder="Server name"
+                            />
+                            <Toggle
+                              checked={server.enabled}
+                              onChange={(enabled) => updateMcpServer(server.id, { enabled })}
+                            />
+                            <button
+                              type="button"
+                              className="kv-icon-btn danger"
+                              onClick={() => updateChatTools({
+                                servers: chatTools.servers.filter((item) => item.id !== server.id),
+                              })}
+                              title={lang === 'zh' ? '删除服务器' : 'Delete server'}
+                              aria-label={lang === 'zh' ? '删除服务器' : 'Delete server'}
+                              data-tauri-drag-region="false"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                          <FieldBlock label={lang === 'zh' ? '传输' : 'Transport'}>
+                            <Select
+                              value={isHttpTransport ? 'streamable_http' : 'stdio'}
+                              onChange={(transport) => updateMcpServer(server.id, { transport })}
+                              options={[
+                                { value: 'stdio', label: 'stdio' },
+                                { value: 'streamable_http', label: 'Streamable HTTP' },
+                              ]}
+                            />
+                          </FieldBlock>
+                          {isHttpTransport ? (
+                            <>
+                              <FieldBlock label={lang === 'zh' ? 'Endpoint URL' : 'Endpoint URL'}>
+                                <Input
+                                  mono
+                                  value={server.url || ''}
+                                  onChange={(url) => updateMcpServer(server.id, { url })}
+                                  placeholder="https://example.com/mcp"
+                                />
+                              </FieldBlock>
+                              <FieldBlock
+                                label="Headers"
+                                description={lang === 'zh' ? '每行 KEY=value；例如 Authorization=Bearer ...，会随 settings.json 明文保存。' : 'One KEY=value per line, e.g. Authorization=Bearer ...; stored in settings.json as plain text.'}
+                              >
+                                <TextArea
+                                  mono
+                                  rows={2}
+                                  value={envToText(server.headers || {})}
+                                  onChange={(value) => updateMcpServer(server.id, { headers: textToEnv(value) })}
+                                  placeholder="Authorization=Bearer ..."
+                                />
+                              </FieldBlock>
+                            </>
+                          ) : (
+                            <>
+                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <FieldBlock label={lang === 'zh' ? '命令' : 'Command'}>
+                                  <Input
+                                    mono
+                                    value={server.command}
+                                    onChange={(command) => updateMcpServer(server.id, { command })}
+                                    placeholder="npx"
+                                  />
+                                </FieldBlock>
+                                <FieldBlock label={lang === 'zh' ? '参数' : 'Arguments'} description={lang === 'zh' ? '每行一个参数；保留参数中的空格和引号。' : 'One argument per line; spaces and quotes inside each argument are preserved.'}>
+                                  <TextArea
+                                    mono
+                                    rows={2}
+                                    value={argsToText(server.args)}
+                                    onChange={(value) => updateMcpServer(server.id, {
+                                      args: textToArgs(value),
+                                    })}
+                                    placeholder={'-y\n@modelcontextprotocol/server-fetch'}
+                                  />
+                                </FieldBlock>
+                              </div>
+                              <FieldBlock label={lang === 'zh' ? '工作目录' : 'Working directory'}>
+                                <Input
+                                  mono
+                                  value={server.cwd || ''}
+                                  onChange={(cwd) => updateMcpServer(server.id, { cwd: cwd.trim() ? cwd : null })}
+                                  placeholder={lang === 'zh' ? '可选' : 'Optional'}
+                                />
+                              </FieldBlock>
+                              <FieldBlock
+                                label="Env"
+                                description={lang === 'zh' ? '每行 KEY=value；这些值会随 settings.json 明文保存。' : 'One KEY=value per line; values are stored in settings.json as plain text.'}
+                              >
+                                <TextArea
+                                  mono
+                                  rows={2}
+                                  value={envToText(server.env || {})}
+                                  onChange={(value) => updateMcpServer(server.id, { env: textToEnv(value) })}
+                                  placeholder="API_KEY=..."
+                                />
+                              </FieldBlock>
+                            </>
+                          )}
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              className="kv-btn sm"
+                              disabled={testingMcpServerId === server.id || (isHttpTransport ? !server.url.trim() : !server.command.trim())}
+                              onClick={() => void handleTestMcpServer(server)}
+                              data-tauri-drag-region="false"
+                            >
+                              <RefreshCw size={10} className={testingMcpServerId === server.id ? 'animate-spin' : ''} />
+                              {testingMcpServerId === server.id ? (lang === 'zh' ? '测试中' : 'Testing') : (lang === 'zh' ? '测试连接' : 'Test')}
+                            </button>
+                            {feedback && (
+                              <span className={`kv-tag ${feedback.ok ? 'ok' : 'warn'}`}>
+                                {feedback.message}
+                              </span>
+                            )}
+                            {server.enabledTools.length === 0 && knownTools.length > 0 && (
+                              <span className="kv-row-desc">{lang === 'zh' ? '当前暴露全部工具。' : 'All tools are exposed.'}</span>
+                            )}
+                          </div>
+                          {knownTools.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {knownTools.map((tool) => {
+                                const checked = server.enabledTools.length === 0 || server.enabledTools.includes(tool.name)
+                                return (
+                                  <button
+                                    key={tool.id}
+                                    type="button"
+                                    className={`kv-chip ${checked ? '' : 'opacity-45'}`}
+                                    title={tool.description}
+                                    onClick={() => {
+                                      if (checked) {
+                                        const next = server.enabledTools.length === 0
+                                          ? knownTools.map((item) => item.name).filter((name) => name !== tool.name)
+                                          : server.enabledTools.filter((name) => name !== tool.name)
+                                        updateMcpServer(server.id, { enabledTools: next })
+                                      } else {
+                                        updateMcpServer(server.id, {
+                                          enabledTools: Array.from(new Set([...server.enabledTools, tool.name])),
+                                        })
+                                      }
+                                    }}
+                                    data-tauri-drag-region="false"
+                                  >
+                                    {tool.sensitive && <Wrench size={10} />}
+                                    {tool.name}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </SettingsGroup>
+              </>
+            )}
+
+            {/* ===== Skill 标签页 ===== */}
+            {activeTab === 'skill' && (
+              <>
+                <SettingsGroup title="Skill">
+                  <div className="flex flex-wrap gap-2 py-2">
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => void refreshChatSkills()}
+                      disabled={skillsLoading}
+                      data-tauri-drag-region="false"
+                    >
+                      <RefreshCw size={10} className={skillsLoading ? 'animate-spin' : ''} />
+                      {lang === 'zh' ? '刷新列表' : 'Refresh'}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => void handleImportSkill()}
+                      data-tauri-drag-region="false"
+                    >
+                      <FolderOpen size={11} />
+                      {lang === 'zh' ? '导入文件夹' : 'Import folder'}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => void handleImportSkillZip()}
+                      data-tauri-drag-region="false"
+                    >
+                      <Download size={11} />
+                      {lang === 'zh' ? '导入 zip' : 'Import zip'}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => void handleOpenSkillFolder()}
+                      data-tauri-drag-region="false"
+                    >
+                      <ExternalLink size={11} />
+                      {lang === 'zh' ? '打开 Skill 文件夹' : 'Open skill folder'}
+                    </button>
+                  </div>
+                  <SettingRow label={lang === 'zh' ? '额外扫描路径' : 'Extra scan paths'} stack>
+                    <div className="space-y-1.5">
+                      {chatTools.skillScanPaths.map((path, index) => (
+                        <div key={`${path}-${index}`} className="flex items-center gap-1.5">
+                          <Input
+                            mono
+                            value={path}
+                            onChange={(value) => {
+                              const next = [...chatTools.skillScanPaths]
+                              next[index] = value
+                              updateChatTools({ skillScanPaths: next })
+                            }}
+                            placeholder="/path/to/skills"
+                          />
+                          <button
+                            type="button"
+                            className="kv-icon-btn danger"
+                            onClick={() => updateChatTools({
+                              skillScanPaths: chatTools.skillScanPaths.filter((_, i) => i !== index),
+                            })}
+                            data-tauri-drag-region="false"
+                            aria-label={lang === 'zh' ? '移除路径' : 'Remove path'}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="kv-btn sm"
+                        onClick={async () => {
+                          const selected = await open({ directory: true, multiple: false })
+                          if (typeof selected === 'string') {
+                            updateChatTools({ skillScanPaths: [...chatTools.skillScanPaths, selected] })
+                          }
+                        }}
+                        data-tauri-drag-region="false"
+                      >
+                        <Plus size={11} />
+                        {lang === 'zh' ? '添加扫描路径' : 'Add scan path'}
+                      </button>
+                    </div>
+                  </SettingRow>
+                  {skillError && <div className="kv-inline-error">{skillError}</div>}
+                  <div className="space-y-2 py-2">
+                    {skills.map((skill) => (
+                      <button
+                        key={skill.id}
+                        type="button"
+                        className="kv-panel w-full text-left transition-colors hover:bg-black/[0.035] dark:hover:bg-white/[0.06]"
+                        onClick={() => void handlePreviewSkill(skill.id)}
+                        data-tauri-drag-region="false"
+                      >
+                        <div className="flex min-w-0 items-start gap-2">
+                          <Sparkles size={14} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
+                          <div className="min-w-0 flex-1">
+                            <div className="kv-panel-title !mb-0">
+                              {skill.name}
+                              <span className="kv-tag ml-2">{skill.source}</span>
+                            </div>
+                            <div className="kv-panel-body">{skill.description}</div>
+                            {skill.recommendedTools.length > 0 && (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {skill.recommendedTools.map((tool) => (
+                                  <span key={tool} className="kv-chip">{tool}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                    {!skillsLoading && skills.length === 0 && (
+                      <div className="kv-panel">
+                        <div className="kv-panel-title">{lang === 'zh' ? '暂无 Skill' : 'No skills'}</div>
+                        <div className="kv-panel-body">
+                          {lang === 'zh' ? '暂无 Skill。可导入文件夹/zip，或打开 Skill 文件夹手动添加后刷新。' : 'No skills yet. Import a folder or zip, or add skills manually and refresh.'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </SettingsGroup>
+              </>
+            )}
+
             {/* ===== 模型管理标签页 ===== */}
             {activeTab === 'providers' && (
               <div className="kv-providers">
@@ -1687,6 +2390,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                   </button>
                                 </div>
                               </div>
+
+                              <SettingRow
+                                label={lang === 'zh' ? '支持工具调用' : 'Supports tools'}
+                                description={lang === 'zh' ? '关闭后，Chat 不会向该供应商发送 OpenAI tools；Skill 仍可正常使用。' : 'When off, Chat will not send OpenAI tools to this provider; Skills still work.'}
+                              >
+                                <Toggle
+                                  checked={provider.supportsTools !== false}
+                                  onChange={(supportsTools) => updateProvider(provider.id, { supportsTools })}
+                                />
+                              </SettingRow>
                             </>
                           )}
 
@@ -2075,6 +2788,38 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               >
                 {t.deleteProvider}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {selectedSkillPreview && (
+        <div className="kv-modal-backdrop" data-tauri-drag-region="false">
+          <div className="kv-modal max-h-[80vh] space-y-3 overflow-hidden">
+            <div className="flex items-start gap-2">
+              <Sparkles size={16} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate text-[14px] font-semibold">{selectedSkillPreview.name}</h3>
+                <p className="kv-panel-body">{selectedSkillPreview.description}</p>
+              </div>
+              <button
+                type="button"
+                className="kv-icon-btn"
+                onClick={() => setSelectedSkillPreview(null)}
+                data-tauri-drag-region="false"
+                aria-label={lang === 'zh' ? '关闭' : 'Close'}
+              >
+                <X size={12} />
+              </button>
+            </div>
+            {selectedSkillPreview.recommendedTools.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {selectedSkillPreview.recommendedTools.map((tool) => (
+                  <span key={tool} className="kv-chip">{tool}</span>
+                ))}
+              </div>
+            )}
+            <div className="custom-scrollbar max-h-[52vh] overflow-y-auto rounded-md border border-black/[0.08] bg-black/[0.025] p-3 text-[12px] leading-relaxed dark:border-white/[0.08] dark:bg-white/[0.035]">
+              <ReactMarkdown>{selectedSkillPreview.body}</ReactMarkdown>
             </div>
           </div>
         </div>

@@ -48,13 +48,110 @@ export type LensStreamPayload = {
 }
 
 export type ChatStreamPayload = {
-  imageId: string
+  conversationId: string
+  runId: string
+  messageId?: string
+  imageId?: string
   kind: 'answer'
   delta: string
   reasoningDelta?: string
   done?: boolean
   reason?: 'done' | 'cancelled' | 'error'
   full?: string
+}
+
+export type ChatToolStatus =
+  | 'pending'
+  | 'running'
+  | 'success'
+  | 'completed'
+  | 'error'
+  | 'skipped'
+  | 'cancelled'
+
+export type ChatToolProgressPayload = {
+  conversationId: string
+  runId: string
+  messageId?: string
+  toolCallId: string
+  id?: string
+  name: string
+  source: string
+  serverId?: string | null
+  status: ChatToolStatus
+  argumentsPreview?: string
+  resultPreview?: string | null
+  error?: string | null
+  startedAt?: number | null
+  completedAt?: number | null
+  durationMs?: number | null
+  round?: number
+  sensitive?: boolean
+}
+
+export type ChatToolConfirmPayload = {
+  conversationId: string
+  runId: string
+  messageId?: string
+  toolCallId: string
+  name: string
+  source: string
+  serverId?: string | null
+  argumentsPreview?: string
+  sensitivity?: string
+}
+
+export type ChatToolDefinition = {
+  id: string
+  name: string
+  description: string
+  source: string
+  serverId?: string | null
+  serverName?: string | null
+  inputSchema: unknown
+  sensitive: boolean
+}
+
+export type ChatMcpServer = {
+  id: string
+  name: string
+  enabled: boolean
+  transport: 'stdio' | 'streamable_http' | string
+  url: string
+  command: string
+  args: string[]
+  env: Record<string, string>
+  headers: Record<string, string>
+  cwd?: string | null
+  enabledTools: string[]
+}
+
+export type ChatNativeToolsConfig = {
+  webSearch: boolean
+}
+
+export type ChatToolsConfig = {
+  enabled: boolean
+  servers: ChatMcpServer[]
+  skillScanPaths: string[]
+  maxToolRounds: number
+  toolTimeoutMs: number
+  maxToolOutputChars: number
+  approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
+  nativeTools: ChatNativeToolsConfig
+}
+
+export type SkillMeta = {
+  id: string
+  name: string
+  description: string
+  source: string
+  path?: string | null
+  recommendedTools: string[]
+}
+
+export type SkillDetail = SkillMeta & {
+  body: string
 }
 
 // Lens 联网搜索状态/结果负载（事件名 lens-web-search）
@@ -99,6 +196,7 @@ export type ModelProvider = {
   baseUrl: string
   availableModels: string[]
   enabledModels: string[]
+  supportsTools: boolean
 }
 
 // 提供商连接测试输入（支持使用未保存的配置进行测试）
@@ -122,6 +220,7 @@ export type Settings = {
   chatModel: string
   translatorPrompt?: string
   providers: ModelProvider[]
+  chatTools: ChatToolsConfig
   retryEnabled: boolean
   retryAttempts: number
   screenshotTranslation: {
@@ -216,6 +315,93 @@ export type RapidOcrInstallResult = {
   message: string
 }
 
+function normalizeProvider(provider: ModelProvider): ModelProvider {
+  return {
+    ...provider,
+    apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys : [],
+    availableModels: Array.isArray(provider.availableModels) ? provider.availableModels : [],
+    enabledModels: Array.isArray(provider.enabledModels) ? provider.enabledModels : [],
+    supportsTools: provider.supportsTools !== false,
+  }
+}
+
+function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatToolsConfig {
+  const current = config ?? {}
+  return {
+    enabled: current.enabled ?? false,
+    servers: Array.isArray(current.servers) ? current.servers : [],
+    skillScanPaths: Array.isArray(current.skillScanPaths) ? current.skillScanPaths : [],
+    maxToolRounds: current.maxToolRounds ?? 5,
+    toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
+    maxToolOutputChars: current.maxToolOutputChars ?? 12_000,
+    approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
+    nativeTools: {
+      webSearch: current.nativeTools?.webSearch ?? false,
+    },
+  }
+}
+
+function normalizeSettings(settings: Settings): Settings {
+  const current = settings as Partial<Settings>
+  return {
+    ...settings,
+    hotkey: current.hotkey ?? 'CommandOrControl+Alt+T',
+    theme: current.theme ?? 'system',
+    targetLang: current.targetLang ?? 'auto',
+    source: current.source ?? 'openai',
+    autoPaste: current.autoPaste ?? true,
+    launchAtStartup: current.launchAtStartup ?? false,
+    translatorProviderId: current.translatorProviderId ?? '',
+    translatorModel: current.translatorModel ?? '',
+    chatProviderId: current.chatProviderId ?? current.lens?.providerId ?? current.translatorProviderId ?? '',
+    chatModel: current.chatModel ?? current.lens?.model ?? current.translatorModel ?? '',
+    providers: Array.isArray(current.providers) ? current.providers.map(normalizeProvider) : [],
+    chatTools: normalizeChatTools(current.chatTools),
+    retryEnabled: current.retryEnabled ?? true,
+    retryAttempts: current.retryAttempts ?? 3,
+    screenshotTranslation: {
+      enabled: current.screenshotTranslation?.enabled ?? true,
+      hotkey: current.screenshotTranslation?.hotkey ?? 'CommandOrControl+Shift+A',
+      textHotkey: current.screenshotTranslation?.textHotkey ?? 'CommandOrControl+Shift+T',
+      providerId: current.screenshotTranslation?.providerId ?? '',
+      model: current.screenshotTranslation?.model ?? '',
+      directTranslate: current.screenshotTranslation?.directTranslate ?? false,
+      thinkingEnabled: current.screenshotTranslation?.thinkingEnabled ?? false,
+      streamEnabled: current.screenshotTranslation?.streamEnabled ?? true,
+      keepFullscreenAfterCapture: current.screenshotTranslation?.keepFullscreenAfterCapture ?? true,
+      useSystemOcr: current.screenshotTranslation?.useSystemOcr ?? false,
+      ocrMode: current.screenshotTranslation?.ocrMode ?? 'cloud_vision',
+      prompt: current.screenshotTranslation?.prompt ?? '',
+    },
+    lens: {
+      enabled: current.lens?.enabled ?? true,
+      hotkey: current.lens?.hotkey ?? 'CommandOrControl+Shift+G',
+      providerId: current.lens?.providerId ?? '',
+      model: current.lens?.model ?? '',
+      defaultLanguage: current.lens?.defaultLanguage ?? '',
+      streamEnabled: current.lens?.streamEnabled ?? true,
+      thinkingEnabled: current.lens?.thinkingEnabled ?? true,
+      systemPrompt: current.lens?.systemPrompt ?? '',
+      questionPrompt: current.lens?.questionPrompt ?? '',
+      messageOrder: current.lens?.messageOrder === 'desc' ? 'desc' : 'asc',
+      showCaptureHint: current.lens?.showCaptureHint ?? true,
+      windowsFreezeFrameSelection: current.lens?.windowsFreezeFrameSelection ?? false,
+      webSearch: {
+        enabled: current.lens?.webSearch?.enabled ?? false,
+        provider: current.lens?.webSearch?.provider ?? 'tavily',
+        tavilyApiKey: current.lens?.webSearch?.tavilyApiKey ?? '',
+        exaApiKey: current.lens?.webSearch?.exaApiKey ?? '',
+        maxResults: current.lens?.webSearch?.maxResults ?? 5,
+        searchDepth: current.lens?.webSearch?.searchDepth ?? 'basic',
+      },
+    },
+    settingsLanguage: current.settingsLanguage ?? 'zh',
+    autoCheckUpdate: current.autoCheckUpdate ?? true,
+    imageArchiveEnabled: current.imageArchiveEnabled ?? false,
+    imageArchivePath: current.imageArchivePath ?? '',
+  }
+}
+
 // 默认提示词模板
 export type DefaultPromptTemplates = {
   translationTemplate: string
@@ -253,9 +439,9 @@ async function on<T>(event: string, handler: (payload: T) => void): Promise<Unli
 
 export const api = {
   // 设置相关
-  getSettings: () => invoke<Settings>('get_settings'),
+  getSettings: async () => normalizeSettings(await invoke<Settings>('get_settings')),
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
-  saveSettings: (settings: Settings) => invoke<Settings>('save_settings', { settings }),
+  saveSettings: async (settings: Settings) => normalizeSettings(await invoke<Settings>('save_settings', { settings })),
 
   // 提供商相关
   fetchModels: (providerId: string, provider?: ProviderConnectionInput) =>
@@ -334,6 +520,49 @@ export const api = {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatStreamPayload>('chat-stream', (payload) => listener(payload))
   },
+  onChatTool: (listener: (payload: ChatToolProgressPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatToolProgressPayload>('chat-tool', (payload) => listener(payload))
+  },
+  onChatToolConfirm: (listener: (payload: ChatToolConfirmPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatToolConfirmPayload>('chat-tool-confirm', (payload) => listener(payload))
+  },
+  chatMcpListTools: () =>
+    invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>('chat_mcp_list_tools'),
+  chatMcpTestServer: (server: ChatMcpServer, timeoutMs?: number) =>
+    invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>(
+      'chat_mcp_test_server',
+      { server, timeoutMs },
+    ),
+  chatMcpImportJson: (path: string) =>
+    invoke<{ success: boolean; servers: ChatMcpServer[]; error?: string | null }>(
+      'chat_mcp_import_json',
+      { path },
+    ),
+  chatSkillsList: (skillScanPaths?: string[]) =>
+    invoke<{ success: boolean; skills: SkillMeta[]; warnings?: string[]; error?: string | null }>(
+      'chat_skills_list',
+      { skillScanPaths },
+    ),
+  chatSkillsRead: (skillId: string) =>
+    invoke<{ success: boolean; skill?: SkillDetail | null; error?: string | null }>(
+      'chat_skills_read',
+      { skillId },
+    ),
+  chatSkillsImport: (path: string) =>
+    invoke<{ success: boolean; skill?: SkillMeta | null; error?: string | null }>(
+      'chat_skills_import',
+      { path },
+    ),
+  chatSkillsOpenFolder: () =>
+    invoke<{ success: boolean; path?: string | null; error?: string | null }>(
+      'chat_skills_open_folder',
+    ),
+  chatCancelStream: (conversationId: string) =>
+    invoke<void>('chat_cancel_stream', { conversationId }),
+  chatConfirmToolCall: (toolCallId: string, approved: boolean) =>
+    invoke<void>('chat_confirm_tool_call', { toolCallId, approved }),
   onLensWebSearch: (listener: (payload: LensWebSearchPayload) => void) =>
     on<LensWebSearchPayload>('lens-web-search', (payload) => listener(payload)),
   onLensTranslateStream: (listener: (payload: LensTranslateStreamPayload) => void) =>

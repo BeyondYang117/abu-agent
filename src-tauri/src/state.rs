@@ -9,10 +9,12 @@ use std::{
 };
 
 use reqwest::Client;
+use tokio::sync::oneshot;
 
 use crate::apple_intelligence::AppleIntelligenceClient;
 #[cfg(target_os = "macos")]
 use crate::macos_ocr::MacOcrClient;
+use crate::mcp::ChatToolDefinition;
 use crate::rapidocr::RapidOcrClient;
 use crate::settings::Settings;
 
@@ -27,6 +29,12 @@ pub struct AppState {
     pub lens_busy: AtomicBool,
     /// 流式取消代号：每开新的流就 +1，跑流的循环检测到代号变了就立即结束。
     pub explain_stream_generation: AtomicU64,
+    /// Chat 流式取消代号，按 conversation_id 隔离，避免 Lens 与 Chat 互相取消。
+    pub chat_stream_generations: Mutex<HashMap<String, u64>>,
+    /// 等待用户确认的敏感 Chat tool 调用。
+    pub pending_chat_tool_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    /// Chat MCP/native tool 列表缓存。key 由工具相关 settings 生成，避免每轮对话重复冷启动 server。
+    pub chat_tool_list_cache: Mutex<HashMap<String, (Instant, Vec<ChatToolDefinition>)>>,
     /// Lens 启动前抓到的选中文本：放在这里等前端 enterSelect 来取走。
     /// 取一次清一次（take 语义）。无选中 / 取过 / translate 模式 = None。
     pub pending_selection: Mutex<Option<String>>,
@@ -125,6 +133,71 @@ impl AppState {
         None
     }
 
+    /// 为某个 Chat conversation 开启一轮新的可取消运行，返回本轮 generation。
+    pub fn next_chat_generation(&self, conversation_id: &str) -> u64 {
+        let mut generations = self
+            .chat_stream_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let next = generations
+            .get(conversation_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        generations.insert(conversation_id.to_string(), next);
+        next
+    }
+
+    /// 取消指定 conversation 的当前 Chat 运行。
+    pub fn cancel_chat_generation(&self, conversation_id: &str) {
+        let mut generations = self
+            .chat_stream_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let next = generations
+            .get(conversation_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        generations.insert(conversation_id.to_string(), next);
+    }
+
+    /// 判断指定 conversation 的 Chat 运行是否仍然有效。
+    pub fn is_chat_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
+        self.chat_stream_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(conversation_id)
+            .copied()
+            .unwrap_or(0)
+            == generation
+    }
+
+    pub fn get_cached_chat_tools(
+        &self,
+        cache_key: &str,
+        ttl: Duration,
+    ) -> Option<Vec<ChatToolDefinition>> {
+        let mut cache = self
+            .chat_tool_list_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((created_at, tools)) = cache.get(cache_key) {
+            if created_at.elapsed() <= ttl {
+                return Some(tools.clone());
+            }
+        }
+        cache.remove(cache_key);
+        None
+    }
+
+    pub fn set_cached_chat_tools(&self, cache_key: String, tools: Vec<ChatToolDefinition>) {
+        self.chat_tool_list_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(cache_key, (Instant::now(), tools));
+    }
+
     /// 标记某个 key 失败：进入冷却 + 不变更 active_key_idx
     pub fn mark_key_failed(&self, provider_id: &str, idx: usize) {
         let mut cooldowns = self.key_cooldowns.lock().unwrap_or_else(|e| e.into_inner());
@@ -161,6 +234,9 @@ mod tests {
             current_explain_image_id: Mutex::new(None),
             lens_busy: AtomicBool::new(false),
             explain_stream_generation: AtomicU64::new(0),
+            chat_stream_generations: Mutex::new(HashMap::new()),
+            pending_chat_tool_approvals: Mutex::new(HashMap::new()),
+            chat_tool_list_cache: Mutex::new(HashMap::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),
             key_cooldowns: Mutex::new(HashMap::new()),

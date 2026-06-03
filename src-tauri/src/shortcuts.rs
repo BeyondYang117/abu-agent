@@ -790,22 +790,32 @@ pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
 
 /// 打开 AI 客户端主窗口。
 pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
+    let existing_window = app.get_webview_window("main");
     let window = ensure_chat_window(app)?;
     apply_chat_window_chrome(&window);
     let _ = window.set_always_on_top(false);
     let _ = window.set_skip_taskbar(false);
-    let _ = window.set_size(tauri::LogicalSize::new(1280.0, 800.0));
-    let _ = window.eval(
-        "window.location.hash = '#chat'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
-    );
+
+    if existing_window.is_some() {
+        let _ = window.eval(
+            "const path = window.location.hash.replace('#', '').split('?')[0]; \
+             const isChatSettings = path === 'chat/settings' || path.startsWith('chat/settings/'); \
+             if (isChatSettings || (path !== 'chat' && !path.startsWith('chat/'))) { \
+               window.location.hash = '#chat'; \
+               window.dispatchEvent(new HashChangeEvent('hashchange')); \
+             }",
+        );
+        let _ = app.emit_to("main", "chat-open-request", ());
+    } else {
+        let window_for_task = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            let _ = window_for_task.center();
+        });
+    }
 
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
-    let window_for_task = window.clone();
-    let _ = window.run_on_main_thread(move || {
-        let _ = window_for_task.center();
-    });
     let _ = window.show();
     let _ = window.set_focus();
 

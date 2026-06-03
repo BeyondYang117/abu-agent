@@ -10,6 +10,7 @@ mod lens;
 mod lens_commands;
 #[cfg(target_os = "macos")]
 mod macos_ocr;
+mod mcp;
 mod prompts;
 mod rapidocr;
 #[cfg(target_os = "macos")]
@@ -17,6 +18,7 @@ mod sck;
 mod screenshot;
 mod settings;
 mod shortcuts;
+mod skills;
 mod state;
 mod updates;
 mod utils;
@@ -137,6 +139,9 @@ fn main() {
                 current_explain_image_id: Mutex::new(None),
                 lens_busy: AtomicBool::new(false),
                 explain_stream_generation: AtomicU64::new(0),
+                chat_stream_generations: Mutex::new(HashMap::new()),
+                pending_chat_tool_approvals: Mutex::new(HashMap::new()),
+                chat_tool_list_cache: Mutex::new(HashMap::new()),
                 pending_selection: Mutex::new(None),
                 lens_freeze_frame_image_id: Mutex::new(None),
                 key_cooldowns: Mutex::new(HashMap::new()),
@@ -244,11 +249,20 @@ fn main() {
             chat::commands::chat_get_conversation,
             chat::commands::chat_create_conversation,
             chat::commands::chat_send_message,
+            chat::commands::chat_cancel_stream,
+            chat::commands::chat_confirm_tool_call,
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
             chat::commands::chat_update_message,
             chat::commands::chat_delete_message,
             chat::commands::chat_regenerate_message,
+            mcp::registry::chat_mcp_list_tools,
+            mcp::registry::chat_mcp_test_server,
+            mcp::registry::chat_mcp_import_json,
+            skills::chat_skills_list,
+            skills::chat_skills_read,
+            skills::chat_skills_import,
+            skills::chat_skills_open_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

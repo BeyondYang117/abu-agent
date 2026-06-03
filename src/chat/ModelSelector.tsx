@@ -30,6 +30,7 @@ export function ModelSelector({
           baseUrl: '',
           availableModels: currentModel ? [currentModel] : ['dev-model'],
           enabledModels: currentModel ? [currentModel] : ['dev-model'],
+          supportsTools: true,
         },
       ])
     }

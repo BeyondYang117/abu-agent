@@ -8,7 +8,6 @@ const SETTINGS_STORE: &str = "settings.json";
 const KEYRING_SERVICE: &str = "com.zmair.kivio";
 // 旧版 service 名（v2.4.5 之前为 com.zmair.keylingo），仅用于 legacy 读 + 清理
 const KEYRING_SERVICE_LEGACY: &str = "com.zmair.keylingo";
-#[cfg(not(target_os = "macos"))]
 const APPLE_INTELLIGENCE_BASE_URL: &str = "applefoundation://local";
 
 /**
@@ -136,6 +135,8 @@ pub struct ModelProvider {
     pub available_models: Vec<String>,
     #[serde(default)]
     pub enabled_models: Vec<String>,
+    #[serde(default = "default_true")]
+    pub supports_tools: bool,
 }
 
 /**
@@ -376,6 +377,108 @@ impl Default for LensConfig {
 }
 
 /**
+ * Chat MCP stdio server 配置。
+ *
+ * settings.json 使用 camelCase；env 与 API keys 一样按本地明文设置策略保存。
+ */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatMcpServer {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub transport: String,
+    pub url: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: std::collections::HashMap<String, String>,
+    pub headers: std::collections::HashMap<String, String>,
+    pub cwd: Option<String>,
+    pub enabled_tools: Vec<String>,
+}
+
+impl Default for ChatMcpServer {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            enabled: false,
+            transport: "stdio".to_string(),
+            url: String::new(),
+            command: String::new(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            cwd: None,
+            enabled_tools: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatNativeToolsConfig {
+    pub web_search: bool,
+}
+
+impl Default for ChatNativeToolsConfig {
+    fn default() -> Self {
+        Self { web_search: false }
+    }
+}
+
+fn default_chat_max_tool_rounds() -> u8 {
+    5
+}
+
+fn default_chat_tool_timeout_ms() -> u64 {
+    60_000
+}
+
+fn default_chat_max_tool_output_chars() -> usize {
+    12_000
+}
+
+fn default_chat_approval_policy() -> String {
+    "readonly_auto_sensitive_confirm".to_string()
+}
+
+/**
+ * Chat 工具与 Skill 配置。
+ */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatToolsConfig {
+    pub enabled: bool,
+    pub servers: Vec<ChatMcpServer>,
+    pub skill_scan_paths: Vec<String>,
+    #[serde(default = "default_chat_max_tool_rounds")]
+    pub max_tool_rounds: u8,
+    #[serde(default = "default_chat_tool_timeout_ms")]
+    pub tool_timeout_ms: u64,
+    #[serde(default = "default_chat_max_tool_output_chars")]
+    pub max_tool_output_chars: usize,
+    #[serde(default = "default_chat_approval_policy")]
+    pub approval_policy: String,
+    pub native_tools: ChatNativeToolsConfig,
+}
+
+impl Default for ChatToolsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            servers: Vec::new(),
+            skill_scan_paths: Vec::new(),
+            max_tool_rounds: default_chat_max_tool_rounds(),
+            tool_timeout_ms: default_chat_tool_timeout_ms(),
+            max_tool_output_chars: default_chat_max_tool_output_chars(),
+            approval_policy: default_chat_approval_policy(),
+            native_tools: ChatNativeToolsConfig::default(),
+        }
+    }
+}
+
+/**
  * 应用完整设置
  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,6 +512,8 @@ pub struct Settings {
     pub screenshot_translation: ScreenshotTranslationConfig,
     #[serde(default, alias = "cowork")]
     pub lens: LensConfig,
+    #[serde(default)]
+    pub chat_tools: ChatToolsConfig,
     #[serde(default = "default_settings_language")]
     pub settings_language: Option<String>,
     #[serde(default = "default_retry_enabled")]
@@ -460,6 +565,7 @@ impl Default for Settings {
             providers: vec![],
             screenshot_translation: ScreenshotTranslationConfig::default(),
             lens: LensConfig::default(),
+            chat_tools: ChatToolsConfig::default(),
             settings_language: Some("zh".to_string()),
             retry_enabled: default_retry_enabled(),
             retry_attempts: default_retry_attempts(),
@@ -501,6 +607,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 base_url: old_openai.base_url,
                 available_models: vec![],
                 enabled_models: vec![old_openai.model.clone()],
+                supports_tools: true,
             });
             settings.translator_provider_id = "default-translator".to_string();
             settings.translator_model = old_openai.model;
@@ -521,6 +628,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 base_url: old_ocr.base_url,
                 available_models: vec![],
                 enabled_models: vec![old_ocr.model.clone()],
+                supports_tools: true,
             });
             settings.screenshot_translation.provider_id = "default-ocr".to_string();
             settings.screenshot_translation.model = old_ocr.model;
@@ -529,6 +637,9 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     // 1b. 单 key → 多 key 迁移（v2.3.1 → v2.4 升级路径）
     for provider in &mut settings.providers {
+        if provider.base_url == APPLE_INTELLIGENCE_BASE_URL {
+            provider.supports_tools = false;
+        }
         if let Some(legacy) = provider.api_key_legacy.take() {
             let trimmed = legacy.trim().to_string();
             if !trimmed.is_empty() && !provider.api_keys.contains(&trimmed) {
@@ -712,6 +823,89 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         "ultra-fast" | "fast" | "basic" | "advanced"
     ) {
         settings.lens.web_search.search_depth = default_web_search_depth();
+    }
+
+    settings.chat_tools.max_tool_rounds = settings.chat_tools.max_tool_rounds.clamp(1, 10);
+    settings.chat_tools.tool_timeout_ms = settings.chat_tools.tool_timeout_ms.clamp(1_000, 60_000);
+    settings.chat_tools.max_tool_output_chars = settings
+        .chat_tools
+        .max_tool_output_chars
+        .clamp(1_000, 50_000);
+    if !matches!(
+        settings.chat_tools.approval_policy.trim(),
+        "readonly_auto_sensitive_confirm" | "always_confirm" | "auto"
+    ) {
+        settings.chat_tools.approval_policy = default_chat_approval_policy();
+    }
+    settings.chat_tools.skill_scan_paths = settings
+        .chat_tools
+        .skill_scan_paths
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+    for server in &mut settings.chat_tools.servers {
+        server.id = server.id.trim().to_string();
+        if server.id.is_empty() {
+            server.id = format!("mcp-{}", uuid::Uuid::new_v4());
+        }
+        server.name = server.name.trim().to_string();
+        if server.name.is_empty() {
+            server.name = server.id.clone();
+        }
+        server.transport = server.transport.trim().to_ascii_lowercase();
+        if server.transport == "http" || server.transport == "sse" {
+            server.transport = "streamable_http".to_string();
+        }
+        if server.transport != "stdio" && server.transport != "streamable_http" {
+            server.transport = "stdio".to_string();
+        }
+        server.url = server.url.trim().to_string();
+        server.command = server.command.trim().to_string();
+        server.args = server
+            .args
+            .iter()
+            .map(|arg| arg.trim().to_string())
+            .filter(|arg| !arg.is_empty())
+            .collect();
+        server.env = server
+            .env
+            .iter()
+            .filter_map(|(key, value)| {
+                let key = key.trim();
+                if key.is_empty() {
+                    None
+                } else {
+                    Some((key.to_string(), value.clone()))
+                }
+            })
+            .collect();
+        server.headers = server
+            .headers
+            .iter()
+            .filter_map(|(key, value)| {
+                let key = key.trim();
+                if key.is_empty() {
+                    None
+                } else {
+                    Some((key.to_string(), value.trim().to_string()))
+                }
+            })
+            .collect();
+        server.cwd = server.cwd.take().and_then(|cwd| {
+            let trimmed = cwd.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+        server.enabled_tools = server
+            .enabled_tools
+            .iter()
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+            .collect();
     }
 
     // 清理归档目录路径（去除首尾空白）
@@ -1203,6 +1397,7 @@ mod tests {
             base_url: APPLE_INTELLIGENCE_BASE_URL.to_string(),
             available_models: vec![],
             enabled_models: vec!["apple-foundation".to_string()],
+            supports_tools: false,
         });
         s.providers.push(ModelProvider {
             id: "cloud".to_string(),
@@ -1212,6 +1407,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
+            supports_tools: true,
         });
         s.translator_provider_id = "apple".to_string();
         s.translator_model = "apple-foundation".to_string();
@@ -1224,6 +1420,37 @@ mod tests {
         assert_eq!(s.translator_provider_id, "cloud");
         assert_eq!(s.screenshot_translation.provider_id, "cloud");
         assert_eq!(s.lens.provider_id, "");
+        assert_eq!(
+            s.providers
+                .iter()
+                .find(|provider| provider.id == "apple")
+                .map(|provider| provider.supports_tools),
+            Some(false),
+        );
+    }
+
+    #[test]
+    fn sanitize_settings_forces_apple_provider_tools_off() {
+        let mut s = Settings::default();
+        s.providers.push(ModelProvider {
+            id: "apple".to_string(),
+            name: "Apple Intelligence".to_string(),
+            api_keys: vec!["__on_device__".to_string()],
+            api_key_legacy: None,
+            base_url: APPLE_INTELLIGENCE_BASE_URL.to_string(),
+            available_models: vec![],
+            enabled_models: vec!["apple-foundation".to_string()],
+            supports_tools: true,
+        });
+
+        let s = sanitize_settings(s);
+        assert_eq!(
+            s.providers
+                .iter()
+                .find(|provider| provider.id == "apple")
+                .map(|provider| provider.supports_tools),
+            Some(false),
+        );
     }
 
     #[test]
@@ -1237,6 +1464,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
+            supports_tools: true,
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -1255,6 +1483,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
+            supports_tools: true,
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -1276,6 +1505,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
+            supports_tools: true,
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -1293,6 +1523,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec![],
+            supports_tools: true,
         });
         s.translator_provider_id = "p".to_string();
         s.screenshot_translation.provider_id = "p".to_string();
@@ -1316,6 +1547,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
+            supports_tools: true,
         });
         s.providers.push(ModelProvider {
             id: "lens".to_string(),
@@ -1325,6 +1557,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["vision-model".to_string()],
+            supports_tools: true,
         });
         s.translator_provider_id = "translator".to_string();
         s.translator_model = "gpt-4o".to_string();
@@ -1347,6 +1580,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m1".to_string(), "m2".to_string()],
+            supports_tools: true,
         });
         s.chat_provider_id = "chat".to_string();
         s.chat_model = "m2".to_string();
@@ -1354,6 +1588,61 @@ mod tests {
         let s = sanitize_settings(s);
         assert_eq!(s.chat_provider_id, "chat");
         assert_eq!(s.chat_model, "m2");
+    }
+
+    #[test]
+    fn sanitize_settings_preserves_streamable_http_mcp_server() {
+        let mut s = Settings::default();
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(" Authorization ".to_string(), " Bearer token ".to_string());
+        s.chat_tools.servers.push(ChatMcpServer {
+            id: " http-server ".to_string(),
+            name: " Remote ".to_string(),
+            enabled: true,
+            transport: "sse".to_string(),
+            url: " https://example.com/mcp ".to_string(),
+            command: " ignored ".to_string(),
+            args: vec![" ".to_string(), "--unused".to_string()],
+            env: std::collections::HashMap::new(),
+            headers,
+            cwd: None,
+            enabled_tools: vec![" fetch ".to_string(), "".to_string()],
+        });
+
+        let s = sanitize_settings(s);
+        let server = &s.chat_tools.servers[0];
+        assert_eq!(server.id, "http-server");
+        assert_eq!(server.name, "Remote");
+        assert_eq!(server.transport, "streamable_http");
+        assert_eq!(server.url, "https://example.com/mcp");
+        assert_eq!(
+            server.headers.get("Authorization").map(String::as_str),
+            Some("Bearer token"),
+        );
+        assert_eq!(server.enabled_tools, vec!["fetch".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_settings_resets_unknown_mcp_transport_to_stdio() {
+        let mut s = Settings::default();
+        s.chat_tools.servers.push(ChatMcpServer {
+            id: "mcp-1".to_string(),
+            name: "Local".to_string(),
+            enabled: false,
+            transport: "websocket".to_string(),
+            url: String::new(),
+            command: " npx ".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            cwd: None,
+            enabled_tools: Vec::new(),
+        });
+
+        let s = sanitize_settings(s);
+        let server = &s.chat_tools.servers[0];
+        assert_eq!(server.transport, "stdio");
+        assert_eq!(server.command, "npx");
     }
 
     #[test]
@@ -1393,6 +1682,7 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
+            supports_tools: true,
         });
         s.lens.provider_id = "nonexistent".to_string();
         s.lens.model = "ghost-model".to_string();

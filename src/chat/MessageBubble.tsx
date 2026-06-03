@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FileText, Image } from 'lucide-react'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
+import { ToolCallBlock } from './ToolCallBlock'
 import type { Attachment, ChatMessage } from './types'
 
 interface MessageBubbleProps {
@@ -52,6 +53,7 @@ export function MessageBubble({
   const isUser = message.role === 'user'
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
   const attachments = message.attachments ?? []
+  const toolCalls = message.tool_calls ?? message.toolCalls ?? []
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
@@ -91,13 +93,33 @@ export function MessageBubble({
   return (
     <div className="flex justify-start py-3">
       <div className="max-w-[85%] min-w-0">
+        {toolCalls.length > 0 && !isEditing && (
+          <section
+            aria-label="工具调用"
+            className={message.content.trim().length > 0 || message.reasoning ? 'mb-3' : ''}
+          >
+            <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+              工具调用
+            </div>
+            {toolCalls.map((toolCall, index) => (
+              <ToolCallBlock
+                key={toolCall.id || toolCall.call_id || toolCall.callId || index}
+                toolCall={toolCall}
+              />
+            ))}
+          </section>
+        )}
+
         {message.reasoning && !isEditing && (
-          <div className="mb-2 text-sm text-neutral-400 dark:text-neutral-500">
+          <section
+            aria-label="思考过程"
+            className="mb-3 border-l border-neutral-200 pl-3 text-sm text-neutral-400 dark:border-neutral-700 dark:text-neutral-500"
+          >
             <div className="mb-1">思考过程</div>
             <div className="whitespace-pre-wrap leading-relaxed opacity-90">
               {message.reasoning}
             </div>
-          </div>
+          </section>
         )}
 
         {isEditing ? (
@@ -132,9 +154,18 @@ export function MessageBubble({
             </div>
           </div>
         ) : (
-          <div className="whitespace-pre-wrap break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100">
-            {message.content}
-          </div>
+          message.content.trim().length > 0 && (
+            <section aria-label="回答">
+              {(toolCalls.length > 0 || message.reasoning) && (
+                <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+                  回答
+                </div>
+              )}
+              <div className="whitespace-pre-wrap break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100">
+                {message.content}
+              </div>
+            </section>
+          )
         )}
 
         {!isEditing && message.content.trim().length > 0 && (

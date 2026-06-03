@@ -77,12 +77,15 @@ const mockChatApi = {
     conversationId: string,
     content: string,
     attachments: PendingAttachment[] = [],
+    activeSkillId?: string | null,
   ): Promise<Conversation> {
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
     if (index < 0) throw new Error('Conversation not found')
     const now = nowSeconds()
     const conversation = { ...conversations[index] }
+    conversation.active_skill_id = activeSkillId ?? conversation.active_skill_id ?? conversation.activeSkillId ?? null
+    conversation.activeSkillId = conversation.active_skill_id
     conversation.messages = [
       ...conversation.messages,
       {
@@ -101,6 +104,7 @@ const mockChatApi = {
         id: `msg_dev_${crypto.randomUUID()}`,
         role: 'assistant',
         content: '这是浏览器预览模式的本地回复。启动 Tauri 桌面应用后会调用真实模型接口。',
+        active_skill_id: conversation.active_skill_id,
         timestamp: now,
       },
     ]
@@ -125,6 +129,7 @@ const mockChatApi = {
       folder?: string
       providerId?: string
       model?: string
+      activeSkillId?: string | null
     }
   ): Promise<Conversation> {
     const conversations = loadMockConversations()
@@ -137,8 +142,13 @@ const mockChatApi = {
       folder: updates.folder ?? conversations[index].folder,
       provider_id: updates.providerId ?? conversations[index].provider_id,
       model: updates.model ?? conversations[index].model,
+      active_skill_id:
+        updates.activeSkillId !== undefined
+          ? updates.activeSkillId || null
+          : conversations[index].active_skill_id ?? conversations[index].activeSkillId ?? null,
       updated_at: nowSeconds(),
     }
+    conversation.activeSkillId = conversation.active_skill_id
     conversations[index] = conversation
     saveMockConversations(conversations)
     return conversation
@@ -269,12 +279,20 @@ export const chatApi = {
   async sendMessage(
     conversationId: string,
     content: string,
-    attachments: PendingAttachment[] = []
+    attachments: PendingAttachment[] = [],
+    activeSkillId?: string | null,
   ): Promise<Conversation> {
-    if (!isTauriRuntime()) return mockChatApi.sendMessage(conversationId, content, attachments)
+    if (!isTauriRuntime()) {
+      return mockChatApi.sendMessage(conversationId, content, attachments, activeSkillId)
+    }
     const result = await invoke<{ success: boolean; conversation?: Conversation; error?: string }>(
       'chat_send_message',
-      { conversationId, content, attachments: attachments.map((attachment) => attachment.path) }
+      {
+        conversationId,
+        content,
+        attachments: attachments.map((attachment) => attachment.path),
+        activeSkillId,
+      }
     )
     if (!result.success || !result.conversation) {
       throw new Error(result.error || 'Failed to send message')
@@ -302,6 +320,7 @@ export const chatApi = {
       folder?: string
       providerId?: string
       model?: string
+      activeSkillId?: string | null
     }
   ): Promise<Conversation> {
     if (!isTauriRuntime()) return mockChatApi.updateConversation(conversationId, updates)
@@ -314,6 +333,7 @@ export const chatApi = {
         folder: updates.folder,
         providerId: updates.providerId,
         model: updates.model,
+        activeSkillId: updates.activeSkillId,
       }
     )
     if (!result.success) {
@@ -369,5 +389,10 @@ export const chatApi = {
       throw new Error(result.error || 'Failed to regenerate message')
     }
     return result.conversation
+  },
+
+  async cancelStream(conversationId: string): Promise<void> {
+    if (!isTauriRuntime()) return
+    await invoke<void>('chat_cancel_stream', { conversationId })
   },
 }

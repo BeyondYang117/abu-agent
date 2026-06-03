@@ -5,37 +5,36 @@
  * - 否则目标语言为中文
  */
 pub fn resolve_target_lang(target: &str, text: &str) -> String {
-  if target == "auto" {
-    if has_chinese(text) {
-      "en".to_string()
+    if target == "auto" {
+        if has_chinese(text) {
+            "en".to_string()
+        } else {
+            "zh".to_string()
+        }
     } else {
-      "zh".to_string()
+        target.to_string()
     }
-  } else {
-    target.to_string()
-  }
 }
 
 /**
  * 判断文本中是否包含中文字符
  */
 pub fn has_chinese(text: &str) -> bool {
-  text.chars().any(|c| ('\u{4e00}'..'\u{9fff}').contains(&c))
+    text.chars().any(|c| ('\u{4e00}'..'\u{9fff}').contains(&c))
 }
 
 /**
  * 获取语言代码对应的显示名称
  */
 pub fn language_name(code: &str) -> &'static str {
-  match code {
-    "zh" | "zh-Hans" => "Simplified Chinese",
-    "zh-Hant" => "Traditional Chinese",
-    "en" => "English",
-    "ja" => "Japanese",
-    "ko" => "Korean",
-    "fr" => "French",
-    "de" => "German",
-    _ => "English",
-  }
+    match code {
+        "zh" | "zh-Hans" => "Simplified Chinese",
+        "zh-Hant" => "Traditional Chinese",
+        "en" => "English",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "fr" => "French",
+        "de" => "German",
+        _ => "English",
+    }
 }
-

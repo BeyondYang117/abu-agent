@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { PanelLeftOpen } from 'lucide-react'
+import { Eye, PanelLeftOpen, Wrench, X } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { MessageList, type AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
@@ -7,11 +7,12 @@ import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
 import { chatTitlebarMacInsetClass, chatTitlebarModelClass, chatTitlebarRowClass, usesNativeTitlebar } from './platform'
-import type { ChatMessage, Conversation, PendingAttachment } from './types'
-import { api } from '../api/tauri'
+import type { ChatMessage, Conversation, PendingAttachment, SkillMeta, ToolCallRecord } from './types'
+import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToolProgressPayload, type SkillDetail } from '../api/tauri'
 import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { estimateTokens } from '../lens/markdown'
+import { forgetRememberedChatRoute } from './persistence'
 
 type ChatView = 'conversation' | 'settings'
 
@@ -27,6 +28,58 @@ function isChatSettingsPath(path: string): boolean {
   return path === 'chat/settings' || path.startsWith('chat/settings/')
 }
 
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+function toolEventToRecord(payload: ChatToolProgressPayload): ToolCallRecord {
+  return {
+    id: payload.id || payload.toolCallId,
+    toolCallId: payload.toolCallId,
+    conversationId: payload.conversationId,
+    runId: payload.runId,
+    messageId: payload.messageId,
+    name: payload.name,
+    source: payload.source,
+    serverId: payload.serverId ?? undefined,
+    status: payload.status === 'success' ? 'completed' : payload.status,
+    argumentPreview: payload.argumentsPreview,
+    argumentsPreview: payload.argumentsPreview,
+    resultPreview: payload.resultPreview ?? undefined,
+    error: payload.error ?? undefined,
+    startedAt: payload.startedAt ?? undefined,
+    completedAt: payload.completedAt ?? undefined,
+    durationMs: payload.durationMs ?? undefined,
+    round: payload.round,
+    sensitive: payload.sensitive,
+  }
+}
+
+function normalizeSkill(skill: import('../api/tauri').SkillMeta): SkillMeta {
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    source: skill.source,
+    path: skill.path ?? undefined,
+    recommendedTools: skill.recommendedTools,
+  }
+}
+
+function skillRecommendedTools(skill?: SkillMeta | null): string[] {
+  return skill?.recommended_tools ?? skill?.recommendedTools ?? []
+}
+
+function toolMatchesRecommendation(tool: ChatToolDefinition, recommended: string): boolean {
+  const name = recommended.trim()
+  if (!name) return false
+  return (
+    tool.name === name ||
+    tool.id === name ||
+    `${tool.serverId ?? ''}:${tool.name}` === name
+  )
+}
+
 export default function Chat({ onSettingsChange }: ChatProps) {
   const [chatView, setChatView] = useState<ChatView>(() =>
     isChatSettingsPath(hashPath()) ? 'settings' : 'conversation',
@@ -37,6 +90,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [cancellingStream, setCancellingStream] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [streamError, setStreamError] = useState('')
@@ -47,7 +101,19 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
+  const [skills, setSkills] = useState<SkillMeta[]>([])
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [draftActiveSkillId, setDraftActiveSkillId] = useState<string | null>(null)
+  const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCallRecord[]>([])
+  const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
+  const [enabledToolCount, setEnabledToolCount] = useState<number | null>(null)
+  const [toolsDisabledReason, setToolsDisabledReason] = useState('')
+  const [toolsRequested, setToolsRequested] = useState(false)
+  const [pendingToolConfirm, setPendingToolConfirm] = useState<ChatToolConfirmPayload | null>(null)
+  const [skillPreview, setSkillPreview] = useState<SkillDetail | null>(null)
+  const [skillPreviewLoading, setSkillPreviewLoading] = useState(false)
   const currentConversationIdRef = useRef<string | null>(null)
+  const activeRunIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
   const streamStartedAtRef = useRef<number | null>(null)
   const streamingContentRef = useRef('')
@@ -58,6 +124,82 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const activeProviderId = currentConversation?.provider_id || draftProviderId
   const activeModel = currentConversation?.model || draftModel
+  const activeSkillId = currentConversation
+    ? currentConversation.active_skill_id ?? currentConversation.activeSkillId ?? null
+    : draftActiveSkillId
+  const activeSkill = useMemo(
+    () => skills.find((skill) => skill.id === activeSkillId) ?? null,
+    [activeSkillId, skills],
+  )
+  const activeSkillRecommendedTools = useMemo(
+    () => skillRecommendedTools(activeSkill),
+    [activeSkill],
+  )
+
+  const refreshToolIndicator = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      setEnabledTools([])
+      setEnabledToolCount(null)
+      setToolsDisabledReason('')
+      setToolsRequested(false)
+      return
+    }
+    try {
+      const settings = await api.getSettings()
+      const provider = settings.providers.find((item) => item.id === activeProviderId)
+      const anyMcpEnabled = settings.chatTools.enabled && settings.chatTools.servers.some((server) => server.enabled)
+      const anyNativeEnabled = Boolean(settings.chatTools.nativeTools?.webSearch)
+      const requested = anyMcpEnabled || anyNativeEnabled
+      setToolsRequested(requested)
+      if (!requested) {
+        setEnabledTools([])
+        setEnabledToolCount(null)
+        setToolsDisabledReason('')
+        return
+      }
+      if (provider?.supportsTools === false) {
+        setEnabledTools([])
+        setEnabledToolCount(0)
+        setToolsDisabledReason('当前模型不支持 tools')
+        return
+      }
+      const result = await api.chatMcpListTools()
+      const tools = result.success ? result.tools : []
+      setEnabledTools(tools)
+      setEnabledToolCount(tools.length)
+      setToolsDisabledReason(result.success ? '' : result.error || '工具不可用')
+    } catch (err) {
+      setEnabledTools([])
+      setToolsRequested(false)
+      setEnabledToolCount(null)
+      setToolsDisabledReason(err instanceof Error ? err.message : String(err))
+    }
+  }, [activeProviderId])
+
+  const unavailableRecommendedTools = useMemo(
+    () =>
+      activeSkillRecommendedTools.filter(
+        (recommended) => !enabledTools.some((tool) => toolMatchesRecommendation(tool, recommended)),
+      ),
+    [activeSkillRecommendedTools, enabledTools],
+  )
+
+  const toolStatusHint = useMemo(() => {
+    if (toolsDisabledReason && (enabledToolCount ?? 0) === 0 && (toolsRequested || activeSkillRecommendedTools.length > 0)) {
+      return activeSkillRecommendedTools.length > 0
+        ? `当前 Skill 需要工具，但${toolsDisabledReason}`
+        : toolsDisabledReason
+    }
+    if (toolsDisabledReason && (enabledToolCount ?? 0) === 0) {
+      return ''
+    }
+    if (unavailableRecommendedTools.length > 0) {
+      return `当前 Skill 推荐的工具不可用：${unavailableRecommendedTools.slice(0, 3).join(', ')}`
+    }
+    return ''
+  }, [activeSkillRecommendedTools.length, enabledToolCount, toolsDisabledReason, toolsRequested, unavailableRecommendedTools])
+
+  const sendDisabledReason = activeSkillRecommendedTools.length > 0 ? toolStatusHint : ''
 
   const getRouteConversationId = useCallback(() => {
     const path = hashPath()
@@ -95,9 +237,36 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }, [])
 
+  const loadSkills = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      setSkills([])
+      setSkillsLoading(false)
+      return
+    }
+    setSkillsLoading(true)
+    try {
+      const result = await api.chatSkillsList()
+      if (result.success) {
+        setSkills(result.skills.map(normalizeSkill))
+        if (result.error) {
+          console.warn('Some chat skills could not be loaded:', result.error)
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load chat skills:', err)
+    } finally {
+      setSkillsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     void loadDefaultModel()
-  }, [loadDefaultModel])
+    void loadSkills()
+  }, [loadDefaultModel, loadSkills])
+
+  useEffect(() => {
+    void refreshToolIndicator()
+  }, [refreshToolIndicator])
 
   const openEmbeddedSettings = useCallback(() => {
     setChatView('settings')
@@ -124,18 +293,27 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const handleSettingsChange = useCallback(() => {
     onSettingsChange()
     void loadDefaultModel()
-  }, [loadDefaultModel, onSettingsChange])
+    void loadSkills()
+    void refreshToolIndicator()
+  }, [loadDefaultModel, loadSkills, onSettingsChange, refreshToolIndicator])
 
   const reloadConversation = useCallback(async (conversationId: string) => {
     if (sendInFlightRef.current) return
     try {
       const conv = await chatApi.getConversation(conversationId)
       setCurrentConversation(conv)
+      setStreamingToolCalls([])
+      setCancellingStream(false)
+      activeRunIdRef.current = null
     } catch (err) {
       console.error('Failed to reload conversation:', err)
+      forgetRememberedChatRoute()
+      currentConversationIdRef.current = null
+      setCurrentConversation(null)
+      syncConversationRoute(null)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '对话加载失败')
     }
-  }, [])
+  }, [syncConversationRoute])
 
   useEffect(() => {
     let cancelled = false
@@ -144,6 +322,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const setupListener = async () => {
       unlisten = await api.onChatStream((payload) => {
         if (cancelled) return
+        const currentConversationId = currentConversationIdRef.current
+        if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        if (payload.runId) {
+          if (activeRunIdRef.current && activeRunIdRef.current !== payload.runId) return
+          activeRunIdRef.current = payload.runId
+        }
         if (payload.reasoningDelta) {
           streamingReasoningRef.current += payload.reasoningDelta
           setStreamingReasoning((prev) => prev + payload.reasoningDelta)
@@ -158,8 +344,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           if (sendInFlightRef.current) return
 
           setStreaming(false)
+          setCancellingStream(false)
           setStreamingContent('')
           setStreamingReasoning('')
+          setStreamingToolCalls([])
+          activeRunIdRef.current = null
           if (payload.reason === 'error') {
             setStreamError('回复生成失败，请稍后重试。')
           }
@@ -183,20 +372,89 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [refreshSidebar, reloadConversation])
 
   useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
+      unlisten = await api.onChatTool((payload) => {
+        if (cancelled) return
+        const currentConversationId = currentConversationIdRef.current
+        if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        if (payload.runId) {
+          if (activeRunIdRef.current && activeRunIdRef.current !== payload.runId) return
+          activeRunIdRef.current = payload.runId
+        }
+        setStreaming(true)
+        const record = toolEventToRecord(payload)
+        setStreamingToolCalls((prev) => {
+          const index = prev.findIndex((item) => item.id === record.id)
+          if (index < 0) return [...prev, record]
+          return prev.map((item, i) => (i === index ? { ...item, ...record } : item))
+        })
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
+      unlisten = await api.onChatToolConfirm((payload) => {
+        if (cancelled) return
+        const currentConversationId = currentConversationIdRef.current
+        if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          void api.chatConfirmToolCall(payload.toolCallId, false)
+          return
+        }
+        setPendingToolConfirm(payload)
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
+  useEffect(() => {
     currentConversationIdRef.current = currentConversation?.id ?? null
   }, [currentConversation?.id])
 
   useEffect(() => {
-    let cleanup: (() => void) | undefined
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
     api.onOpenSettings(() => {
+      if (cancelled) return
       const path = hashPath()
       if (!path.startsWith('chat')) return
       openEmbeddedSettings()
-    }).then((unlisten) => {
-      cleanup = unlisten
+    }).then((dispose) => {
+      if (cancelled) {
+        dispose()
+      } else {
+        unlisten = dispose
+      }
     })
     return () => {
-      cleanup?.()
+      cancelled = true
+      unlisten?.()
     }
   }, [openEmbeddedSettings])
 
@@ -226,6 +484,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     try {
       const conv = await chatApi.getConversation(conversationId)
       setCurrentConversation(conv)
+      setStreamingToolCalls([])
+      activeRunIdRef.current = null
       syncConversationRoute(conversationId)
       setStreamError('')
     } catch (err) {
@@ -241,15 +501,20 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         activeProviderId || undefined,
         activeModel || undefined
       )
-      setCurrentConversation(conv)
-      syncConversationRoute(conv.id)
+      const nextConv = draftActiveSkillId
+        ? await chatApi.updateConversation(conv.id, { activeSkillId: draftActiveSkillId })
+        : conv
+      setCurrentConversation(nextConv)
+      setStreamingToolCalls([])
+      activeRunIdRef.current = null
+      syncConversationRoute(nextConv.id)
       refreshSidebar()
       setStreamError('')
     } catch (err) {
       console.error('Failed to create conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
     }
-  }, [activeModel, activeProviderId, refreshSidebar, syncConversationRoute])
+  }, [activeModel, activeProviderId, draftActiveSkillId, refreshSidebar, syncConversationRoute])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -293,6 +558,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
     const trimmed = content.trim()
     if (!trimmed && attachments.length === 0) return
+    if (sendDisabledReason) {
+      setStreamError(sendDisabledReason)
+      return
+    }
 
     const pendingUserId = `pending-user-${Date.now()}`
     const optimisticUserMessage: ChatMessage = {
@@ -310,9 +579,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
     setPendingUserMessage(optimisticUserMessage)
     setStreaming(true)
+    setCancellingStream(false)
     setStreamingContent('')
     setStreamingReasoning('')
+    setStreamingToolCalls([])
     setStreamError('')
+    activeRunIdRef.current = null
     streamStartedAtRef.current = Date.now()
     streamingContentRef.current = ''
     streamingReasoningRef.current = ''
@@ -330,13 +602,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         syncConversationRoute(conversation.id)
       }
 
-      const updatedConv = await chatApi.sendMessage(conversation!.id, trimmed, attachments)
+      const selectedSkillId = activeSkillId || null
+      const updatedConv = await chatApi.sendMessage(
+        conversation!.id,
+        trimmed,
+        attachments,
+        selectedSkillId,
+      )
       applyAssistantStreamStats(updatedConv)
       setCurrentConversation(updatedConv)
       setPendingUserMessage(null)
       setStreaming(false)
+      setCancellingStream(false)
       setStreamingContent('')
       setStreamingReasoning('')
+      setStreamingToolCalls([])
+      activeRunIdRef.current = null
       streamStartedAtRef.current = null
       streamingContentRef.current = ''
       streamingReasoningRef.current = ''
@@ -345,8 +626,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to send message:', err)
       setPendingUserMessage(null)
       setStreaming(false)
+      setCancellingStream(false)
       setStreamingContent('')
       setStreamingReasoning('')
+      setStreamingToolCalls([])
+      activeRunIdRef.current = null
       streamStartedAtRef.current = null
       streamingContentRef.current = ''
       streamingReasoningRef.current = ''
@@ -406,9 +690,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       })
       setLastAssistantStreamStats(null)
       setStreaming(true)
+      setCancellingStream(false)
       setStreamingContent('')
       setStreamingReasoning('')
+      setStreamingToolCalls([])
       setStreamError('')
+      activeRunIdRef.current = null
       streamStartedAtRef.current = Date.now()
       streamingContentRef.current = ''
       streamingReasoningRef.current = ''
@@ -425,8 +712,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         void reloadConversation(conversationId)
       } finally {
         setStreaming(false)
+        setCancellingStream(false)
         setStreamingContent('')
         setStreamingReasoning('')
+        setStreamingToolCalls([])
+        activeRunIdRef.current = null
         streamStartedAtRef.current = null
         streamingContentRef.current = ''
         streamingReasoningRef.current = ''
@@ -454,6 +744,51 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '模型切换失败')
     }
   }
+
+  const handleCancelStream = useCallback(async () => {
+    const conversationId = currentConversationIdRef.current
+    if (!conversationId || cancellingStream || (!streaming && !sendInFlightRef.current)) return
+
+    setCancellingStream(true)
+    try {
+      await chatApi.cancelStream(conversationId)
+    } catch (err) {
+      console.error('Failed to cancel chat stream:', err)
+      setCancellingStream(false)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '停止生成失败')
+    }
+  }, [cancellingStream, streaming])
+
+  const handleSkillChange = async (skillId: string | null) => {
+    setDraftActiveSkillId(skillId)
+    if (!currentConversation) return
+
+    try {
+      const updatedConv = await chatApi.updateConversation(currentConversation.id, {
+        activeSkillId: skillId ?? '',
+      })
+      setCurrentConversation(updatedConv)
+      refreshSidebar()
+    } catch (err) {
+      console.error('Failed to change skill:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Skill 切换失败')
+    }
+  }
+
+  const handlePreviewSkill = useCallback(async (skill: SkillMeta) => {
+    setSkillPreviewLoading(true)
+    try {
+      const result = await api.chatSkillsRead(skill.id)
+      if (!result.success || !result.skill) {
+        throw new Error(result.error || 'Skill 读取失败')
+      }
+      setSkillPreview(result.skill)
+    } catch (err) {
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Skill 读取失败')
+    } finally {
+      setSkillPreviewLoading(false)
+    }
+  }, [])
 
   const displayMessages = useMemo(() => {
     const stored = currentConversation?.messages ?? []
@@ -488,6 +823,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             runAfterLeavingSettings(() => void handleNewConversation())
           }}
           onConversationDeleted={() => {
+            forgetRememberedChatRoute()
             setCurrentConversation(null)
             syncConversationRoute(null)
             refreshSidebar()
@@ -569,7 +905,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       layout="inline"
                       onSend={(content, attachments) => void handleSendMessage(content, attachments)}
                       disabled={streaming || sendInFlightRef.current}
+                      onCancel={() => void handleCancelStream()}
+                      cancelVisible={streaming || sendInFlightRef.current}
+                      cancelling={cancellingStream}
                       onOpenSettings={openEmbeddedSettings}
+                      toolCount={enabledToolCount ?? undefined}
+                      enabledTools={enabledTools}
+                      toolsRequested={toolsRequested}
+                      toolsDisabledReason={toolsDisabledReason}
+                      toolStatusHint={toolStatusHint}
+                      sendDisabledReason={sendDisabledReason}
+                      skills={skills}
+                      activeSkillId={activeSkillId}
+                      skillsLoading={skillsLoading}
+                      onSkillChange={(skillId) => void handleSkillChange(skillId)}
+                      onPreviewSkill={(skill) => void handlePreviewSkill(skill)}
                       autoFocus
                     />
                   </div>
@@ -581,6 +931,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     streaming={streaming}
                     streamingContent={streamingContent}
                     streamingReasoning={streamingReasoning}
+                    streamingToolCalls={streamingToolCalls}
                     error={streamError}
                     lastAssistantStreamStats={lastAssistantStreamStats}
                     onUpdateMessage={handleUpdateMessage}
@@ -590,7 +941,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   <InputBar
                     onSend={(content, attachments) => void handleSendMessage(content, attachments)}
                     disabled={streaming || sendInFlightRef.current}
+                    onCancel={() => void handleCancelStream()}
+                    cancelVisible={streaming || sendInFlightRef.current}
+                    cancelling={cancellingStream}
                     onOpenSettings={openEmbeddedSettings}
+                    toolCount={enabledToolCount ?? undefined}
+                    enabledTools={enabledTools}
+                    toolsRequested={toolsRequested}
+                    toolsDisabledReason={toolsDisabledReason}
+                    toolStatusHint={toolStatusHint}
+                    sendDisabledReason={sendDisabledReason}
+                    skills={skills}
+                    activeSkillId={activeSkillId}
+                    skillsLoading={skillsLoading}
+                    onSkillChange={(skillId) => void handleSkillChange(skillId)}
+                    onPreviewSkill={(skill) => void handlePreviewSkill(skill)}
                     autoFocus
                   />
                 </>
@@ -599,6 +964,105 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           </div>
         )}
       </div>
+      {pendingToolConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4" data-tauri-drag-region="false">
+          <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+            <div className="mb-3 flex items-start gap-2">
+              <Wrench size={17} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
+              <div className="min-w-0 flex-1">
+                <div className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">
+                  允许调用工具 {pendingToolConfirm.name}？
+                </div>
+                <div className="mt-1 text-[12px] text-neutral-500 dark:text-neutral-400">
+                  {pendingToolConfirm.source}
+                  {pendingToolConfirm.serverId ? ` · ${pendingToolConfirm.serverId}` : ''}
+                  {pendingToolConfirm.sensitivity ? ` · ${pendingToolConfirm.sensitivity}` : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                aria-label="拒绝"
+                onClick={() => {
+                  void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, false)
+                  setPendingToolConfirm(null)
+                }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            {pendingToolConfirm.argumentsPreview && (
+              <pre className="mb-3 max-h-40 overflow-auto rounded-md bg-neutral-100 p-3 text-[11px] leading-relaxed text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+                {pendingToolConfirm.argumentsPreview}
+              </pre>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md px-3 py-1.5 text-[12px] font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                onClick={() => {
+                  void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, false)
+                  setPendingToolConfirm(null)
+                }}
+              >
+                拒绝
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+                onClick={() => {
+                  void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, true)
+                  setPendingToolConfirm(null)
+                }}
+              >
+                允许
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {(skillPreview || skillPreviewLoading) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4" data-tauri-drag-region="false">
+          <div className="flex max-h-[82vh] w-full max-w-2xl flex-col rounded-lg border border-neutral-200 bg-white shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+            <div className="flex items-start gap-2 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+              <Eye size={17} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">
+                  {skillPreview?.name || 'Skill'}
+                </div>
+                {skillPreview?.description && (
+                  <div className="mt-1 line-clamp-2 text-[12px] text-neutral-500 dark:text-neutral-400">
+                    {skillPreview.description}
+                  </div>
+                )}
+                {skillPreview && skillPreview.recommendedTools.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {skillPreview.recommendedTools.map((tool) => (
+                      <span
+                        key={tool}
+                        className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10.5px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+                      >
+                        {tool}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                aria-label="关闭 Skill 预览"
+                onClick={() => setSkillPreview(null)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-4 py-3 text-[12px] leading-relaxed text-neutral-700 dark:text-neutral-200">
+              {skillPreviewLoading ? '加载中...' : skillPreview?.body || ''}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -21,7 +21,7 @@ use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 use flate2::read::GzDecoder;
-use oar_ocr::oarocr::{OAROCR, OAROCRBuilder};
+use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tokio::sync::{Mutex, OnceCell};
@@ -89,15 +89,13 @@ struct DownloadFile {
 
 /// 必备文件:本地名 + 下载 URL。任一缺失则视为「未就绪」。
 fn download_files() -> Vec<DownloadFile> {
-    let mut files = vec![
-        DownloadFile {
-            name: DYLIB_NAME,
-            source: DownloadSource::Archive {
-                url: DYLIB_URL,
-                entry_suffix: DYLIB_ARCHIVE_PATH,
-            },
+    let mut files = vec![DownloadFile {
+        name: DYLIB_NAME,
+        source: DownloadSource::Archive {
+            url: DYLIB_URL,
+            entry_suffix: DYLIB_ARCHIVE_PATH,
         },
-    ];
+    }];
 
     // Windows 官方 CPU 包会带 shared provider 运行时。ONNX Runtime 会从
     // onnxruntime.dll 同目录查 provider shared libs,所以跟主 DLL 放在一起。
@@ -223,14 +221,12 @@ impl RapidOcrClient {
             }
             let tmp_path = dir.join(format!("{name}.tmp"));
             let write_result = match file.source {
-                DownloadSource::File { url } => {
-                    match download_bytes(&self.http, name, url).await {
-                        Ok(bytes) => tokio::fs::write(&tmp_path, bytes)
-                            .await
-                            .map_err(|e| format!("write {name}: {e}")),
-                        Err(e) => Err(e),
-                    }
-                }
+                DownloadSource::File { url } => match download_bytes(&self.http, name, url).await {
+                    Ok(bytes) => tokio::fs::write(&tmp_path, bytes)
+                        .await
+                        .map_err(|e| format!("write {name}: {e}")),
+                    Err(e) => Err(e),
+                },
                 DownloadSource::Archive { url, entry_suffix } => {
                     let bytes = match archive_cache.get(url) {
                         Some(bytes) => Arc::clone(bytes),
@@ -326,11 +322,7 @@ impl RapidOcrClient {
     }
 }
 
-async fn download_bytes(
-    http: &reqwest::Client,
-    name: &str,
-    url: &str,
-) -> Result<Vec<u8>, String> {
+async fn download_bytes(http: &reqwest::Client, name: &str, url: &str) -> Result<Vec<u8>, String> {
     match http.get(url).timeout(DOWNLOAD_TIMEOUT).send().await {
         Ok(resp) => match resp.error_for_status() {
             Ok(r) => r
@@ -449,8 +441,14 @@ impl OcrLine {
         let text = join_line_spans(&spans);
         let x_min = spans.iter().map(|s| s.x_min).fold(f32::INFINITY, f32::min);
         let y_min = spans.iter().map(|s| s.y_min).fold(f32::INFINITY, f32::min);
-        let x_max = spans.iter().map(|s| s.x_max).fold(f32::NEG_INFINITY, f32::max);
-        let y_max = spans.iter().map(|s| s.y_max).fold(f32::NEG_INFINITY, f32::max);
+        let x_max = spans
+            .iter()
+            .map(|s| s.x_max)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let y_max = spans
+            .iter()
+            .map(|s| s.y_max)
+            .fold(f32::NEG_INFINITY, f32::max);
         Self {
             text,
             x_min,
@@ -549,8 +547,14 @@ fn join_text_regions(results: &[oar_ocr::oarocr::OAROCRResult]) -> String {
 fn span_belongs_to_line(line: &[OcrSpan], span: &OcrSpan, median_height: f32) -> bool {
     let x_min = line.iter().map(|s| s.x_min).fold(f32::INFINITY, f32::min);
     let y_min = line.iter().map(|s| s.y_min).fold(f32::INFINITY, f32::min);
-    let x_max = line.iter().map(|s| s.x_max).fold(f32::NEG_INFINITY, f32::max);
-    let y_max = line.iter().map(|s| s.y_max).fold(f32::NEG_INFINITY, f32::max);
+    let x_max = line
+        .iter()
+        .map(|s| s.x_max)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let y_max = line
+        .iter()
+        .map(|s| s.y_max)
+        .fold(f32::NEG_INFINITY, f32::max);
     let line_height = (y_max - y_min).max(1.0);
     let span_height = span.height();
     let vertical_overlap = (y_max.min(span.y_max) - y_min.max(span.y_min)).max(0.0);
@@ -578,7 +582,10 @@ fn format_ocr_lines(lines: &[OcrLine]) -> String {
 
     let median_height = median(lines.iter().map(OcrLine::height).collect()).unwrap_or(20.0);
     let doc_left = lines.iter().map(|l| l.x_min).fold(f32::INFINITY, f32::min);
-    let doc_right = lines.iter().map(|l| l.x_max).fold(f32::NEG_INFINITY, f32::max);
+    let doc_right = lines
+        .iter()
+        .map(|l| l.x_max)
+        .fold(f32::NEG_INFINITY, f32::max);
     let doc_width = (doc_right - doc_left).max(1.0);
 
     let mut out = String::new();
@@ -681,7 +688,10 @@ fn should_separate_blocks(
     out: &str,
     median_height: f32,
 ) -> bool {
-    let previous_text = out.rsplit(['\n', '\r']).find(|s| !s.trim().is_empty()).unwrap_or(out);
+    let previous_text = out
+        .rsplit(['\n', '\r'])
+        .find(|s| !s.trim().is_empty())
+        .unwrap_or(out);
 
     // Keep Markdown lists tight internally. Use a blank line only when entering or
     // leaving a list block so ReactMarkdown does not render every item as loose.
@@ -730,10 +740,15 @@ fn normalize_line_text(text: &str) -> String {
         return String::new();
     };
     let rest = chars.as_str().trim_start();
-    let marker = matches!(first, '•' | '·' | '●' | '○' | '◦' | '▪' | '▫' | '-' | '*' | '–' | '—')
-        || ((first == 'O' || first == 'o' || first == '0')
-            && !rest.is_empty()
-            && rest.chars().next().is_some_and(|c| c.is_uppercase() || !c.is_ascii()));
+    let marker = matches!(
+        first,
+        '•' | '·' | '●' | '○' | '◦' | '▪' | '▫' | '-' | '*' | '–' | '—'
+    ) || ((first == 'O' || first == 'o' || first == '0')
+        && !rest.is_empty()
+        && rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_uppercase() || !c.is_ascii()));
 
     if marker && !rest.is_empty() {
         format!("- {rest}")
@@ -781,7 +796,12 @@ fn normalize_ordered_list_item(text: &str) -> Option<String> {
     Some(format!("{}. {}", &text[..digit_end], rest))
 }
 
-fn should_insert_inline_space(prev_text: &str, next_text: &str, gap: f32, line_height: f32) -> bool {
+fn should_insert_inline_space(
+    prev_text: &str,
+    next_text: &str,
+    gap: f32,
+    line_height: f32,
+) -> bool {
     if prev_text.is_empty() || next_text.is_empty() || gap <= 1.0 {
         return false;
     }
@@ -793,7 +813,22 @@ fn should_insert_inline_space(prev_text: &str, next_text: &str, gap: f32, line_h
     };
     if prev.is_whitespace()
         || next.is_whitespace()
-        || matches!(next, ',' | '.' | ':' | ';' | ')' | ']' | '}' | '，' | '。' | '、' | '：' | '；' | '）' | '】')
+        || matches!(
+            next,
+            ',' | '.'
+                | ':'
+                | ';'
+                | ')'
+                | ']'
+                | '}'
+                | '，'
+                | '。'
+                | '、'
+                | '：'
+                | '；'
+                | '）'
+                | '】'
+        )
         || matches!(prev, '(' | '[' | '{' | '（' | '【')
     {
         return false;
@@ -820,7 +855,22 @@ fn needs_space_before(next_text: &str, previous: char) -> bool {
     };
     !is_cjk(previous)
         && !is_cjk(next)
-        && !matches!(next, ',' | '.' | ':' | ';' | ')' | ']' | '}' | '，' | '。' | '、' | '：' | '；' | '）' | '】')
+        && !matches!(
+            next,
+            ',' | '.'
+                | ':'
+                | ';'
+                | ')'
+                | ']'
+                | '}'
+                | '，'
+                | '。'
+                | '、'
+                | '：'
+                | '；'
+                | '）'
+                | '】'
+        )
 }
 
 fn ensure_blank_line(out: &mut String) {
@@ -876,10 +926,12 @@ fn looks_like_heading(text: &str, height: f32, median_height: f32) -> bool {
 }
 
 fn ends_with_sentence_break(text: &str) -> bool {
-    text.trim_end()
-        .chars()
-        .last()
-        .is_some_and(|c| matches!(c, '.' | '!' | '?' | ':' | ';' | '。' | '！' | '？' | '：' | '；'))
+    text.trim_end().chars().last().is_some_and(|c| {
+        matches!(
+            c,
+            '.' | '!' | '?' | ':' | ';' | '。' | '！' | '？' | '：' | '；'
+        )
+    })
 }
 
 fn collapse_spaces(text: &str) -> String {

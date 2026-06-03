@@ -1,5 +1,45 @@
 use serde::{Deserialize, Serialize};
 
+/// 工具调用状态（保存在 assistant message metadata 中）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallStatus {
+    Pending,
+    Running,
+    Success,
+    Error,
+    Cancelled,
+    Skipped,
+}
+
+/// Chat 工具调用记录。字段保持 snake_case 存储，前端可同时兼容 camelCase 事件。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallRecord {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub arguments: String,
+    pub status: ToolCallStatus,
+    #[serde(default)]
+    pub result_preview: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub started_at: Option<i64>,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
+    #[serde(default)]
+    pub round: u8,
+    #[serde(default)]
+    pub sensitive: bool,
+}
+
 /// 对话消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -10,6 +50,10 @@ pub struct ChatMessage {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub reasoning: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallRecord>,
+    #[serde(default)]
+    pub active_skill_id: Option<String>,
     pub timestamp: i64,
 }
 
@@ -31,6 +75,8 @@ pub struct Conversation {
     pub provider_id: String,
     pub model: String,
     pub messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub active_skill_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(default)]
