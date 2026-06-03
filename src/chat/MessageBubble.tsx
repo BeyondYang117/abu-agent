@@ -2,12 +2,15 @@ import { useEffect, useState } from 'react'
 import { FileText, Image } from 'lucide-react'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatMarkdown } from './ChatMarkdown'
+import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import type { Attachment, ChatMessage } from './types'
 
 interface MessageBubbleProps {
   message: ChatMessage
   tokensPerSec?: number
+  /** 思维链仍在流式写入 */
+  reasoningActive?: boolean
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
@@ -47,6 +50,7 @@ function AttachmentList({
 export function MessageBubble({
   message,
   tokensPerSec,
+  reasoningActive = false,
   onUpdateMessage,
   onRegenerateMessage,
   onDeleteMessage,
@@ -112,15 +116,7 @@ export function MessageBubble({
         )}
 
         {message.reasoning && !isEditing && (
-          <section
-            aria-label="思考过程"
-            className="mb-3 border-l border-neutral-200 pl-3 text-sm text-neutral-400 dark:border-neutral-700 dark:text-neutral-500"
-          >
-            <div className="mb-1">思考过程</div>
-            <div className="whitespace-pre-wrap leading-relaxed opacity-90">
-              {message.reasoning}
-            </div>
-          </section>
+          <ReasoningBlock reasoning={message.reasoning} active={reasoningActive} />
         )}
 
         {isEditing ? (

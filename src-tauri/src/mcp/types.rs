@@ -173,7 +173,7 @@ pub fn native_skill_run_script_tool() -> ChatToolDefinition {
             },
             "required": ["name", "relative_path"]
         }),
-        sensitive: true,
+        sensitive: false,
     }
 }
 
@@ -243,8 +243,10 @@ mod tests {
     }
 
     #[test]
-    fn skill_run_script_requires_confirmation_by_default() {
-        assert!(native_skill_run_script_tool().sensitive);
+    fn builtin_skill_tools_are_not_marked_sensitive() {
+        assert!(!native_skill_activate_tool().sensitive);
+        assert!(!native_skill_read_file_tool().sensitive);
+        assert!(!native_skill_run_script_tool().sensitive);
     }
 
     #[test]

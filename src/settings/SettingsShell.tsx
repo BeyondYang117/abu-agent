@@ -78,7 +78,7 @@ function defaultChatTools(): ChatToolsConfig {
     skillAutoMatch: true,
     skillFallbackMode: 'progressive',
     skillScriptAllowlist: ['python3', 'bash', 'sh', 'node'],
-    maxToolRounds: 5,
+    maxToolRounds: 30,
     toolTimeoutMs: 60_000,
     maxToolOutputChars: 12_000,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
@@ -1903,9 +1903,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         type="number"
                         min={1}
                         max={10}
-                        value={String(chatTools.maxToolRounds ?? 5)}
+                        value={String(chatTools.maxToolRounds ?? 30)}
                         onChange={(value) => updateChatTools({
-                          maxToolRounds: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 1)),
+                          maxToolRounds: Math.min(30, Math.max(1, Number.parseInt(value, 10) || 1)),
                         })}
                       />
                     </FieldBlock>

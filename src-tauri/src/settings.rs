@@ -452,7 +452,7 @@ fn default_skill_script_allowlist() -> Vec<String> {
 }
 
 fn default_chat_max_tool_rounds() -> u8 {
-    5
+    30
 }
 
 fn default_chat_tool_timeout_ms() -> u64 {
@@ -860,7 +860,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         settings.lens.web_search.search_depth = default_web_search_depth();
     }
 
-    settings.chat_tools.max_tool_rounds = settings.chat_tools.max_tool_rounds.clamp(1, 10);
+    settings.chat_tools.max_tool_rounds = settings.chat_tools.max_tool_rounds.clamp(1, 30);
     settings.chat_tools.tool_timeout_ms = settings.chat_tools.tool_timeout_ms.clamp(1_000, 60_000);
     settings.chat_tools.max_tool_output_chars = settings
         .chat_tools

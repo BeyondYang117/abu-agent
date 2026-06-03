@@ -350,7 +350,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     skillScriptAllowlist: Array.isArray(current.skillScriptAllowlist) && current.skillScriptAllowlist.length > 0
       ? current.skillScriptAllowlist
       : ['python3', 'bash', 'sh', 'node'],
-    maxToolRounds: current.maxToolRounds ?? 5,
+    maxToolRounds: current.maxToolRounds ?? 30,
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
     maxToolOutputChars: current.maxToolOutputChars ?? 12_000,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',

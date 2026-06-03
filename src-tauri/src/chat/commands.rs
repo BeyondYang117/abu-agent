@@ -646,7 +646,8 @@ async fn complete_assistant_reply(
             }
             let tool_calls = extract_tool_calls(&message);
             if tool_calls.is_empty() {
-                let response = assistant_content_from_api_message(&message);
+                let mut response =
+                    crate::chat::dsml_tools::strip_dsml_tool_markup(&assistant_content_from_api_message(&message));
                 let reasoning = merge_reasoning(&planning_reasoning_parts, None);
                 if !response.is_empty() {
                     emit_chat_stream_delta(
@@ -683,7 +684,8 @@ async fn complete_assistant_reply(
                 return Ok(());
             }
 
-            runtime_messages.push(message);
+            let assistant_message = assistant_api_message_for_tool_calls(&message, &tool_calls);
+            runtime_messages.push(assistant_message);
             generated_api_messages.push(runtime_messages.last().cloned().unwrap_or(Value::Null));
             for tool_call in tool_calls {
                 let Some(tool) = match_tool_call(&tools, &tool_call.function_name) else {
@@ -731,30 +733,10 @@ async fn complete_assistant_reply(
             }
         }
         if !provider_tools_unsupported {
-            let message = "工具调用达到最大轮次，已停止。".to_string();
-            emit_chat_stream_done(
-                app,
-                &conversation.id,
-                &run_id,
-                &assistant_message_id,
-                "error",
-                &message,
-            );
-            if !generated_api_messages.is_empty() {
-                generated_api_messages.push(final_assistant_api_message(&message, None));
-            }
-            push_assistant_message(
-                app,
-                conversation,
-                assistant_message_id,
-                message,
-                None,
-                tool_records,
-                generated_api_messages,
-                skill_id,
-                title_from_first_user,
-            )?;
-            return Ok(());
+            runtime_messages.push(serde_json::json!({
+                "role": "system",
+                "content": "已达到本轮工具调用轮次上限。请根据对话中已有的工具返回结果直接回答用户，不要再调用任何工具。"
+            }));
         }
     }
 
@@ -817,13 +799,14 @@ async fn complete_assistant_reply(
         }
         let final_reasoning_for_api = stream.reasoning.clone();
         let reasoning = merge_reasoning(&planning_reasoning_parts, stream.reasoning);
+        let response = sanitize_assistant_text_response(&stream.content);
         if !generated_api_messages.is_empty() {
             generated_api_messages.push(final_assistant_api_message(
-                &stream.content,
+                &response,
                 final_reasoning_for_api.as_deref(),
             ));
         }
-        (stream.content, reasoning)
+        (response, reasoning)
     } else {
         let message = tokio::select! {
             result = call_chat_completion_message(
@@ -848,24 +831,26 @@ async fn complete_assistant_reply(
                 return Err("cancelled".to_string());
             }
         };
-        let response = message
-            .get("content")
-            .and_then(|content| content.as_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let response = sanitize_assistant_text_response(
+            &message
+                .get("content")
+                .and_then(|content| content.as_str())
+                .unwrap_or_default(),
+        );
         let reasoning = merge_reasoning(
             &planning_reasoning_parts,
             extract_reasoning_content(&message),
         );
-        emit_chat_stream_delta(
-            app,
-            &conversation.id,
-            &run_id,
-            &assistant_message_id,
-            &response,
-            None,
-        );
+        if !response.is_empty() {
+            emit_chat_stream_delta(
+                app,
+                &conversation.id,
+                &run_id,
+                &assistant_message_id,
+                &response,
+                None,
+            );
+        }
         emit_chat_stream_done(
             app,
             &conversation.id,
@@ -1040,6 +1025,12 @@ fn is_native_skill_tool_name(name: &str) -> bool {
         name,
         "skill_activate" | "skill_read_file" | "skill_run_script"
     )
+}
+
+/// Kivio 内置工具（Skill 三件套 + 原生联网搜索）始终自动执行，不走审批弹窗。
+fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
+    (tool.source == "skill" && is_native_skill_tool_name(&tool.name))
+        || (tool.source == "native" && tool.name == "web_search")
 }
 
 fn apply_provider_tools_fallback(
@@ -1432,16 +1423,17 @@ async fn stream_scoped_chat_completion(
                 continue;
             }
             if data == "[DONE]" {
+                let cleaned = sanitize_assistant_text_response(full.trim());
                 emit_chat_stream_done(
                     app,
                     conversation_id,
                     run_id,
                     message_id,
                     "done",
-                    full.trim(),
+                    &cleaned,
                 );
                 return Ok(ChatStreamOutput::new(
-                    full.trim().to_string(),
+                    cleaned,
                     reasoning_full.trim().to_string(),
                     false,
                 ));
@@ -1483,16 +1475,17 @@ async fn stream_scoped_chat_completion(
             }
         }
     }
+    let cleaned = sanitize_assistant_text_response(full.trim());
     emit_chat_stream_done(
         app,
         conversation_id,
         run_id,
         message_id,
         "done",
-        full.trim(),
+        &cleaned,
     );
     Ok(ChatStreamOutput::new(
-        full.trim().to_string(),
+        cleaned,
         reasoning_full.trim().to_string(),
         false,
     ))
@@ -1689,6 +1682,15 @@ pub(crate) struct PendingToolCall {
 }
 
 fn extract_tool_calls(message: &Value) -> Vec<PendingToolCall> {
+    let from_api = extract_openai_tool_calls(message);
+    if !from_api.is_empty() {
+        return from_api;
+    }
+    let content = assistant_content_from_api_message(message);
+    pending_tool_calls_from_dsml(&content)
+}
+
+fn extract_openai_tool_calls(message: &Value) -> Vec<PendingToolCall> {
     message
         .get("tool_calls")
         .and_then(|value| value.as_array())
@@ -1718,6 +1720,58 @@ fn extract_tool_calls(message: &Value) -> Vec<PendingToolCall> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn pending_tool_calls_from_dsml(content: &str) -> Vec<PendingToolCall> {
+    crate::chat::dsml_tools::extract_dsml_tool_calls(content)
+        .into_iter()
+        .map(|call| {
+            let arguments = Value::Object(call.arguments);
+            let arguments_raw =
+                serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string());
+            PendingToolCall {
+                id: format!("tool_{}", Uuid::new_v4()),
+                function_name: call.name,
+                arguments,
+                arguments_raw,
+            }
+        })
+        .collect()
+}
+
+fn assistant_api_message_for_tool_calls(
+    message: &Value,
+    tool_calls: &[PendingToolCall],
+) -> Value {
+    if message
+        .get("tool_calls")
+        .and_then(|value| value.as_array())
+        .is_some_and(|calls| !calls.is_empty())
+    {
+        return message.clone();
+    }
+    serde_json::json!({
+        "role": "assistant",
+        "content": Value::Null,
+        "tool_calls": tool_calls.iter().map(|call| {
+            serde_json::json!({
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.function_name,
+                    "arguments": call.arguments_raw,
+                }
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn sanitize_assistant_text_response(content: &str) -> String {
+    let stripped = crate::chat::dsml_tools::strip_dsml_tool_markup(content);
+    if stripped.is_empty() && crate::chat::dsml_tools::contains_dsml_tool_markup(content) {
+        return String::new();
+    }
+    stripped
 }
 
 fn match_tool_call<'a>(
@@ -1798,10 +1852,14 @@ async fn execute_chat_tool_call(
     emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
 
     let settings = state.settings_read().clone();
-    let requires_approval = match settings.chat_tools.approval_policy.as_str() {
-        "auto" => false,
-        "always_confirm" => true,
-        _ => tool.sensitive,
+    let requires_approval = if builtin_tool_bypasses_approval(tool) {
+        false
+    } else {
+        match settings.chat_tools.approval_policy.as_str() {
+            "auto" => false,
+            "always_confirm" => true,
+            _ => tool.sensitive,
+        }
     };
     if requires_approval {
         let approved = request_tool_approval(

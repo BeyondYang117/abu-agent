@@ -77,6 +77,7 @@ export function MessageList({
               tool_calls: streamingToolCalls,
               timestamp: Math.floor(Date.now() / 1000),
             }}
+            reasoningActive={Boolean(streamingReasoning)}
           />
         )}
 
