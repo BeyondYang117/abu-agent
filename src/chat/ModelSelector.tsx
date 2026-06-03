@@ -31,6 +31,7 @@ export function ModelSelector({
           availableModels: currentModel ? [currentModel] : ['dev-model'],
           enabledModels: currentModel ? [currentModel] : ['dev-model'],
           supportsTools: true,
+          apiFormat: 'openai',
         },
       ])
     }

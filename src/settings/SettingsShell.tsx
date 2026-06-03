@@ -910,6 +910,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       availableModels: [],
       enabledModels: [],
       supportsTools: true,
+      apiFormat: 'openai',
     }
     setSettings({
       ...settings,
@@ -931,6 +932,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       availableModels: [],
       enabledModels: [],
       supportsTools: !preset.onDevice,
+      apiFormat: 'openai',
     }
     setSettings({
       ...settings,
@@ -2527,6 +2529,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                 <Toggle
                                   checked={provider.supportsTools !== false}
                                   onChange={(supportsTools) => updateProvider(provider.id, { supportsTools })}
+                                />
+                              </SettingRow>
+
+                              <SettingRow
+                                label={lang === 'zh' ? 'API 格式' : 'API format'}
+                                description={lang === 'zh' ? '选择该供应商使用的 API 协议格式。代理/中转服务可能需要 Anthropic 格式。' : 'Select the API protocol format for this provider. Proxy services may require Anthropic format.'}
+                              >
+                                <Select
+                                  value={provider.apiFormat || 'openai'}
+                                  onChange={(apiFormat) => updateProvider(provider.id, { apiFormat })}
+                                  options={[
+                                    { value: 'openai', label: 'OpenAI Chat API' },
+                                    { value: 'anthropic', label: 'Anthropic Messages API' },
+                                  ]}
                                 />
                               </SettingRow>
                             </>

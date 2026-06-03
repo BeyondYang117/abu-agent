@@ -16,6 +16,7 @@ use crate::mcp::{self, ChatToolDefinition};
 use crate::settings::{default_system_prompt, no_think_instruction, persist_settings};
 use crate::skills;
 use crate::state::AppState;
+use crate::utils;
 
 use super::storage::{
     conversation_attachments_dir, delete_conversation as delete_conv,
@@ -969,6 +970,10 @@ fn build_chat_system_prompt(
 ) -> String {
     let mut prompt = default_system_prompt(language, has_image);
 
+    if tools_available {
+        prompt.push_str("\n\nYou have access to tools (functions). When the user's request requires action—such as activating a skill, reading a file, running a script, or searching the web—YOU MUST call the appropriate tool instead of describing what to do. Never say \"I cannot run commands\" or \"you can do it yourself\" when a tool is available for that action.");
+    }
+
     let include_catalog = chat_tools.skill_auto_match
         || active_skill_id.is_some()
         || chat_tools.skill_fallback_mode != "legacy_full_body";
@@ -990,7 +995,7 @@ fn build_chat_system_prompt(
         prompt.push_str("\n\nUser explicitly selected skill: ");
         prompt.push_str(skill_id);
         if tools_available {
-            prompt.push_str(". Activate it with skill_activate before proceeding. Run bundled scripts via skill_run_script (paths under scripts/).");
+            prompt.push_str(". You MUST call skill_activate with this name first, then follow the returned instructions. Do NOT describe the steps—actually call the tools.");
         } else if matches!(fallback, "skill_md_only" | "legacy_full_body") {
             prompt.push_str(". Follow the Active Skill instructions below.");
         } else {
@@ -1009,7 +1014,7 @@ fn build_chat_system_prompt(
         }
     }
 
-    if !thinking_enabled {
+    if !thinking_enabled && !tools_available {
         prompt.push_str(no_think_instruction(language));
     }
     prompt
@@ -1152,6 +1157,10 @@ async fn call_chat_completion_message(
     thinking_enabled: bool,
     label: &str,
 ) -> Result<Value, String> {
+    if provider.api_format == "anthropic" {
+        return call_anthropic_message(state, provider, model, messages, tools, retry_attempts, label).await;
+    }
+
     let url = format!(
         "{}/chat/completions",
         provider.base_url.trim_end_matches('/')
@@ -1169,9 +1178,8 @@ async fn call_chat_completion_message(
                 .map(ChatToolDefinition::to_openai_tool)
                 .collect(),
         );
-        body["tool_choice"] = serde_json::json!("auto");
     }
-    if !thinking_enabled {
+    if !thinking_enabled && utils::provider_supports_thinking_field(&provider.base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }
 
@@ -1215,6 +1223,111 @@ async fn call_chat_completion_message(
         })
 }
 
+/// Anthropic Messages API 非流式调用（用于工具规划轮次）。
+/// 将 OpenAI 格式的消息和工具转换为 Anthropic 格式，发送请求，再将响应转回 OpenAI 兼容格式。
+async fn call_anthropic_message(
+    state: &State<'_, AppState>,
+    provider: &crate::settings::ModelProvider,
+    model: &str,
+    messages: Vec<Value>,
+    tools: Option<&[ChatToolDefinition]>,
+    retry_attempts: usize,
+    label: &str,
+) -> Result<Value, String> {
+    use crate::anthropic_adapter;
+
+    let (system_prompt, anthropic_messages) = anthropic_adapter::convert_messages_to_anthropic(&messages);
+
+    let url = anthropic_adapter::build_anthropic_url(&provider.base_url);
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": anthropic_messages,
+        "max_tokens": 2000,
+    });
+    if !system_prompt.is_empty() {
+        body["system"] = Value::String(system_prompt);
+    }
+    if let Some(tools) = tools.filter(|t| !t.is_empty()) {
+        let openai_tools: Vec<Value> = tools.iter().map(ChatToolDefinition::to_openai_tool).collect();
+        let anthropic_tools = anthropic_adapter::convert_tools_to_anthropic(&openai_tools);
+        if !anthropic_tools.is_empty() {
+            body["tools"] = Value::Array(anthropic_tools);
+        }
+    }
+
+    let response = send_with_failover(
+        state,
+        label,
+        retry_attempts,
+        &provider.id,
+        &provider.api_keys,
+        |key| {
+            let headers = anthropic_adapter::build_anthropic_headers(key)
+                .unwrap_or_default();
+            state
+                .http
+                .post(url.clone())
+                .headers(headers)
+                .json(&body)
+                .send()
+        },
+    )
+    .await?;
+
+    let raw = response
+        .text()
+        .await
+        .map_err(|err| format!("{label} read body: {err}"))?;
+    let anthropic_response: Value = serde_json::from_str(&raw).map_err(|err| {
+        format!(
+            "{label} parse JSON: {} (body: {})",
+            err,
+            raw.chars().take(500).collect::<String>()
+        )
+    })?;
+
+    // 检查 Anthropic 错误
+    if let Some(error) = anthropic_response.get("error") {
+        let msg = error
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Unknown Anthropic error");
+        return Err(format!("{label}: {msg}"));
+    }
+
+    // 将 Anthropic 响应转换为 OpenAI 兼容格式
+    let parsed = anthropic_adapter::parse_anthropic_response(&anthropic_response);
+
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": if parsed.content.is_empty() { Value::Null } else { Value::String(parsed.content) },
+        "finish_reason": parsed.finish_reason,
+    });
+    if let Some(reasoning) = parsed.reasoning {
+        message["reasoning_content"] = Value::String(reasoning);
+    }
+    if !parsed.tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(
+            parsed
+                .tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function_name,
+                            "arguments": tc.arguments_raw,
+                        }
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    Ok(message)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn stream_scoped_chat_completion(
     app: &AppHandle,
@@ -1229,6 +1342,10 @@ async fn stream_scoped_chat_completion(
     message_id: &str,
     generation: u64,
 ) -> Result<ChatStreamOutput, String> {
+    if provider.api_format == "anthropic" {
+        return stream_anthropic_completion(app, state, provider, model, messages, retry_attempts, conversation_id, run_id, message_id, generation).await;
+    }
+
     let url = format!(
         "{}/chat/completions",
         provider.base_url.trim_end_matches('/')
@@ -1240,7 +1357,7 @@ async fn stream_scoped_chat_completion(
         "max_tokens": 2000,
         "stream": true,
     });
-    if !thinking_enabled {
+    if !thinking_enabled && utils::provider_supports_thinking_field(&provider.base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }
     let mut response = send_with_failover(
@@ -1381,6 +1498,137 @@ async fn stream_scoped_chat_completion(
     ))
 }
 
+/// Anthropic Messages API 流式调用（用于最终回复）。
+/// 解析 Anthropic SSE 事件格式，转换为 OpenAI 兼容的流式输出。
+#[allow(clippy::too_many_arguments)]
+async fn stream_anthropic_completion(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    provider: &crate::settings::ModelProvider,
+    model: &str,
+    messages: Vec<Value>,
+    retry_attempts: usize,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+) -> Result<ChatStreamOutput, String> {
+    use crate::anthropic_adapter;
+
+    let (system_prompt, anthropic_messages) = anthropic_adapter::convert_messages_to_anthropic(&messages);
+
+    let url = anthropic_adapter::build_anthropic_url(&provider.base_url);
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": anthropic_messages,
+        "max_tokens": 2000,
+        "stream": true,
+    });
+    if !system_prompt.is_empty() {
+        body["system"] = Value::String(system_prompt);
+    }
+
+    let mut response = send_with_failover(
+        state,
+        "Anthropic stream",
+        retry_attempts,
+        &provider.id,
+        &provider.api_keys,
+        |key| {
+            let headers = anthropic_adapter::build_anthropic_headers(key)
+                .unwrap_or_default();
+            state
+                .http
+                .post(url.clone())
+                .headers(headers)
+                .json(&body)
+                .send()
+        },
+    )
+    .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "Anthropic stream HTTP {}: {}",
+            status.as_u16(),
+            text.chars().take(500).collect::<String>()
+        ));
+    }
+
+    let mut buffer = String::new();
+    let mut full = String::new();
+    let mut reasoning_full = String::new();
+    // 用于追踪当前 tool_use 块
+    let mut current_tool_id = String::new();
+    let mut current_tool_name = String::new();
+    let mut current_tool_input_parts: Vec<String> = Vec::new();
+
+    loop {
+        if !state.is_chat_generation_active(conversation_id, generation) {
+            emit_chat_stream_done(app, conversation_id, run_id, message_id, "cancelled", full.trim());
+            return Ok(ChatStreamOutput::new(full.trim().to_string(), reasoning_full.trim().to_string(), true));
+        }
+
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(err) => {
+                emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", full.trim());
+                return Err(err.to_string());
+            }
+        };
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(pos) = buffer.find('\n') {
+            let line: String = buffer.drain(..=pos).collect();
+            let event = anthropic_adapter::parse_anthropic_sse_event(&line);
+            match event {
+                Some(anthropic_adapter::AnthropicSseEvent::TextDelta(text)) => {
+                    full.push_str(&text);
+                    emit_chat_stream_delta(app, conversation_id, run_id, message_id, &text, None);
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::ThinkingDelta(thinking)) => {
+                    reasoning_full.push_str(&thinking);
+                    emit_chat_stream_delta(app, conversation_id, run_id, message_id, "", Some(&thinking));
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::ToolUseStart { id, name }) => {
+                    current_tool_id = id;
+                    current_tool_name = name;
+                    current_tool_input_parts.clear();
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::ToolInputDelta(json)) => {
+                    current_tool_input_parts.push(json);
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::ContentBlockStop) => {
+                    // tool_use 块结束，但我们不在流式中处理 tool calls
+                    // tool calls 在非流式 planning 路径中处理
+                    current_tool_id.clear();
+                    current_tool_name.clear();
+                    current_tool_input_parts.clear();
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::MessageStop) => {
+                    emit_chat_stream_done(app, conversation_id, run_id, message_id, "done", full.trim());
+                    return Ok(ChatStreamOutput::new(full.trim().to_string(), reasoning_full.trim().to_string(), false));
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::MessageStopWithReason(_)) => {
+                    emit_chat_stream_done(app, conversation_id, run_id, message_id, "done", full.trim());
+                    return Ok(ChatStreamOutput::new(full.trim().to_string(), reasoning_full.trim().to_string(), false));
+                }
+                Some(anthropic_adapter::AnthropicSseEvent::Error(err)) => {
+                    emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", full.trim());
+                    return Err(format!("Anthropic stream error: {err}"));
+                }
+                None => {}
+            }
+        }
+    }
+
+    emit_chat_stream_done(app, conversation_id, run_id, message_id, "done", full.trim());
+    Ok(ChatStreamOutput::new(full.trim().to_string(), reasoning_full.trim().to_string(), false))
+}
+
 struct ChatStreamOutput {
     content: String,
     reasoning: Option<String>,
@@ -1433,11 +1681,11 @@ fn merge_reasoning(planning_parts: &[String], final_reasoning: Option<String>) -
 }
 
 #[derive(Debug, Clone)]
-struct PendingToolCall {
-    id: String,
-    function_name: String,
-    arguments: Value,
-    arguments_raw: String,
+pub(crate) struct PendingToolCall {
+    pub(crate) id: String,
+    pub(crate) function_name: String,
+    pub(crate) arguments: Value,
+    pub(crate) arguments_raw: String,
 }
 
 fn extract_tool_calls(message: &Value) -> Vec<PendingToolCall> {
@@ -2094,6 +2342,9 @@ mod tests {
         ));
         assert!(is_tools_unsupported_error(
             "Chat tools planning Error: 400 Bad Request - function call is not supported (attempt 1/3)"
+        ));
+        assert!(is_tools_unsupported_error(
+            "Chat tools planning Error: 400 Bad Request - tools[0]: unknown variant `function`, expected `web_search_20250305` or `web_search_20260209` (attempt 1/1)"
         ));
         assert!(!is_tools_unsupported_error(
             "Chat tools planning Error: 429 Too Many Requests - rate limited (attempt 1/3)"

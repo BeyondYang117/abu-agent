@@ -209,6 +209,7 @@ export type ModelProvider = {
   availableModels: string[]
   enabledModels: string[]
   supportsTools: boolean
+  apiFormat: string
 }
 
 // 提供商连接测试输入（支持使用未保存的配置进行测试）
@@ -334,6 +335,7 @@ function normalizeProvider(provider: ModelProvider): ModelProvider {
     availableModels: Array.isArray(provider.availableModels) ? provider.availableModels : [],
     enabledModels: Array.isArray(provider.enabledModels) ? provider.enabledModels : [],
     supportsTools: provider.supportsTools !== false,
+    apiFormat: provider.apiFormat || 'openai',
   }
 }
 

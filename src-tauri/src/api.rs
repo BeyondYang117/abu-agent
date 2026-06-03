@@ -32,6 +32,7 @@ use crate::settings::{
     self, default_system_prompt, no_think_instruction, ExplainMessage, Settings,
 };
 use crate::state::AppState;
+use crate::utils::provider_supports_thinking_field;
 
 // ===== Provider 凭据 =====
 
@@ -380,7 +381,7 @@ pub async fn call_openai_text(
       "messages": [{ "role": "user", "content": prompt }],
       "temperature": 0.2
     });
-    if !thinking_enabled {
+    if !thinking_enabled && provider_supports_thinking_field(&config.base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }
 
@@ -466,7 +467,7 @@ pub async fn call_openai_ocr(
       "temperature": 0.2,
       "max_tokens": 2000
     });
-    if !thinking_enabled {
+    if !thinking_enabled && provider_supports_thinking_field(&config.base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }
 
@@ -647,7 +648,7 @@ pub async fn call_vision_api(
     // 不再注入 chat_template_kwargs / enable_thinking / reasoning_effort —— 这些是 vLLM/Qwen/OpenAI
     // 私有字段，第三方代理（如 OpenRouter / 反代）做严格校验时会以 400 拒绝整个请求（实测 DeepSeek
     // 路径上 chat_template_kwargs 直接报错）。提示词层的 no-think 指令是更稳的兜底。
-    if !thinking_enabled {
+    if !thinking_enabled && provider_supports_thinking_field(&provider.base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }
 
@@ -896,6 +897,7 @@ pub fn build_ocr_request_body(
     image_path: &Path,
     prompt: &str,
     thinking_enabled: bool,
+    provider_base_url: &str,
 ) -> Result<serde_json::Value, String> {
     let bytes = fs::read(image_path).map_err(|e| e.to_string())?;
     let base64 = general_purpose::STANDARD.encode(bytes);
@@ -911,7 +913,7 @@ pub fn build_ocr_request_body(
       "max_tokens": 2000,
       "stream": true
     });
-    if !thinking_enabled {
+    if !thinking_enabled && provider_supports_thinking_field(provider_base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }
     Ok(body)

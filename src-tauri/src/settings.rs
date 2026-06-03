@@ -137,6 +137,9 @@ pub struct ModelProvider {
     pub enabled_models: Vec<String>,
     #[serde(default = "default_true")]
     pub supports_tools: bool,
+    /// API 格式："openai"（默认）或 "anthropic"
+    #[serde(default = "default_api_format")]
+    pub api_format: String,
 }
 
 /**
@@ -638,6 +641,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 available_models: vec![],
                 enabled_models: vec![old_openai.model.clone()],
                 supports_tools: true,
+                api_format: "openai".to_string(),
             });
             settings.translator_provider_id = "default-translator".to_string();
             settings.translator_model = old_openai.model;
@@ -659,6 +663,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 available_models: vec![],
                 enabled_models: vec![old_ocr.model.clone()],
                 supports_tools: true,
+                api_format: "openai".to_string(),
             });
             settings.screenshot_translation.provider_id = "default-ocr".to_string();
             settings.screenshot_translation.model = old_ocr.model;
@@ -1172,6 +1177,10 @@ fn default_false() -> bool {
     false
 }
 
+fn default_api_format() -> String {
+    "openai".to_string()
+}
+
 fn default_hotkey() -> String {
     "CommandOrControl+Alt+T".to_string()
 }
@@ -1444,6 +1453,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["apple-foundation".to_string()],
             supports_tools: false,
+                api_format: "openai".to_string(),
         });
         s.providers.push(ModelProvider {
             id: "cloud".to_string(),
@@ -1454,6 +1464,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         s.translator_provider_id = "apple".to_string();
         s.translator_model = "apple-foundation".to_string();
@@ -1487,6 +1498,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["apple-foundation".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
 
         let s = sanitize_settings(s);
@@ -1511,6 +1523,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -1530,6 +1543,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -1552,6 +1566,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -1570,6 +1585,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec![],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         s.translator_provider_id = "p".to_string();
         s.screenshot_translation.provider_id = "p".to_string();
@@ -1594,6 +1610,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         s.providers.push(ModelProvider {
             id: "lens".to_string(),
@@ -1604,6 +1621,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["vision-model".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         s.translator_provider_id = "translator".to_string();
         s.translator_model = "gpt-4o".to_string();
@@ -1627,6 +1645,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["m1".to_string(), "m2".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         s.chat_provider_id = "chat".to_string();
         s.chat_model = "m2".to_string();
@@ -1729,6 +1748,7 @@ mod tests {
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
+                api_format: "openai".to_string(),
         });
         s.lens.provider_id = "nonexistent".to_string();
         s.lens.model = "ghost-model".to_string();

@@ -1,3 +1,11 @@
+/// 判断 provider 是否支持 `thinking` 字段。
+/// 目前只有 DeepSeek 官方 API 和 Kimi 支持该字段；
+/// 第三方代理（OpenRouter / 反代）做严格校验时会以 400 拒绝整个请求。
+pub fn provider_supports_thinking_field(base_url: &str) -> bool {
+    let lower = base_url.to_ascii_lowercase();
+    lower.contains("deepseek.com") || lower.contains("moonshot.cn")
+}
+
 /**
  * 解析目标语言
  * 当设置为 "auto" 时，根据文本内容自动判断：

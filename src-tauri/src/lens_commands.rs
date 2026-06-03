@@ -31,7 +31,7 @@ use crate::screenshot::cleanup_temp_file;
 use crate::settings::{self, default_question_prompt, ExplainMessage, OcrMode};
 use crate::shortcuts::{capture_active_selection, get_mouse_position};
 use crate::state::AppState;
-use crate::utils::{language_name, resolve_target_lang};
+use crate::utils::{language_name, provider_supports_thinking_field, resolve_target_lang};
 use crate::web_search::{format_web_context, search_web, WebSearchResult};
 use crate::windows;
 
@@ -1267,7 +1267,7 @@ pub(crate) async fn lens_translate(
                 &state,
                 &ocr_provider,
                 &settings.screenshot_translation.model,
-                build_ocr_request_body(&temp_path, &prompt, st_thinking)?,
+                build_ocr_request_body(&temp_path, &prompt, st_thinking, &ocr_provider.base_url)?,
                 retry_attempts,
                 &image_id,
                 "translated",
@@ -1322,7 +1322,7 @@ pub(crate) async fn lens_translate(
             &state,
             &ocr_provider,
             &settings.screenshot_translation.model,
-            build_ocr_request_body(&temp_path, &prompt, st_thinking)?,
+            build_ocr_request_body(&temp_path, &prompt, st_thinking, &ocr_provider.base_url)?,
             retry_attempts,
             &image_id,
             "lens-translate-stream",
@@ -1474,7 +1474,7 @@ pub(crate) async fn lens_translate_text(
               "stream": true,
               "temperature": 0.2,
             });
-            if !st_thinking {
+            if !st_thinking && provider_supports_thinking_field(&provider.base_url) {
                 body["thinking"] = serde_json::json!({ "type": "disabled" });
             }
             match stream_chat_call(
@@ -1675,7 +1675,7 @@ async fn local_ocr_then_translate(
               "stream": true,
               "temperature": 0.2,
             });
-            if !st_thinking {
+            if !st_thinking && provider_supports_thinking_field(&translate_provider.base_url) {
                 body["thinking"] = serde_json::json!({ "type": "disabled" });
             }
             match stream_chat_call(

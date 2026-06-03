@@ -2,6 +2,7 @@
 #![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
 
 mod api;
+mod anthropic_adapter;
 mod apple_intelligence;
 mod capture_geometry;
 mod chat;
