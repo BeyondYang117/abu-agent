@@ -205,4 +205,16 @@ mod tests {
         assert!(stripped.starts_with("hello"));
         assert!(!stripped.contains("DSML"));
     }
+
+    #[test]
+    fn extracts_fullwidth_dsml_delimiters() {
+        const FULLWIDTH: &str = concat!(
+            "<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name=\"skill_activate\">",
+            "<｜｜DSML｜｜parameter name=\"name\" string=\"true\">tavily-multi-key</｜｜DSML｜｜parameter>",
+            "</｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>",
+        );
+        let calls = extract_dsml_tool_calls(FULLWIDTH);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "skill_activate");
+    }
 }

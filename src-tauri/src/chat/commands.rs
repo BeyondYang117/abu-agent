@@ -13,7 +13,9 @@ use uuid::Uuid;
 use crate::api::{extract_status_code, send_with_failover};
 use crate::apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{default_system_prompt, no_think_instruction, persist_settings};
+use crate::settings::{
+    chat_no_think_instruction, default_chat_system_prompt, persist_settings,
+};
 use crate::skills;
 use crate::state::AppState;
 use crate::utils;
@@ -407,13 +409,9 @@ async fn complete_assistant_reply(
     }
 
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
-    let language = if !settings.lens.default_language.is_empty() {
-        settings.lens.default_language.clone()
-    } else {
-        "zh".to_string()
-    };
-    let stream_enabled = settings.lens.stream_enabled;
-    let thinking_enabled = settings.lens.thinking_enabled;
+    let language = crate::settings::resolve_chat_language(&settings);
+    let stream_enabled = settings.chat.stream_enabled;
+    let thinking_enabled = settings.chat.thinking_enabled;
     let retry_attempts = if settings.retry_enabled {
         settings.retry_attempts as usize
     } else {
@@ -422,11 +420,15 @@ async fn complete_assistant_reply(
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
-    let skill_id = active_skill_id.filter(|id| !id.trim().is_empty());
     let skill_registry =
         skills::build_registry(app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
-    let active_skill_record = skill_id.and_then(|id| skill_registry.find(id)).cloned();
-    let active_skill_detail = skill_id.and_then(|id| {
+    let skill_id = resolve_chat_active_skill_id(
+        &settings.chat_tools,
+        &skill_registry,
+        active_skill_id,
+    );
+    let active_skill_record = skill_id.as_deref().and_then(|id| skill_registry.find(id)).cloned();
+    let active_skill_detail = skill_id.as_deref().and_then(|id| {
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
@@ -443,8 +445,9 @@ async fn complete_assistant_reply(
         &skill_registry,
         &effective_chat_tools,
         tools_capable,
-        skill_id,
+        skill_id.as_deref(),
         active_skill_detail.as_ref(),
+        settings.chat.system_prompt.as_str(),
     );
 
     if provider_is_apple {
@@ -497,7 +500,7 @@ async fn complete_assistant_reply(
             None,
             Vec::new(),
             Vec::new(),
-            skill_id,
+            skill_id.as_deref(),
             title_from_first_user,
         )?;
         return Ok(());
@@ -562,7 +565,7 @@ async fn complete_assistant_reply(
                         None,
                         tool_records,
                         generated_api_messages,
-                        skill_id,
+                        skill_id.as_deref(),
                         title_from_first_user,
                     )?;
                 }
@@ -597,7 +600,7 @@ async fn complete_assistant_reply(
                             None,
                             tool_records,
                             generated_api_messages,
-                            skill_id,
+                            skill_id.as_deref(),
                             title_from_first_user,
                         )?;
                     }
@@ -678,7 +681,7 @@ async fn complete_assistant_reply(
                     reasoning,
                     tool_records,
                     generated_api_messages,
-                    skill_id,
+                    skill_id.as_deref(),
                     title_from_first_user,
                 )?;
                 return Ok(());
@@ -748,8 +751,9 @@ async fn complete_assistant_reply(
             thinking_enabled,
             &skill_registry,
             &mut effective_chat_tools,
-            skill_id,
+            skill_id.as_deref(),
             active_skill_detail.as_ref(),
+            settings.chat.system_prompt.as_str(),
         );
     }
 
@@ -791,7 +795,7 @@ async fn complete_assistant_reply(
                     reasoning,
                     tool_records,
                     generated_api_messages,
-                    skill_id,
+                    skill_id.as_deref(),
                     title_from_first_user,
                 )?;
             }
@@ -873,7 +877,7 @@ async fn complete_assistant_reply(
         reasoning,
         tool_records,
         generated_api_messages,
-        skill_id,
+        skill_id.as_deref(),
         title_from_first_user,
     )?;
     Ok(())
@@ -943,6 +947,31 @@ fn chat_tools_capable(
             || chat_tools.native_tools.skill_runtime)
 }
 
+fn resolve_chat_active_skill_id(
+    chat_tools: &crate::settings::ChatToolsConfig,
+    registry: &skills::SkillRegistry,
+    requested: Option<&str>,
+) -> Option<String> {
+    let enabled_ids: Vec<String> = registry
+        .records
+        .iter()
+        .filter(|record| crate::settings::is_skill_enabled(chat_tools, &record.meta.id))
+        .map(|record| record.meta.id.clone())
+        .collect();
+
+    if let Some(requested) = requested.map(str::trim).filter(|id| !id.is_empty()) {
+        if enabled_ids.iter().any(|id| id == requested) {
+            return Some(requested.to_string());
+        }
+    }
+
+    if enabled_ids.len() == 1 {
+        return Some(enabled_ids[0].clone());
+    }
+
+    None
+}
+
 fn build_chat_system_prompt(
     language: &str,
     has_image: bool,
@@ -952,18 +981,38 @@ fn build_chat_system_prompt(
     tools_available: bool,
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
+    custom_system_prompt: &str,
 ) -> String {
-    let mut prompt = default_system_prompt(language, has_image);
+    let mut prompt = if custom_system_prompt.trim().is_empty() {
+        default_chat_system_prompt(language, has_image)
+    } else {
+        custom_system_prompt.trim().to_string()
+    };
+    prompt.push_str(&crate::settings::chat_current_datetime_context(language));
 
     if tools_available {
         prompt.push_str("\n\nYou have access to tools (functions). When the user's request requires action—such as activating a skill, reading a file, running a script, or searching the web—YOU MUST call the appropriate tool instead of describing what to do. Never say \"I cannot run commands\" or \"you can do it yourself\" when a tool is available for that action.");
+        if language.starts_with("zh") {
+            prompt.push_str(
+                " 若用户只问今天/明天/星期几等可由上文「当前本地时间」直接推算的日期问题，直接回答，不要调用 skill_activate 或 web_search。",
+            );
+        } else {
+            prompt.push_str(
+                " If the user only asks for today/tomorrow/weekday derivable from the system local time above, answer directly without skill_activate or web_search.",
+            );
+        }
     }
 
     let include_catalog = chat_tools.skill_auto_match
         || active_skill_id.is_some()
         || chat_tools.skill_fallback_mode != "legacy_full_body";
     if include_catalog {
-        let catalog = skills::format_catalog(registry, active_skill_id, tools_available);
+        let catalog = skills::format_catalog(
+            registry,
+            active_skill_id,
+            tools_available,
+            |skill_id| crate::settings::is_skill_enabled(chat_tools, skill_id),
+        );
         if !catalog.is_empty() {
             prompt.push_str("\n\n");
             prompt.push_str(&catalog);
@@ -971,8 +1020,9 @@ fn build_chat_system_prompt(
     }
 
     if !chat_tools.skill_auto_match {
-        prompt
-            .push_str("\n\nOnly activate a skill when the user explicitly selected one in the UI.");
+        prompt.push_str(
+            "\n\nOnly activate skills that are enabled in Settings (listed in the catalog below).",
+        );
     }
 
     let fallback = chat_tools.skill_fallback_mode.as_str();
@@ -1000,7 +1050,7 @@ fn build_chat_system_prompt(
     }
 
     if !thinking_enabled && !tools_available {
-        prompt.push_str(no_think_instruction(language));
+        prompt.push_str(chat_no_think_instruction(language));
     }
     prompt
 }
@@ -1042,6 +1092,7 @@ fn apply_provider_tools_fallback(
     chat_tools: &mut crate::settings::ChatToolsConfig,
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
+    custom_system_prompt: &str,
 ) {
     if active_skill_id.is_some() && chat_tools.skill_fallback_mode == "progressive" {
         chat_tools.skill_fallback_mode = "skill_md_only".to_string();
@@ -1055,6 +1106,7 @@ fn apply_provider_tools_fallback(
         false,
         active_skill_id,
         active_skill_detail,
+        custom_system_prompt,
     );
     patch_system_message(runtime_messages, &fallback_prompt);
 }
@@ -1907,7 +1959,7 @@ async fn execute_chat_tool_call(
         Ok(Ok(output)) if !output.is_error => {
             record.status = ToolCallStatus::Success;
             record.result_preview = Some(truncate_chars(
-                &output.content,
+                &format_tool_result_preview(&output.content),
                 settings.chat_tools.max_tool_output_chars,
             ));
             output.content
@@ -2077,6 +2129,65 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+/// UI/storage preview for Tavily-style JSON stdout (`answer` is often null for search).
+fn format_tool_result_preview(content: &str) -> String {
+    let trimmed = content.trim();
+    let json_str = trimmed
+        .strip_prefix("stdout:")
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let Ok(value) = serde_json::from_str::<Value>(json_str) else {
+        return content.to_string();
+    };
+
+    if let Some(answer) = value
+        .get("answer")
+        .and_then(|answer| answer.as_str())
+        .map(str::trim)
+        .filter(|answer| !answer.is_empty())
+    {
+        return format!("答: {answer}");
+    }
+
+    let Some(results) = value.get("results").and_then(|results| results.as_array()) else {
+        return content.to_string();
+    };
+
+    if results.is_empty() {
+        return "无搜索结果".to_string();
+    }
+
+    let query = value
+        .get("query")
+        .and_then(|query| query.as_str())
+        .unwrap_or_default();
+    let query_label = if query.is_empty() {
+        String::new()
+    } else {
+        format!("「{query}」")
+    };
+    let first = &results[0];
+    let title = first
+        .get("title")
+        .or_else(|| first.get("url"))
+        .and_then(|title| title.as_str())
+        .unwrap_or_default();
+    let snippet = first
+        .get("content")
+        .or_else(|| first.get("raw_content"))
+        .and_then(|content| content.as_str())
+        .unwrap_or_default();
+    let snippet: String = snippet.chars().take(80).collect();
+    let head = format!("{} 条结果{query_label}", results.len());
+    if title.is_empty() && snippet.is_empty() {
+        return head;
+    }
+    if snippet.is_empty() {
+        return format!("{head}: {title}");
+    }
+    format!("{head}: {title} — {snippet}")
 }
 
 fn image_content_part(path: &PathBuf) -> Result<serde_json::Value, String> {
@@ -2415,6 +2526,50 @@ mod tests {
         assert!(is_native_skill_tool_name("skill_activate"));
         assert!(is_native_skill_tool_name("skill_run_script"));
         assert!(!is_native_skill_tool_name("web_search"));
+    }
+
+    #[test]
+    fn format_tool_result_preview_summarizes_tavily_search_json() {
+        let raw = r#"stdout:
+{
+  "answer": null,
+  "query": "吉林市 明天 天气",
+  "results": [
+    {
+      "title": "吉林市天气预报",
+      "content": "明天晴有时多云，最高33℃"
+    }
+  ]
+}"#;
+        let preview = format_tool_result_preview(raw);
+        assert!(preview.contains("1 条结果"));
+        assert!(preview.contains("吉林市天气预报"));
+        assert!(preview.contains("33"));
+        assert!(!preview.contains("\"answer\": null"));
+    }
+
+    #[test]
+    fn extract_tool_calls_parses_dsml_when_api_tool_calls_missing() {
+        const SAMPLE: &str = concat!(
+            "<|DSML|tool_calls><|DSML|invoke name=\"skill_run_script\">",
+            "<|DSML|parameter name=\"name\" string=\"true\">tavily-multi-key</|DSML|parameter>",
+            "<|DSML|parameter name=\"relative_path\" string=\"true\">scripts/tavily_cli.py</|DSML|parameter>",
+            "</|DSML|invoke></|DSML|tool_calls>",
+        );
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": SAMPLE,
+        });
+        let calls = extract_tool_calls(&message);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function_name, "skill_run_script");
+        assert_eq!(
+            calls[0]
+                .arguments
+                .get("name")
+                .and_then(|value| value.as_str()),
+            Some("tavily-multi-key")
+        );
     }
 
     #[test]

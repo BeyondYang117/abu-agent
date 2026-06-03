@@ -9,6 +9,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { ToolCallRecord, ToolCallStatus } from './types'
+import { formatToolResultPreview } from './toolResultPreview'
 
 export interface ToolCallBlockLabels {
   pending: string
@@ -136,11 +137,12 @@ function getArgumentPreview(toolCall: ToolCallRecord): string {
 }
 
 function getResultPreview(toolCall: ToolCallRecord): string {
-  return (
+  const raw =
     toolCall.result_preview ||
     toolCall.resultPreview ||
     previewValue(toolCall.result ?? toolCall.output)
-  )
+  if (!raw) return ''
+  return formatToolResultPreview(raw)
 }
 
 function StatusIcon({ status }: { status: ToolCallStatus }) {

@@ -15,7 +15,8 @@ use crate::prompts::{
 };
 use crate::rapidocr;
 use crate::settings::{
-    default_question_prompt, default_system_prompt, persist_settings, sanitize_settings, Settings,
+    default_chat_system_prompt, default_lens_system_prompt, default_question_prompt,
+    persist_settings, sanitize_settings, Settings,
 };
 #[cfg(target_os = "macos")]
 use crate::shortcuts::{check_accessibility, check_screen_recording_permission};
@@ -54,13 +55,17 @@ pub(crate) fn get_default_prompt_templates() -> serde_json::Value {
       "screenshotTranslationTemplate": DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE,
       "lensPrompts": {
         "zh": {
-          "system": default_system_prompt("zh", true),
+          "system": default_lens_system_prompt("zh", true),
           "question": default_question_prompt("zh", true)
         },
         "en": {
-          "system": default_system_prompt("en", true),
+          "system": default_lens_system_prompt("en", true),
           "question": default_question_prompt("en", true)
         }
+      },
+      "chatPrompts": {
+        "zh": default_chat_system_prompt("zh", false),
+        "en": default_chat_system_prompt("en", false)
       }
     })
 }

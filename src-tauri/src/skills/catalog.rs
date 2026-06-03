@@ -4,10 +4,12 @@ pub fn format_catalog(
     registry: &SkillRegistry,
     explicit_skill_id: Option<&str>,
     tools_available: bool,
+    skill_enabled: impl Fn(&str) -> bool,
 ) -> String {
     let mut skills: Vec<_> = registry
         .records
         .iter()
+        .filter(|record| skill_enabled(&record.meta.id))
         .filter(|record| {
             if !record.meta.disable_model_invocation {
                 return true;
@@ -97,12 +99,12 @@ mod tests {
             warnings: vec![],
         };
 
-        let catalog = format_catalog(&registry, None, true);
+        let catalog = format_catalog(&registry, None, true, |_| true);
         assert!(catalog.contains("auto"));
         assert!(!catalog.contains("manual"));
         assert!(catalog.contains("<location>/skills/auto/SKILL.md</location>"));
 
-        let explicit = format_catalog(&registry, Some("manual"), true);
+        let explicit = format_catalog(&registry, Some("manual"), true, |_| true);
         assert!(explicit.contains("manual"));
         assert!(explicit.contains("<location>/skills/manual/SKILL.md</location>"));
     }
@@ -114,9 +116,24 @@ mod tests {
             warnings: vec![],
         };
 
-        let catalog = format_catalog(&registry, None, false);
+        let catalog = format_catalog(&registry, None, false, |_| true);
         assert!(!catalog.contains("call skill_activate"));
         assert!(catalog.contains("does not support tools"));
         assert!(catalog.contains("<location>/skills/auto/SKILL.md</location>"));
+    }
+
+    #[test]
+    fn catalog_respects_skill_enabled_filter() {
+        let registry = SkillRegistry {
+            records: vec![
+                sample_record("auto", "auto", false),
+                sample_record("off", "off", false),
+            ],
+            warnings: vec![],
+        };
+
+        let catalog = format_catalog(&registry, None, true, |id| id != "off");
+        assert!(catalog.contains("auto"));
+        assert!(!catalog.contains("off"));
     }
 }

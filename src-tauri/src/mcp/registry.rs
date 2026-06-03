@@ -332,6 +332,9 @@ async fn call_skill_tool(
     let skill_name = crate::skills::extract_skill_name(&arguments)?;
     let record = crate::skills::lookup_skill(&registry, &skill_name)
         .ok_or_else(|| format!("Skill not found: {skill_name}"))?;
+    if !crate::settings::is_skill_enabled(&settings.chat_tools, &record.meta.id) {
+        return Err(format!("Skill is disabled in Settings: {skill_name}"));
+    }
 
     let content = match tool.name.as_str() {
         "skill_activate" => {

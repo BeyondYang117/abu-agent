@@ -29,7 +29,7 @@ use crate::apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
 use crate::lens_commands::resolve_explain_image_path;
 use crate::prompts::COMBINED_TRANSLATE_SEPARATOR;
 use crate::settings::{
-    self, default_system_prompt, no_think_instruction, ExplainMessage, Settings,
+    self, default_lens_system_prompt, no_think_instruction, ExplainMessage, Settings,
 };
 use crate::state::AppState;
 use crate::utils::provider_supports_thinking_field;
@@ -558,7 +558,7 @@ pub async fn call_vision_api(
     let system_prompt_to_use = {
         let base = match system_prompt_override.filter(|s| !s.is_empty()) {
             Some(s) => s.to_string(),
-            None => default_system_prompt(language, has_image),
+            None => default_lens_system_prompt(language, has_image),
         };
         if !thinking_enabled {
             format!("{}{}", base, no_think_instruction(language))

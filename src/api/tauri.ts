@@ -137,6 +137,13 @@ export type SkillFileEntry = {
   sizeBytes: number
 }
 
+export type ChatConfig = {
+  streamEnabled?: boolean
+  thinkingEnabled?: boolean
+  defaultLanguage?: string
+  systemPrompt?: string
+}
+
 export type ChatToolsConfig = {
   enabled: boolean
   servers: ChatMcpServer[]
@@ -144,6 +151,8 @@ export type ChatToolsConfig = {
   skillAutoMatch?: boolean
   skillFallbackMode?: 'progressive' | 'skill_md_only' | 'legacy_full_body' | string
   skillScriptAllowlist?: string[]
+  /** Skill ids turned off in Settings; omitted ids are enabled. */
+  disabledSkillIds?: string[]
   maxToolRounds: number
   toolTimeoutMs: number
   maxToolOutputChars: number
@@ -231,6 +240,7 @@ export type Settings = {
   translatorModel: string
   chatProviderId: string
   chatModel: string
+  chat?: ChatConfig
   translatorPrompt?: string
   providers: ModelProvider[]
   chatTools: ChatToolsConfig
@@ -350,6 +360,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     skillScriptAllowlist: Array.isArray(current.skillScriptAllowlist) && current.skillScriptAllowlist.length > 0
       ? current.skillScriptAllowlist
       : ['python3', 'bash', 'sh', 'node'],
+    disabledSkillIds: Array.isArray(current.disabledSkillIds) ? current.disabledSkillIds : [],
     maxToolRounds: current.maxToolRounds ?? 30,
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
     maxToolOutputChars: current.maxToolOutputChars ?? 12_000,
@@ -375,6 +386,12 @@ function normalizeSettings(settings: Settings): Settings {
     translatorModel: current.translatorModel ?? '',
     chatProviderId: current.chatProviderId ?? current.lens?.providerId ?? current.translatorProviderId ?? '',
     chatModel: current.chatModel ?? current.lens?.model ?? current.translatorModel ?? '',
+    chat: {
+      streamEnabled: current.chat?.streamEnabled ?? current.lens?.streamEnabled ?? true,
+      thinkingEnabled: current.chat?.thinkingEnabled ?? current.lens?.thinkingEnabled ?? true,
+      defaultLanguage: current.chat?.defaultLanguage ?? '',
+      systemPrompt: current.chat?.systemPrompt ?? '',
+    },
     providers: Array.isArray(current.providers) ? current.providers.map(normalizeProvider) : [],
     chatTools: normalizeChatTools(current.chatTools),
     retryEnabled: current.retryEnabled ?? true,
@@ -429,6 +446,10 @@ export type DefaultPromptTemplates = {
   lensPrompts: {
     zh: { system: string; question: string }
     en: { system: string; question: string }
+  }
+  chatPrompts?: {
+    zh: string
+    en: string
   }
 }
 

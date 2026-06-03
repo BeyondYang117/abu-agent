@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, PanelLeftOpen, Wrench, X } from 'lucide-react'
+import { PanelLeftOpen, Wrench, X } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { MessageList, type AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
@@ -8,8 +8,8 @@ import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
 import { chatTitlebarMacInsetClass, chatTitlebarModelClass, chatTitlebarRowClass, usesNativeTitlebar } from './platform'
 import type { ChatMessage, Conversation, PendingAttachment, SkillMeta, ToolCallRecord } from './types'
-import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToolProgressPayload, type SkillDetail } from '../api/tauri'
-import { SettingsShell, type SettingsShellHandle } from '../settings/SettingsShell'
+import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToolProgressPayload } from '../api/tauri'
+import { SettingsShell, type SettingsShellHandle, type SettingsTab } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { estimateTokens } from '../lens/markdown'
 import { forgetRememberedChatRoute } from './persistence'
@@ -104,16 +104,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
   const [skills, setSkills] = useState<SkillMeta[]>([])
-  const [skillsLoading, setSkillsLoading] = useState(false)
-  const [draftActiveSkillId, setDraftActiveSkillId] = useState<string | null>(null)
+  const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('chat')
   const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCallRecord[]>([])
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [enabledToolCount, setEnabledToolCount] = useState<number | null>(null)
   const [toolsDisabledReason, setToolsDisabledReason] = useState('')
   const [toolsRequested, setToolsRequested] = useState(false)
   const [pendingToolConfirm, setPendingToolConfirm] = useState<ChatToolConfirmPayload | null>(null)
-  const [skillPreview, setSkillPreview] = useState<SkillDetail | null>(null)
-  const [skillPreviewLoading, setSkillPreviewLoading] = useState(false)
   const currentConversationIdRef = useRef<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
@@ -127,16 +125,30 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const activeProviderId = currentConversation?.provider_id || draftProviderId
   const activeModel = currentConversation?.model || draftModel
-  const activeSkillId = currentConversation
+  const storedActiveSkillId = currentConversation
     ? currentConversation.active_skill_id ?? currentConversation.activeSkillId ?? null
-    : draftActiveSkillId
-  const activeSkill = useMemo(
-    () => skills.find((skill) => skill.id === activeSkillId) ?? null,
-    [activeSkillId, skills],
+    : null
+  const enabledSkills = useMemo(
+    () => skills.filter((skill) => !disabledSkillIds.includes(skill.id)),
+    [disabledSkillIds, skills],
   )
-  const activeSkillRecommendedTools = useMemo(
-    () => skillRecommendedTools(activeSkill),
-    [activeSkill],
+  const effectiveSkillId = useMemo(() => {
+    if (enabledSkills.length === 1) return enabledSkills[0].id
+    if (
+      storedActiveSkillId
+      && enabledSkills.some((skill) => skill.id === storedActiveSkillId)
+    ) {
+      return storedActiveSkillId
+    }
+    return null
+  }, [enabledSkills, storedActiveSkillId])
+  const effectiveSkill = useMemo(
+    () => enabledSkills.find((skill) => skill.id === effectiveSkillId) ?? null,
+    [effectiveSkillId, enabledSkills],
+  )
+  const effectiveSkillRecommendedTools = useMemo(
+    () => skillRecommendedTools(effectiveSkill),
+    [effectiveSkill],
   )
 
   const refreshToolIndicator = useCallback(async () => {
@@ -149,6 +161,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
     try {
       const settings = await api.getSettings()
+      setDisabledSkillIds(settings.chatTools.disabledSkillIds ?? [])
       const provider = settings.providers.find((item) => item.id === activeProviderId)
       const anyMcpEnabled = settings.chatTools.enabled && settings.chatTools.servers.some((server) => server.enabled)
       const anyNativeEnabled = Boolean(settings.chatTools.nativeTools?.webSearch)
@@ -164,7 +177,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       if (provider?.supportsTools === false) {
         setEnabledTools([])
         setEnabledToolCount(0)
-        if (skillRuntimeEnabled && activeSkillId) {
+        if (skillRuntimeEnabled && effectiveSkillId) {
           setToolsDisabledReason('当前模型不支持 tools；已选 Skill 时将注入 SKILL.md')
         } else if (skillRuntimeEnabled) {
           setToolsDisabledReason('Skill 渐进式加载需要 tools 支持；已选 Skill 时将注入 SKILL.md')
@@ -184,22 +197,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setEnabledToolCount(null)
       setToolsDisabledReason(err instanceof Error ? err.message : String(err))
     }
-  }, [activeProviderId, activeSkillId])
+  }, [activeProviderId, effectiveSkillId])
 
   const unavailableRecommendedTools = useMemo(
     () =>
-      activeSkillRecommendedTools.filter(
+      effectiveSkillRecommendedTools.filter(
         (recommended) => !enabledTools.some((tool) => toolMatchesRecommendation(tool, recommended)),
       ),
-    [activeSkillRecommendedTools, enabledTools],
+    [effectiveSkillRecommendedTools, enabledTools],
   )
 
   const toolStatusHint = useMemo(() => {
-    if (toolsDisabledReason && (enabledToolCount ?? 0) === 0 && (toolsRequested || activeSkillRecommendedTools.length > 0)) {
-      if (toolsDisabledReason.includes('不支持 tools') && activeSkillId) {
+    if (toolsDisabledReason && (enabledToolCount ?? 0) === 0 && (toolsRequested || effectiveSkillRecommendedTools.length > 0)) {
+      if (toolsDisabledReason.includes('不支持 tools') && effectiveSkillId) {
         return toolsDisabledReason
       }
-      return activeSkillRecommendedTools.length > 0
+      return effectiveSkillRecommendedTools.length > 0
         ? `当前 Skill 需要工具，但${toolsDisabledReason}`
         : toolsDisabledReason
     }
@@ -210,9 +223,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       return `当前 Skill 推荐的工具不可用：${unavailableRecommendedTools.slice(0, 3).join(', ')}`
     }
     return ''
-  }, [activeSkillId, activeSkillRecommendedTools.length, enabledToolCount, toolsDisabledReason, toolsRequested, unavailableRecommendedTools])
+  }, [effectiveSkillId, effectiveSkillRecommendedTools.length, enabledToolCount, toolsDisabledReason, toolsRequested, unavailableRecommendedTools])
 
-  const sendDisabledReason = activeSkillRecommendedTools.length > 0 ? toolStatusHint : ''
+  const sendDisabledReason = effectiveSkillRecommendedTools.length > 0 ? toolStatusHint : ''
 
   const getRouteConversationId = useCallback(() => {
     const path = hashPath()
@@ -253,10 +266,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const loadSkills = useCallback(async () => {
     if (!isTauriRuntime()) {
       setSkills([])
-      setSkillsLoading(false)
       return
     }
-    setSkillsLoading(true)
     try {
       const result = await api.chatSkillsList()
       if (result.success) {
@@ -270,8 +281,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
     } catch (err) {
       console.error('Failed to load chat skills:', err)
-    } finally {
-      setSkillsLoading(false)
     }
   }, [])
 
@@ -284,7 +293,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     void refreshToolIndicator()
   }, [refreshToolIndicator])
 
-  const openEmbeddedSettings = useCallback(() => {
+  const openEmbeddedSettings = useCallback((tab: SettingsTab = 'chat') => {
+    setSettingsInitialTab(tab)
     setChatView('settings')
     syncSettingsRoute()
   }, [syncSettingsRoute])
@@ -538,20 +548,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         activeProviderId || undefined,
         activeModel || undefined
       )
-      const nextConv = draftActiveSkillId
-        ? await chatApi.updateConversation(conv.id, { activeSkillId: draftActiveSkillId })
-        : conv
-      setCurrentConversation(nextConv)
+      setCurrentConversation(conv)
       setStreamingToolCalls([])
       activeRunIdRef.current = null
-      syncConversationRoute(nextConv.id)
+      syncConversationRoute(conv.id)
       refreshSidebar()
       setStreamError('')
     } catch (err) {
       console.error('Failed to create conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
     }
-  }, [activeModel, activeProviderId, draftActiveSkillId, refreshSidebar, syncConversationRoute])
+  }, [activeModel, activeProviderId, refreshSidebar, syncConversationRoute])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -639,7 +646,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         syncConversationRoute(conversation.id)
       }
 
-      const selectedSkillId = activeSkillId || null
+      const selectedSkillId = effectiveSkillId || null
       const updatedConv = await chatApi.sendMessage(
         conversation!.id,
         trimmed,
@@ -799,37 +806,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }, [cancellingStream, streaming])
 
-  const handleSkillChange = async (skillId: string | null) => {
-    setDraftActiveSkillId(skillId)
-    if (!currentConversation) return
-
-    try {
-      const updatedConv = await chatApi.updateConversation(currentConversation.id, {
-        activeSkillId: skillId ?? '',
-      })
-      setCurrentConversation(updatedConv)
-      refreshSidebar()
-    } catch (err) {
-      console.error('Failed to change skill:', err)
-      setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Skill 切换失败')
-    }
-  }
-
-  const handlePreviewSkill = useCallback(async (skill: SkillMeta) => {
-    setSkillPreviewLoading(true)
-    try {
-      const result = await api.chatSkillsRead(skill.id)
-      if (!result.success || !result.skill) {
-        throw new Error(result.error || 'Skill 读取失败')
-      }
-      setSkillPreview(result.skill)
-    } catch (err) {
-      setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Skill 读取失败')
-    } finally {
-      setSkillPreviewLoading(false)
-    }
-  }, [])
-
   const displayMessages = useMemo(() => {
     const stored = currentConversation?.messages ?? []
     if (!pendingUserMessage) return stored
@@ -868,7 +844,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             syncConversationRoute(null)
             refreshSidebar()
           }}
-          onOpenSettings={openEmbeddedSettings}
+          onOpenSettings={() => openEmbeddedSettings('chat')}
           settingsActive={chatView === 'settings'}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed(true)}
@@ -887,6 +863,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           <SettingsShell
             ref={settingsRef}
             variant="embedded"
+            initialTab={settingsInitialTab}
             reserveTrafficLightSpace={sidebarCollapsed && usesNativeTitlebar}
             onClose={handleSettingsClose}
             onSettingsChange={handleSettingsChange}
@@ -948,19 +925,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onCancel={() => void handleCancelStream()}
                       cancelVisible={streaming || sendInFlightRef.current}
                       cancelling={cancellingStream}
-                      onOpenSettings={openEmbeddedSettings}
-                      toolCount={enabledToolCount ?? undefined}
+                      onOpenSettings={() => openEmbeddedSettings('chat')}
                       enabledTools={enabledTools}
-                      toolsRequested={toolsRequested}
                       toolsDisabledReason={toolsDisabledReason}
                       toolStatusHint={toolStatusHint}
                       sendDisabledReason={sendDisabledReason}
-                      skills={skills}
-                      activeSkillId={activeSkillId}
-                      skillsLoading={skillsLoading}
-                      onSkillChange={(skillId) => void handleSkillChange(skillId)}
-                      onPreviewSkill={(skill) => void handlePreviewSkill(skill)}
-                      onRefreshSkills={() => void loadSkills()}
+                      enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
+                      onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                       autoFocus
                     />
                   </div>
@@ -985,19 +956,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     onCancel={() => void handleCancelStream()}
                     cancelVisible={streaming || sendInFlightRef.current}
                     cancelling={cancellingStream}
-                    onOpenSettings={openEmbeddedSettings}
-                    toolCount={enabledToolCount ?? undefined}
+                    onOpenSettings={() => openEmbeddedSettings('chat')}
                     enabledTools={enabledTools}
-                    toolsRequested={toolsRequested}
                     toolsDisabledReason={toolsDisabledReason}
                     toolStatusHint={toolStatusHint}
                     sendDisabledReason={sendDisabledReason}
-                    skills={skills}
-                    activeSkillId={activeSkillId}
-                    skillsLoading={skillsLoading}
-                    onSkillChange={(skillId) => void handleSkillChange(skillId)}
-                    onPreviewSkill={(skill) => void handlePreviewSkill(skill)}
-                    onRefreshSkills={() => void loadSkills()}
+                    enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
+                    onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                     autoFocus
                   />
                 </>
@@ -1060,48 +1025,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 允许
               </button>
             </div>
-          </div>
-        </div>
-      )}
-      {(skillPreview || skillPreviewLoading) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4" data-tauri-drag-region="false">
-          <div className="flex max-h-[82vh] w-full max-w-2xl flex-col rounded-lg border border-neutral-200 bg-white shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
-            <div className="flex items-start gap-2 border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
-              <Eye size={17} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">
-                  {skillPreview?.name || 'Skill'}
-                </div>
-                {skillPreview?.description && (
-                  <div className="mt-1 line-clamp-2 text-[12px] text-neutral-500 dark:text-neutral-400">
-                    {skillPreview.description}
-                  </div>
-                )}
-                {skillPreview && skillPreview.recommendedTools.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {skillPreview.recommendedTools.map((tool) => (
-                      <span
-                        key={tool}
-                        className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10.5px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
-                      >
-                        {tool}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                className="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-                aria-label="关闭 Skill 预览"
-                onClick={() => setSkillPreview(null)}
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap px-4 py-3 text-[12px] leading-relaxed text-neutral-700 dark:text-neutral-200">
-              {skillPreviewLoading ? '加载中...' : skillPreview?.body || ''}
-            </pre>
           </div>
         </div>
       )}

@@ -3,23 +3,22 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   ArrowUp,
-  Check,
-  Eye,
   FileText,
   Image,
   Plus,
-  Settings,
   SlidersHorizontal,
-  Sparkles,
   Square,
-  Wrench,
   X,
 } from 'lucide-react'
 import type { ChatToolDefinition } from '../api/tauri'
-import type { PendingAttachment, SkillMeta } from './types'
+import type { PendingAttachment } from './types'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+function isExternalMcpTool(tool: ChatToolDefinition): boolean {
+  return tool.source !== 'skill' && tool.source !== 'native'
+}
 
 interface InputBarProps {
   onSend: (content: string, attachments: PendingAttachment[]) => void
@@ -28,33 +27,15 @@ interface InputBarProps {
   cancelVisible?: boolean
   cancelling?: boolean
   onOpenSettings?: () => void
-  toolCount?: number
   enabledTools?: ChatToolDefinition[]
-  toolsRequested?: boolean
   toolsDisabledReason?: string
   toolStatusHint?: string
   sendDisabledReason?: string
-  skills?: SkillMeta[]
-  activeSkillId?: string | null
-  skillsLoading?: boolean
-  onSkillChange?: (skillId: string | null, skill?: SkillMeta) => void
-  onPreviewSkill?: (skill: SkillMeta) => void
-  onRefreshSkills?: () => void
+  enabledSkills?: { id: string; name: string }[]
+  onOpenSkillSettings?: () => void
   autoFocus?: boolean
   /** footer：贴底（有消息时）；inline：嵌入居中区域（空对话欢迎页） */
   layout?: 'footer' | 'inline'
-}
-
-function recommendedTools(skill?: SkillMeta | null): string[] {
-  return skill?.recommended_tools ?? skill?.recommendedTools ?? []
-}
-
-function sourceLabel(skill: SkillMeta): string {
-  if (!skill.source) return ''
-  if (skill.source === 'builtin') return '内置'
-  if (skill.source === 'user') return '用户'
-  if (skill.source === 'external') return '外部'
-  return skill.source
 }
 
 export function InputBar({
@@ -64,18 +45,12 @@ export function InputBar({
   cancelVisible,
   cancelling,
   onOpenSettings,
-  toolCount,
   enabledTools = [],
-  toolsRequested,
   toolsDisabledReason,
   toolStatusHint,
   sendDisabledReason,
-  skills = [],
-  activeSkillId,
-  skillsLoading = false,
-  onSkillChange,
-  onPreviewSkill,
-  onRefreshSkills,
+  enabledSkills = [],
+  onOpenSkillSettings,
   autoFocus,
   layout = 'footer',
 }: InputBarProps) {
@@ -258,20 +233,11 @@ export function InputBar({
       : 'shrink-0 px-6 pb-8 pt-2'
 
   const innerClass = layout === 'inline' ? 'w-full' : 'mx-auto w-full max-w-3xl'
-  const activeSkill = skills.find((skill) => skill.id === activeSkillId) ?? null
-  const activeSkillTools = recommendedTools(activeSkill)
+  const externalMcpTools = enabledTools.filter(isExternalMcpTool)
   const hasToolProblem = Boolean(toolsDisabledReason || toolStatusHint || sendDisabledReason)
-  const skillToolCount = enabledTools.filter((tool) => tool.source === 'skill').length
-  const mcpToolCount = enabledTools.filter((tool) => tool.source !== 'skill').length
-  const toolSummary = toolsDisabledReason
-    || (toolCount !== undefined && toolCount > 0
-      ? (() => {
-          const parts: string[] = []
-          if (skillToolCount > 0) parts.push(`Skill ${skillToolCount}`)
-          if (mcpToolCount > 0) parts.push(`MCP ${mcpToolCount}`)
-          return parts.length > 0 ? `已启用 ${parts.join(' · ')}` : `已启用 ${toolCount} 个工具`
-        })()
-      : '未启用工具')
+  const showMcpSection = externalMcpTools.length > 0 || Boolean(toolsDisabledReason)
+  const mcpStatusLine = toolsDisabledReason
+    || (externalMcpTools.length > 0 ? `MCP ${externalMcpTools.length}` : '')
 
   return (
     <div className={wrapperClass}>
@@ -280,219 +246,50 @@ export function InputBar({
           <>
             <div className="fixed inset-0 z-30" onClick={() => setToolPanelOpen(false)} aria-hidden />
             <div
-              className="absolute bottom-full left-10 z-40 mb-2 w-[min(320px,calc(100vw-32px))] overflow-hidden rounded-xl border border-neutral-200/90 bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
+              className="absolute bottom-full left-10 z-40 mb-2 w-[min(272px,calc(100vw-32px))] overflow-hidden rounded-xl border border-neutral-200/90 bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
               data-tauri-drag-region="false"
             >
-              <div className="flex items-center gap-2 border-b border-neutral-200/80 px-3 py-2 dark:border-neutral-800">
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <SlidersHorizontal size={15} strokeWidth={1.8} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
-                  <div className="truncate text-[13px] font-semibold text-neutral-900 dark:text-neutral-100">
-                    MCP / Skill
-                  </div>
+              <div className="space-y-1.5 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-semibold text-neutral-800 dark:text-neutral-100">Skill</span>
+                  {onOpenSkillSettings && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setToolPanelOpen(false)
+                        onOpenSkillSettings()
+                      }}
+                      className="rounded-md px-1.5 py-0.5 text-[11px] text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                    >
+                      管理
+                    </button>
+                  )}
                 </div>
-                {onOpenSettings && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setToolPanelOpen(false)
-                      onOpenSettings()
-                    }}
-                    className="rounded-md p-1 text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
-                    title="配置 MCP 与 Skill"
-                    aria-label="配置 MCP 与 Skill"
-                  >
-                    <Settings size={15} strokeWidth={1.9} />
-                  </button>
+                <div className="text-[11px] leading-4 text-neutral-600 dark:text-neutral-300">
+                  <span className="text-neutral-500 dark:text-neutral-400">
+                    已启用 {enabledSkills.length} 个
+                  </span>
+                  {enabledSkills.length > 0 && (
+                    <>
+                      <span className="text-neutral-300 dark:text-neutral-600"> · </span>
+                      <span className="text-neutral-700 dark:text-neutral-200">
+                        {enabledSkills.map((skill) => skill.name).join('、')}
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {showMcpSection && mcpStatusLine && (
+                  <div className="border-t border-neutral-200/80 pt-1.5 text-[11px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                    {mcpStatusLine}
+                  </div>
                 )}
-              </div>
 
-              <div className="max-h-[min(360px,58vh)] overflow-y-auto p-2">
-                <section>
-                  <div className="mb-1 flex items-center justify-between gap-2 px-1">
-                    <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-semibold text-neutral-700 dark:text-neutral-200">
-                      <Sparkles size={13} strokeWidth={1.9} className="shrink-0 text-[#C56646] dark:text-[#E39A78]" />
-                      <span>Skill</span>
-                    </div>
-                    {activeSkill && onSkillChange && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onSkillChange(null)
-                          textareaRef.current?.focus()
-                        }}
-                        className="rounded-md px-2 py-1 text-[11px] text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
-                      >
-                        清除
-                      </button>
-                    )}
-                  </div>
-
-                  {skillsLoading && (
-                    <div className="px-2 py-3 text-center text-[12px] text-neutral-500 dark:text-neutral-400">
-                      加载中…
-                    </div>
-                  )}
-
-                  {!skillsLoading && skills.length === 0 && (
-                    <div className="px-2 py-3 text-center text-[12px] text-neutral-500 dark:text-neutral-400">
-                      暂无 Skill
-                    </div>
-                  )}
-
-                  {!skillsLoading && skills.length > 0 && (
-                    <div className="space-y-1">
-                      {skills.map((skill) => {
-                        const active = activeSkill?.id === skill.id
-                        const tools = recommendedTools(skill)
-                        const source = sourceLabel(skill)
-                        return (
-                          <button
-                            key={skill.id}
-                            type="button"
-                            onClick={() => {
-                              onSkillChange?.(active ? null : skill.id, active ? undefined : skill)
-                              setToolPanelOpen(false)
-                              textareaRef.current?.focus()
-                            }}
-                            title={skill.description || skill.name}
-                            className={`group w-full rounded-lg px-2 py-1.5 text-left transition-colors ${
-                              active
-                                ? 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
-                                : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/80'
-                            }`}
-                          >
-                            <div className="flex min-w-0 items-start gap-2">
-                              <Sparkles
-                                size={13}
-                                strokeWidth={1.8}
-                                className={`mt-[3px] shrink-0 ${
-                                  active
-                                    ? 'text-[#C56646] dark:text-[#E39A78]'
-                                    : 'text-neutral-400 group-hover:text-neutral-500 dark:group-hover:text-neutral-300'
-                                }`}
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex min-w-0 items-center gap-1.5">
-                                  <span className="min-w-0 truncate text-[13px] font-medium">
-                                    {skill.name}
-                                  </span>
-                                  {source && (
-                                    <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                                      {source}
-                                    </span>
-                                  )}
-                                </div>
-                                {tools.length > 0 && (
-                                  <div className="mt-0.5 flex flex-wrap gap-1">
-                                    {tools.slice(0, 2).map((tool) => (
-                                      <span
-                                        key={tool}
-                                        className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
-                                      >
-                                        {tool}
-                                      </span>
-                                    ))}
-                                    {tools.length > 2 && (
-                                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                                        +{tools.length - 2}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                              <div className="mt-0.5 flex shrink-0 items-center gap-1">
-                                {onPreviewSkill && (
-                                  <span
-                                    role="button"
-                                    tabIndex={0}
-                                    title="预览 Skill"
-                                    aria-label={`预览 ${skill.name}`}
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      onPreviewSkill(skill)
-                                      setToolPanelOpen(false)
-                                    }}
-                                    onKeyDown={(event) => {
-                                      if (event.key !== 'Enter' && event.key !== ' ') return
-                                      event.preventDefault()
-                                      event.stopPropagation()
-                                      onPreviewSkill(skill)
-                                      setToolPanelOpen(false)
-                                    }}
-                                    className="rounded-md p-1 text-neutral-400 opacity-0 transition group-hover:opacity-100 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
-                                  >
-                                    <Eye size={13} strokeWidth={1.9} />
-                                  </span>
-                                )}
-                                {active && (
-                                  <Check size={14} strokeWidth={2} className="text-[#C56646] dark:text-[#E39A78]" />
-                                )}
-                              </div>
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </section>
-
-                <section className="mt-2 border-t border-neutral-200/80 px-1 pt-2 dark:border-neutral-800">
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-semibold text-neutral-700 dark:text-neutral-200">
-                      <Wrench size={13} strokeWidth={1.9} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
-                      <span>MCP</span>
-                    </div>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] ${
-                      hasToolProblem
-                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-200'
-                        : 'bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
-                    }`}>
-                      {toolSummary}
-                    </span>
-                  </div>
-
-                  {(sendDisabledReason || toolStatusHint) && (
-                    <div className="mb-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
-                      {sendDisabledReason || toolStatusHint}
-                    </div>
-                  )}
-
-                  {activeSkillTools.length > 0 && (
-                    <div className="mb-1.5 flex flex-wrap gap-1">
-                      {activeSkillTools.map((tool) => (
-                        <span
-                          key={tool}
-                          className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
-                        >
-                          {tool}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {enabledTools.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {enabledTools.slice(0, 8).map((tool) => (
-                        <span
-                          key={tool.id}
-                          className="rounded-md border border-neutral-200/80 px-1.5 py-0.5 text-[10.5px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-300"
-                          title={tool.description}
-                        >
-                          {tool.name}
-                        </span>
-                      ))}
-                      {enabledTools.length > 8 && (
-                        <span className="rounded-md border border-neutral-200/80 px-1.5 py-0.5 text-[10.5px] text-neutral-500 dark:border-neutral-700 dark:text-neutral-400">
-                          +{enabledTools.length - 8}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-[12px] text-neutral-500 dark:text-neutral-400">
-                      {toolsDisabledReason || (toolsRequested ? '未发现可用工具' : '未启用 MCP 工具')}
-                    </div>
-                  )}
-                </section>
+                {(sendDisabledReason || toolStatusHint) && (
+                  <p className="rounded-md bg-amber-50 px-2 py-1 text-[11px] leading-4 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
+                    {sendDisabledReason || toolStatusHint}
+                  </p>
+                )}
               </div>
             </div>
           </>
@@ -561,15 +358,11 @@ export function InputBar({
               <button
                 type="button"
                 onClick={() => {
-                  setToolPanelOpen((open) => {
-                    const next = !open
-                    if (next) onRefreshSkills?.()
-                    return next
-                  })
+                  setToolPanelOpen((open) => !open)
                 }}
                 disabled={disabled}
                 className={`mb-0.5 shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
-                  toolPanelOpen || activeSkill || hasToolProblem || (toolCount ?? 0) > 0
+                  toolPanelOpen || hasToolProblem || enabledSkills.length > 0 || externalMcpTools.length > 0
                     ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
                     : 'text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800'
                 }`}

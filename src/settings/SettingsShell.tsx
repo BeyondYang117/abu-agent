@@ -2,7 +2,8 @@ import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useM
 import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Camera,
-  Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen
+  Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
+  MessageSquare, Globe,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -32,7 +33,7 @@ import {
   SettingsGroup,
 } from './components'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'mcp' | 'skill' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'mcp' | 'skill' | 'webSearch' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 
@@ -42,6 +43,8 @@ export interface SettingsShellProps {
   onSettingsChange: () => void
   onReady?: () => void
   reserveTrafficLightSpace?: boolean
+  /** 打开设置面板时选中的侧栏项（如 Chat 内嵌设置默认 AI 客户端） */
+  initialTab?: SettingsTab
 }
 
 export interface SettingsShellHandle {
@@ -70,6 +73,15 @@ function FieldBlock({
   )
 }
 
+function defaultChatConfig(): NonNullable<SettingsData['chat']> {
+  return {
+    streamEnabled: true,
+    thinkingEnabled: true,
+    defaultLanguage: '',
+    systemPrompt: '',
+  }
+}
+
 function defaultChatTools(): ChatToolsConfig {
   return {
     enabled: false,
@@ -78,6 +90,7 @@ function defaultChatTools(): ChatToolsConfig {
     skillAutoMatch: true,
     skillFallbackMode: 'progressive',
     skillScriptAllowlist: ['python3', 'bash', 'sh', 'node'],
+    disabledSkillIds: [],
     maxToolRounds: 30,
     toolTimeoutMs: 60_000,
     maxToolOutputChars: 12_000,
@@ -136,7 +149,7 @@ function textToArgs(text: string): string[] {
  * 设置面板主组件（standalone / embedded 双宿主）
  */
 export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>(function SettingsShell(
-  { variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false },
+  { variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false, initialTab },
   ref,
 ) {
   const [settings, setSettings] = useState<SettingsData | null>(null)
@@ -144,7 +157,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [appVersion, setAppVersion] = useState('')
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general')
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab)
+  }, [initialTab])
   const [saveError, setSaveError] = useState('')
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
@@ -1143,6 +1159,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
+  const updateChat = useCallback((updates: Partial<NonNullable<SettingsData['chat']>>) => {
+    setSettings((prev) => {
+      if (!prev) return prev
+      const current = prev.chat || defaultChatConfig()
+      return { ...prev, chat: { ...current, ...updates } }
+    })
+  }, [])
+
   const updateLensWebSearch = useCallback((updates: Partial<NonNullable<SettingsData['lens']['webSearch']>>) => {
     setSettings((prev) => {
       if (!prev) return prev
@@ -1180,6 +1204,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
   // 当前语言对应的默认 lens 提示词
   const lensDefaults = defaultPrompts?.lensPrompts?.[settings?.lens?.defaultLanguage === 'en' ? 'en' : 'zh']
+  const chatLangKey = settings?.chat?.defaultLanguage === 'en' ? 'en' : 'zh'
+  const chatDefaults = defaultPrompts?.chatPrompts?.[chatLangKey]
+  const chatConfig = settings?.chat || defaultChatConfig()
 
   // 快捷键录制监听
   useEffect(() => {
@@ -1261,8 +1288,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'translate' as const, label: t.tabTranslate, icon: Languages },
     { id: 'screenshot' as const, label: t.tabScreenshot, icon: Camera },
     { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
+    { id: 'chat' as const, label: t.tabChatClient, icon: MessageSquare },
     { id: 'mcp' as const, label: 'MCP', icon: Wrench },
     { id: 'skill' as const, label: 'Skill', icon: Sparkles },
+    { id: 'webSearch' as const, label: t.tabWebSearch, icon: Globe },
     { id: 'providers' as const, label: t.tabModels, icon: Cloud },
   ]
   const pageMeta: Record<typeof activeTab, { title: string; subtitle: string; right?: string }> = {
@@ -1282,13 +1311,25 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       title: t.lensTabLabel,
       subtitle: lang === 'zh' ? '视觉问答的快捷键、响应方式和提示词。' : 'Shortcut, response behavior, and prompts for visual Q&A.',
     },
+    chat: {
+      title: t.tabChatClient,
+      subtitle: lang === 'zh'
+        ? '对话客户端默认模型、流式/思考行为、系统提示词；工具见 MCP / Skill。'
+        : 'Default model, streaming/thinking, and system prompt for Chat; tools live under MCP / Skill.',
+    },
     mcp: {
       title: 'MCP',
-      subtitle: lang === 'zh' ? '管理 MCP 服务器、原生工具和工具审批。' : 'Manage MCP servers, native tools, and tool approvals.',
+      subtitle: lang === 'zh' ? '管理 MCP 服务器与工具审批策略。' : 'Manage MCP servers and tool approval policy.',
     },
     skill: {
       title: 'Skill',
       subtitle: lang === 'zh' ? '管理用户导入与本地 Skill 库。' : 'Manage imported and local Skills.',
+    },
+    webSearch: {
+      title: t.tabWebSearch,
+      subtitle: lang === 'zh'
+        ? 'Tavily/Exa 密钥与参数；分别开启 Lens 与 Chat 的联网搜索。'
+        : 'Tavily/Exa keys and parameters; enable web search for Lens and Chat separately.',
     },
     providers: {
       title: t.tabModels,
@@ -1715,74 +1756,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       )}
                     </SettingsGroup>
 
-                    <SettingsGroup title={t.lensWebSearch}>
-                      <SettingRow label={t.enabled} description={t.lensWebSearchHint}>
-                        <Toggle
-                          checked={settings.lens?.webSearch?.enabled === true}
-                          onChange={(v) => updateLensWebSearch({ enabled: v })}
-                        />
-                      </SettingRow>
-                      {settings.lens?.webSearch?.enabled === true && (
-                        <>
-                          <SettingRow label={t.lensWebSearchProvider}>
-                            <Select
-                              className="w-44"
-                              value={settings.lens?.webSearch?.provider || 'tavily'}
-                              onChange={(v) => updateLensWebSearch({ provider: v as 'tavily' | 'exa' })}
-                              options={[
-                                { value: 'tavily', label: 'Tavily' },
-                                { value: 'exa', label: 'Exa' },
-                              ]}
-                            />
-                          </SettingRow>
-                          <SettingRow label={t.lensWebSearchApiKey}>
-                            <Input
-                              type="password"
-                              value={settings.lens?.webSearch?.provider === 'exa'
-                                ? settings.lens?.webSearch?.exaApiKey || ''
-                                : settings.lens?.webSearch?.tavilyApiKey || ''}
-                              onChange={(value) => {
-                                if (settings.lens?.webSearch?.provider === 'exa') {
-                                  updateLensWebSearch({ exaApiKey: value })
-                                } else {
-                                  updateLensWebSearch({ tavilyApiKey: value })
-                                }
-                              }}
-                              placeholder={settings.lens?.webSearch?.provider === 'exa' ? 'exa-...' : 'tvly-...'}
-                              mono
-                            />
-                          </SettingRow>
-                          <SettingRow label={t.lensWebSearchMaxResults}>
-                            <Input
-                              type="number"
-                              min={1}
-                              max={10}
-                              className="w-24"
-                              value={String(settings.lens?.webSearch?.maxResults ?? 5)}
-                              onChange={(value) => updateLensWebSearch({
-                                maxResults: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 1)),
-                              })}
-                            />
-                          </SettingRow>
-                          {settings.lens?.webSearch?.provider !== 'exa' && (
-                            <SettingRow label={t.lensWebSearchDepth}>
-                              <Select
-                                className="w-44"
-                                value={settings.lens?.webSearch?.searchDepth || 'basic'}
-                                onChange={(v) => updateLensWebSearch({ searchDepth: v as 'ultra-fast' | 'fast' | 'basic' | 'advanced' })}
-                                options={[
-                                  { value: 'ultra-fast', label: 'Ultra fast' },
-                                  { value: 'fast', label: 'Fast' },
-                                  { value: 'basic', label: 'Basic' },
-                                  { value: 'advanced', label: 'Advanced' },
-                                ]}
-                              />
-                            </SettingRow>
-                          )}
-                        </>
-                      )}
-                    </SettingsGroup>
-
                     <SettingsGroup title={t.engine}>
                       <SettingRow label={t.selectModelPair} description={lang === 'zh' ? '留空时继承输入翻译模型。' : 'Leave empty to inherit the input translation model.'}>
                         <ModelPairSelect
@@ -1842,6 +1815,157 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               </>
             )}
 
+            {/* ===== AI 客户端标签页 ===== */}
+            {activeTab === 'chat' && (
+              <>
+                <SettingsGroup title={t.engine}>
+                  <SettingRow
+                    label={t.selectModelPair}
+                    description={lang === 'zh'
+                      ? '新对话的默认供应商与模型；也可在 Chat 顶栏随时切换。'
+                      : 'Default provider and model for new chats; you can still switch in the Chat header.'}
+                  >
+                    <ModelPairSelect
+                      providerId={settings.chatProviderId || ''}
+                      model={settings.chatModel || ''}
+                      providers={settings.providers}
+                      platform={platform}
+                      onChange={(providerId, model) => {
+                        updateSettings({ chatProviderId: providerId, chatModel: model })
+                      }}
+                    />
+                  </SettingRow>
+                  {!chatProvider && (
+                    <p className="kv-row-desc px-0 pb-2">
+                      {lang === 'zh' ? '请先在「模型」中添加并配置供应商。' : 'Add and configure a provider under Models first.'}
+                    </p>
+                  )}
+                  {chatProvider && chatProviderSupportsTools === false && (
+                    <p className="kv-row-desc px-0 pb-2 text-amber-700 dark:text-amber-400">
+                      {lang === 'zh'
+                        ? '当前默认供应商未启用工具调用；MCP / Skill 工具可能不可用。'
+                        : 'The default provider is marked as not supporting tools; MCP / Skill may be unavailable.'}
+                    </p>
+                  )}
+                </SettingsGroup>
+
+                <SettingsGroup title={lang === 'zh' ? '响应' : 'Response'}>
+                  <SettingRow label={t.chatStreamEnabled} description={t.chatStreamHint}>
+                    <Toggle
+                      checked={chatConfig.streamEnabled !== false}
+                      onChange={(streamEnabled) => updateChat({ streamEnabled })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.chatThinkingEnabled} description={t.chatThinkingHint}>
+                    <Toggle
+                      checked={chatConfig.thinkingEnabled !== false}
+                      onChange={(thinkingEnabled) => updateChat({ thinkingEnabled })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.chatDefaultLanguage} description={t.chatDefaultLanguageHint}>
+                    <Select
+                      className="w-44"
+                      value={chatConfig.defaultLanguage || ''}
+                      onChange={(defaultLanguage) => updateChat({ defaultLanguage })}
+                      options={[
+                        { value: '', label: t.lensLanguageInherit },
+                        { value: 'zh', label: '中文' },
+                        { value: 'zh-Hant', label: '繁體中文' },
+                        { value: 'en', label: 'English' },
+                      ]}
+                    />
+                  </SettingRow>
+                </SettingsGroup>
+
+                <SettingsGroup title={t.customPrompts}>
+                  <FieldBlock label={t.chatSystemPrompt} description={t.chatSystemPromptHint}>
+                    <TextArea
+                      value={chatConfig.systemPrompt || ''}
+                      onChange={(systemPrompt) => updateChat({ systemPrompt })}
+                      placeholder={t.lensPromptHint}
+                      rows={4}
+                    />
+                    {!chatConfig.systemPrompt?.trim() && chatDefaults && (
+                      <DefaultPrompt label={t.defaultTemplate} content={chatDefaults} />
+                    )}
+                  </FieldBlock>
+                </SettingsGroup>
+
+                <SettingsGroup title={t.chatToolsSection}>
+                  <p className="kv-row-desc mb-3">{t.chatToolsSectionHint}</p>
+                  <div className="flex flex-wrap gap-2 pb-2">
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => setActiveTab('mcp')}
+                      data-tauri-drag-region="false"
+                    >
+                      <Wrench size={11} />
+                      {t.chatOpenMcp}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => setActiveTab('skill')}
+                      data-tauri-drag-region="false"
+                    >
+                      <Sparkles size={11} />
+                      {t.chatOpenSkill}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => setActiveTab('webSearch')}
+                      data-tauri-drag-region="false"
+                    >
+                      <Globe size={11} />
+                      {t.chatOpenWebSearch}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => setActiveTab('providers')}
+                      data-tauri-drag-region="false"
+                    >
+                      <Cloud size={11} />
+                      {t.chatOpenProviders}
+                    </button>
+                  </div>
+                  <SettingRow
+                    label={lang === 'zh' ? 'MCP 工具' : 'MCP tools'}
+                    description={lang === 'zh' ? `已配置 ${chatTools.servers.length} 个服务器` : `${chatTools.servers.length} server(s) configured`}
+                  >
+                    <span className={`kv-tag ${chatTools.enabled ? 'ok' : ''}`}>
+                      {chatTools.enabled
+                        ? (lang === 'zh' ? '已启用' : 'On')
+                        : (lang === 'zh' ? '未启用' : 'Off')}
+                    </span>
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? 'Skill 运行时' : 'Skill runtime'}
+                    description={lang === 'zh' ? '内置 skill_activate / read_file / run_script' : 'Built-in skill_activate / read_file / run_script'}
+                  >
+                    <span className={`kv-tag ${chatTools.nativeTools?.skillRuntime !== false ? 'ok' : ''}`}>
+                      {chatTools.nativeTools?.skillRuntime !== false
+                        ? (lang === 'zh' ? '已启用' : 'On')
+                        : (lang === 'zh' ? '未启用' : 'Off')}
+                    </span>
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? '联网搜索' : 'Web search'}
+                    description={lang === 'zh' ? 'Tavily/Exa 与 Lens、Chat 开关' : 'Tavily/Exa plus Lens and Chat toggles'}
+                  >
+                    <span className={`kv-tag ${(settings.lens?.webSearch?.enabled || chatTools.nativeTools?.webSearch) ? 'ok' : ''}`}>
+                      {(settings.lens?.webSearch?.enabled || chatTools.nativeTools?.webSearch)
+                        ? (lang === 'zh' ? '部分启用' : 'Partially on')
+                        : (lang === 'zh' ? '未启用' : 'Off')}
+                    </span>
+                  </SettingRow>
+                  <p className="kv-row-desc">{t.chatRetryNote}</p>
+                </SettingsGroup>
+              </>
+            )}
+
             {/* ===== MCP 标签页 ===== */}
             {activeTab === 'mcp' && (
               <>
@@ -1862,23 +1986,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                           return
                         }
                         updateChatTools({ enabled })
-                      }}
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    label={lang === 'zh' ? '原生联网搜索' : 'Native web search'}
-                    description={lang === 'zh' ? '复用 Lens 联网搜索配置，作为 Chat 中的统一工具展示。' : 'Reuses the Lens web search config and shows as a unified Chat tool.'}
-                  >
-                    <Toggle
-                      checked={chatTools.nativeTools?.webSearch === true}
-                      onChange={(webSearch) => {
-                        if (!chatProviderSupportsTools) {
-                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用原生工具。' : 'The current Chat provider does not support tools, so native tools cannot be enabled.')
-                          return
-                        }
-                        updateChatTools({
-                          nativeTools: { ...(chatTools.nativeTools || { webSearch: false }), webSearch },
-                        })
                       }}
                     />
                   </SettingRow>
@@ -2275,44 +2382,70 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     />
                   </SettingRow>
                   {skillError && <div className="kv-inline-error">{skillError}</div>}
+                  <SettingRow label={t.enabled} description={t.skillCatalogEnableHint}>
+                    <span className="kv-tag ok">
+                      {skills.filter((skill) => !(chatTools.disabledSkillIds ?? []).includes(skill.id)).length}
+                      {' / '}
+                      {skills.length}
+                    </span>
+                  </SettingRow>
                   <div className="space-y-2 py-2">
-                    {skills.map((skill) => (
-                      <button
-                        key={skill.id}
-                        type="button"
-                        className="kv-panel w-full text-left transition-colors hover:bg-black/[0.035] dark:hover:bg-white/[0.06]"
-                        onClick={() => void handlePreviewSkill(skill.id)}
-                        data-tauri-drag-region="false"
-                      >
-                        <div className="flex min-w-0 items-start gap-2">
-                          <Sparkles size={14} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
-                          <div className="min-w-0 flex-1">
-                            <div className="kv-panel-title !mb-0">
-                              {skill.name}
-                              <span className="kv-tag ml-2">{skill.source}</span>
+                    {skills.map((skill) => {
+                      const skillEnabled = !(chatTools.disabledSkillIds ?? []).includes(skill.id)
+                      return (
+                        <div
+                          key={skill.id}
+                          className="kv-panel flex items-start gap-3"
+                        >
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left transition-colors hover:opacity-90"
+                            onClick={() => void handlePreviewSkill(skill.id)}
+                            data-tauri-drag-region="false"
+                          >
+                            <div className="flex min-w-0 items-start gap-2">
+                              <Sparkles size={14} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
+                              <div className="min-w-0 flex-1">
+                                <div className="kv-panel-title !mb-0">
+                                  {skill.name}
+                                  <span className="kv-tag ml-2">{skill.source}</span>
+                                </div>
+                                <div className="kv-panel-body">{skill.description}</div>
+                                {(skill.files?.length ?? 0) > 0 && (
+                                  <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
+                                    {skill.files?.length} {lang === 'zh' ? '个附属文件' : 'bundled files'}
+                                  </div>
+                                )}
+                                {skill.disableModelInvocation && (
+                                  <div className="mt-1">
+                                    <span className="kv-chip">{lang === 'zh' ? '仅手动触发' : 'Manual only'}</span>
+                                  </div>
+                                )}
+                                {skill.recommendedTools.length > 0 && (
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {skill.recommendedTools.map((tool) => (
+                                      <span key={tool} className="kv-chip">{tool}</span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                            <div className="kv-panel-body">{skill.description}</div>
-                            {(skill.files?.length ?? 0) > 0 && (
-                              <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                                {skill.files?.length} {lang === 'zh' ? '个附属文件' : 'bundled files'}
-                              </div>
-                            )}
-                            {skill.disableModelInvocation && (
-                              <div className="mt-1">
-                                <span className="kv-chip">{lang === 'zh' ? '仅手动触发' : 'Manual only'}</span>
-                              </div>
-                            )}
-                            {skill.recommendedTools.length > 0 && (
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {skill.recommendedTools.map((tool) => (
-                                  <span key={tool} className="kv-chip">{tool}</span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
+                          </button>
+                          <Toggle
+                            checked={skillEnabled}
+                            onChange={(enabled) => {
+                              const disabled = chatTools.disabledSkillIds ?? []
+                              const next = enabled
+                                ? disabled.filter((id) => id !== skill.id)
+                                : disabled.includes(skill.id)
+                                  ? disabled
+                                  : [...disabled, skill.id]
+                              updateChatTools({ disabledSkillIds: next })
+                            }}
+                          />
                         </div>
-                      </button>
-                    ))}
+                      )
+                    })}
                     {!skillsLoading && skills.length === 0 && (
                       <div className="kv-panel">
                         <div className="kv-panel-title">{lang === 'zh' ? '暂无 Skill' : 'No skills'}</div>
@@ -2322,6 +2455,95 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       </div>
                     )}
                   </div>
+                </SettingsGroup>
+              </>
+            )}
+
+            {/* ===== 网络搜索标签页 ===== */}
+            {activeTab === 'webSearch' && (
+              <>
+                <SettingsGroup title={t.webSearchApiSection}>
+                  <SettingRow label={t.lensWebSearchProvider}>
+                    <Select
+                      className="w-44"
+                      value={settings.lens?.webSearch?.provider || 'tavily'}
+                      onChange={(v) => updateLensWebSearch({ provider: v as 'tavily' | 'exa' })}
+                      options={[
+                        { value: 'tavily', label: 'Tavily' },
+                        { value: 'exa', label: 'Exa' },
+                      ]}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.lensWebSearchApiKey}>
+                    <Input
+                      type="password"
+                      value={settings.lens?.webSearch?.provider === 'exa'
+                        ? settings.lens?.webSearch?.exaApiKey || ''
+                        : settings.lens?.webSearch?.tavilyApiKey || ''}
+                      onChange={(value) => {
+                        if (settings.lens?.webSearch?.provider === 'exa') {
+                          updateLensWebSearch({ exaApiKey: value })
+                        } else {
+                          updateLensWebSearch({ tavilyApiKey: value })
+                        }
+                      }}
+                      placeholder={settings.lens?.webSearch?.provider === 'exa' ? 'exa-...' : 'tvly-...'}
+                      mono
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.lensWebSearchMaxResults}>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      className="w-24"
+                      value={String(settings.lens?.webSearch?.maxResults ?? 5)}
+                      onChange={(value) => updateLensWebSearch({
+                        maxResults: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 1)),
+                      })}
+                    />
+                  </SettingRow>
+                  {settings.lens?.webSearch?.provider !== 'exa' && (
+                    <SettingRow label={t.lensWebSearchDepth}>
+                      <Select
+                        className="w-44"
+                        value={settings.lens?.webSearch?.searchDepth || 'basic'}
+                        onChange={(v) => updateLensWebSearch({ searchDepth: v as 'ultra-fast' | 'fast' | 'basic' | 'advanced' })}
+                        options={[
+                          { value: 'ultra-fast', label: 'Ultra fast' },
+                          { value: 'fast', label: 'Fast' },
+                          { value: 'basic', label: 'Basic' },
+                          { value: 'advanced', label: 'Advanced' },
+                        ]}
+                      />
+                    </SettingRow>
+                  )}
+                </SettingsGroup>
+
+                <SettingsGroup title={t.webSearchLensSection}>
+                  <SettingRow label={t.enabled} description={t.lensWebSearchHint}>
+                    <Toggle
+                      checked={settings.lens?.webSearch?.enabled === true}
+                      onChange={(v) => updateLensWebSearch({ enabled: v })}
+                    />
+                  </SettingRow>
+                </SettingsGroup>
+
+                <SettingsGroup title={t.webSearchChatSection}>
+                  <SettingRow label={t.webSearchChatToggle} description={t.webSearchChatHint}>
+                    <Toggle
+                      checked={chatTools.nativeTools?.webSearch === true}
+                      onChange={(webSearch) => {
+                        if (!chatProviderSupportsTools) {
+                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用联网搜索工具。' : 'The current Chat provider does not support tools, so web search cannot be enabled.')
+                          return
+                        }
+                        updateChatTools({
+                          nativeTools: { ...(chatTools.nativeTools || { webSearch: false, skillRuntime: true }), webSearch },
+                        })
+                      }}
+                    />
+                  </SettingRow>
                 </SettingsGroup>
               </>
             )}

@@ -11,6 +11,24 @@ function reasoningExceedsLineLimit(text: string): boolean {
   return Math.ceil(trimmed.length / CHARS_PER_LINE) > COLLAPSE_LINE_LIMIT
 }
 
+/** Collapsed preview: last N lines (or tail chars) so streaming updates stay visible. */
+function collapsedReasoningPreview(text: string): { preview: string; truncated: boolean } {
+  const trimmed = text.trimEnd()
+  if (!trimmed) return { preview: '', truncated: false }
+  const lines = trimmed.split(/\r?\n/)
+  if (lines.length > COLLAPSE_LINE_LIMIT) {
+    return {
+      preview: lines.slice(-COLLAPSE_LINE_LIMIT).join('\n'),
+      truncated: true,
+    }
+  }
+  const maxChars = COLLAPSE_LINE_LIMIT * CHARS_PER_LINE
+  if (trimmed.length > maxChars) {
+    return { preview: trimmed.slice(-maxChars), truncated: true }
+  }
+  return { preview: trimmed, truncated: false }
+}
+
 type ReasoningBlockProps = {
   reasoning: string
   active?: boolean
@@ -18,6 +36,10 @@ type ReasoningBlockProps = {
 
 export function ReasoningBlock({ reasoning, active = false }: ReasoningBlockProps) {
   const collapsible = useMemo(() => reasoningExceedsLineLimit(reasoning), [reasoning])
+  const collapsedPreview = useMemo(
+    () => collapsedReasoningPreview(reasoning),
+    [reasoning],
+  )
   const [open, setOpen] = useState(() => !collapsible)
 
   useEffect(() => {
@@ -29,9 +51,10 @@ export function ReasoningBlock({ reasoning, active = false }: ReasoningBlockProp
   }, [active, collapsible, reasoning])
 
   const titleClass = 'mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500'
+  const showCollapsed = collapsible && !open
   const bodyClass = `whitespace-pre-wrap leading-relaxed opacity-90 text-sm text-neutral-400 dark:text-neutral-500 ${
-    collapsible && !open ? 'line-clamp-3' : ''
-  } ${collapsible && open ? 'max-h-[200px] overflow-y-auto custom-scrollbar' : ''}`
+    collapsible && open ? 'max-h-[200px] overflow-y-auto custom-scrollbar' : ''
+  }`
 
   return (
     <section
@@ -56,7 +79,12 @@ export function ReasoningBlock({ reasoning, active = false }: ReasoningBlockProp
       ) : (
         <div className={titleClass}>思考过程</div>
       )}
-      <div className={bodyClass}>{reasoning}</div>
+      <div className={bodyClass}>
+        {showCollapsed && collapsedPreview.truncated ? (
+          <span className="mr-0.5 opacity-50">…</span>
+        ) : null}
+        {showCollapsed ? collapsedPreview.preview : reasoning}
+      </div>
     </section>
   )
 }

@@ -1,3 +1,4 @@
+use chrono::{Datelike, Local, Timelike};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
@@ -380,6 +381,50 @@ impl Default for LensConfig {
 }
 
 /**
+ * AI 客户端（Chat）行为配置：与 Lens 分离，避免截图问答与对话客户端共用开关。
+ */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatConfig {
+    #[serde(default = "default_true")]
+    pub stream_enabled: bool,
+    #[serde(default = "default_true")]
+    pub thinking_enabled: bool,
+    /// 响应语言（"zh"/"en" 等）。空字符串表示跟随 Lens 默认语言，再跟随 target_lang。
+    #[serde(default)]
+    pub default_language: String,
+    /// 自定义 system prompt；空则使用内置 Chat 模板。
+    #[serde(default)]
+    pub system_prompt: String,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            stream_enabled: true,
+            thinking_enabled: true,
+            default_language: String::new(),
+            system_prompt: String::new(),
+        }
+    }
+}
+
+/// 解析 Chat 使用的响应语言代码。
+pub fn resolve_chat_language(settings: &Settings) -> String {
+    if !settings.chat.default_language.trim().is_empty() {
+        return settings.chat.default_language.trim().to_string();
+    }
+    if !settings.lens.default_language.trim().is_empty() {
+        return settings.lens.default_language.trim().to_string();
+    }
+    match settings.target_lang.as_str() {
+        "en" => "en".to_string(),
+        "zh-Hant" | "zh-TW" => "zh-Hant".to_string(),
+        _ => "zh".to_string(),
+    }
+}
+
+/**
  * Chat MCP stdio server 配置。
  *
  * settings.json 使用 camelCase；env 与 API keys 一样按本地明文设置策略保存。
@@ -482,6 +527,9 @@ pub struct ChatToolsConfig {
     pub skill_fallback_mode: String,
     #[serde(default = "default_skill_script_allowlist")]
     pub skill_script_allowlist: Vec<String>,
+    /// Skill ids the user turned off in Settings. Omitted ids are enabled.
+    #[serde(default)]
+    pub disabled_skill_ids: Vec<String>,
     #[serde(default = "default_chat_max_tool_rounds")]
     pub max_tool_rounds: u8,
     #[serde(default = "default_chat_tool_timeout_ms")]
@@ -502,6 +550,7 @@ impl Default for ChatToolsConfig {
             skill_auto_match: default_skill_auto_match(),
             skill_fallback_mode: default_skill_fallback_mode(),
             skill_script_allowlist: default_skill_script_allowlist(),
+            disabled_skill_ids: Vec::new(),
             max_tool_rounds: default_chat_max_tool_rounds(),
             tool_timeout_ms: default_chat_tool_timeout_ms(),
             max_tool_output_chars: default_chat_max_tool_output_chars(),
@@ -546,7 +595,12 @@ pub struct Settings {
     #[serde(default, alias = "cowork")]
     pub lens: LensConfig,
     #[serde(default)]
+    pub chat: ChatConfig,
+    #[serde(default)]
     pub chat_tools: ChatToolsConfig,
+    /// 一次性：将 Lens 的流式/思考开关复制到独立的 Chat 配置（旧版共用 Lens 行为）。
+    #[serde(default)]
+    pub chat_behavior_migrated_from_lens: bool,
     #[serde(default = "default_settings_language")]
     pub settings_language: Option<String>,
     #[serde(default = "default_retry_enabled")]
@@ -598,7 +652,9 @@ impl Default for Settings {
             providers: vec![],
             screenshot_translation: ScreenshotTranslationConfig::default(),
             lens: LensConfig::default(),
+            chat: ChatConfig::default(),
             chat_tools: ChatToolsConfig::default(),
+            chat_behavior_migrated_from_lens: false,
             settings_language: Some("zh".to_string()),
             retry_enabled: default_retry_enabled(),
             retry_attempts: default_retry_attempts(),
@@ -621,6 +677,17 @@ impl Default for Settings {
  * 4. 规范化快捷键字符串
  * 5. 确保必要字段不为空
  */
+pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
+    let skill_id = skill_id.trim();
+    if skill_id.is_empty() {
+        return false;
+    }
+    !chat_tools
+        .disabled_skill_ids
+        .iter()
+        .any(|disabled| disabled == skill_id)
+}
+
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
     // 1. 从旧版配置迁移
     if settings.providers.is_empty() {
@@ -860,6 +927,24 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         settings.lens.web_search.search_depth = default_web_search_depth();
     }
 
+    if !settings.chat_behavior_migrated_from_lens {
+        settings.chat.stream_enabled = settings.lens.stream_enabled;
+        settings.chat.thinking_enabled = settings.lens.thinking_enabled;
+        if settings.lens.default_language.trim().is_empty() {
+            // keep chat.default_language empty → inherit chain unchanged
+        } else {
+            settings.chat.default_language = settings.lens.default_language.clone();
+        }
+        settings.chat_behavior_migrated_from_lens = true;
+    }
+    if !matches!(
+        settings.chat.default_language.trim(),
+        "" | "zh" | "zh-Hant" | "en"
+    ) {
+        settings.chat.default_language.clear();
+    }
+    settings.chat.system_prompt = settings.chat.system_prompt.trim().to_string();
+
     settings.chat_tools.max_tool_rounds = settings.chat_tools.max_tool_rounds.clamp(1, 30);
     settings.chat_tools.tool_timeout_ms = settings.chat_tools.tool_timeout_ms.clamp(1_000, 60_000);
     settings.chat_tools.max_tool_output_chars = settings
@@ -895,6 +980,13 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     if settings.chat_tools.skill_script_allowlist.is_empty() {
         settings.chat_tools.skill_script_allowlist = default_skill_script_allowlist();
     }
+    settings.chat_tools.disabled_skill_ids = settings
+        .chat_tools
+        .disabled_skill_ids
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
     for server in &mut settings.chat_tools.servers {
         server.id = server.id.trim().to_string();
         if server.id.is_empty() {
@@ -1129,25 +1221,99 @@ pub fn load_settings(app: &AppHandle) -> Settings {
  * has_image=true 时为视觉助手；为 false 时为通用对话助手（不假设有图片）
  * 风格统一：简短直答、无小标题、思考过程尽量精简
  */
-pub fn default_system_prompt(language: &str, has_image: bool) -> String {
+/// Local system clock for Chat date/time questions. Models must not guess dates from training data.
+pub fn chat_current_datetime_context(language: &str) -> String {
+    let now = Local::now();
+    let weekday = weekday_label(language, now.weekday());
+    if language.starts_with("zh") {
+        format!(
+            "\n\n当前本地时间（系统时钟；回答今天/明天/星期几等日期时间问题必须以此为准，禁止凭记忆臆测）：{}年{}月{}日 {} {:02}:{:02}。",
+            now.year(),
+            now.month(),
+            now.day(),
+            weekday,
+            now.hour(),
+            now.minute()
+        )
+    } else {
+        format!(
+            "\n\nCurrent local time (system clock; use for today/tomorrow/weekday questions—never guess from training data): {}-{:02}-{:02} {} {:02}:{:02}.",
+            now.year(),
+            now.month(),
+            now.day(),
+            weekday,
+            now.hour(),
+            now.minute()
+        )
+    }
+}
+
+fn weekday_label(language: &str, weekday: chrono::Weekday) -> &'static str {
+    if language.starts_with("zh") {
+        match weekday {
+            chrono::Weekday::Mon => "星期一",
+            chrono::Weekday::Tue => "星期二",
+            chrono::Weekday::Wed => "星期三",
+            chrono::Weekday::Thu => "星期四",
+            chrono::Weekday::Fri => "星期五",
+            chrono::Weekday::Sat => "星期六",
+            chrono::Weekday::Sun => "星期日",
+        }
+    } else {
+        match weekday {
+            chrono::Weekday::Mon => "Monday",
+            chrono::Weekday::Tue => "Tuesday",
+            chrono::Weekday::Wed => "Wednesday",
+            chrono::Weekday::Thu => "Thursday",
+            chrono::Weekday::Fri => "Friday",
+            chrono::Weekday::Sat => "Saturday",
+            chrono::Weekday::Sun => "Sunday",
+        }
+    }
+}
+
+/// Lens 默认系统提示（含截图翻译后的视觉问答）：输出紧凑，尽量不输出空行。
+pub fn default_lens_system_prompt(language: &str, has_image: bool) -> String {
     match (language.starts_with("zh"), has_image) {
-    (true, true) => "你是一位智能助手，能够看到用户分享的截图。请将其作为视觉上下文来理解和回答，可以涉及信息提取、概念解释、操作协助或任何相关话题。保持回答简洁直接，自然流畅，不用小标题和编号。输出必须紧凑：不要输出空行；只有在真正需要分隔段落、列表项、表格行、代码块或数学公式时才换行；列表项之间不要留空行。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁，避免反复重述。".to_string(),
-    (true, false) => "你是一位智能助手。直接给出答案，回答简洁、自然流畅，不要小标题或编号。输出必须紧凑：不要输出空行；只有在真正需要分隔段落、列表项、表格行、代码块或数学公式时才换行；列表项之间不要留空行。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁，避免反复重述。".to_string(),
-    (_, true) => "You are a helpful assistant that can see the user's screenshot. Use it as visual context to understand and answer, whether extracting information, explaining concepts, assisting with tasks, or any relevant topic. Keep responses short and natural, with no headings or bullet points unless a list is genuinely useful. Keep output compact: do not output blank lines; use a single newline only when needed for clear paragraph boundaries, list items, table rows, code blocks, or math; never put empty lines between list items. Use LaTeX ($...$ or $$...$$) for math. Think briefly; avoid repeating yourself.".to_string(),
-    (_, false) => "You are a helpful assistant. Answer directly. Keep responses short and natural, with no headings or bullet points unless a list is genuinely useful. Keep output compact: do not output blank lines; use a single newline only when needed for clear paragraph boundaries, list items, table rows, code blocks, or math; never put empty lines between list items. Use LaTeX ($...$ or $$...$$) for math. Think briefly; avoid repeating yourself.".to_string(),
-  }
+        (true, true) => "你是一位智能助手，能够看到用户分享的截图。请将其作为视觉上下文来理解和回答，可以涉及信息提取、概念解释、操作协助或任何相关话题。保持回答简洁直接，自然流畅，不用小标题和编号。输出必须紧凑：不要输出空行；只有在真正需要分隔段落、列表项、表格行、代码块或数学公式时才换行；列表项之间不要留空行。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁，避免反复重述。".to_string(),
+        (true, false) => "你是一位智能助手。直接给出答案，回答简洁、自然流畅，不要小标题或编号。输出必须紧凑：不要输出空行；只有在真正需要分隔段落、列表项、表格行、代码块或数学公式时才换行；列表项之间不要留空行。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁，避免反复重述。".to_string(),
+        (_, true) => "You are a helpful assistant that can see the user's screenshot. Use it as visual context to understand and answer, whether extracting information, explaining concepts, assisting with tasks, or any relevant topic. Keep responses short and natural, with no headings or bullet points unless a list is genuinely useful. Keep output compact: do not output blank lines; use a single newline only when needed for clear paragraph boundaries, list items, table rows, code blocks, or math; never put empty lines between list items. Use LaTeX ($...$ or $$...$$) for math. Think briefly; avoid repeating yourself.".to_string(),
+        (_, false) => "You are a helpful assistant. Answer directly. Keep responses short and natural, with no headings or bullet points unless a list is genuinely useful. Keep output compact: do not output blank lines; use a single newline only when needed for clear paragraph boundaries, list items, table rows, code blocks, or math; never put empty lines between list items. Use LaTeX ($...$ or $$...$$) for math. Think briefly; avoid repeating yourself.".to_string(),
+    }
+}
+
+/// Chat 客户端默认系统提示：允许正常 Markdown（含表格），不强制「不要空行」。
+pub fn default_chat_system_prompt(language: &str, has_image: bool) -> String {
+    match (language.starts_with("zh"), has_image) {
+        (true, true) => "你是一位智能助手，可结合用户提供的图片作答。回答清晰、有条理；可使用 Markdown（表格、列表、代码块等，表格每行单独一行）。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁。".to_string(),
+        (true, false) => "你是一位智能助手。直接、清晰地回答用户问题；可使用 Markdown（表格、列表、代码块等，表格每行单独一行）。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁。".to_string(),
+        (_, true) => "You are a helpful assistant that can use images the user provides. Answer clearly; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string(),
+        (_, false) => "You are a helpful assistant. Answer clearly and directly; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string(),
+    }
+}
+
+/// 兼容旧调用：等同于 [`default_lens_system_prompt`]。
+pub fn default_system_prompt(language: &str, has_image: bool) -> String {
+    default_lens_system_prompt(language, has_image)
 }
 
 /**
- * 关闭思考模式时附加到系统提示词末尾的指令。
- * 提示词层兜底：当 provider 不识别 thinking={type:"disabled"} 字段（如某些第三方代理）时，
- * 仍可让模型按指令省略思考过程。
+ * Lens：关闭思考模式时附加到系统提示词末尾（含紧凑输出要求）。
  */
 pub fn no_think_instruction(language: &str) -> &'static str {
     if language.starts_with("zh") {
         "\n\n严格要求：直接给出最终答案，不要输出任何思考过程、推理步骤或 <think> 内容。保持输出紧凑，不要输出空行。"
     } else {
         "\n\nStrict requirement: output only the final answer; do NOT include any thinking, reasoning steps, or <think> content. Keep output compact; do not output blank lines."
+    }
+}
+
+/// Chat：关闭思考模式时的附加指令（不要求紧凑、不禁止空行）。
+pub fn chat_no_think_instruction(language: &str) -> &'static str {
+    if language.starts_with("zh") {
+        "\n\n严格要求：直接给出最终答案，不要输出任何思考过程、推理步骤或 <think> 内容。"
+    } else {
+        "\n\nStrict requirement: output only the final answer; do NOT include any thinking, reasoning steps, or <think> content."
     }
 }
 
@@ -1756,5 +1922,16 @@ mod tests {
         // 不存在的 provider_id 应被清空 → fallback 到 translator provider/model
         assert_eq!(s.lens.provider_id, "");
         assert_eq!(s.lens.model, "");
+    }
+
+    #[test]
+    fn chat_current_datetime_context_uses_local_clock() {
+        let now = Local::now();
+        let zh = chat_current_datetime_context("zh");
+        assert!(zh.contains("系统时钟"));
+        assert!(zh.contains(&format!("{}年", now.year())));
+        let en = chat_current_datetime_context("en");
+        assert!(en.contains("system clock"));
+        assert!(en.contains(&format!("{}-", now.year())));
     }
 }
