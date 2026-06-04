@@ -948,6 +948,7 @@ async fn complete_assistant_reply(
     let mut provider_tools_unsupported = false;
     let mut tool_planning_finished = false;
     let mut planning_final_message: Option<Value> = None;
+    let mut planning_final_already_streamed = false;
 
     if !tools.is_empty() {
         let mut tried_skill_only_tools = false;
@@ -964,8 +965,9 @@ async fn complete_assistant_reply(
                 );
                 return Err("cancelled".to_string());
             }
-            let planning_result = tokio::select! {
-                result = call_chat_completion_message(
+            let planning_result = if stream_enabled {
+                match stream_scoped_chat_completion_inner(
+                    app,
                     state,
                     &provider,
                     &conversation.model,
@@ -973,22 +975,59 @@ async fn complete_assistant_reply(
                     Some(&tools),
                     retry_attempts,
                     thinking_enabled,
+                    &conversation.id,
+                    &run_id,
+                    &assistant_message_id,
+                    run_generation,
                     "Chat tools planning",
-                ) => result,
-                _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
-                    emit_chat_stream_done(
-                        app,
-                        &conversation.id,
-                        &run_id,
-                        &assistant_message_id,
-                        "cancelled",
-                        "",
-                    );
-                    return Err("cancelled".to_string());
+                    ChatStreamFinishPolicy::WhenNoToolCalls,
+                )
+                .await
+                {
+                    Ok(stream) => {
+                        if stream.cancelled {
+                            return Err("cancelled".to_string());
+                        }
+                        Ok(ChatPlanningStep {
+                            message: stream.to_openai_compatible_message(),
+                            streamed: true,
+                        })
+                    }
+                    Err(err) => Err(err),
+                }
+            } else {
+                tokio::select! {
+                    result = call_chat_completion_message(
+                        state,
+                        &provider,
+                        &conversation.model,
+                        runtime_messages.clone(),
+                        Some(&tools),
+                        retry_attempts,
+                        thinking_enabled,
+                        "Chat tools planning",
+                    ) => result.map(|message| ChatPlanningStep {
+                        message,
+                        streamed: false,
+                    }),
+                    _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
+                        emit_chat_stream_done(
+                            app,
+                            &conversation.id,
+                            &run_id,
+                            &assistant_message_id,
+                            "cancelled",
+                            "",
+                        );
+                        return Err("cancelled".to_string());
+                    }
                 }
             };
             let message = match planning_result {
-                Ok(message) => message,
+                Ok(step) => {
+                    planning_final_already_streamed = step.streamed;
+                    step.message
+                }
                 Err(err) if is_tools_unsupported_error(&err) => {
                     let skill_only: Vec<ChatToolDefinition> = tools
                         .iter()
@@ -1022,15 +1061,18 @@ async fn complete_assistant_reply(
                 planning_final_message = Some(message);
                 break;
             }
+            planning_final_already_streamed = false;
             if let Some(reasoning) = extract_reasoning_content(&message) {
-                emit_chat_stream_delta(
-                    app,
-                    &conversation.id,
-                    &run_id,
-                    &assistant_message_id,
-                    "",
-                    Some(&reasoning),
-                );
+                if !stream_enabled {
+                    emit_chat_stream_delta(
+                        app,
+                        &conversation.id,
+                        &run_id,
+                        &assistant_message_id,
+                        "",
+                        Some(&reasoning),
+                    );
+                }
                 planning_reasoning_parts.push(reasoning);
             }
 
@@ -1133,22 +1175,24 @@ async fn complete_assistant_reply(
     if let Some(message) = planning_final_message {
         let (response, reasoning) =
             final_response_from_planning_message(&message, &planning_reasoning_parts)?;
-        emit_chat_stream_delta(
-            app,
-            &conversation.id,
-            &run_id,
-            &assistant_message_id,
-            &response,
-            None,
-        );
-        emit_chat_stream_done(
-            app,
-            &conversation.id,
-            &run_id,
-            &assistant_message_id,
-            "done",
-            &response,
-        );
+        if !planning_final_already_streamed {
+            emit_chat_stream_delta(
+                app,
+                &conversation.id,
+                &run_id,
+                &assistant_message_id,
+                &response,
+                None,
+            );
+            emit_chat_stream_done(
+                app,
+                &conversation.id,
+                &run_id,
+                &assistant_message_id,
+                "done",
+                &response,
+            );
+        }
         if !generated_api_messages.is_empty() {
             generated_api_messages.push(message);
         }
@@ -2816,6 +2860,17 @@ async fn call_chat_completion_message(
     Ok(output.to_openai_compatible_message())
 }
 
+struct ChatPlanningStep {
+    message: Value,
+    streamed: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ChatStreamFinishPolicy {
+    Always,
+    WhenNoToolCalls,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn stream_scoped_chat_completion(
     app: &AppHandle,
@@ -2830,16 +2885,52 @@ async fn stream_scoped_chat_completion(
     message_id: &str,
     generation: u64,
 ) -> Result<ChatStreamOutput, String> {
-    let request = generate_request_from_openai_messages(
+    stream_scoped_chat_completion_inner(
+        app,
+        state,
+        provider,
         model,
         messages,
         None,
+        retry_attempts,
+        thinking_enabled,
+        conversation_id,
+        run_id,
+        message_id,
+        generation,
+        "Chat stream",
+        ChatStreamFinishPolicy::Always,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_scoped_chat_completion_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    provider: &crate::settings::ModelProvider,
+    model: &str,
+    messages: Vec<Value>,
+    tools: Option<&[ChatToolDefinition]>,
+    retry_attempts: usize,
+    thinking_enabled: bool,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+    label: &str,
+    finish_policy: ChatStreamFinishPolicy,
+) -> Result<ChatStreamOutput, String> {
+    let request = generate_request_from_openai_messages(
+        model,
+        messages,
+        tools,
         GenerateOptions {
             stream: true,
             thinking_enabled,
             ..GenerateOptions::default()
         },
-        "Chat stream",
+        label,
     );
     let accumulator = Arc::new(Mutex::new(ChatStreamAccumulator::default()));
     let mut sink = ChatTauriStreamSink::new(
@@ -2848,6 +2939,7 @@ async fn stream_scoped_chat_completion(
         run_id,
         message_id,
         accumulator.clone(),
+        matches!(finish_policy, ChatStreamFinishPolicy::WhenNoToolCalls),
     );
     let output = tokio::select! {
         result = stream_with_chat_provider(
@@ -2875,19 +2967,45 @@ async fn stream_scoped_chat_completion(
         }
     };
     let snapshot = chat_stream_snapshot(&accumulator);
-    let content = if output.text.trim().is_empty() {
+    let raw_content = if output.text.trim().is_empty() {
         snapshot.content
     } else {
         output.text
     };
-    let cleaned = sanitize_assistant_text_response(content.trim());
-    if cleaned.trim().is_empty() {
-        emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", "");
-        return Err(empty_assistant_response_error("Chat stream"));
-    }
-    emit_chat_stream_done(app, conversation_id, run_id, message_id, "done", &cleaned);
+    let cleaned = sanitize_assistant_text_response(raw_content.trim());
     let reasoning = output.reasoning.unwrap_or(snapshot.reasoning);
-    Ok(ChatStreamOutput::new(cleaned, reasoning, false))
+    let stream_output = ChatStreamOutput::from_generate_output(
+        cleaned,
+        raw_content,
+        reasoning,
+        output.tool_calls,
+        output.finish_reason,
+        false,
+    );
+    let tool_calls_from_stream = !stream_output.tool_calls.is_empty()
+        || !pending_tool_calls_from_dsml(&stream_output.raw_content).is_empty();
+    let should_emit_done = match finish_policy {
+        ChatStreamFinishPolicy::Always => true,
+        ChatStreamFinishPolicy::WhenNoToolCalls => !tool_calls_from_stream,
+    };
+    if stream_output.content.trim().is_empty()
+        && (matches!(finish_policy, ChatStreamFinishPolicy::Always) || !tool_calls_from_stream)
+    {
+        emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", "");
+        return Err(empty_assistant_response_error(label));
+    }
+    if should_emit_done {
+        sink.flush_pending_text();
+        emit_chat_stream_done(
+            app,
+            conversation_id,
+            run_id,
+            message_id,
+            "done",
+            &stream_output.content,
+        );
+    }
+    Ok(stream_output)
 }
 
 async fn generate_with_chat_provider(
@@ -2968,6 +3086,9 @@ struct ChatTauriStreamSink {
     run_id: String,
     message_id: String,
     accumulator: Arc<Mutex<ChatStreamAccumulator>>,
+    buffer_tool_planning_text: bool,
+    text_buffer: String,
+    text_suppressed: bool,
 }
 
 impl ChatTauriStreamSink {
@@ -2977,6 +3098,7 @@ impl ChatTauriStreamSink {
         run_id: &str,
         message_id: &str,
         accumulator: Arc<Mutex<ChatStreamAccumulator>>,
+        buffer_tool_planning_text: bool,
     ) -> Self {
         Self {
             app,
@@ -2984,7 +3106,55 @@ impl ChatTauriStreamSink {
             run_id: run_id.to_string(),
             message_id: message_id.to_string(),
             accumulator,
+            buffer_tool_planning_text,
+            text_buffer: String::new(),
+            text_suppressed: false,
         }
+    }
+
+    fn emit_text_delta(&self, delta: &str) {
+        emit_chat_stream_delta(
+            &self.app,
+            &self.conversation_id,
+            &self.run_id,
+            &self.message_id,
+            delta,
+            None,
+        );
+    }
+
+    fn handle_text_delta(&mut self, delta: String) {
+        self.accumulator
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .content
+            .push_str(&delta);
+
+        if self.text_suppressed {
+            return;
+        }
+        if !self.buffer_tool_planning_text {
+            self.emit_text_delta(&delta);
+            return;
+        }
+
+        self.text_buffer.push_str(&delta);
+        if crate::chat::dsml_tools::contains_dsml_tool_markup(&self.text_buffer) {
+            self.text_buffer.clear();
+            self.text_suppressed = true;
+            return;
+        }
+        if should_flush_tool_planning_text_buffer(&self.text_buffer) {
+            self.flush_pending_text();
+        }
+    }
+
+    fn flush_pending_text(&mut self) {
+        if self.text_suppressed || self.text_buffer.is_empty() {
+            return;
+        }
+        let delta = std::mem::take(&mut self.text_buffer);
+        self.emit_text_delta(&delta);
     }
 }
 
@@ -2992,19 +3162,7 @@ impl StreamSink for ChatTauriStreamSink {
     fn emit(&mut self, part: StreamPart) -> Result<(), ModelError> {
         match part {
             StreamPart::TextDelta { delta } => {
-                self.accumulator
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .content
-                    .push_str(&delta);
-                emit_chat_stream_delta(
-                    &self.app,
-                    &self.conversation_id,
-                    &self.run_id,
-                    &self.message_id,
-                    &delta,
-                    None,
-                );
+                self.handle_text_delta(delta);
             }
             StreamPart::ReasoningDelta { delta } => {
                 self.accumulator
@@ -3032,23 +3190,90 @@ impl StreamSink for ChatTauriStreamSink {
     }
 }
 
+fn should_flush_tool_planning_text_buffer(buffer: &str) -> bool {
+    let trimmed = buffer.trim_start();
+    if trimmed.starts_with('<') && trimmed.len() < 64 {
+        return false;
+    }
+    buffer.chars().count() >= 12 || buffer.contains('\n')
+}
+
 struct ChatStreamOutput {
     content: String,
+    raw_content: String,
     reasoning: Option<String>,
+    tool_calls: Vec<PendingToolCall>,
+    finish_reason: Option<String>,
     cancelled: bool,
 }
 
 impl ChatStreamOutput {
     fn new(content: String, reasoning: String, cancelled: bool) -> Self {
+        Self::from_generate_output(
+            content.clone(),
+            content,
+            reasoning,
+            Vec::new(),
+            None,
+            cancelled,
+        )
+    }
+
+    fn from_generate_output(
+        content: String,
+        raw_content: String,
+        reasoning: String,
+        tool_calls: Vec<PendingToolCall>,
+        finish_reason: Option<String>,
+        cancelled: bool,
+    ) -> Self {
         Self {
             content,
+            raw_content,
             reasoning: if reasoning.trim().is_empty() {
                 None
             } else {
                 Some(reasoning)
             },
+            tool_calls,
+            finish_reason,
             cancelled,
         }
+    }
+
+    fn to_openai_compatible_message(&self) -> Value {
+        let content = if self.raw_content.trim().is_empty() {
+            self.content.clone()
+        } else {
+            self.raw_content.clone()
+        };
+        let mut message = final_assistant_api_message(&content, self.reasoning.as_deref());
+        if !self.tool_calls.is_empty() {
+            message["tool_calls"] = Value::Array(
+                self.tool_calls
+                    .iter()
+                    .map(|call| {
+                        serde_json::json!({
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function_name,
+                                "arguments": call.arguments_raw,
+                            }
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        if let Some(finish_reason) = self
+            .finish_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            message["finish_reason"] = Value::String(finish_reason.to_string());
+        }
+        message
     }
 }
 
@@ -4517,6 +4742,16 @@ mod tests {
             err,
             "Chat tools planning returned an empty assistant response"
         );
+    }
+
+    #[test]
+    fn tool_planning_text_buffer_delays_possible_dsml_prefix() {
+        assert!(!should_flush_tool_planning_text_buffer("<|DSML|"));
+        assert!(!should_flush_tool_planning_text_buffer("   <invoke"));
+        assert!(should_flush_tool_planning_text_buffer(
+            "普通回答已经足够长，可以开始流式显示了"
+        ));
+        assert!(should_flush_tool_planning_text_buffer("first line\n"));
     }
 
     #[test]
