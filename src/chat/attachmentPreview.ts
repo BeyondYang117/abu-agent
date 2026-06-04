@@ -5,16 +5,21 @@ const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS
 
 type AttachmentLike = Pick<Attachment, 'path' | 'name' | 'type'>
 
+function isLocalAttachmentPath(path: string): boolean {
+  return path.includes('/') || path.includes('\\')
+}
+
 export async function loadAttachmentDataUrl(
   attachment: AttachmentLike,
   conversationId?: string | null,
 ): Promise<string | null> {
   if (!isTauriRuntime() || attachment.type !== 'image') return null
+  const previewConversationId = isLocalAttachmentPath(attachment.path) ? null : conversationId
   try {
     const result = await invoke<{ success: boolean; data?: string; error?: string }>(
       'chat_read_attachment',
       {
-        conversationId: conversationId ?? null,
+        conversationId: previewConversationId ?? null,
         path: attachment.path,
       },
     )

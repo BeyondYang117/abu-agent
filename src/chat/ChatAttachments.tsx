@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FileText, Loader2 } from 'lucide-react'
+import { FileText, Loader2, X } from 'lucide-react'
 import { loadAttachmentDataUrl, openAttachment, type DisplayAttachment } from './attachmentPreview'
 
 type ChatAttachmentsProps = {
@@ -43,13 +43,14 @@ function ImagePreview({
     }
   }, [attachment, conversationId])
 
+  const isComposer = variant === 'composer'
   const loadingClass =
-    variant === 'composer'
-      ? 'flex min-h-[72px] min-w-[120px] items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800'
+    isComposer
+      ? 'flex h-20 w-28 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800'
       : 'flex min-h-[72px] min-w-[120px] items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.06]'
 
   return (
-    <div className="relative inline-block max-w-full">
+    <div className={isComposer ? 'relative h-20 w-28 overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-800' : 'relative inline-block max-w-full'}>
       {loading && (
         <div className={loadingClass}>
           <Loader2 size={14} className="animate-spin text-neutral-400" />
@@ -59,7 +60,11 @@ function ImagePreview({
         <img
           src={src}
           alt=""
-          className="block max-h-72 max-w-[min(100%,420px)] rounded-xl object-contain"
+          className={
+            isComposer
+              ? 'h-full w-full rounded-xl object-contain'
+              : 'block max-h-72 max-w-[min(100%,420px)] rounded-xl object-contain'
+          }
           loading="lazy"
         />
       )}
@@ -128,9 +133,9 @@ export function ChatAttachments({
   return (
     <div className={variant === 'composer' ? 'space-y-2' : 'mt-2 space-y-2'}>
       {images.length > 0 && (
-        <div className="flex flex-col gap-2">
+        <div className={variant === 'composer' ? 'flex flex-wrap gap-2' : 'flex flex-col gap-2'}>
           {images.map((attachment) => (
-            <div key={attachment.id} className="relative">
+            <div key={attachment.id} className={variant === 'composer' ? 'relative h-20 w-28 shrink-0' : 'relative'}>
               <ImagePreview
                 attachment={attachment}
                 conversationId={conversationId}
@@ -140,9 +145,15 @@ export function ChatAttachments({
                 <button
                   type="button"
                   onClick={() => onRemove(attachment.id)}
-                  className="absolute right-2 top-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm hover:bg-black/65"
+                  className={
+                    variant === 'composer'
+                      ? 'absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-950/90 text-white shadow-sm transition-colors hover:bg-neutral-800'
+                      : 'absolute right-2 top-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm hover:bg-black/65'
+                  }
+                  title="移除图片"
+                  aria-label="移除图片"
                 >
-                  移除
+                  {variant === 'composer' ? <X size={12} strokeWidth={2.4} /> : '移除'}
                 </button>
               ) : null}
             </div>
