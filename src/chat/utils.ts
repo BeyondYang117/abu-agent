@@ -69,18 +69,18 @@ export function truncateText(text: string, maxLength: number): string {
   return text.slice(0, maxLength) + '...'
 }
 
-/** 空对话页主标题：每次进入新的空会话时随机展示一条 */
+/** Empty-chat hero headline: pick one at random for each new empty conversation */
 export const CHAT_EMPTY_GREETINGS = [
-  '嗨，想做些什么',
-  '我们快进入正题吧',
-  '我们应该关注什么',
-  '需要我帮你做点什么',
-  '说说你现在的目标',
-  '先从哪件事开始？',
-  '今天想解决什么问题？',
-  '有什么想让我一起想的？',
-  '来吧，把任务交给我',
-  '你现在最想搞定哪件？',
+  'Hey — what are we doing?',
+  "Let's get to it.",
+  'What should we focus on?',
+  'Need a hand with something?',
+  "What's the goal?",
+  'Where do we start?',
+  'What are you trying to solve today?',
+  'What should we think through together?',
+  "Send it — I've got you.",
+  "What's top of mind?",
 ] as const
 
 export function pickRandomChatEmptyGreeting(): string {

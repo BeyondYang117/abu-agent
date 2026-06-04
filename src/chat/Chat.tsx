@@ -32,6 +32,7 @@ import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { estimateTokens } from '../lens/markdown'
 import { forgetRememberedChatRoute } from './persistence'
 import { runPythonInSandbox } from './pyodideRunner'
+import { TypewriterText } from './TypewriterText'
 import { pickRandomChatEmptyGreeting } from './utils'
 
 type ChatView = 'conversation' | 'settings' | 'assistants'
@@ -1307,7 +1308,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       text: pickRandomChatEmptyGreeting(),
     }),
     [emptyHeroGreetingKey],
-  ).text
+  )
 
   const handleCollapseSidebar = useCallback(() => {
     setSidebarCollapsed(true)
@@ -1458,14 +1459,29 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
             <div className="flex min-h-0 flex-1 flex-col">
               {showEmptyHero ? (
-                <div className="flex flex-1 flex-col items-center justify-center px-6 pb-16">
-                  <div className="w-full max-w-3xl space-y-8">
-                    <h2 className="chat-empty-hero-title text-center text-[1.75rem] leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]">
-                      {currentAssistantSnapshot
-                        ? currentAssistantSnapshot.name
-                        : selectedProject
-                          ? `开始「${selectedProject.name}」`
-                          : emptyHeroGreeting}
+                <div className="chat-empty-hero flex flex-1 flex-col items-center justify-center px-6 pb-16">
+                  <div className="relative z-10 w-full max-w-3xl space-y-8">
+                    <h2
+                      className="chat-empty-hero-title text-center text-[1.75rem] leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]"
+                      aria-label={
+                        currentAssistantSnapshot
+                          ? currentAssistantSnapshot.name
+                          : selectedProject
+                            ? `Start in “${selectedProject.name}”`
+                            : emptyHeroGreeting.text
+                      }
+                    >
+                      {currentAssistantSnapshot ? (
+                        currentAssistantSnapshot.name
+                      ) : selectedProject ? (
+                        `Start in “${selectedProject.name}”`
+                      ) : (
+                        <TypewriterText
+                          text={emptyHeroGreeting.text}
+                          resetKey={emptyHeroGreeting.key}
+                          active={showEmptyHero}
+                        />
+                      )}
                     </h2>
                     {(currentAssistantSnapshot?.greeting || currentAssistantSnapshot?.conversation_starters?.length) && (
                       <div className="space-y-3 text-center">

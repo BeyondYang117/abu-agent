@@ -257,10 +257,61 @@ body {
   overflow: hidden;
 }
 
+/* 空对话页：点阵向中心渐隐（preview 03-dot-grid-fade） */
+.chat-empty-hero {
+  background-color: #ffffff;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(0, 0, 0, 0.07) 1px, transparent 0),
+    radial-gradient(
+      ellipse 85% 75% at 50% 42%,
+      rgba(255, 255, 255, 1) 0%,
+      rgba(255, 255, 255, 0.88) 45%,
+      rgba(255, 255, 255, 0.4) 100%
+    );
+  background-size: 20px 20px, 100% 100%;
+  background-position: 0 0, center;
+}
+
+.dark .chat-empty-hero {
+  background-color: #212121;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.08) 1px, transparent 0),
+    radial-gradient(
+      ellipse 85% 75% at 50% 42%,
+      rgba(33, 33, 33, 1) 0%,
+      rgba(33, 33, 33, 0.88) 45%,
+      rgba(33, 33, 33, 0.35) 100%
+    );
+}
+
 .chat-empty-hero-title {
   font-family: inherit;
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+
+.chat-typewriter-cursor {
+  display: inline-block;
+  margin-left: 0.02em;
+  font-weight: 400;
+  color: var(--tw-prose-body, #a3a3a3);
+  animation: chat-typewriter-blink 1s step-end infinite;
+}
+
+.dark .chat-typewriter-cursor {
+  color: #737373;
+}
+
+@keyframes chat-typewriter-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-typewriter-cursor {
+    display: none;
+    animation: none;
+  }
 }
 
 .chat-window-shell button:focus {
