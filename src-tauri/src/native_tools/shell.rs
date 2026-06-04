@@ -35,14 +35,13 @@ pub async fn run_command(
         }
     }
 
-    let cwd = if let Some(cwd_arg) = arguments.get("cwd").and_then(|v| v.as_str()) {
-        resolve_workspace_path(cwd_arg, workspace_roots)?
-    } else {
-        user_home_dir()?
-    };
+    let cwd = resolve_command_cwd(arguments, workspace_roots)?;
 
     if !cwd.is_dir() {
-        return Err(format!("Working directory is not a directory: {}", cwd.display()));
+        return Err(format!(
+            "Working directory is not a directory: {}",
+            cwd.display()
+        ));
     }
 
     let timeout_ms = arguments
@@ -52,7 +51,27 @@ pub async fn run_command(
         .clamp(1_000, 300_000);
 
     let output = run_shell_command(command, cwd, timeout_ms).await?;
-    format_command_output(&output)
+    let formatted = format_command_output(&output);
+    if let Some(code) = output.status_code {
+        if code != 0 {
+            return Err(formatted);
+        }
+    }
+    Ok(formatted)
+}
+
+fn resolve_command_cwd(arguments: &Value, workspace_roots: &[String]) -> Result<PathBuf, String> {
+    if let Some(cwd_arg) = arguments.get("cwd").and_then(|v| v.as_str()) {
+        resolve_workspace_path(cwd_arg, workspace_roots)
+    } else if let Some(root) = workspace_roots
+        .iter()
+        .map(|root| root.trim())
+        .find(|root| !root.is_empty())
+    {
+        resolve_workspace_path(root, workspace_roots)
+    } else {
+        user_home_dir()
+    }
 }
 
 #[derive(Debug)]
@@ -104,7 +123,7 @@ async fn run_shell_command(
     })
 }
 
-fn format_command_output(output: &CommandOutput) -> Result<String, String> {
+fn format_command_output(output: &CommandOutput) -> String {
     let mut out = String::new();
     if let Some(code) = output.status_code {
         out.push_str(&format!("exit_code: {code}\n"));
@@ -126,5 +145,35 @@ fn format_command_output(output: &CommandOutput) -> Result<String, String> {
     if out.trim().is_empty() {
         out.push_str("(no output)\n");
     }
-    Ok(out)
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_cwd_uses_first_workspace_root_when_configured() {
+        let home = user_home_dir().expect("home should be available in tests");
+        let root = home.join(".kivio-chat-test-root");
+        let args = serde_json::json!({ "command": "pwd" });
+        let cwd = resolve_command_cwd(&args, &[root.to_string_lossy().into_owned()])
+            .expect("workspace root should resolve");
+
+        assert_eq!(cwd, root);
+    }
+
+    #[test]
+    fn format_command_output_includes_nonzero_exit_code() {
+        let output = CommandOutput {
+            status_code: Some(1),
+            stdout: String::new(),
+            stderr: "boom\n".to_string(),
+        };
+
+        let formatted = format_command_output(&output);
+
+        assert!(formatted.contains("exit_code: 1"));
+        assert!(formatted.contains("stderr:\nboom"));
+    }
 }

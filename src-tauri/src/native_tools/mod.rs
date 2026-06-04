@@ -14,7 +14,12 @@ use std::{
 pub const MAX_READ_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Block writes/edits under these path segments (relative to home).
-const WRITE_BLOCKLIST_SEGMENTS: &[&str] = &[".ssh", ".gnupg", "Library/Keychains", "Library/Application Support/Keychain"];
+const WRITE_BLOCKLIST_SEGMENTS: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    "Library/Keychains",
+    "Library/Application Support/Keychain",
+];
 
 pub fn user_home_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
@@ -37,7 +42,7 @@ pub fn resolve_workspace_path(
 ) -> Result<PathBuf, String> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
-        return Err("path is empty".to_string());
+        return Err("路径为空，请提供要访问的文件或目录路径。".to_string());
     }
 
     let home = user_home_dir()?;
@@ -54,13 +59,13 @@ pub fn resolve_workspace_path(
 
     for component in candidate.components() {
         if matches!(component, Component::ParentDir) {
-            return Err("path must not contain '..'".to_string());
+            return Err("路径不能包含 '..'，请使用明确的文件路径。".to_string());
         }
     }
 
     let canonical = fs_canonicalize_existing_or_self(&candidate)?;
     if !canonical.starts_with(&home_canon) {
-        return Err("path must be under the user home directory".to_string());
+        return Err("路径不在允许范围内：只能访问用户主目录下的文件。".to_string());
     }
 
     if !workspace_roots.is_empty() {
@@ -78,7 +83,7 @@ pub fn resolve_workspace_path(
         });
         if !allowed {
             return Err(
-                "path is outside configured workspace roots (Settings → MCP → Built-in tools)"
+                "路径不在允许的工作区根目录内，请到设置 > MCP > Kivio 内置工具检查 workspaceRoots。"
                     .to_string(),
             );
         }
@@ -94,16 +99,13 @@ pub fn assert_writable_path(path: &Path) -> Result<(), String> {
         fs::canonicalize(path).map_err(|err| format!("Resolve path failed: {err}"))?
     } else if let Some(parent) = path.parent() {
         let parent_canon = fs_canonicalize_existing_or_self(parent)?;
-        parent_canon.join(
-            path.file_name()
-                .ok_or_else(|| "Invalid path".to_string())?,
-        )
+        parent_canon.join(path.file_name().ok_or_else(|| "Invalid path".to_string())?)
     } else {
         return Err("Invalid path".to_string());
     };
 
     if !canonical.starts_with(&home_canon) {
-        return Err("path must be under the user home directory".to_string());
+        return Err("路径不在允许范围内：只能写入用户主目录下的文件。".to_string());
     }
 
     let relative = canonical
@@ -112,7 +114,7 @@ pub fn assert_writable_path(path: &Path) -> Result<(), String> {
     let rel = relative.to_string_lossy();
     for blocked in WRITE_BLOCKLIST_SEGMENTS {
         if rel.as_ref() == *blocked || rel.starts_with(&format!("{blocked}/")) {
-            return Err(format!("writes are blocked under {blocked}"));
+            return Err(format!("出于安全策略，禁止写入 {blocked} 目录。"));
         }
     }
     Ok(())

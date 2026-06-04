@@ -4,6 +4,7 @@ import { ChatAttachments } from './ChatAttachments'
 import { ChatMarkdown } from './ChatMarkdown'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
+import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { ChatMessage } from './types'
 
 interface MessageBubbleProps {
@@ -87,10 +88,11 @@ export function MessageBubble({
               工具调用
             </div>
             {toolCalls.map((toolCall, index) => (
-              <ToolCallBlock
+              <ToolCallErrorBoundary
                 key={toolCall.id || toolCall.call_id || toolCall.callId || index}
-                toolCall={toolCall}
-              />
+              >
+                <ToolCallBlock toolCall={toolCall} />
+              </ToolCallErrorBoundary>
             ))}
           </section>
         )}

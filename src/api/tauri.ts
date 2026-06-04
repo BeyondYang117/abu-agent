@@ -60,6 +60,60 @@ export type ChatStreamPayload = {
   full?: string
 }
 
+export type ChatContextUsageSegment = {
+  id: string
+  label: string
+  estimated_tokens?: number
+  estimatedTokens?: number
+  color?: string | null
+}
+
+export type ChatContextSummary = {
+  id: string
+  content: string
+  source_message_ids?: string[]
+  sourceMessageIds?: string[]
+  source_until_message_id?: string
+  sourceUntilMessageId?: string
+  token_estimate_before?: number
+  tokenEstimateBefore?: number
+  token_estimate_after?: number
+  tokenEstimateAfter?: number
+  created_at?: number
+  createdAt?: number
+  provider_id?: string
+  providerId?: string
+  model?: string
+  stale?: boolean
+}
+
+export type ChatContextState = {
+  estimated_input_tokens?: number
+  estimatedInputTokens?: number
+  context_window_tokens?: number | null
+  contextWindowTokens?: number | null
+  context_window_estimated?: boolean
+  contextWindowEstimated?: boolean
+  usage_ratio?: number | null
+  usageRatio?: number | null
+  status?: string
+  segments?: ChatContextUsageSegment[]
+  last_measured_at?: number
+  lastMeasuredAt?: number
+  last_compressed_at?: number | null
+  lastCompressedAt?: number | null
+  compressed_message_count?: number
+  compressedMessageCount?: number
+  summary?: ChatContextSummary | null
+  warning?: string | null
+  warningMessage?: string | null
+}
+
+export type ChatContextPayload = {
+  conversationId: string
+  contextState: ChatContextState
+}
+
 export type ChatToolStatus =
   | 'pending'
   | 'running'
@@ -234,6 +288,25 @@ export type LensWindowInfo = {
   height: number
 }
 
+// 模型能力与定价信息（来自内置数据库或用户自定义）
+export type ModelInfo = {
+  displayName?: string
+  contextWindow?: number
+  maxOutput?: number
+  capabilities?: {
+    vision?: boolean
+    functionCalling?: boolean
+    reasoning?: boolean
+    streaming?: boolean
+    webSearch?: boolean
+  }
+  pricing?: {
+    input?: number
+    output?: number
+    cachedInput?: number
+  }
+}
+
 // AI 模型提供商配置
 // apiKeys 支持多 key failover：第一个为主 key，其余为备用 key；
 // 当某个 key 触发限流/配额/鉴权失败时后端会自动切下一个。
@@ -246,6 +319,7 @@ export type ModelProvider = {
   enabledModels: string[]
   supportsTools: boolean
   apiFormat: string
+  modelOverrides?: Record<string, ModelInfo>
 }
 
 // 提供商连接测试输入（支持使用未保存的配置进行测试）
@@ -253,6 +327,17 @@ export type ProviderConnectionInput = {
   id?: string
   baseUrl: string
   apiKeys: string[]
+}
+
+export type DefaultModelSelection = {
+  providerId: string
+  model: string
+}
+
+export type DefaultModelsConfig = {
+  chat: DefaultModelSelection
+  titleSummary: DefaultModelSelection
+  compression: DefaultModelSelection
 }
 
 // 应用设置数据结构
@@ -267,6 +352,7 @@ export type Settings = {
   translatorModel: string
   chatProviderId: string
   chatModel: string
+  defaultModels: DefaultModelsConfig
   chat?: ChatConfig
   translatorPrompt?: string
   providers: ModelProvider[]
@@ -402,8 +488,58 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
   }
 }
 
+function normalizeDefaultModelSelection(selection?: Partial<DefaultModelSelection> | null): DefaultModelSelection {
+  return {
+    providerId: selection?.providerId ?? '',
+    model: selection?.model ?? '',
+  }
+}
+
+function normalizeDefaultModels(
+  config?: Partial<DefaultModelsConfig> | null,
+  legacyChat?: Partial<DefaultModelSelection> | null,
+): DefaultModelsConfig {
+  return {
+    chat: normalizeDefaultModelSelection(config?.chat ?? legacyChat),
+    titleSummary: normalizeDefaultModelSelection(config?.titleSummary),
+    compression: normalizeDefaultModelSelection(config?.compression),
+  }
+}
+
+function isDefaultModelConfigured(selection: DefaultModelSelection): boolean {
+  return selection.providerId.trim() !== ''
+}
+
+function prepareSettingsForSave(settings: Settings): Settings {
+  const current = settings as Partial<Settings>
+  const defaultModels = normalizeDefaultModels(current.defaultModels, {
+    providerId: current.chatProviderId ?? '',
+    model: current.chatModel ?? '',
+  })
+
+  return {
+    ...settings,
+    defaultModels,
+    chatProviderId: defaultModels.chat.providerId,
+    chatModel: defaultModels.chat.model,
+  }
+}
+
 function normalizeSettings(settings: Settings): Settings {
   const current = settings as Partial<Settings>
+  const defaultModels = normalizeDefaultModels(current.defaultModels, {
+    providerId: current.chatProviderId ?? '',
+    model: current.chatModel ?? '',
+  })
+  const effectiveChatModel = isDefaultModelConfigured(defaultModels.chat)
+    ? defaultModels.chat
+    : normalizeDefaultModelSelection(
+      (current.chatProviderId?.trim()
+        ? { providerId: current.chatProviderId, model: current.chatModel ?? '' }
+        : current.lens?.providerId?.trim()
+          ? { providerId: current.lens.providerId, model: current.lens.model ?? '' }
+          : { providerId: current.translatorProviderId ?? '', model: current.translatorModel ?? '' }),
+    )
   return {
     ...settings,
     hotkey: current.hotkey ?? 'CommandOrControl+Alt+T',
@@ -414,8 +550,9 @@ function normalizeSettings(settings: Settings): Settings {
     launchAtStartup: current.launchAtStartup ?? false,
     translatorProviderId: current.translatorProviderId ?? '',
     translatorModel: current.translatorModel ?? '',
-    chatProviderId: current.chatProviderId ?? current.lens?.providerId ?? current.translatorProviderId ?? '',
-    chatModel: current.chatModel ?? current.lens?.model ?? current.translatorModel ?? '',
+    chatProviderId: effectiveChatModel.providerId,
+    chatModel: effectiveChatModel.model,
+    defaultModels,
     chat: {
       streamEnabled: current.chat?.streamEnabled ?? current.lens?.streamEnabled ?? true,
       thinkingEnabled: current.chat?.thinkingEnabled ?? current.lens?.thinkingEnabled ?? true,
@@ -512,7 +649,8 @@ export const api = {
   // 设置相关
   getSettings: async () => normalizeSettings(await invoke<Settings>('get_settings')),
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
-  saveSettings: async (settings: Settings) => normalizeSettings(await invoke<Settings>('save_settings', { settings })),
+  saveSettings: async (settings: Settings) =>
+    normalizeSettings(await invoke<Settings>('save_settings', { settings: prepareSettingsForSave(settings) })),
 
   // 提供商相关
   fetchModels: (providerId: string, provider?: ProviderConnectionInput) =>
@@ -590,6 +728,10 @@ export const api = {
   onChatStream: (listener: (payload: ChatStreamPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatStreamPayload>('chat-stream', (payload) => listener(payload))
+  },
+  onChatContext: (listener: (payload: ChatContextPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatContextPayload>('chat-context', (payload) => listener(payload))
   },
   onChatTool: (listener: (payload: ChatToolProgressPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})

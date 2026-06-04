@@ -1,6 +1,63 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+fn default_context_usage_status() -> String {
+    "unknown".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextUsageSegment {
+    pub id: String,
+    pub label: String,
+    pub estimated_tokens: usize,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationContextSummary {
+    pub id: String,
+    pub content: String,
+    #[serde(default)]
+    pub source_message_ids: Vec<String>,
+    pub source_until_message_id: String,
+    pub token_estimate_before: usize,
+    pub token_estimate_after: usize,
+    pub created_at: i64,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ConversationContextState {
+    #[serde(default)]
+    pub estimated_input_tokens: usize,
+    #[serde(default)]
+    pub context_window_tokens: Option<usize>,
+    #[serde(default)]
+    pub context_window_estimated: bool,
+    #[serde(default)]
+    pub usage_ratio: Option<f32>,
+    #[serde(default = "default_context_usage_status")]
+    pub status: String,
+    #[serde(default)]
+    pub segments: Vec<ContextUsageSegment>,
+    #[serde(default)]
+    pub last_measured_at: i64,
+    #[serde(default)]
+    pub last_compressed_at: Option<i64>,
+    #[serde(default)]
+    pub compressed_message_count: usize,
+    #[serde(default)]
+    pub summary: Option<ConversationContextSummary>,
+    #[serde(default)]
+    pub warning: Option<String>,
+}
+
 /// 工具调用状态（保存在 assistant message metadata 中）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +148,8 @@ pub struct Conversation {
     pub pinned: bool,
     #[serde(default)]
     pub folder: Option<String>,
+    #[serde(default)]
+    pub context_state: ConversationContextState,
 }
 
 /// 对话列表项（index.json 中的元数据）

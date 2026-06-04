@@ -22,10 +22,7 @@ pub fn build_anthropic_headers(api_key: &str) -> Result<HeaderMap, String> {
 
 /// 构造 Anthropic Messages API URL。
 pub fn build_anthropic_url(base_url: &str) -> String {
-    format!(
-        "{}/messages",
-        base_url.trim_end_matches('/')
-    )
+    format!("{}/messages", base_url.trim_end_matches('/'))
 }
 
 /// 将 OpenAI 格式的 messages 转换为 Anthropic 格式。
@@ -76,10 +73,7 @@ pub fn convert_tools_to_anthropic(tools: &[Value]) -> Vec<Value> {
     for tool in tools {
         // OpenAI 格式
         if let Some(function) = tool.get("function") {
-            let name = function
-                .get("name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("");
+            let name = function.get("name").and_then(|n| n.as_str()).unwrap_or("");
             if name.is_empty() {
                 continue;
             }
@@ -159,6 +153,7 @@ pub fn parse_anthropic_response(response: &Value) -> AnthropicParsedResponse {
                         function_name: name,
                         arguments: input,
                         arguments_raw,
+                        arguments_parse_error: None,
                     });
                 }
                 _ => {}
@@ -287,16 +282,17 @@ pub fn assemble_tool_call_from_stream(
     input_json_parts: &[String],
 ) -> PendingToolCall {
     let raw = input_json_parts.join("");
-    let arguments: Value = if raw.is_empty() {
-        Value::Object(serde_json::Map::new())
+    let (arguments, arguments_parse_error) = if raw.is_empty() {
+        (Value::Object(serde_json::Map::new()), None)
     } else {
-        serde_json::from_str(&raw).unwrap_or(Value::Null)
+        crate::chat::commands::parse_tool_arguments(&raw)
     };
     PendingToolCall {
         id: id.to_string(),
         function_name: name.to_string(),
         arguments,
         arguments_raw: raw,
+        arguments_parse_error,
     }
 }
 
@@ -404,7 +400,11 @@ fn convert_assistant_message(msg: &Value) -> Option<Value> {
     }
 
     // 文本内容
-    if let Some(content) = msg.get("content").and_then(|c| c.as_str()).filter(|c| !c.is_empty()) {
+    if let Some(content) = msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+    {
         blocks.push(serde_json::json!({
             "type": "text",
             "text": content
@@ -424,8 +424,7 @@ fn convert_assistant_message(msg: &Value) -> Option<Value> {
                 .and_then(|f| f.get("arguments"))
                 .and_then(|a| a.as_str())
                 .unwrap_or("{}");
-            let input: Value =
-                serde_json::from_str(arguments_raw).unwrap_or(Value::Null);
+            let input: Value = serde_json::from_str(arguments_raw).unwrap_or(Value::Null);
 
             blocks.push(serde_json::json!({
                 "type": "tool_use",
@@ -455,10 +454,7 @@ fn convert_tool_result_message(msg: &Value, output: &mut Vec<Value>) {
         .get("tool_call_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let content = msg
-        .get("content")
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
+    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
 
     // Anthropic 要求 tool_result 放在 user 消息中
     // 尝试追加到上一个 user 消息，否则新建
@@ -525,13 +521,13 @@ fn normalize_schema(schema: Value) -> Value {
     // Anthropic 不支持 nullable union，简化 anyOf: [{type: "string"}, {type: "null"}]
     if let Some(any_of) = schema.get("anyOf").and_then(|a| a.as_array()) {
         if any_of.len() == 2 {
-            let has_null = any_of.iter().any(|item| {
-                item.get("type").and_then(|t| t.as_str()) == Some("null")
-            });
+            let has_null = any_of
+                .iter()
+                .any(|item| item.get("type").and_then(|t| t.as_str()) == Some("null"));
             if has_null {
-                let non_null = any_of.iter().find(|item| {
-                    item.get("type").and_then(|t| t.as_str()) != Some("null")
-                });
+                let non_null = any_of
+                    .iter()
+                    .find(|item| item.get("type").and_then(|t| t.as_str()) != Some("null"));
                 if let Some(inner) = non_null {
                     let mut result = inner.clone();
                     // 保留原始字段

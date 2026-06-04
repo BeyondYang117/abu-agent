@@ -2,9 +2,7 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::{
-    assert_writable_path, resolve_workspace_path, MAX_READ_FILE_BYTES,
-};
+use super::{assert_writable_path, resolve_workspace_path, MAX_READ_FILE_BYTES};
 
 pub fn read_file(workspace_roots: &[String], arguments: &Value) -> Result<String, String> {
     let path = arguments
@@ -13,7 +11,7 @@ pub fn read_file(workspace_roots: &[String], arguments: &Value) -> Result<String
         .ok_or_else(|| "read_file requires path".to_string())?;
     let full = resolve_workspace_path(path, workspace_roots)?;
     if !full.is_file() {
-        return Err(format!("Not a file: {path}"));
+        return Err(format!("不是可读取的文件: {path}"));
     }
     let metadata = fs::metadata(&full).map_err(|err| format!("Read metadata failed: {err}"))?;
     if metadata.len() > MAX_READ_FILE_BYTES {
@@ -61,7 +59,11 @@ pub fn write_file(workspace_roots: &[String], arguments: &Value) -> Result<Strin
         fs::create_dir_all(parent).map_err(|err| format!("Create parent dirs failed: {err}"))?;
     }
     fs::write(&full, content).map_err(|err| format!("Write file failed: {err}"))?;
-    Ok(format!("Wrote {} bytes to {}", content.len(), full.display()))
+    Ok(format!(
+        "Wrote {} bytes to {}",
+        content.len(),
+        full.display()
+    ))
 }
 
 pub fn edit_file(workspace_roots: &[String], arguments: &Value) -> Result<String, String> {
@@ -85,7 +87,7 @@ pub fn edit_file(workspace_roots: &[String], arguments: &Value) -> Result<String
     let full = resolve_workspace_path(path, workspace_roots)?;
     assert_writable_path(&full)?;
     if !full.is_file() {
-        return Err(format!("Not a file: {path}"));
+        return Err(format!("不是可编辑的文件: {path}"));
     }
 
     let content = fs::read_to_string(&full).map_err(|err| format!("Read file failed: {err}"))?;

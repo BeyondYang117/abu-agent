@@ -153,6 +153,14 @@ function getResultPreview(toolCall: ToolCallRecord): string {
   return formatToolResultPreview(raw)
 }
 
+function getRunningPreview(toolCall: ToolCallRecord): string {
+  const raw = toolCall.tool_name || toolCall.toolName || toolCall.name || ''
+  if (raw === 'run_python') {
+    return '正在加载 Python 环境…'
+  }
+  return ''
+}
+
 function StatusIcon({ status }: { status: ToolCallStatus }) {
   if (status === 'running') {
     return <Loader2 className="shrink-0 animate-spin" size={12} />
@@ -193,7 +201,7 @@ export function ToolCallBlock({
   const argumentPreview = useMemo(() => getArgumentPreview(toolCall), [toolCall])
   const resultPreview = useMemo(() => getResultPreview(toolCall), [toolCall])
   const error = toolCall.error ? compactText(toolCall.error, 260) : ''
-  const rowPreview = error || resultPreview || argumentPreview
+  const rowPreview = error || resultPreview || (status === 'running' ? getRunningPreview(toolCall) : '') || argumentPreview
   const hasDetails = Boolean(argumentPreview || resultPreview || error)
 
   return (

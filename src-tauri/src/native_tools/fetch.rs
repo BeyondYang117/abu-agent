@@ -39,7 +39,10 @@ pub async fn web_fetch(http: &Client, arguments: &Value) -> Result<String, Strin
         .await
         .map_err(|err| format!("Read body failed: {err}"))?;
     if bytes.len() > MAX_FETCH_BYTES {
-        return Err(format!("Response too large (max {} bytes)", MAX_FETCH_BYTES));
+        return Err(format!(
+            "Response too large (max {} bytes)",
+            MAX_FETCH_BYTES
+        ));
     }
 
     let body = String::from_utf8_lossy(&bytes).into_owned();

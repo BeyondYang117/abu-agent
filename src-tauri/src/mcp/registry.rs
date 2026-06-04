@@ -397,19 +397,13 @@ async fn call_native_tool(
                 raw,
             });
         }
-        "web_fetch" => {
-            crate::native_tools::web_fetch(&state.http, &arguments).await?
-        }
+        "web_fetch" => crate::native_tools::web_fetch(&state.http, &arguments).await?,
         "read_file" => crate::native_tools::read_file(roots, &arguments)?,
         "write_file" => crate::native_tools::write_file(roots, &arguments)?,
         "edit_file" => crate::native_tools::edit_file(roots, &arguments)?,
         "run_command" => {
-            crate::native_tools::run_command(
-                roots,
-                settings.chat_tools.tool_timeout_ms,
-                &arguments,
-            )
-            .await?
+            crate::native_tools::run_command(roots, settings.chat_tools.tool_timeout_ms, &arguments)
+                .await?
         }
         "run_python" => run_python_via_pyodide(app, state, &settings, &arguments).await?,
         other => return Err(format!("Unknown native tool: {other}")),
@@ -445,7 +439,11 @@ async fn run_python_via_pyodide(
         pending.insert(run_id.clone(), tx);
     }
 
-    let timeout_ms = settings.chat_tools.tool_timeout_ms.min(300_000);
+    let timeout_ms = arguments
+        .get("timeout_ms")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(settings.chat_tools.tool_timeout_ms)
+        .clamp(1_000, 300_000);
     let emit_result = app.emit(
         "chat-run-python",
         serde_json::json!({
@@ -463,11 +461,8 @@ async fn run_python_via_pyodide(
         return Err(format!("Failed to start Python runner: {err}"));
     }
 
-    let wait = tokio::time::timeout(
-        Duration::from_millis(timeout_ms.saturating_add(5_000)),
-        rx,
-    )
-    .await;
+    let wait =
+        tokio::time::timeout(Duration::from_millis(timeout_ms.saturating_add(5_000)), rx).await;
 
     match wait {
         Ok(Ok((content, is_error))) => {

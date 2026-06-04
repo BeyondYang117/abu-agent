@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
 
-mod api;
 mod anthropic_adapter;
+mod api;
 mod apple_intelligence;
 mod capture_geometry;
 mod chat;
@@ -251,6 +251,8 @@ fn main() {
             chat::commands::chat_get_conversations,
             chat::commands::chat_get_conversation,
             chat::commands::chat_create_conversation,
+            chat::commands::chat_get_context_stats,
+            chat::commands::chat_compress_context,
             chat::commands::chat_send_message,
             chat::commands::chat_cancel_stream,
             chat::commands::chat_confirm_tool_call,

@@ -252,7 +252,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "run_command".to_string(),
-        description: "Run a shell command (build, test, etc.) in a working directory under the user home. Requires user approval.".to_string(),
+        description: "Run a shell command (build, test, etc.) in a working directory under the user home. Requires user approval. A non-zero exit code is returned as a tool error with stdout/stderr.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -273,14 +273,15 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox (no host filesystem or network). stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox (no host filesystem or network). Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported. stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "code": { "type": "string", "description": "Python source code" }
+                "code": { "type": "string", "description": "Python source code" },
+                "timeout_ms": { "type": "integer", "description": "Timeout in ms (optional, max 300000)" }
             },
             "required": ["code"]
         }),
@@ -292,7 +293,8 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__web_fetch".to_string(),
         name: "web_fetch".to_string(),
-        description: "Fetch readable text from an HTTPS URL (HTML is stripped to plain text).".to_string(),
+        description: "Fetch readable text from an HTTPS URL (HTML is stripped to plain text)."
+            .to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),

@@ -11,6 +11,7 @@ import {
   api,
   type Settings as SettingsType,
   type ModelProvider,
+  type ModelInfo,
   type DefaultPromptTemplates,
   type PermissionStatus,
   type UpdateInfo,
@@ -28,6 +29,8 @@ import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
 import { ModelPairSelect } from './ModelPairSelect'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
+import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
+import { resolveModelInfo } from '../data/modelMatching'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
 import {
   Toggle, Select, Input, TextArea, Label,
@@ -98,6 +101,47 @@ function defaultChatTools(): ChatToolsConfig {
     maxToolOutputChars: 12_000,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
     nativeTools: defaultNativeTools(),
+  }
+}
+
+function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData['defaultModels'] {
+  return {
+    chat: { providerId: chatProviderId, model: chatModel },
+    titleSummary: { providerId: '', model: '' },
+    compression: { providerId: '', model: '' },
+  }
+}
+
+function clearDefaultModelProvider(
+  defaultModels: SettingsData['defaultModels'],
+  providerId: string,
+): SettingsData['defaultModels'] {
+  return {
+    chat: defaultModels.chat.providerId === providerId ? { providerId: '', model: '' } : defaultModels.chat,
+    titleSummary: defaultModels.titleSummary.providerId === providerId
+      ? { providerId: '', model: '' }
+      : defaultModels.titleSummary,
+    compression: defaultModels.compression.providerId === providerId
+      ? { providerId: '', model: '' }
+      : defaultModels.compression,
+  }
+}
+
+function resolveDefaultModelsAfterModelRemoval(
+  defaultModels: SettingsData['defaultModels'],
+  providerId: string,
+  resolveAfterRemoval: (currentModel: string) => string,
+): SettingsData['defaultModels'] {
+  return {
+    chat: defaultModels.chat.providerId === providerId
+      ? { ...defaultModels.chat, model: resolveAfterRemoval(defaultModels.chat.model) }
+      : defaultModels.chat,
+    titleSummary: defaultModels.titleSummary.providerId === providerId
+      ? { ...defaultModels.titleSummary, model: resolveAfterRemoval(defaultModels.titleSummary.model) }
+      : defaultModels.titleSummary,
+    compression: defaultModels.compression.providerId === providerId
+      ? { ...defaultModels.compression, model: resolveAfterRemoval(defaultModels.compression.model) }
+      : defaultModels.compression,
   }
 }
 
@@ -175,6 +219,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null)
   const [fetchingProviderId, setFetchingProviderId] = useState<string | null>(null)
   const [modelPickerProviderId, setModelPickerProviderId] = useState<string | null>(null)
+  const [drawerModel, setDrawerModel] = useState<{ providerId: string; model: string } | null>(null)
   const [onDeviceManualModel, setOnDeviceManualModel] = useState('')
   const [providerTestFeedback, setProviderTestFeedback] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [selectedProviderId, setSelectedProviderId] = useState('')
@@ -723,6 +768,26 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
+  const updateDefaultModel = useCallback((
+    key: keyof SettingsData['defaultModels'],
+    providerId: string,
+    model: string,
+  ) => {
+    setSettings((prev) => {
+      if (!prev) return prev
+      const current = prev.defaultModels || defaultDefaultModels(prev.chatProviderId, prev.chatModel)
+      const defaultModels = {
+        ...current,
+        [key]: { providerId, model },
+      }
+      return {
+        ...prev,
+        defaultModels,
+        ...(key === 'chat' ? { chatProviderId: providerId, chatModel: model } : {}),
+      }
+    })
+  }, [])
+
   const updateChatTools = useCallback((updates: Partial<ChatToolsConfig>) => {
     setSettings((prev) => {
       if (!prev) return prev
@@ -922,7 +987,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   /**
    * 更新指定提供商配置
    */
-  const updateProvider = (id: string, updates: Partial<ModelProvider>) => {
+  const updateProvider = useCallback((id: string, updates: Partial<ModelProvider>) => {
     setSettings((prev) => {
       if (!prev) return prev
       return {
@@ -930,7 +995,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         providers: prev.providers.map(p => p.id === id ? { ...p, ...updates } : p)
       }
     })
-  }
+  }, [])
 
   /**
    * 添加新提供商
@@ -1014,6 +1079,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       providers: nextProviders,
       translatorProviderId: translatorProvider ? translatorProvider.id : '',
       translatorModel: resolveModel(translatorProvider, settings.translatorModel),
+      chatProviderId: settings.defaultModels.chat.providerId === id ? '' : settings.chatProviderId,
+      chatModel: settings.defaultModels.chat.providerId === id ? '' : settings.chatModel,
+      defaultModels: clearDefaultModelProvider(settings.defaultModels, id),
       screenshotTranslation: {
         ...settings.screenshotTranslation,
         providerId: screenshotProvider ? screenshotProvider.id : '',
@@ -1067,10 +1135,18 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         ...prev,
         providers: nextProviders,
       }
+      const defaultModels = resolveDefaultModelsAfterModelRemoval(
+        prev.defaultModels,
+        providerId,
+        resolveAfterRemoval,
+      )
 
       if (prev.translatorProviderId === providerId) {
         next.translatorModel = resolveAfterRemoval(prev.translatorModel)
       }
+      next.defaultModels = defaultModels
+      next.chatProviderId = defaultModels.chat.providerId
+      next.chatModel = defaultModels.chat.model
 
       if (prev.screenshotTranslation.providerId === providerId) {
         next.screenshotTranslation = {
@@ -1089,6 +1165,33 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       return next
     })
   }
+
+  /**
+   * 保存模型自定义参数
+   */
+  const saveModelOverride = useCallback((providerId: string, modelName: string, info: ModelInfo) => {
+    if (!settings) return
+    const provider = settings.providers.find(p => p.id === providerId)
+    if (!provider) return
+    updateProvider(providerId, {
+      modelOverrides: {
+        ...provider.modelOverrides,
+        [modelName]: info,
+      },
+    })
+  }, [settings, updateProvider])
+
+  /**
+   * 重置模型参数为数据库默认值
+   */
+  const resetModelOverride = useCallback((providerId: string, modelName: string) => {
+    if (!settings) return
+    const provider = settings.providers.find(p => p.id === providerId)
+    if (!provider?.modelOverrides?.[modelName]) return
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { [modelName]: _removed, ...rest } = provider.modelOverrides
+    updateProvider(providerId, { modelOverrides: rest })
+  }, [settings, updateProvider])
 
   /**
    * 从提供商 API 获取可用模型列表
@@ -1838,20 +1941,49 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== AI 客户端标签页 ===== */}
             {activeTab === 'chat' && (
               <>
-                <SettingsGroup title={t.engine}>
+                <SettingsGroup title={t.defaultModelsSection}>
                   <SettingRow
-                    label={t.selectModelPair}
-                    description={lang === 'zh'
-                      ? '新对话的默认供应商与模型；也可在 Chat 顶栏随时切换。'
-                      : 'Default provider and model for new chats; you can still switch in the Chat header.'}
+                    label={t.defaultChatModel}
+                    description={t.defaultChatModelHint}
                   >
                     <ModelPairSelect
-                      providerId={settings.chatProviderId || ''}
-                      model={settings.chatModel || ''}
+                      providerId={settings.defaultModels.chat.providerId || ''}
+                      model={settings.defaultModels.chat.model || ''}
                       providers={settings.providers}
                       platform={platform}
+                      inheritLabel={t.defaultModelsUnset}
                       onChange={(providerId, model) => {
-                        updateSettings({ chatProviderId: providerId, chatModel: model })
+                        updateDefaultModel('chat', providerId, model)
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={t.defaultTitleSummaryModel}
+                    description={t.defaultTitleSummaryModelHint}
+                  >
+                    <ModelPairSelect
+                      providerId={settings.defaultModels.titleSummary.providerId || ''}
+                      model={settings.defaultModels.titleSummary.model || ''}
+                      providers={settings.providers}
+                      platform={platform}
+                      inheritLabel={t.defaultModelsUnset}
+                      onChange={(providerId, model) => {
+                        updateDefaultModel('titleSummary', providerId, model)
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={t.defaultCompressionModel}
+                    description={t.defaultCompressionModelHint}
+                  >
+                    <ModelPairSelect
+                      providerId={settings.defaultModels.compression.providerId || ''}
+                      model={settings.defaultModels.compression.model || ''}
+                      providers={settings.providers}
+                      platform={platform}
+                      inheritLabel={t.defaultModelsUnset}
+                      onChange={(providerId, model) => {
+                        updateDefaultModel('compression', providerId, model)
                       }}
                     />
                   </SettingRow>
@@ -2960,20 +3092,29 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                     {lang === 'zh' ? '手动添加本地可用模型名称。' : 'Add local model names manually.'}
                                   </li>
                                 )}
-                                {provider.enabledModels.map(model => (
-                                  <li key={model} className="kv-enabled-model-row">
-                                    <span className="kv-enabled-model-name" title={model}>{model}</span>
-                                    <button
-                                      type="button"
-                                      onClick={() => removeEnabledModel(provider.id, model)}
-                                      className="kv-enabled-model-remove"
-                                      data-tauri-drag-region="false"
-                                      aria-label={t.removeModel}
-                                    >
-                                      <Minus size={14} />
-                                    </button>
-                                  </li>
-                                ))}
+                                {provider.enabledModels.map(model => {
+                                  const modelInfo = resolveModelInfo(model, provider.modelOverrides)
+                                  const caps = modelInfo.capabilities
+                                  return (
+                                    <li key={model} className="kv-enabled-model-row" onClick={() => setDrawerModel({ providerId: provider.id, model })}>
+                                      <span className="kv-enabled-model-name" title={model}>{modelInfo.displayName || model}</span>
+                                      <span className="kv-enabled-model-badges">
+                                        {caps?.vision && <span className="kv-badge-mini">V</span>}
+                                        {caps?.functionCalling && <span className="kv-badge-mini">T</span>}
+                                        {caps?.reasoning && <span className="kv-badge-mini">R</span>}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); removeEnabledModel(provider.id, model) }}
+                                        className="kv-enabled-model-remove"
+                                        data-tauri-drag-region="false"
+                                        aria-label={t.removeModel}
+                                      >
+                                        <Minus size={14} />
+                                      </button>
+                                    </li>
+                                  )
+                                })}
                               </ul>
                             </FieldBlock>
                           ) : (
@@ -2989,23 +3130,32 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                               <ul className="kv-enabled-model-list">
                                 {provider.enabledModels.length === 0 && (
                                   <li className="kv-enabled-model-empty">
-                                    {lang === 'zh' ? '点击上方「获取模型列表」拉取并添加模型。' : 'Use “Fetch Models” above to load and add models.'}
+                                    {lang === 'zh' ? '点击上方「获取模型列表」拉取并添加模型。' : 'Use "Fetch Models" above to load and add models.'}
                                   </li>
                                 )}
-                                {provider.enabledModels.map(model => (
-                                  <li key={model} className="kv-enabled-model-row">
-                                    <span className="kv-enabled-model-name" title={model}>{model}</span>
-                                    <button
-                                      type="button"
-                                      onClick={() => removeEnabledModel(provider.id, model)}
-                                      className="kv-enabled-model-remove"
-                                      data-tauri-drag-region="false"
-                                      aria-label={t.removeModel}
-                                    >
-                                      <Minus size={14} />
-                                    </button>
-                                  </li>
-                                ))}
+                                {provider.enabledModels.map(model => {
+                                  const modelInfo = resolveModelInfo(model, provider.modelOverrides)
+                                  const caps = modelInfo.capabilities
+                                  return (
+                                    <li key={model} className="kv-enabled-model-row" onClick={() => setDrawerModel({ providerId: provider.id, model })}>
+                                      <span className="kv-enabled-model-name" title={model}>{modelInfo.displayName || model}</span>
+                                      <span className="kv-enabled-model-badges">
+                                        {caps?.vision && <span className="kv-badge-mini">V</span>}
+                                        {caps?.functionCalling && <span className="kv-badge-mini">T</span>}
+                                        {caps?.reasoning && <span className="kv-badge-mini">R</span>}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); removeEnabledModel(provider.id, model) }}
+                                        className="kv-enabled-model-remove"
+                                        data-tauri-drag-region="false"
+                                        aria-label={t.removeModel}
+                                      >
+                                        <Minus size={14} />
+                                      </button>
+                                    </li>
+                                  )
+                                })}
                               </ul>
                             </FieldBlock>
                           )}
@@ -3248,6 +3398,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
           onFetch={() => void fetchModels(modelPickerProvider.id)}
           onAdd={(model) => addEnabledModel(modelPickerProvider.id, model)}
           onRemove={(model) => removeEnabledModel(modelPickerProvider.id, model)}
+        />
+      )}
+      {/* 模型详情抽屉 */}
+      {drawerModel && settings && (
+        <ModelDetailDrawer
+          modelName={drawerModel.model}
+          overrides={settings.providers.find(p => p.id === drawerModel.providerId)?.modelOverrides}
+          lang={lang}
+          onClose={() => setDrawerModel(null)}
+          onSave={(modelName, info) => {
+            saveModelOverride(drawerModel.providerId, modelName, info)
+            setDrawerModel(null)
+          }}
+          onReset={(modelName) => resetModelOverride(drawerModel.providerId, modelName)}
         />
       )}
       {/* 未保存更改确认弹窗 */}

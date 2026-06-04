@@ -138,9 +138,7 @@ fn parse_parameters(block: &str) -> Map<String, Value> {
             } else {
                 args.insert(param_name, Value::String(value));
             }
-        } else if param_name.ends_with("_json")
-            || value.starts_with('{')
-            || value.starts_with('[')
+        } else if param_name.ends_with("_json") || value.starts_with('{') || value.starts_with('[')
         {
             if let Ok(parsed) = serde_json::from_str::<Value>(&value) {
                 args.insert(param_name.trim_end_matches("_json").to_string(), parsed);
@@ -160,9 +158,7 @@ fn parse_parameter_value(slice: &str) -> String {
         return String::new();
     };
     let rest = &slice[gt + 1..];
-    let end = rest
-        .find("</")
-        .unwrap_or(rest.len());
+    let end = rest.find("</").unwrap_or(rest.len());
     rest[..end].trim().to_string()
 }
 

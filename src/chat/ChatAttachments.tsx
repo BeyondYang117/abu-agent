@@ -41,7 +41,7 @@ function ImagePreview({
     return () => {
       cancelled = true
     }
-  }, [attachment.path, attachment.name, attachment.type, conversationId])
+  }, [attachment, conversationId])
 
   const loadingClass =
     variant === 'composer'

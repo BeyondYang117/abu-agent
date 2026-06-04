@@ -6,9 +6,17 @@ import { MessageList, type AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
+import { ContextIndicator } from './ContextIndicator'
 import { chatApi } from './api'
 import { chatTitlebarMacInsetClass, chatTitlebarRowClass, usesNativeTitlebar } from './platform'
-import type { ChatMessage, Conversation, PendingAttachment, SkillMeta, ToolCallRecord } from './types'
+import type {
+  ChatMessage,
+  Conversation,
+  ConversationContextState,
+  PendingAttachment,
+  SkillMeta,
+  ToolCallRecord,
+} from './types'
 import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToolProgressPayload } from '../api/tauri'
 import { SettingsShell, type SettingsShellHandle, type SettingsTab } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
@@ -84,6 +92,15 @@ function toolMatchesRecommendation(tool: ChatToolDefinition, recommended: string
   )
 }
 
+function isLocallyCancelledPayload(
+  payload: { conversationId: string; runId?: string },
+  cancelledConversationId: string | null,
+  cancelledRunId: string | null,
+): boolean {
+  if (cancelledConversationId !== payload.conversationId) return false
+  return !cancelledRunId || !payload.runId || payload.runId === cancelledRunId
+}
+
 export default function Chat({ onSettingsChange }: ChatProps) {
   const [chatView, setChatView] = useState<ChatView>(() =>
     isChatSettingsPath(hashPath()) ? 'settings' : 'conversation',
@@ -101,6 +118,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [streamError, setStreamError] = useState('')
   /** 发送中待显示的用户消息（与 conversation 分离，避免 route reload 冲掉） */
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null)
+  const [pendingUserMessageConversationId, setPendingUserMessageConversationId] = useState<string | null>(null)
   const [lastAssistantStreamStats, setLastAssistantStreamStats] =
     useState<AssistantStreamStats | null>(null)
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
@@ -115,8 +133,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [toolsDisabledReason, setToolsDisabledReason] = useState('')
   const [toolsRequested, setToolsRequested] = useState(false)
   const [pendingToolConfirm, setPendingToolConfirm] = useState<ChatToolConfirmPayload | null>(null)
+  const [contextState, setContextState] = useState<ConversationContextState | null>(null)
+  const [contextLoading, setContextLoading] = useState(false)
+  const [contextCompressing, setContextCompressing] = useState(false)
+  const [contextError, setContextError] = useState('')
   const currentConversationIdRef = useRef<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
+  const locallyCancelledConversationIdRef = useRef<string | null>(null)
+  const locallyCancelledRunIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
   const pendingStreamDoneRef = useRef<(() => void) | null>(null)
   const streamStartedAtRef = useRef<number | null>(null)
@@ -125,6 +149,42 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
   const requestWindowFocus = useWindowInteractionFocus()
+
+  const applyConversation = useCallback((conversation: Conversation | null) => {
+    setCurrentConversation(conversation)
+    setContextState(conversation?.context_state ?? conversation?.contextState ?? null)
+  }, [])
+
+  const patchContextState = useCallback((nextState: ConversationContextState) => {
+    setContextState(nextState)
+    setCurrentConversation((prev) => prev
+      ? { ...prev, context_state: nextState, contextState: nextState }
+      : prev)
+  }, [])
+
+  const clearStreamingPreview = useCallback(() => {
+    setStreaming(false)
+    setCancellingStream(false)
+    setStreamingContent('')
+    setStreamingReasoning('')
+    setReasoningStreaming(false)
+    setStreamingToolCalls([])
+    activeRunIdRef.current = null
+    streamStartedAtRef.current = null
+    streamingContentRef.current = ''
+    streamingReasoningRef.current = ''
+  }, [])
+
+  const cancelCurrentRunLocally = useCallback(() => {
+    locallyCancelledConversationIdRef.current = currentConversationIdRef.current
+    locallyCancelledRunIdRef.current = activeRunIdRef.current
+    clearStreamingPreview()
+  }, [clearStreamingPreview])
+
+  const resetLocalCancellation = useCallback(() => {
+    locallyCancelledConversationIdRef.current = null
+    locallyCancelledRunIdRef.current = null
+  }, [])
 
   const activeProviderId = currentConversation?.provider_id || draftProviderId
   const activeModel = currentConversation?.model || draftModel
@@ -271,8 +331,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const loadDefaultModel = useCallback(async () => {
     try {
       const settings = await api.getSettings()
-      setDraftProviderId(settings.chatProviderId || settings.translatorProviderId || '')
-      setDraftModel(settings.chatModel || settings.translatorModel || '')
+      const chatDefault = settings.defaultModels.chat
+      if (chatDefault.providerId) {
+        setDraftProviderId(chatDefault.providerId)
+        setDraftModel(chatDefault.model)
+      } else if (settings.lens?.providerId) {
+        setDraftProviderId(settings.lens.providerId)
+        setDraftModel(settings.lens.model || '')
+      } else {
+        setDraftProviderId(settings.translatorProviderId || '')
+        setDraftModel(settings.translatorModel || '')
+      }
     } catch {
       setDraftProviderId('dev-provider')
       setDraftModel('dev-model')
@@ -341,11 +410,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     void refreshToolIndicator()
   }, [loadDefaultModel, loadSkills, onSettingsChange, refreshToolIndicator])
 
-  const reloadConversation = useCallback(async (conversationId: string) => {
-    if (sendInFlightRef.current) return
+  const reloadConversation = useCallback(async (conversationId: string, options?: { force?: boolean }) => {
+    if (sendInFlightRef.current && !options?.force) return
     try {
       const conv = await chatApi.getConversation(conversationId)
-      setCurrentConversation(conv)
+      applyConversation(conv)
       setStreamingToolCalls([])
       setCancellingStream(false)
       activeRunIdRef.current = null
@@ -353,24 +422,72 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to reload conversation:', err)
       forgetRememberedChatRoute()
       currentConversationIdRef.current = null
-      setCurrentConversation(null)
+      applyConversation(null)
       syncConversationRoute(null)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '对话加载失败')
     }
-  }, [syncConversationRoute])
+  }, [applyConversation, syncConversationRoute])
+
+  const refreshContextStats = useCallback(async (conversationId?: string) => {
+    const targetConversationId = conversationId ?? currentConversationIdRef.current
+    if (!targetConversationId) {
+      setContextState(null)
+      setContextError('')
+      return
+    }
+    setContextLoading(true)
+    setContextError('')
+    try {
+      const result = await chatApi.getContextStats(targetConversationId)
+      if (currentConversationIdRef.current === targetConversationId) {
+        applyConversation(result.conversation)
+        setContextState(result.contextState)
+      }
+    } catch (err) {
+      if (currentConversationIdRef.current === targetConversationId) {
+        setContextError(typeof err === 'string' ? err : (err as Error).message || '上下文统计失败')
+      }
+    } finally {
+      if (currentConversationIdRef.current === targetConversationId) {
+        setContextLoading(false)
+      }
+    }
+  }, [applyConversation])
+
+  const handleRefreshContext = useCallback(() => {
+    const conversationId = currentConversationIdRef.current
+    if (conversationId) void refreshContextStats(conversationId)
+  }, [refreshContextStats])
+
+  const handleCompressContext = useCallback(async () => {
+    const conversationId = currentConversationIdRef.current
+    if (!conversationId || contextCompressing) return
+    setContextCompressing(true)
+    setContextError('')
+    try {
+      const result = await chatApi.compressContext(conversationId)
+      if (currentConversationIdRef.current === conversationId) {
+        applyConversation(result.conversation)
+        setContextState(result.contextState)
+        refreshSidebar()
+      }
+    } catch (err) {
+      if (currentConversationIdRef.current === conversationId) {
+        setContextError(typeof err === 'string' ? err : (err as Error).message || '上下文压缩失败')
+      }
+    } finally {
+      if (currentConversationIdRef.current === conversationId) {
+        setContextCompressing(false)
+      }
+    }
+  }, [applyConversation, contextCompressing, refreshSidebar])
 
   const finishStreamingRun = useCallback(
     (payload: { reason?: string; conversationId?: string }) => {
-      setStreaming(false)
-      setCancellingStream(false)
-      setStreamingContent('')
-      setStreamingReasoning('')
-      setReasoningStreaming(false)
-      setStreamingToolCalls([])
-      activeRunIdRef.current = null
-      streamStartedAtRef.current = null
-      streamingContentRef.current = ''
-      streamingReasoningRef.current = ''
+      clearStreamingPreview()
+      if (payload.reason !== 'cancelled') {
+        resetLocalCancellation()
+      }
       if (payload.reason === 'error') {
         setStreamError('回复生成失败，请稍后重试。')
       }
@@ -380,7 +497,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         refreshSidebar()
       }
     },
-    [refreshSidebar, reloadConversation],
+    [clearStreamingPreview, refreshSidebar, reloadConversation, resetLocalCancellation],
   )
 
   const flushPendingStreamDone = useCallback(() => {
@@ -398,6 +515,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         if (cancelled) return
         const currentConversationId = currentConversationIdRef.current
         if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        if (isLocallyCancelledPayload(
+          payload,
+          locallyCancelledConversationIdRef.current,
+          locallyCancelledRunIdRef.current,
+        )) {
           return
         }
         if (payload.runId) {
@@ -440,10 +564,43 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     let unlisten: (() => void) | undefined
 
     const setupListener = async () => {
+      unlisten = await api.onChatContext((payload) => {
+        if (cancelled) return
+        const currentConversationId = currentConversationIdRef.current
+        if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        patchContextState(payload.contextState)
+        setContextError('')
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [patchContextState])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
       unlisten = await api.onChatTool((payload) => {
         if (cancelled) return
         const currentConversationId = currentConversationIdRef.current
         if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        if (isLocallyCancelledPayload(
+          payload,
+          locallyCancelledConversationIdRef.current,
+          locallyCancelledRunIdRef.current,
+        )) {
           return
         }
         // 忽略 invoke 结束后的迟到 tool 事件，否则会重新 setStreaming(true) 卡死输入栏。
@@ -507,8 +664,19 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       unlisten = await api.onChatRunPython((payload) => {
         if (cancelled) return
         void (async () => {
-          const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs)
-          await api.chatPythonComplete(payload.runId, outcome.content, outcome.isError)
+          try {
+            const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs)
+            await api.chatPythonComplete(payload.runId, outcome.content, outcome.isError)
+          } catch (err) {
+            const message = err instanceof Error
+              ? err.message || err.stack || err.name
+              : String(err)
+            await api.chatPythonComplete(
+              payload.runId,
+              `Python 环境加载失败：${message || 'Unknown error'}`,
+              true,
+            )
+          }
         })()
       })
       if (cancelled) {
@@ -526,6 +694,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   useEffect(() => {
     currentConversationIdRef.current = currentConversation?.id ?? null
   }, [currentConversation?.id])
+
+  useEffect(() => {
+    if (!currentConversation?.id || chatView !== 'conversation') {
+      setContextLoading(false)
+      return
+    }
+    void refreshContextStats(currentConversation.id)
+  }, [chatView, currentConversation?.id, activeModel, effectiveSkillId, refreshContextStats])
 
   useEffect(() => {
     let cancelled = false
@@ -557,24 +733,38 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         return
       }
       setChatView('conversation')
-      if (sendInFlightRef.current) return
       const conversationId = getRouteConversationId()
       if (!conversationId) {
-        setCurrentConversation(null)
+        const previousConversationId = currentConversationIdRef.current
+        if (previousConversationId && (streaming || sendInFlightRef.current)) {
+          cancelCurrentRunLocally()
+          void chatApi.cancelStream(previousConversationId)
+        }
+        applyConversation(null)
         return
       }
-      void reloadConversation(conversationId)
+      const previousConversationId = currentConversationIdRef.current
+      if (previousConversationId && previousConversationId !== conversationId && (streaming || sendInFlightRef.current)) {
+        cancelCurrentRunLocally()
+        void chatApi.cancelStream(previousConversationId)
+      }
+      void reloadConversation(conversationId, { force: true })
     }
     loadFromRoute()
     window.addEventListener('hashchange', loadFromRoute)
     return () => window.removeEventListener('hashchange', loadFromRoute)
-  }, [getRouteConversationId, reloadConversation])
+  }, [applyConversation, cancelCurrentRunLocally, getRouteConversationId, reloadConversation, streaming])
 
   const handleSelectConversation = async (conversationId: string) => {
     setLastAssistantStreamStats(null)
+    const previousConversationId = currentConversationIdRef.current
+    if (previousConversationId && previousConversationId !== conversationId && (streaming || sendInFlightRef.current)) {
+      cancelCurrentRunLocally()
+      void chatApi.cancelStream(previousConversationId)
+    }
     try {
       const conv = await chatApi.getConversation(conversationId)
-      setCurrentConversation(conv)
+      applyConversation(conv)
       setStreamingToolCalls([])
       activeRunIdRef.current = null
       syncConversationRoute(conversationId)
@@ -587,12 +777,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleNewConversation = useCallback(async () => {
     setLastAssistantStreamStats(null)
+    const previousConversationId = currentConversationIdRef.current
+    if (previousConversationId && (streaming || sendInFlightRef.current)) {
+      cancelCurrentRunLocally()
+      void chatApi.cancelStream(previousConversationId)
+    }
     try {
       const conv = await chatApi.createConversation(
         activeProviderId || undefined,
         activeModel || undefined
       )
-      setCurrentConversation(conv)
+      applyConversation(conv)
       setStreamingToolCalls([])
       activeRunIdRef.current = null
       syncConversationRoute(conv.id)
@@ -602,7 +797,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to create conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
     }
-  }, [activeModel, activeProviderId, refreshSidebar, syncConversationRoute])
+  }, [activeModel, activeProviderId, applyConversation, cancelCurrentRunLocally, refreshSidebar, streaming, syncConversationRoute])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -665,7 +860,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       timestamp: Math.floor(Date.now() / 1000),
     }
 
-    setPendingUserMessage(optimisticUserMessage)
+    resetLocalCancellation()
     setStreaming(true)
     setCancellingStream(false)
     setStreamingContent('')
@@ -687,43 +882,35 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           activeModel || undefined
         )
         currentConversationIdRef.current = conversation.id
-        setCurrentConversation(conversation)
+        applyConversation(conversation)
         syncConversationRoute(conversation.id)
       }
 
+      const conversationId = conversation!.id
+      setPendingUserMessage(optimisticUserMessage)
+      setPendingUserMessageConversationId(conversationId)
       const updatedConv = await chatApi.sendMessage(
-        conversation!.id,
+        conversationId,
         trimmed,
         attachments,
         null,
       )
       applyAssistantStreamStats(updatedConv)
-      setCurrentConversation(updatedConv)
       setPendingUserMessage(null)
-      setStreaming(false)
-      setCancellingStream(false)
-      setStreamingContent('')
-      setStreamingReasoning('')
-      setReasoningStreaming(false)
-      setStreamingToolCalls([])
-      activeRunIdRef.current = null
-      streamStartedAtRef.current = null
-      streamingContentRef.current = ''
-      streamingReasoningRef.current = ''
-      refreshSidebar()
+      setPendingUserMessageConversationId(null)
+      if (currentConversationIdRef.current === conversationId) {
+        applyConversation(updatedConv)
+        clearStreamingPreview()
+        if (!locallyCancelledConversationIdRef.current) {
+          resetLocalCancellation()
+        }
+        refreshSidebar()
+      }
     } catch (err) {
       console.error('Failed to send message:', err)
       setPendingUserMessage(null)
-      setStreaming(false)
-      setCancellingStream(false)
-      setStreamingContent('')
-      setStreamingReasoning('')
-      setReasoningStreaming(false)
-      setStreamingToolCalls([])
-      activeRunIdRef.current = null
-      streamStartedAtRef.current = null
-      streamingContentRef.current = ''
-      streamingReasoningRef.current = ''
+      setPendingUserMessageConversationId(null)
+      clearStreamingPreview()
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '发送失败')
     } finally {
       flushPendingStreamDone()
@@ -736,14 +923,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       if (!currentConversation) return
       try {
         const updated = await chatApi.updateMessage(currentConversation.id, messageId, content)
-        setCurrentConversation(updated)
+        applyConversation(updated)
         refreshSidebar()
       } catch (err) {
         console.error('Failed to update message:', err)
         setStreamError(typeof err === 'string' ? err : (err as Error).message || '保存失败')
       }
     },
-    [currentConversation, refreshSidebar],
+    [applyConversation, currentConversation, refreshSidebar],
   )
 
   const handleDeleteMessage = useCallback(
@@ -752,7 +939,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       if (!window.confirm('确定删除这条助手回复吗？')) return
       try {
         const updated = await chatApi.deleteMessage(currentConversation.id, messageId)
-        setCurrentConversation(updated)
+        applyConversation(updated)
         setLastAssistantStreamStats((prev) =>
           prev?.messageId === messageId ? null : prev,
         )
@@ -762,7 +949,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setStreamError(typeof err === 'string' ? err : (err as Error).message || '删除失败')
       }
     },
-    [currentConversation, refreshSidebar],
+    [applyConversation, currentConversation, refreshSidebar],
   )
 
   const handleRegenerateMessage = useCallback(
@@ -775,11 +962,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       )
       if (messageIndex < 0) return
 
-      setCurrentConversation({
+      applyConversation({
         ...currentConversation,
         messages: currentConversation.messages.slice(0, messageIndex),
       })
       setLastAssistantStreamStats(null)
+      resetLocalCancellation()
       setStreaming(true)
       setCancellingStream(false)
       setStreamingContent('')
@@ -796,28 +984,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       try {
         const updated = await chatApi.regenerateMessage(conversationId, messageId)
         applyAssistantStreamStats(updated)
-        setCurrentConversation(updated)
-        refreshSidebar()
+        if (currentConversationIdRef.current === conversationId) {
+          applyConversation(updated)
+          refreshSidebar()
+        }
       } catch (err) {
         console.error('Failed to regenerate message:', err)
         setStreamError(typeof err === 'string' ? err : (err as Error).message || '重新生成失败')
         void reloadConversation(conversationId)
       } finally {
         flushPendingStreamDone()
-        setStreaming(false)
-        setCancellingStream(false)
-        setStreamingContent('')
-        setStreamingReasoning('')
-        setReasoningStreaming(false)
-        setStreamingToolCalls([])
-        activeRunIdRef.current = null
-        streamStartedAtRef.current = null
-        streamingContentRef.current = ''
-        streamingReasoningRef.current = ''
+        clearStreamingPreview()
         sendInFlightRef.current = false
       }
     },
-    [applyAssistantStreamStats, currentConversation, flushPendingStreamDone, refreshSidebar, reloadConversation, streaming],
+    [applyAssistantStreamStats, applyConversation, clearStreamingPreview, currentConversation, flushPendingStreamDone, refreshSidebar, reloadConversation, resetLocalCancellation, streaming],
   )
 
   const handleModelChange = async (providerId: string, model: string) => {
@@ -831,7 +1012,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         providerId,
         model,
       })
-      setCurrentConversation(updatedConv)
+      applyConversation(updatedConv)
       refreshSidebar()
     } catch (err) {
       console.error('Failed to change model:', err)
@@ -844,6 +1025,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (!conversationId || cancellingStream || (!streaming && !sendInFlightRef.current)) return
 
     setCancellingStream(true)
+    cancelCurrentRunLocally()
     try {
       await chatApi.cancelStream(conversationId)
     } catch (err) {
@@ -852,11 +1034,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     } finally {
       setCancellingStream(false)
     }
-  }, [cancellingStream, streaming])
+  }, [cancelCurrentRunLocally, cancellingStream, streaming])
 
   const displayMessages = useMemo(() => {
     const stored = currentConversation?.messages ?? []
-    if (!pendingUserMessage) return stored
+    if (!pendingUserMessage || pendingUserMessageConversationId !== currentConversation?.id) return stored
     const alreadyStored = stored.some(
       (message) =>
         message.id === pendingUserMessage.id ||
@@ -865,7 +1047,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           message.timestamp >= pendingUserMessage.timestamp - 2),
     )
     return alreadyStored ? stored : [...stored, pendingUserMessage]
-  }, [currentConversation?.messages, pendingUserMessage])
+  }, [currentConversation?.id, currentConversation?.messages, pendingUserMessage, pendingUserMessageConversationId])
 
   const hasMessages = displayMessages.length > 0
   const showEmptyHero = chatView === 'conversation' && !hasMessages && !streaming && !streamError
@@ -888,7 +1070,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           }}
           onConversationDeleted={() => {
             forgetRememberedChatRoute()
-            setCurrentConversation(null)
+            applyConversation(null)
             syncConversationRoute(null)
             refreshSidebar()
           }}
@@ -943,6 +1125,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
                 />
               </div>
+              <ContextIndicator
+                contextState={contextState}
+                messageCount={displayMessages.length}
+                loading={contextLoading}
+                compressing={contextCompressing}
+                error={contextError}
+                onRefresh={handleRefreshContext}
+                onCompress={() => void handleCompressContext()}
+              />
               <div className="min-w-0 flex-1" data-tauri-drag-region />
             </header>
 

@@ -1,6 +1,7 @@
 // Chat API 调用封装
 import { invoke } from '@tauri-apps/api/core'
-import type { Conversation, ConversationListItem, PendingAttachment } from './types'
+import { estimateTokens } from '../lens/markdown'
+import type { Conversation, ConversationContextState, ConversationListItem, PendingAttachment } from './types'
 
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -42,6 +43,55 @@ function toListItem(conversation: Conversation): ConversationListItem {
   }
 }
 
+function estimateMockContext(conversation: Conversation): ConversationContextState {
+  const conversationTokens = conversation.messages.reduce(
+    (sum, message) => sum + estimateTokens(message.content || ''),
+    0,
+  )
+  const attachmentTokens = conversation.messages.reduce(
+    (sum, message) => sum + (message.attachments?.filter((attachment) => attachment.type === 'image').length ?? 0) * 1200,
+    0,
+  )
+  const systemTokens = 900
+  const estimatedInputTokens = systemTokens + conversationTokens + attachmentTokens
+  const contextWindowTokens = 200_000
+  const usageRatio = estimatedInputTokens / contextWindowTokens
+  const summary = conversation.context_state?.summary ?? conversation.contextState?.summary ?? null
+  return {
+    estimated_input_tokens: estimatedInputTokens,
+    context_window_tokens: contextWindowTokens,
+    context_window_estimated: true,
+    usage_ratio: usageRatio,
+    status: summary?.stale
+      ? 'stale'
+      : summary
+        ? 'compressed'
+        : usageRatio >= 0.95
+          ? 'critical'
+          : usageRatio >= 0.70
+            ? 'warning'
+            : 'normal',
+    segments: [
+      { id: 'system_prompt', label: 'System prompt', estimated_tokens: systemTokens, color: '#7A7A7A' },
+      { id: 'conversation', label: 'Conversation', estimated_tokens: conversationTokens, color: '#D07652' },
+      { id: 'attachments', label: 'Attachments', estimated_tokens: attachmentTokens, color: '#6A8FBD' },
+    ].filter((segment) => segment.estimated_tokens > 0),
+    last_measured_at: nowSeconds(),
+    last_compressed_at: summary?.created_at ?? summary?.createdAt ?? null,
+    compressed_message_count: summary?.source_message_ids?.length ?? summary?.sourceMessageIds?.length ?? 0,
+    summary,
+  }
+}
+
+function withMockContext(conversation: Conversation): Conversation {
+  const contextState = estimateMockContext(conversation)
+  return {
+    ...conversation,
+    context_state: contextState,
+    contextState,
+  }
+}
+
 const mockChatApi = {
   async getConversations(offset = 0, limit = 50, folder?: string): Promise<ConversationListItem[]> {
     const conversations = loadMockConversations()
@@ -53,7 +103,7 @@ const mockChatApi = {
   async getConversation(conversationId: string): Promise<Conversation> {
     const conversation = loadMockConversations().find((item) => item.id === conversationId)
     if (!conversation) throw new Error('Conversation not found')
-    return conversation
+    return withMockContext(conversation)
   },
 
   async createConversation(providerId = 'dev-provider', model = 'dev-model', folder?: string): Promise<Conversation> {
@@ -69,8 +119,9 @@ const mockChatApi = {
       pinned: false,
       folder,
     }
-    saveMockConversations([conversation, ...loadMockConversations()])
-    return conversation
+    const withContext = withMockContext(conversation)
+    saveMockConversations([withContext, ...loadMockConversations()])
+    return withContext
   },
 
   async sendMessage(
@@ -112,6 +163,9 @@ const mockChatApi = {
       conversation.title = content.length > 30 ? `${content.slice(0, 30)}...` : content
     }
     conversation.updated_at = now
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
     conversations[index] = conversation
     saveMockConversations(conversations)
     return conversation
@@ -149,6 +203,9 @@ const mockChatApi = {
       updated_at: nowSeconds(),
     }
     conversation.activeSkillId = conversation.active_skill_id
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
     conversations[index] = conversation
     saveMockConversations(conversations)
     return conversation
@@ -176,6 +233,9 @@ const mockChatApi = {
         : message,
     )
     conversation.updated_at = nowSeconds()
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
     conversations[index] = conversation
     saveMockConversations(conversations)
     return conversation
@@ -191,6 +251,9 @@ const mockChatApi = {
     if (target.role !== 'assistant') throw new Error('仅支持删除助手回复')
     conversation.messages = conversation.messages.filter((message) => message.id !== messageId)
     conversation.updated_at = nowSeconds()
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
     conversations[index] = conversation
     saveMockConversations(conversations)
     return conversation
@@ -221,9 +284,62 @@ const mockChatApi = {
       },
     ]
     conversation.updated_at = nowSeconds()
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
     conversations[index] = conversation
     saveMockConversations(conversations)
     return conversation
+  },
+
+  async getContextStats(conversationId: string): Promise<{ contextState: ConversationContextState; conversation: Conversation }> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const conversation = withMockContext(conversations[index])
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return { contextState: conversation.context_state ?? {}, conversation }
+  },
+
+  async compressContext(conversationId: string): Promise<{ contextState: ConversationContextState; conversation: Conversation }> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const conversation = { ...conversations[index] }
+    const cutoff = Math.max(0, conversation.messages.length - 8)
+    const source = conversation.messages.slice(0, cutoff)
+    if (source.length < 2) {
+      throw new Error('没有足够的旧消息可以压缩')
+    }
+    const summary = {
+      id: `ctxsum_dev_${crypto.randomUUID()}`,
+      content: `Browser preview summary for ${source.length} older messages.`,
+      source_message_ids: source.map((message) => message.id),
+      source_until_message_id: source[source.length - 1]?.id ?? '',
+      token_estimate_before: source.reduce((sum, message) => sum + estimateTokens(message.content || ''), 0),
+      token_estimate_after: 20,
+      created_at: nowSeconds(),
+      provider_id: conversation.provider_id,
+      model: conversation.model,
+      stale: false,
+    }
+    const baseState = estimateMockContext(conversation)
+    conversation.context_state = {
+      ...baseState,
+      status: 'compressed',
+      summary,
+      last_compressed_at: summary.created_at,
+      compressed_message_count: source.length,
+      segments: [
+        ...(baseState.segments ?? []).filter((segment) => segment.id !== 'summarized_conversation'),
+        { id: 'summarized_conversation', label: 'Summarized conversation', estimated_tokens: 20, color: '#BF3F66' },
+      ],
+    }
+    conversation.contextState = conversation.context_state
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return { contextState: conversation.context_state, conversation }
   },
 }
 
@@ -389,6 +505,34 @@ export const chatApi = {
       throw new Error(result.error || 'Failed to regenerate message')
     }
     return result.conversation
+  },
+
+  async getContextStats(conversationId: string): Promise<{ contextState: ConversationContextState; conversation: Conversation }> {
+    if (!isTauriRuntime()) return mockChatApi.getContextStats(conversationId)
+    const result = await invoke<{
+      success: boolean
+      contextState?: ConversationContextState
+      conversation?: Conversation
+      error?: string
+    }>('chat_get_context_stats', { conversationId })
+    if (!result.success || !result.contextState || !result.conversation) {
+      throw new Error(result.error || 'Failed to get context stats')
+    }
+    return { contextState: result.contextState, conversation: result.conversation }
+  },
+
+  async compressContext(conversationId: string): Promise<{ contextState: ConversationContextState; conversation: Conversation }> {
+    if (!isTauriRuntime()) return mockChatApi.compressContext(conversationId)
+    const result = await invoke<{
+      success: boolean
+      contextState?: ConversationContextState
+      conversation?: Conversation
+      error?: string
+    }>('chat_compress_context', { conversationId })
+    if (!result.success || !result.contextState || !result.conversation) {
+      throw new Error(result.error || 'Failed to compress context')
+    }
+    return { contextState: result.contextState, conversation: result.conversation }
   },
 
   async cancelStream(conversationId: string): Promise<void> {

@@ -111,6 +111,64 @@ export interface PendingAttachment {
   path: string
 }
 
+export type ContextUsageStatus =
+  | 'normal'
+  | 'warning'
+  | 'critical'
+  | 'compressed'
+  | 'stale'
+  | 'unknown'
+  | string
+
+export interface ContextUsageSegment {
+  id: string
+  label: string
+  estimated_tokens?: number
+  estimatedTokens?: number
+  color?: string | null
+}
+
+export interface ConversationContextSummary {
+  id: string
+  content: string
+  source_message_ids?: string[]
+  sourceMessageIds?: string[]
+  source_until_message_id?: string
+  sourceUntilMessageId?: string
+  token_estimate_before?: number
+  tokenEstimateBefore?: number
+  token_estimate_after?: number
+  tokenEstimateAfter?: number
+  created_at?: number
+  createdAt?: number
+  provider_id?: string
+  providerId?: string
+  model?: string
+  stale?: boolean
+}
+
+export interface ConversationContextState {
+  estimated_input_tokens?: number
+  estimatedInputTokens?: number
+  context_window_tokens?: number | null
+  contextWindowTokens?: number | null
+  context_window_estimated?: boolean
+  contextWindowEstimated?: boolean
+  usage_ratio?: number | null
+  usageRatio?: number | null
+  status?: ContextUsageStatus
+  segments?: ContextUsageSegment[]
+  last_measured_at?: number
+  lastMeasuredAt?: number
+  last_compressed_at?: number | null
+  lastCompressedAt?: number | null
+  compressed_message_count?: number
+  compressedMessageCount?: number
+  summary?: ConversationContextSummary | null
+  warning?: string | null
+  warningMessage?: string | null
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -123,6 +181,8 @@ export interface Conversation {
   updated_at: number
   pinned?: boolean
   folder?: string
+  context_state?: ConversationContextState
+  contextState?: ConversationContextState
 }
 
 export interface ConversationListItem {
