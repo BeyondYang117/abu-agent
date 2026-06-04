@@ -43,6 +43,28 @@ pub struct McpToolCallResult {
     pub content: String,
     pub is_error: bool,
     pub raw: serde_json::Value,
+    #[serde(default)]
+    pub artifacts: Vec<ChatToolArtifact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatToolArtifact {
+    pub name: String,
+    #[serde(alias = "mimeType")]
+    pub mime_type: String,
+    #[serde(alias = "dataUrl")]
+    pub data_url: String,
+    #[serde(default, alias = "sizeBytes")]
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonRunResult {
+    pub content: String,
+    #[serde(alias = "isError")]
+    pub is_error: bool,
+    #[serde(default)]
+    pub artifacts: Vec<ChatToolArtifact>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,6 +191,10 @@ pub fn native_skill_run_script_tool() -> ChatToolDefinition {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional script arguments passed after the script path"
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Timeout in ms (optional, max 300000)"
                 }
             },
             "required": ["name", "relative_path"]
@@ -252,7 +278,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "run_command".to_string(),
-        description: "Run a shell command (build, test, etc.) in a working directory under the user home. Requires user approval. A non-zero exit code is returned as a tool error with stdout/stderr.".to_string(),
+        description: "Run a shell command (build, test, etc.) in a working directory under the user home. Requires user approval. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -261,7 +287,8 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
             "properties": {
                 "command": { "type": "string", "description": "Shell command" },
                 "cwd": { "type": "string", "description": "Working directory (optional)" },
-                "timeout_ms": { "type": "integer", "description": "Timeout in ms (optional)" }
+                "timeout_ms": { "type": "integer", "description": "Timeout in ms (optional)" },
+                "allow_host_python_package_install": { "type": "boolean", "description": "Only true when the user explicitly asked to modify the host Python environment; installs must use --user or a virtual environment." }
             },
             "required": ["command"]
         }),
@@ -273,7 +300,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox (no host filesystem or network). Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported. stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox (no host filesystem or network). Use for calculation, statistics, basic ML, and chart/data code. Do not use network/API client packages such as tavily, requests, httpx, urllib3, or aiohttp; use web_search/web_fetch or Skill scripts for live web/API access. Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported. stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),

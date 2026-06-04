@@ -15,6 +15,7 @@ use crate::apple_intelligence::AppleIntelligenceClient;
 #[cfg(target_os = "macos")]
 use crate::macos_ocr::MacOcrClient;
 use crate::mcp::ChatToolDefinition;
+use crate::mcp::types::PythonRunResult;
 use crate::rapidocr::RapidOcrClient;
 use crate::settings::Settings;
 
@@ -34,7 +35,7 @@ pub struct AppState {
     /// 等待用户确认的敏感 Chat tool 调用。
     pub pending_chat_tool_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     /// 等待前端 Pyodide 完成的 run_python 调用。
-    pub pending_python_runs: Mutex<HashMap<String, oneshot::Sender<(String, bool)>>>,
+    pub pending_python_runs: Mutex<HashMap<String, oneshot::Sender<PythonRunResult>>>,
     /// Chat MCP/native tool 列表缓存。key 由工具相关 settings 生成，避免每轮对话重复冷启动 server。
     pub chat_tool_list_cache: Mutex<HashMap<String, (Instant, Vec<ChatToolDefinition>)>>,
     /// Lens 启动前抓到的选中文本：放在这里等前端 enterSelect 来取走。

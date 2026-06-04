@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Wrench, X } from 'lucide-react'
+import { Bot, Wrench, X } from 'lucide-react'
 import { Sidebar } from './Sidebar'
+import { AssistantCenter } from './AssistantCenter'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { MessageList, type AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
@@ -8,9 +9,17 @@ import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
 import { ContextIndicator } from './ContextIndicator'
 import { chatApi } from './api'
-import { chatTitlebarMacInsetClass, chatTitlebarRowClass, usesNativeTitlebar } from './platform'
+import {
+  chatTitlebarMacInsetClass,
+  chatTitlebarPillButtonClass,
+  chatTitlebarPillIconClass,
+  chatTitlebarRowClass,
+  usesNativeTitlebar,
+} from './platform'
 import type {
+  ChatProject,
   ChatMessage,
+  ChatAssistant,
   Conversation,
   ConversationContextState,
   PendingAttachment,
@@ -24,10 +33,20 @@ import { estimateTokens } from '../lens/markdown'
 import { forgetRememberedChatRoute } from './persistence'
 import { runPythonInSandbox } from './pyodideRunner'
 
-type ChatView = 'conversation' | 'settings'
+type ChatView = 'conversation' | 'settings' | 'assistants'
 
 interface ChatProps {
   onSettingsChange: () => void
+}
+
+interface ConversationStreamSnapshot {
+  runId: string | null
+  streaming: boolean
+  content: string
+  reasoning: string
+  reasoningStreaming: boolean
+  toolCalls: ToolCallRecord[]
+  startedAt: number | null
 }
 
 function hashPath(): string {
@@ -36,6 +55,10 @@ function hashPath(): string {
 
 function isChatSettingsPath(path: string): boolean {
   return path === 'chat/settings' || path.startsWith('chat/settings/')
+}
+
+function isChatAssistantCenterPath(path: string): boolean {
+  return path === 'chat/assistants' || path.startsWith('chat/assistants/')
 }
 
 function isTauriRuntime(): boolean {
@@ -62,6 +85,7 @@ function toolEventToRecord(payload: ChatToolProgressPayload): ToolCallRecord {
     durationMs: payload.durationMs ?? undefined,
     round: payload.round,
     sensitive: payload.sensitive,
+    artifacts: payload.artifacts ?? [],
   }
 }
 
@@ -102,14 +126,18 @@ function isLocallyCancelledPayload(
 }
 
 export default function Chat({ onSettingsChange }: ChatProps) {
-  const [chatView, setChatView] = useState<ChatView>(() =>
-    isChatSettingsPath(hashPath()) ? 'settings' : 'conversation',
-  )
+  const [chatView, setChatView] = useState<ChatView>(() => {
+    const path = hashPath()
+    if (isChatSettingsPath(path)) return 'settings'
+    if (isChatAssistantCenterPath(path)) return 'assistants'
+    return 'conversation'
+  })
   const [currentConversation, setCurrentConversation] = useState<Awaited<
     ReturnType<typeof chatApi.getConversation>
   > | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [selectedProject, setSelectedProject] = useState<ChatProject | null>(null)
   const [streaming, setStreaming] = useState(false)
   const [cancellingStream, setCancellingStream] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
@@ -143,9 +171,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const locallyCancelledRunIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
   const pendingStreamDoneRef = useRef<(() => void) | null>(null)
+  const streamSnapshotsRef = useRef<Record<string, ConversationStreamSnapshot>>({})
+  const pendingToolConfirmsRef = useRef<Record<string, ChatToolConfirmPayload>>({})
   const streamStartedAtRef = useRef<number | null>(null)
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
+  const newConversationRequestRef = useRef<Promise<Conversation> | null>(null)
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
   const requestWindowFocus = useWindowInteractionFocus()
@@ -175,11 +206,79 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     streamingReasoningRef.current = ''
   }, [])
 
+  const ensureStreamSnapshot = useCallback((conversationId: string) => {
+    const existing = streamSnapshotsRef.current[conversationId]
+    if (existing) return existing
+    const snapshot: ConversationStreamSnapshot = {
+      runId: null,
+      streaming: true,
+      content: '',
+      reasoning: '',
+      reasoningStreaming: false,
+      toolCalls: [],
+      startedAt: Date.now(),
+    }
+    streamSnapshotsRef.current[conversationId] = snapshot
+    return snapshot
+  }, [])
+
+  const restoreStreamingPreview = useCallback((conversationId: string | null) => {
+    if (!conversationId) {
+      clearStreamingPreview()
+      setPendingToolConfirm(null)
+      return
+    }
+    const snapshot = streamSnapshotsRef.current[conversationId]
+    if (!snapshot) {
+      clearStreamingPreview()
+    } else {
+      setStreaming(snapshot.streaming)
+      setCancellingStream(false)
+      setStreamingContent(snapshot.content)
+      setStreamingReasoning(snapshot.reasoning)
+      setReasoningStreaming(snapshot.reasoningStreaming)
+      setStreamingToolCalls(snapshot.toolCalls)
+      activeRunIdRef.current = snapshot.runId
+      streamStartedAtRef.current = snapshot.startedAt
+      streamingContentRef.current = snapshot.content
+      streamingReasoningRef.current = snapshot.reasoning
+    }
+    setPendingToolConfirm(pendingToolConfirmsRef.current[conversationId] ?? null)
+  }, [clearStreamingPreview])
+
+  const showStreamSnapshotIfCurrent = useCallback((
+    conversationId: string,
+    snapshot: ConversationStreamSnapshot,
+  ) => {
+    if (currentConversationIdRef.current !== conversationId) return
+    setStreaming(snapshot.streaming)
+    setCancellingStream(false)
+    setStreamingContent(snapshot.content)
+    setStreamingReasoning(snapshot.reasoning)
+    setReasoningStreaming(snapshot.reasoningStreaming)
+    setStreamingToolCalls(snapshot.toolCalls)
+    activeRunIdRef.current = snapshot.runId
+    streamStartedAtRef.current = snapshot.startedAt
+    streamingContentRef.current = snapshot.content
+    streamingReasoningRef.current = snapshot.reasoning
+  }, [])
+
+  const clearStreamSnapshot = useCallback((conversationId: string | null) => {
+    if (!conversationId) return
+    delete streamSnapshotsRef.current[conversationId]
+    delete pendingToolConfirmsRef.current[conversationId]
+    if (currentConversationIdRef.current === conversationId) {
+      setPendingToolConfirm(null)
+      clearStreamingPreview()
+    }
+  }, [clearStreamingPreview])
+
   const cancelCurrentRunLocally = useCallback(() => {
     locallyCancelledConversationIdRef.current = currentConversationIdRef.current
     locallyCancelledRunIdRef.current = activeRunIdRef.current
+    clearStreamSnapshot(currentConversationIdRef.current)
     clearStreamingPreview()
-  }, [clearStreamingPreview])
+  }, [clearStreamSnapshot, clearStreamingPreview])
 
   const resetLocalCancellation = useCallback(() => {
     locallyCancelledConversationIdRef.current = null
@@ -212,6 +311,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     () => skillRecommendedTools(effectiveSkill),
     [effectiveSkill],
   )
+
+  const canReuseCurrentBlankConversation = useCallback(() => {
+    if (!currentConversation) return false
+    if (currentConversation.messages.length > 0) return false
+    if (currentConversation.assistant_id ?? currentConversation.assistantId) return false
+    if ((currentConversation.folder ?? '') !== (selectedProject?.name ?? '')) return false
+    return true
+  }, [currentConversation, selectedProject?.name])
+  const currentAssistantSnapshot =
+    currentConversation?.assistant_snapshot ?? currentConversation?.assistantSnapshot ?? null
+  const currentAssistantId =
+    currentConversation?.assistant_id
+    ?? currentConversation?.assistantId
+    ?? currentAssistantSnapshot?.id
+    ?? null
 
   const refreshToolIndicator = useCallback(async () => {
     if (!isTauriRuntime()) {
@@ -308,6 +422,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (!path.startsWith('chat/')) return null
     const rest = path.slice('chat/'.length)
     if (rest === 'settings' || rest.startsWith('settings/')) return null
+    if (rest === 'assistants' || rest.startsWith('assistants/')) return null
     return decodeURIComponent(rest)
   }, [])
 
@@ -321,6 +436,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const syncSettingsRoute = useCallback(() => {
     if (window.location.hash !== '#chat/settings') {
       window.location.hash = '#chat/settings'
+    }
+  }, [])
+
+  const syncAssistantCenterRoute = useCallback(() => {
+    if (window.location.hash !== '#chat/assistants') {
+      window.location.hash = '#chat/assistants'
     }
   }, [])
 
@@ -384,6 +505,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     syncSettingsRoute()
   }, [syncSettingsRoute])
 
+  const openAssistantCenter = useCallback(() => {
+    setChatView('assistants')
+    syncAssistantCenterRoute()
+  }, [syncAssistantCenterRoute])
+
   const handleSettingsClose = useCallback(() => {
     setChatView('conversation')
     syncConversationRoute(currentConversationIdRef.current)
@@ -393,6 +519,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     pendingAfterSettingsCloseRef.current = null
     pending?.()
   }, [loadSkills, refreshToolIndicator, syncConversationRoute])
+
+  const handleAssistantCenterClose = useCallback(() => {
+    setChatView('conversation')
+    syncConversationRoute(currentConversationIdRef.current)
+  }, [syncConversationRoute])
 
   const runAfterLeavingSettings = useCallback((action: () => void) => {
     if (chatView !== 'settings') {
@@ -414,10 +545,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (sendInFlightRef.current && !options?.force) return
     try {
       const conv = await chatApi.getConversation(conversationId)
+      currentConversationIdRef.current = conversationId
       applyConversation(conv)
-      setStreamingToolCalls([])
+      restoreStreamingPreview(conversationId)
       setCancellingStream(false)
-      activeRunIdRef.current = null
     } catch (err) {
       console.error('Failed to reload conversation:', err)
       forgetRememberedChatRoute()
@@ -426,7 +557,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       syncConversationRoute(null)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '对话加载失败')
     }
-  }, [applyConversation, syncConversationRoute])
+  }, [applyConversation, restoreStreamingPreview, syncConversationRoute])
 
   const refreshContextStats = useCallback(async (conversationId?: string) => {
     const targetConversationId = conversationId ?? currentConversationIdRef.current
@@ -484,16 +615,23 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const finishStreamingRun = useCallback(
     (payload: { reason?: string; conversationId?: string }) => {
-      clearStreamingPreview()
+      const conversationId = payload.conversationId ?? currentConversationIdRef.current
+      if (conversationId) {
+        delete streamSnapshotsRef.current[conversationId]
+      }
+      if (conversationId && currentConversationIdRef.current === conversationId) {
+        clearStreamingPreview()
+      }
       if (payload.reason !== 'cancelled') {
         resetLocalCancellation()
       }
       if (payload.reason === 'error') {
-        setStreamError('回复生成失败，请稍后重试。')
+        setStreamError((prev) => prev || '回复生成失败，请稍后重试。')
       }
-      const conversationId = currentConversationIdRef.current
       if (conversationId && payload.reason !== 'cancelled') {
-        void reloadConversation(conversationId)
+        if (currentConversationIdRef.current === conversationId) {
+          void reloadConversation(conversationId)
+        }
         refreshSidebar()
       }
     },
@@ -513,10 +651,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const setupListener = async () => {
       unlisten = await api.onChatStream((payload) => {
         if (cancelled) return
-        const currentConversationId = currentConversationIdRef.current
-        if (!currentConversationId || payload.conversationId !== currentConversationId) {
-          return
-        }
         if (isLocallyCancelledPayload(
           payload,
           locallyCancelledConversationIdRef.current,
@@ -524,20 +658,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         )) {
           return
         }
+        const snapshot = ensureStreamSnapshot(payload.conversationId)
         if (payload.runId) {
-          if (activeRunIdRef.current && activeRunIdRef.current !== payload.runId) return
-          activeRunIdRef.current = payload.runId
+          if (snapshot.runId && snapshot.runId !== payload.runId) return
+          snapshot.runId = payload.runId
         }
         if (payload.reasoningDelta) {
-          setReasoningStreaming(true)
-          streamingReasoningRef.current += payload.reasoningDelta
-          setStreamingReasoning((prev) => prev + payload.reasoningDelta)
+          snapshot.streaming = true
+          snapshot.reasoningStreaming = true
+          snapshot.reasoning += payload.reasoningDelta
         }
         if (payload.delta) {
-          setReasoningStreaming(false)
-          streamingContentRef.current += payload.delta
-          setStreamingContent((prev) => prev + payload.delta)
+          snapshot.streaming = true
+          snapshot.reasoningStreaming = false
+          snapshot.content += payload.delta
         }
+        showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
         if (payload.done) {
           // invoke 未完成前不要 reload；延后到 flushPendingStreamDone，避免与 send 写盘竞态。
           if (sendInFlightRef.current) {
@@ -557,7 +693,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [finishStreamingRun, refreshSidebar, reloadConversation])
+  }, [ensureStreamSnapshot, finishStreamingRun, showStreamSnapshotIfCurrent])
 
   useEffect(() => {
     let cancelled = false
@@ -592,10 +728,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const setupListener = async () => {
       unlisten = await api.onChatTool((payload) => {
         if (cancelled) return
-        const currentConversationId = currentConversationIdRef.current
-        if (!currentConversationId || payload.conversationId !== currentConversationId) {
-          return
-        }
         if (isLocallyCancelledPayload(
           payload,
           locallyCancelledConversationIdRef.current,
@@ -605,18 +737,19 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         }
         // 忽略 invoke 结束后的迟到 tool 事件，否则会重新 setStreaming(true) 卡死输入栏。
         if (!sendInFlightRef.current) return
+        const snapshot = ensureStreamSnapshot(payload.conversationId)
         if (payload.runId) {
-          if (activeRunIdRef.current && activeRunIdRef.current !== payload.runId) return
-          activeRunIdRef.current = payload.runId
+          if (snapshot.runId && snapshot.runId !== payload.runId) return
+          snapshot.runId = payload.runId
         }
-        setStreaming(true)
-        setReasoningStreaming(false)
         const record = toolEventToRecord(payload)
-        setStreamingToolCalls((prev) => {
-          const index = prev.findIndex((item) => item.id === record.id)
-          if (index < 0) return [...prev, record]
-          return prev.map((item, i) => (i === index ? { ...item, ...record } : item))
-        })
+        snapshot.streaming = true
+        snapshot.reasoningStreaming = false
+        const index = snapshot.toolCalls.findIndex((item) => item.id === record.id)
+        snapshot.toolCalls = index < 0
+          ? [...snapshot.toolCalls, record]
+          : snapshot.toolCalls.map((item, i) => (i === index ? { ...item, ...record } : item))
+        showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
       })
       if (cancelled) {
         unlisten()
@@ -628,7 +761,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [])
+  }, [ensureStreamSnapshot, showStreamSnapshotIfCurrent])
 
   useEffect(() => {
     let cancelled = false
@@ -637,12 +770,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const setupListener = async () => {
       unlisten = await api.onChatToolConfirm((payload) => {
         if (cancelled) return
-        const currentConversationId = currentConversationIdRef.current
-        if (!currentConversationId || payload.conversationId !== currentConversationId) {
-          void api.chatConfirmToolCall(payload.toolCallId, false)
-          return
+        pendingToolConfirmsRef.current[payload.conversationId] = payload
+        if (currentConversationIdRef.current === payload.conversationId) {
+          setPendingToolConfirm(payload)
         }
-        setPendingToolConfirm(payload)
       })
       if (cancelled) {
         unlisten()
@@ -655,6 +786,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       unlisten?.()
     }
   }, [])
+
+  const resolvePendingToolConfirm = useCallback((approved: boolean) => {
+    if (!pendingToolConfirm) return
+    delete pendingToolConfirmsRef.current[pendingToolConfirm.conversationId]
+    void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, approved)
+    setPendingToolConfirm(null)
+  }, [pendingToolConfirm])
 
   useEffect(() => {
     let cancelled = false
@@ -666,15 +804,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         void (async () => {
           try {
             const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs)
-            await api.chatPythonComplete(payload.runId, outcome.content, outcome.isError)
+            await api.chatPythonComplete(
+              payload.runId,
+              outcome.content,
+              outcome.isError,
+              outcome.artifacts,
+            )
           } catch (err) {
             const message = err instanceof Error
               ? err.message || err.stack || err.name
               : String(err)
             await api.chatPythonComplete(
               payload.runId,
-              `Python 环境加载失败：${message || 'Unknown error'}`,
+              `Python 沙盒调用失败：${message || 'Unknown error'}。不要重试 run_python，也不要使用 run_command/pip 安装或修改本机 Python 环境来绕过沙盒；请直接基于已有数据回答，除非用户明确要求修改本机环境。`,
               true,
+              [],
             )
           }
         })()
@@ -732,41 +876,32 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setChatView('settings')
         return
       }
+      if (isChatAssistantCenterPath(path)) {
+        setChatView('assistants')
+        return
+      }
       setChatView('conversation')
       const conversationId = getRouteConversationId()
       if (!conversationId) {
-        const previousConversationId = currentConversationIdRef.current
-        if (previousConversationId && (streaming || sendInFlightRef.current)) {
-          cancelCurrentRunLocally()
-          void chatApi.cancelStream(previousConversationId)
-        }
+        currentConversationIdRef.current = null
         applyConversation(null)
+        restoreStreamingPreview(null)
         return
-      }
-      const previousConversationId = currentConversationIdRef.current
-      if (previousConversationId && previousConversationId !== conversationId && (streaming || sendInFlightRef.current)) {
-        cancelCurrentRunLocally()
-        void chatApi.cancelStream(previousConversationId)
       }
       void reloadConversation(conversationId, { force: true })
     }
     loadFromRoute()
     window.addEventListener('hashchange', loadFromRoute)
     return () => window.removeEventListener('hashchange', loadFromRoute)
-  }, [applyConversation, cancelCurrentRunLocally, getRouteConversationId, reloadConversation, streaming])
+  }, [applyConversation, getRouteConversationId, reloadConversation, restoreStreamingPreview])
 
   const handleSelectConversation = async (conversationId: string) => {
     setLastAssistantStreamStats(null)
-    const previousConversationId = currentConversationIdRef.current
-    if (previousConversationId && previousConversationId !== conversationId && (streaming || sendInFlightRef.current)) {
-      cancelCurrentRunLocally()
-      void chatApi.cancelStream(previousConversationId)
-    }
     try {
       const conv = await chatApi.getConversation(conversationId)
+      currentConversationIdRef.current = conversationId
       applyConversation(conv)
-      setStreamingToolCalls([])
-      activeRunIdRef.current = null
+      restoreStreamingPreview(conversationId)
       syncConversationRoute(conversationId)
       setStreamError('')
     } catch (err) {
@@ -777,19 +912,34 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleNewConversation = useCallback(async () => {
     setLastAssistantStreamStats(null)
-    const previousConversationId = currentConversationIdRef.current
-    if (previousConversationId && (streaming || sendInFlightRef.current)) {
-      cancelCurrentRunLocally()
-      void chatApi.cancelStream(previousConversationId)
+    if (canReuseCurrentBlankConversation()) {
+      const conversationId = currentConversation!.id
+      currentConversationIdRef.current = conversationId
+      restoreStreamingPreview(conversationId)
+      syncConversationRoute(conversationId)
+      setStreamError('')
+      return
     }
+
     try {
-      const conv = await chatApi.createConversation(
-        activeProviderId || undefined,
-        activeModel || undefined
-      )
+      if (!newConversationRequestRef.current) {
+        const request = chatApi.createConversation(
+          activeProviderId || undefined,
+          activeModel || undefined,
+          selectedProject?.name,
+        )
+        const guardedRequest = request.finally(() => {
+          if (newConversationRequestRef.current === guardedRequest) {
+            newConversationRequestRef.current = null
+          }
+        })
+        newConversationRequestRef.current = guardedRequest
+      }
+
+      const conv = await newConversationRequestRef.current
+      currentConversationIdRef.current = conv.id
       applyConversation(conv)
-      setStreamingToolCalls([])
-      activeRunIdRef.current = null
+      restoreStreamingPreview(conv.id)
       syncConversationRoute(conv.id)
       refreshSidebar()
       setStreamError('')
@@ -797,7 +947,67 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to create conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
     }
-  }, [activeModel, activeProviderId, applyConversation, cancelCurrentRunLocally, refreshSidebar, streaming, syncConversationRoute])
+  }, [
+    activeModel,
+    activeProviderId,
+    applyConversation,
+    canReuseCurrentBlankConversation,
+    currentConversation,
+    refreshSidebar,
+    restoreStreamingPreview,
+    selectedProject?.name,
+    syncConversationRoute,
+  ])
+
+  const handleStartAssistantChat = useCallback(async (assistant: ChatAssistant) => {
+    setLastAssistantStreamStats(null)
+    try {
+      const assistantProviderId = assistant.provider_id ?? assistant.providerId ?? ''
+      const assistantModel = assistant.model ?? ''
+      const conv = await chatApi.createConversation(
+        assistantProviderId || activeProviderId || undefined,
+        assistantModel || activeModel || undefined,
+        selectedProject?.name,
+        assistant.id,
+      )
+      currentConversationIdRef.current = conv.id
+      applyConversation(conv)
+      restoreStreamingPreview(conv.id)
+      syncConversationRoute(conv.id)
+      refreshSidebar()
+      setStreamError('')
+    } catch (err) {
+      console.error('Failed to start assistant conversation:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建助手对话失败')
+    }
+  }, [activeModel, activeProviderId, applyConversation, refreshSidebar, restoreStreamingPreview, selectedProject?.name, syncConversationRoute])
+
+  const handleApplyAssistant = useCallback(async (assistantId: string | null) => {
+    if (!currentConversation) return
+    try {
+      const updated = await chatApi.updateConversation(currentConversation.id, {
+        assistantId: assistantId ?? '',
+      })
+      applyConversation(updated)
+      refreshSidebar()
+      if (assistantId) void refreshContextStats(updated.id)
+    } catch (err) {
+      console.error('Failed to update conversation assistant:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '助手切换失败')
+    }
+  }, [applyConversation, currentConversation, refreshContextStats, refreshSidebar])
+
+  const handleSelectProject = useCallback((project: ChatProject | null) => {
+    setSelectedProject(project)
+    setLastAssistantStreamStats(null)
+    setPendingUserMessage(null)
+    setPendingUserMessageConversationId(null)
+    currentConversationIdRef.current = null
+    applyConversation(null)
+    restoreStreamingPreview(null)
+    syncConversationRoute(null)
+    setStreamError('')
+  }, [applyConversation, restoreStreamingPreview, syncConversationRoute])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -874,12 +1084,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     streamingReasoningRef.current = ''
 
     sendInFlightRef.current = true
+    let conversationIdForRun: string | null = null
     try {
       let conversation = currentConversation
       if (!conversation) {
         conversation = await chatApi.createConversation(
           activeProviderId || undefined,
-          activeModel || undefined
+          activeModel || undefined,
+          selectedProject?.name,
         )
         currentConversationIdRef.current = conversation.id
         applyConversation(conversation)
@@ -887,6 +1099,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
 
       const conversationId = conversation!.id
+      conversationIdForRun = conversationId
+      const snapshot = ensureStreamSnapshot(conversationId)
+      snapshot.streaming = true
+      snapshot.content = ''
+      snapshot.reasoning = ''
+      snapshot.reasoningStreaming = false
+      snapshot.toolCalls = []
+      snapshot.startedAt = streamStartedAtRef.current
+      snapshot.runId = null
       setPendingUserMessage(optimisticUserMessage)
       setPendingUserMessageConversationId(conversationId)
       const updatedConv = await chatApi.sendMessage(
@@ -900,7 +1121,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setPendingUserMessageConversationId(null)
       if (currentConversationIdRef.current === conversationId) {
         applyConversation(updatedConv)
-        clearStreamingPreview()
+        clearStreamSnapshot(conversationId)
         if (!locallyCancelledConversationIdRef.current) {
           resetLocalCancellation()
         }
@@ -910,7 +1131,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to send message:', err)
       setPendingUserMessage(null)
       setPendingUserMessageConversationId(null)
-      clearStreamingPreview()
+      if (conversationIdForRun) {
+        clearStreamSnapshot(conversationIdForRun)
+      } else {
+        clearStreamingPreview()
+      }
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '发送失败')
     } finally {
       flushPendingStreamDone()
@@ -979,6 +1204,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       streamStartedAtRef.current = Date.now()
       streamingContentRef.current = ''
       streamingReasoningRef.current = ''
+      const snapshot = ensureStreamSnapshot(conversationId)
+      snapshot.streaming = true
+      snapshot.content = ''
+      snapshot.reasoning = ''
+      snapshot.reasoningStreaming = false
+      snapshot.toolCalls = []
+      snapshot.startedAt = streamStartedAtRef.current
+      snapshot.runId = null
       sendInFlightRef.current = true
 
       try {
@@ -991,14 +1224,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       } catch (err) {
         console.error('Failed to regenerate message:', err)
         setStreamError(typeof err === 'string' ? err : (err as Error).message || '重新生成失败')
+        clearStreamSnapshot(conversationId)
         void reloadConversation(conversationId)
       } finally {
         flushPendingStreamDone()
-        clearStreamingPreview()
+        if (currentConversationIdRef.current === conversationId) {
+          clearStreamingPreview()
+        }
         sendInFlightRef.current = false
       }
     },
-    [applyAssistantStreamStats, applyConversation, clearStreamingPreview, currentConversation, flushPendingStreamDone, refreshSidebar, reloadConversation, resetLocalCancellation, streaming],
+    [applyAssistantStreamStats, applyConversation, clearStreamSnapshot, clearStreamingPreview, currentConversation, ensureStreamSnapshot, flushPendingStreamDone, refreshSidebar, reloadConversation, resetLocalCancellation, streaming],
   )
 
   const handleModelChange = async (providerId: string, model: string) => {
@@ -1062,6 +1298,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       <div className="flex h-full min-h-0 w-full">
         <Sidebar
           currentConversationId={currentConversation?.id}
+          selectedProject={selectedProject}
+          onSelectProject={(project) => {
+            runAfterLeavingSettings(() => handleSelectProject(project))
+          }}
           onSelectConversation={(id) => {
             runAfterLeavingSettings(() => void handleSelectConversation(id))
           }}
@@ -1074,8 +1314,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             syncConversationRoute(null)
             refreshSidebar()
           }}
+          onOpenAssistantCenter={openAssistantCenter}
           onOpenSettings={() => openEmbeddedSettings('chat')}
           settingsActive={chatView === 'settings'}
+          assistantCenterActive={chatView === 'assistants'}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed(true)}
           refreshKey={sidebarRefreshKey}
@@ -1100,8 +1342,18 @@ export default function Chat({ onSettingsChange }: ChatProps) {
               onSettingsChange={handleSettingsChange}
             />
           </div>
+        ) : chatView === 'assistants' ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <AssistantCenter
+              skills={enabledSkills}
+              currentAssistantId={currentAssistantId}
+              onStartAssistantChat={(assistant) => void handleStartAssistantChat(assistant)}
+              onApplyAssistant={currentConversation ? (assistantId) => void handleApplyAssistant(assistantId) : undefined}
+              onClose={handleAssistantCenterClose}
+            />
+          </div>
         ) : (
-          <div className="relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
+          <div className="chat-main-pane relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
             <header
               className={`${chatTitlebarRowClass} gap-2 ${
                 sidebarCollapsed && usesNativeTitlebar ? chatTitlebarMacInsetClass : 'px-6'
@@ -1125,6 +1377,34 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
                 />
               </div>
+              {currentAssistantSnapshot && (
+                <div className={chatTitlebarPillButtonClass} data-tauri-drag-region="false">
+                  <button
+                    type="button"
+                    onClick={openAssistantCenter}
+                    className="flex min-w-0 items-center gap-1.5"
+                    title="打开助手中心"
+                  >
+                    <Bot size={15} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
+                    <span className="max-w-[150px] truncate text-[13px] font-medium text-neutral-800 dark:text-neutral-200">
+                      {currentAssistantSnapshot.name}
+                    </span>
+                  </button>
+                  <span
+                    aria-hidden
+                    className="h-4 w-px shrink-0 bg-neutral-200/90 dark:bg-neutral-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleApplyAssistant(null)}
+                    className={chatTitlebarPillIconClass}
+                    title="清除助手"
+                    aria-label="清除助手"
+                  >
+                    <X size={13} strokeWidth={1.9} />
+                  </button>
+                </div>
+              )}
               <ContextIndicator
                 contextState={contextState}
                 messageCount={displayMessages.length}
@@ -1142,8 +1422,36 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 <div className="flex flex-1 flex-col items-center justify-center px-6 pb-16">
                   <div className="w-full max-w-3xl space-y-8">
                     <h2 className="text-center text-[1.75rem] font-semibold leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]">
-                      今天我能为您做些什么？
+                      {currentAssistantSnapshot
+                        ? currentAssistantSnapshot.name
+                        : selectedProject
+                          ? `开始「${selectedProject.name}」`
+                          : '今天我能为您做些什么？'}
                     </h2>
+                    {(currentAssistantSnapshot?.greeting || currentAssistantSnapshot?.conversation_starters?.length) && (
+                      <div className="space-y-3 text-center">
+                        {currentAssistantSnapshot.greeting && (
+                          <p className="mx-auto max-w-xl text-[13px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+                            {currentAssistantSnapshot.greeting}
+                          </p>
+                        )}
+                        {currentAssistantSnapshot.conversation_starters && currentAssistantSnapshot.conversation_starters.length > 0 && (
+                          <div className="mx-auto flex max-w-2xl flex-wrap justify-center gap-2">
+                            {currentAssistantSnapshot.conversation_starters.slice(0, 4).map((starter) => (
+                              <button
+                                key={starter}
+                                type="button"
+                                onClick={() => void handleSendMessage(starter)}
+                                disabled={streaming || sendInFlightRef.current}
+                                className="max-w-full truncate rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-[12px] text-neutral-700 shadow-sm transition hover:border-neutral-300 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                              >
+                                {starter}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <InputBar
                       layout="inline"
                       onSend={(content, attachments) => void handleSendMessage(content, attachments)}
@@ -1218,10 +1526,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 type="button"
                 className="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
                 aria-label="拒绝"
-                onClick={() => {
-                  void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, false)
-                  setPendingToolConfirm(null)
-                }}
+                onClick={() => resolvePendingToolConfirm(false)}
               >
                 <X size={14} />
               </button>
@@ -1235,20 +1540,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
               <button
                 type="button"
                 className="rounded-md px-3 py-1.5 text-[12px] font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                onClick={() => {
-                  void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, false)
-                  setPendingToolConfirm(null)
-                }}
+                onClick={() => resolvePendingToolConfirm(false)}
               >
                 拒绝
               </button>
               <button
                 type="button"
                 className="rounded-md bg-neutral-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
-                onClick={() => {
-                  void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, true)
-                  setPendingToolConfirm(null)
-                }}
+                onClick={() => resolvePendingToolConfirm(true)}
               >
                 允许
               </button>

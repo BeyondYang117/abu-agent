@@ -2133,19 +2133,19 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onChange={(readFile) => updateNativeTools({ readFile })}
                     />
                   </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '写入文件' : 'Write file'} description={lang === 'zh' ? 'write_file，默认需确认' : 'write_file, approval by default'}>
+                  <SettingRow label={lang === 'zh' ? '写入文件' : 'Write file'} description={lang === 'zh' ? 'write_file，无需确认' : 'write_file, no approval'}>
                     <Toggle
                       checked={chatTools.nativeTools?.writeFile === true}
                       onChange={(writeFile) => updateNativeTools({ writeFile })}
                     />
                   </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '编辑文件' : 'Edit file'} description={lang === 'zh' ? 'edit_file，默认需确认' : 'edit_file, approval by default'}>
+                  <SettingRow label={lang === 'zh' ? '编辑文件' : 'Edit file'} description={lang === 'zh' ? 'edit_file，无需确认' : 'edit_file, no approval'}>
                     <Toggle
                       checked={chatTools.nativeTools?.editFile === true}
                       onChange={(editFile) => updateNativeTools({ editFile })}
                     />
                   </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '终端命令' : 'Terminal command'} description={lang === 'zh' ? 'run_command，默认需确认' : 'run_command, approval by default'}>
+                  <SettingRow label={lang === 'zh' ? '终端命令' : 'Terminal command'} description={lang === 'zh' ? 'run_command，无需确认' : 'run_command, no approval'}>
                     <Toggle
                       checked={chatTools.nativeTools?.runCommand === true}
                       onChange={(runCommand) => updateNativeTools({ runCommand })}
@@ -2330,10 +2330,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       <Input
                         type="number"
                         min={1000}
-                        max={60000}
+                        max={300000}
                         value={String(chatTools.toolTimeoutMs ?? 60_000)}
                         onChange={(value) => updateChatTools({
-                          toolTimeoutMs: Math.min(60_000, Math.max(1_000, Number.parseInt(value, 10) || 1_000)),
+                          toolTimeoutMs: Math.min(300_000, Math.max(1_000, Number.parseInt(value, 10) || 1_000)),
                         })}
                       />
                     </FieldBlock>

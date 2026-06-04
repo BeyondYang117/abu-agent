@@ -7,6 +7,7 @@ use std::{
 
 use serde_json::Value;
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 use super::{
     discover::build_registry,
@@ -148,14 +149,20 @@ pub async fn run_skill_script(
         .current_dir(&record.base_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        command.kill_on_drop(true);
+    }
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        command.output(),
-    )
-    .await
-    .map_err(|_| "Script execution timed out".to_string())?
-    .map_err(|err| format!("Script execution failed: {err}"))?;
+    let child = command
+        .spawn()
+        .map_err(|err| format!("Script execution failed: {err}"))?;
+    let output = match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
+        Ok(result) => result.map_err(|err| format!("Script execution failed: {err}"))?,
+        Err(_) => {
+            return Err(format!("Script execution timed out after {timeout_ms}ms"));
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -394,6 +401,43 @@ mod tests {
             ))
             .expect_err("should reject non-scripts path");
         assert!(err.contains("scripts/"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skill_run_script_reports_timeout() {
+        let dir =
+            std::env::temp_dir().join(format!("kivio-skill-timeout-{}", uuid::Uuid::new_v4()));
+        let scripts_dir = dir.join("scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+        fs::write(scripts_dir.join("slow.py"), "import time\ntime.sleep(2)\n").unwrap();
+        let record = SkillRecord {
+            meta: SkillMeta {
+                id: "demo".to_string(),
+                name: "demo".to_string(),
+                description: "Demo".to_string(),
+                source: "user".to_string(),
+                path: None,
+                recommended_tools: vec![],
+                disable_model_invocation: false,
+                files: vec![],
+            },
+            location: dir.join("SKILL.md"),
+            base_dir: dir.clone(),
+            body: String::new(),
+            allowed_tools: vec![],
+        };
+        let err = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_skill_script(
+                &record,
+                "scripts/slow.py",
+                &[],
+                100,
+                &["python3".to_string()],
+            ))
+            .expect_err("should time out");
+        assert!(err.contains("timed out after 100ms"));
         let _ = fs::remove_dir_all(dir);
     }
 }

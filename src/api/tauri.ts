@@ -123,6 +123,16 @@ export type ChatToolStatus =
   | 'skipped'
   | 'cancelled'
 
+export type ChatToolArtifact = {
+  name: string
+  mime_type?: string
+  mimeType?: string
+  data_url?: string
+  dataUrl?: string
+  size_bytes?: number | null
+  sizeBytes?: number | null
+}
+
 export type ChatToolProgressPayload = {
   conversationId: string
   runId: string
@@ -141,6 +151,7 @@ export type ChatToolProgressPayload = {
   durationMs?: number | null
   round?: number
   sensitive?: boolean
+  artifacts?: ChatToolArtifact[]
 }
 
 export type ChatToolConfirmPayload = {
@@ -776,8 +787,13 @@ export const api = {
     invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>
     invoke<void>('chat_confirm_tool_call', { toolCallId, approved }),
-  chatPythonComplete: (runId: string, content: string, isError: boolean) =>
-    invoke<void>('chat_python_complete', { runId, content, isError }),
+  chatPythonComplete: (
+    runId: string,
+    content: string,
+    isError: boolean,
+    artifacts: ChatToolArtifact[] = [],
+  ) =>
+    invoke<void>('chat_python_complete', { runId, content, isError, artifacts }),
   onChatRunPython: (listener: (payload: ChatRunPythonPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatRunPythonPayload>('chat-run-python', (payload) => listener(payload))

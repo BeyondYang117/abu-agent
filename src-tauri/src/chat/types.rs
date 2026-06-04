@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::mcp::types::ChatToolArtifact;
+
 fn default_context_usage_status() -> String {
     "unknown".to_string()
 }
@@ -96,6 +98,8 @@ pub struct ToolCallRecord {
     pub round: u8,
     #[serde(default)]
     pub sensitive: bool,
+    #[serde(default)]
+    pub artifacts: Vec<ChatToolArtifact>,
 }
 
 /// 对话消息
@@ -142,6 +146,10 @@ pub struct Conversation {
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub active_skill_id: Option<String>,
+    #[serde(default)]
+    pub assistant_id: Option<String>,
+    #[serde(default)]
+    pub assistant_snapshot: Option<ChatAssistantSnapshot>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(default)]
@@ -167,12 +175,120 @@ pub struct ConversationListItem {
     pub pinned: bool,
     #[serde(default)]
     pub folder: Option<String>,
+    #[serde(default)]
+    pub assistant_id: Option<String>,
+    #[serde(default)]
+    pub assistant_name: Option<String>,
 }
 
 /// 对话索引文件结构
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConversationIndex {
     pub conversations: Vec<ConversationListItem>,
+}
+
+/// Chat 项目（MVP 使用 `name` 作为 Conversation.folder 归属键）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatProject {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 项目索引文件结构
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatProjectIndex {
+    pub projects: Vec<ChatProject>,
+}
+
+/// 可复用 Chat 助手配置。存储字段保持 snake_case，与 Conversation JSON 一致。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAssistant {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub skill_id: Option<String>,
+    #[serde(default)]
+    pub tool_preset: String,
+    #[serde(default)]
+    pub conversation_starters: Vec<String>,
+    #[serde(default)]
+    pub greeting: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub built_in: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 对话创建时冻结的助手配置，避免后续编辑助手静默改变旧对话行为。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAssistantSnapshot {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub skill_id: Option<String>,
+    #[serde(default)]
+    pub tool_preset: String,
+    #[serde(default)]
+    pub conversation_starters: Vec<String>,
+    #[serde(default)]
+    pub greeting: String,
+}
+
+impl From<&ChatAssistant> for ChatAssistantSnapshot {
+    fn from(assistant: &ChatAssistant) -> Self {
+        Self {
+            id: assistant.id.clone(),
+            name: assistant.name.clone(),
+            description: assistant.description.clone(),
+            system_prompt: assistant.system_prompt.clone(),
+            provider_id: assistant.provider_id.clone(),
+            model: assistant.model.clone(),
+            skill_id: assistant.skill_id.clone(),
+            tool_preset: assistant.tool_preset.clone(),
+            conversation_starters: assistant.conversation_starters.clone(),
+            greeting: assistant.greeting.clone(),
+        }
+    }
+}
+
+/// 助手索引文件结构。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatAssistantIndex {
+    pub assistants: Vec<ChatAssistant>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl From<&Conversation> for ConversationListItem {
@@ -199,6 +315,8 @@ impl From<&Conversation> for ConversationListItem {
             updated_at: conv.updated_at,
             pinned: conv.pinned,
             folder: conv.folder.clone(),
+            assistant_id: conv.assistant_id.clone(),
+            assistant_name: conv.assistant_snapshot.as_ref().map(|snapshot| snapshot.name.clone()),
         }
     }
 }

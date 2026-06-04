@@ -6,7 +6,10 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 
 use crate::{
-    settings::{ChatMcpServer, WebSearchProvider},
+    settings::{
+        ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
+        SKILL_SCRIPT_MIN_TIMEOUT_MS,
+    },
     state::AppState,
     web_search,
 };
@@ -20,6 +23,17 @@ use super::{
 };
 
 const TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+
+pub(crate) fn effective_skill_script_timeout_ms(
+    default_timeout_ms: u64,
+    requested_timeout_ms: Option<u64>,
+) -> u64 {
+    let base_timeout_ms = default_timeout_ms.max(SKILL_SCRIPT_MIN_TIMEOUT_MS);
+    requested_timeout_ms
+        .unwrap_or(base_timeout_ms)
+        .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS)
+        .max(base_timeout_ms)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,11 +345,15 @@ async fn call_skill_tool(
         "skill_run_script" => {
             let relative_path = crate::skills::extract_relative_path(&arguments)?;
             let args = crate::skills::extract_script_args(&arguments);
+            let timeout_ms = effective_skill_script_timeout_ms(
+                settings.chat_tools.tool_timeout_ms,
+                arguments.get("timeout_ms").and_then(|value| value.as_u64()),
+            );
             crate::skills::run_skill_script(
                 record,
                 &relative_path,
                 &args,
-                settings.chat_tools.tool_timeout_ms,
+                timeout_ms,
                 &settings.chat_tools.skill_script_allowlist,
             )
             .await?
@@ -347,6 +365,7 @@ async fn call_skill_tool(
         content,
         is_error: false,
         raw: Value::Null,
+        artifacts: Vec::new(),
     })
 }
 
@@ -370,6 +389,10 @@ async fn call_native_tool(
 ) -> Result<McpToolCallResult, String> {
     let settings = state.settings_read().clone();
     let roots = &settings.chat_tools.native_tools.workspace_roots;
+
+    if tool.name == "run_python" {
+        return run_python_via_pyodide(app, state, &settings, &arguments).await;
+    }
 
     let content = match tool.name.as_str() {
         "web_search" => {
@@ -395,6 +418,7 @@ async fn call_native_tool(
                 content: web_search::format_web_context(&results),
                 is_error: false,
                 raw,
+                artifacts: Vec::new(),
             });
         }
         "web_fetch" => crate::native_tools::web_fetch(&state.http, &arguments).await?,
@@ -405,7 +429,6 @@ async fn call_native_tool(
             crate::native_tools::run_command(roots, settings.chat_tools.tool_timeout_ms, &arguments)
                 .await?
         }
-        "run_python" => run_python_via_pyodide(app, state, &settings, &arguments).await?,
         other => return Err(format!("Unknown native tool: {other}")),
     };
 
@@ -413,6 +436,7 @@ async fn call_native_tool(
         content,
         is_error: false,
         raw: Value::Null,
+        artifacts: Vec::new(),
     })
 }
 
@@ -421,7 +445,7 @@ async fn run_python_via_pyodide(
     state: &AppState,
     settings: &crate::settings::Settings,
     arguments: &Value,
-) -> Result<String, String> {
+) -> Result<McpToolCallResult, String> {
     let code = arguments
         .get("code")
         .and_then(|v| v.as_str())
@@ -465,11 +489,16 @@ async fn run_python_via_pyodide(
         tokio::time::timeout(Duration::from_millis(timeout_ms.saturating_add(5_000)), rx).await;
 
     match wait {
-        Ok(Ok((content, is_error))) => {
-            if is_error {
-                Err(content)
+        Ok(Ok(result)) => {
+            if result.is_error {
+                Err(result.content)
             } else {
-                Ok(content)
+                Ok(McpToolCallResult {
+                    content: result.content,
+                    is_error: false,
+                    raw: Value::Null,
+                    artifacts: result.artifacts,
+                })
             }
         }
         Ok(Err(_)) => Err("Python runner channel closed".to_string()),

@@ -244,6 +244,10 @@ body {
   box-shadow: none;
 }
 
+.chat-main-pane {
+  overflow: hidden;
+}
+
 /* ===== Chat 内嵌设置（对齐 Chat 侧栏 + Jan 卡片详情区） ===== */
 /* 设置面板容器查询：窗口变窄时收窄导航、模型页改单栏 */
 .settings-embedded.kv,

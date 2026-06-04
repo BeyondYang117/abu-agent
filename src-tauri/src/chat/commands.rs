@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::api::{extract_status_code, send_with_failover};
 use crate::apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
+use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
 use crate::settings::{
     chat_no_think_instruction, default_chat_system_prompt, persist_settings, Settings,
@@ -22,12 +23,15 @@ use crate::state::AppState;
 use crate::utils;
 
 use super::storage::{
-    conversation_attachments_dir, delete_conversation as delete_conv,
-    get_conversations as get_convs, load_conversation, save_conversation,
+    archive_assistant, assistant_snapshot, conversation_attachments_dir, create_assistant,
+    create_project, delete_conversation as delete_conv, delete_project, duplicate_assistant,
+    get_assistants, get_conversations as get_convs, get_projects, load_conversation,
+    save_conversation, update_assistant, update_project,
 };
 use super::{
-    Attachment, ChatMessage, ContextUsageSegment, Conversation, ConversationContextState,
-    ConversationContextSummary, ToolCallRecord, ToolCallStatus,
+    Attachment, ChatAssistant, ChatAssistantSnapshot, ChatMessage, ContextUsageSegment,
+    Conversation, ConversationContextState, ConversationContextSummary, ToolCallRecord,
+    ToolCallStatus,
 };
 
 /// 获取对话列表
@@ -66,13 +70,42 @@ pub(crate) fn chat_create_conversation(
     provider_id: Option<String>,
     model: Option<String>,
     folder: Option<String>,
+    assistant_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let settings = state.settings_read().clone();
+    let assistant_snapshot = assistant_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| assistant_snapshot(&app, id))
+        .transpose()?;
 
     // 使用提供的 provider/model，或者回退到默认模型配置。
     let (default_provider_id, default_model) = settings.effective_chat_model();
-    let provider_id = provider_id.unwrap_or(default_provider_id);
-    let model = model.unwrap_or(default_model);
+    let provider_id = provider_id
+        .and_then(non_empty_string)
+        .or_else(|| {
+            assistant_snapshot
+                .as_ref()
+                .and_then(|assistant| non_empty_string(assistant.provider_id.clone()))
+        })
+        .unwrap_or(default_provider_id);
+    let model = model
+        .and_then(non_empty_string)
+        .or_else(|| {
+            assistant_snapshot
+                .as_ref()
+                .and_then(|assistant| non_empty_string(assistant.model.clone()))
+        })
+        .unwrap_or(default_model);
+    let folder = folder.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
 
     let now = chrono::Local::now().timestamp();
     let conversation = Conversation {
@@ -81,7 +114,11 @@ pub(crate) fn chat_create_conversation(
         provider_id,
         model,
         messages: vec![],
-        active_skill_id: None,
+        active_skill_id: assistant_snapshot
+            .as_ref()
+            .and_then(|assistant| assistant.skill_id.clone()),
+        assistant_id: assistant_snapshot.as_ref().map(|assistant| assistant.id.clone()),
+        assistant_snapshot,
         created_at: now,
         updated_at: now,
         pinned: false,
@@ -94,6 +131,132 @@ pub(crate) fn chat_create_conversation(
     Ok(serde_json::json!({
         "success": true,
         "conversation": conversation,
+    }))
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[tauri::command]
+pub(crate) fn chat_get_assistants(app: AppHandle) -> Result<serde_json::Value, String> {
+    let assistants = get_assistants(&app, false)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "assistants": assistants,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_create_assistant(
+    app: AppHandle,
+    assistant: ChatAssistant,
+) -> Result<serde_json::Value, String> {
+    let assistant = create_assistant(&app, assistant)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "assistant": assistant,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_update_assistant(
+    app: AppHandle,
+    assistant: ChatAssistant,
+) -> Result<serde_json::Value, String> {
+    let assistant = update_assistant(&app, assistant)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "assistant": assistant,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_duplicate_assistant(
+    app: AppHandle,
+    assistant_id: String,
+) -> Result<serde_json::Value, String> {
+    let assistant = duplicate_assistant(&app, &assistant_id)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "assistant": assistant,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_delete_assistant(
+    app: AppHandle,
+    assistant_id: String,
+) -> Result<serde_json::Value, String> {
+    archive_assistant(&app, &assistant_id)?;
+    Ok(serde_json::json!({
+        "success": true,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_get_projects(app: AppHandle) -> Result<serde_json::Value, String> {
+    let projects = get_projects(&app)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "projects": projects,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_create_project(
+    app: AppHandle,
+    name: String,
+    description: Option<String>,
+    color: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let now = chrono::Local::now().timestamp();
+    let project = create_project(
+        &app,
+        super::ChatProject {
+            id: format!("proj_{}", Uuid::new_v4()),
+            name,
+            description,
+            color,
+            created_at: now,
+            updated_at: now,
+        },
+    )?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "project": project,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_update_project(
+    app: AppHandle,
+    project_id: String,
+    name: Option<String>,
+    description: Option<String>,
+    color: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let project = update_project(&app, &project_id, name, description, color)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "project": project,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_delete_project(
+    app: AppHandle,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    delete_project(&app, &project_id)?;
+    Ok(serde_json::json!({
+        "success": true,
     }))
 }
 
@@ -218,7 +381,11 @@ pub(crate) async fn chat_send_message(
                             "Automatic compression failed: {err}. The uncompressed request was sent because the estimate is still within the model window."
                         ));
                         save_conversation(&app, &conversation)?;
-                        emit_chat_context_state(&app, &conversation.id, &conversation.context_state);
+                        emit_chat_context_state(
+                            &app,
+                            &conversation.id,
+                            &conversation.context_state,
+                        );
                     }
                 }
             } else {
@@ -258,8 +425,13 @@ pub(crate) async fn chat_send_message(
             "conversation": conversation,
         })),
         Err(err) => {
-            rollback_user_message_after_failed_send(&app, &state, &mut conversation, &user_message.id)
-                .await?;
+            rollback_user_message_after_failed_send(
+                &app,
+                &state,
+                &mut conversation,
+                &user_message.id,
+            )
+            .await?;
             Ok(serde_json::json!({
                 "success": false,
                 "conversation": conversation,
@@ -304,6 +476,7 @@ pub(crate) fn chat_python_complete(
     run_id: String,
     content: String,
     is_error: bool,
+    artifacts: Option<Vec<ChatToolArtifact>>,
 ) -> Result<(), String> {
     let sender = state
         .pending_python_runs
@@ -311,7 +484,11 @@ pub(crate) fn chat_python_complete(
         .unwrap_or_else(|e| e.into_inner())
         .remove(&run_id);
     if let Some(sender) = sender {
-        let _ = sender.send((content, is_error));
+        let _ = sender.send(crate::mcp::types::PythonRunResult {
+            content,
+            is_error,
+            artifacts: artifacts.unwrap_or_default(),
+        });
     }
     Ok(())
 }
@@ -621,7 +798,16 @@ async fn complete_assistant_reply(
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
     let skill_registry =
         skills::build_registry(app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
-    let skill_id = resolve_forced_skill_id(&settings.chat_tools, &skill_registry, active_skill_id);
+    let requested_skill_id = active_skill_id
+        .or(conversation.active_skill_id.as_deref())
+        .or_else(|| {
+            conversation
+                .assistant_snapshot
+                .as_ref()
+                .and_then(|assistant| assistant.skill_id.as_deref())
+        });
+    let skill_id =
+        resolve_forced_skill_id(&settings.chat_tools, &skill_registry, requested_skill_id);
     let active_skill_record = skill_id
         .as_deref()
         .and_then(|id| skill_registry.find(id))
@@ -631,15 +817,17 @@ async fn complete_assistant_reply(
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
     let tools_capable = chat_tools_capable(&provider, &effective_chat_tools);
-    if !tools_capable && effective_chat_tools.skill_fallback_mode == "progressive" {
-        if skill_id.is_some() {
-            effective_chat_tools.skill_fallback_mode = "skill_md_only".to_string();
-        }
-    }
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider.supports_tools).await;
+    apply_assistant_tool_preset(&mut tools, conversation.assistant_snapshot.as_ref());
     if let Some(skill) = active_skill_record.as_ref() {
         apply_active_skill_tool_filter(&mut tools, skill);
     }
+    let tools_available = tools_capable && !tools.is_empty();
+    apply_skill_fallback_when_tools_unavailable(
+        &mut effective_chat_tools,
+        skill_id.as_deref(),
+        tools_available,
+    );
     let available_builtin_tools = available_builtin_tool_names(&tools);
     let system_prompt = build_chat_system_prompt(
         &language,
@@ -647,10 +835,11 @@ async fn complete_assistant_reply(
         thinking_enabled,
         &skill_registry,
         &effective_chat_tools,
-        tools_capable && !tools.is_empty(),
+        tools_available,
         &available_builtin_tools,
         skill_id.as_deref(),
         active_skill_detail.as_ref(),
+        conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
     );
 
@@ -725,6 +914,7 @@ async fn complete_assistant_reply(
     let mut planning_reasoning_parts: Vec<String> = Vec::new();
     let max_rounds = settings.chat_tools.max_tool_rounds.max(1);
     let mut provider_tools_unsupported = false;
+    let mut tool_planning_finished = false;
 
     if !tools.is_empty() {
         let mut tried_skill_only_tools = false;
@@ -739,22 +929,6 @@ async fn complete_assistant_reply(
                     "cancelled",
                     "",
                 );
-                if !tool_records.is_empty() {
-                    push_assistant_message(
-                        app,
-                        state,
-                        &settings,
-                        conversation,
-                        assistant_message_id,
-                        String::new(),
-                        None,
-                        tool_records,
-                        generated_api_messages,
-                        skill_id.as_deref(),
-                        title_from_first_user,
-                    )
-                    .await?;
-                }
                 return Err("cancelled".to_string());
             }
             let planning_result = tokio::select! {
@@ -777,22 +951,6 @@ async fn complete_assistant_reply(
                         "cancelled",
                         "",
                     );
-                    if !tool_records.is_empty() {
-                        push_assistant_message(
-                            app,
-                            state,
-                            &settings,
-                            conversation,
-                            assistant_message_id,
-                            String::new(),
-                            None,
-                            tool_records,
-                            generated_api_messages,
-                            skill_id.as_deref(),
-                            title_from_first_user,
-                        )
-                        .await?;
-                    }
                     return Err("cancelled".to_string());
                 }
             };
@@ -825,6 +983,11 @@ async fn complete_assistant_reply(
                 }
                 Err(err) => return Err(err),
             };
+            let tool_calls = extract_tool_calls(&message);
+            if tool_calls.is_empty() {
+                tool_planning_finished = true;
+                break;
+            }
             if let Some(reasoning) = extract_reasoning_content(&message) {
                 emit_chat_stream_delta(
                     app,
@@ -835,49 +998,6 @@ async fn complete_assistant_reply(
                     Some(&reasoning),
                 );
                 planning_reasoning_parts.push(reasoning);
-            }
-            let tool_calls = extract_tool_calls(&message);
-            if tool_calls.is_empty() {
-                let response = crate::chat::dsml_tools::strip_dsml_tool_markup(
-                    &assistant_content_from_api_message(&message),
-                );
-                let reasoning = merge_reasoning(&planning_reasoning_parts, None);
-                if !response.is_empty() {
-                    emit_chat_stream_delta(
-                        app,
-                        &conversation.id,
-                        &run_id,
-                        &assistant_message_id,
-                        &response,
-                        None,
-                    );
-                }
-                emit_chat_stream_done(
-                    app,
-                    &conversation.id,
-                    &run_id,
-                    &assistant_message_id,
-                    "done",
-                    &response,
-                );
-                if !generated_api_messages.is_empty() {
-                    generated_api_messages.push(message);
-                }
-                push_assistant_message(
-                    app,
-                    state,
-                    &settings,
-                    conversation,
-                    assistant_message_id,
-                    response,
-                    reasoning,
-                    tool_records,
-                    generated_api_messages,
-                    skill_id.as_deref(),
-                    title_from_first_user,
-                )
-                .await?;
-                return Ok(());
             }
 
             let assistant_message = assistant_api_message_for_tool_calls(&message, &tool_calls);
@@ -898,8 +1018,9 @@ async fn complete_assistant_reply(
                         );
                         tool_records.push(record);
                     }
-                    let content = disabled
-                        .unwrap_or_else(|| format!("Unknown tool requested: {}", tool_call.function_name));
+                    let content = disabled.unwrap_or_else(|| {
+                        format!("Unknown tool requested: {}", tool_call.function_name)
+                    });
                     let tool_message = serde_json::json!({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -952,7 +1073,7 @@ async fn complete_assistant_reply(
                 tool_records.push(record);
             }
         }
-        if !provider_tools_unsupported {
+        if !provider_tools_unsupported && !tool_planning_finished {
             runtime_messages.push(serde_json::json!({
                 "role": "system",
                 "content": "已达到本轮工具调用轮次上限。请根据对话中已有的工具返回结果直接回答用户，不要再调用任何工具。"
@@ -970,6 +1091,7 @@ async fn complete_assistant_reply(
             &mut effective_chat_tools,
             skill_id.as_deref(),
             active_skill_detail.as_ref(),
+            conversation.assistant_snapshot.as_ref(),
             settings.chat.system_prompt.as_str(),
         );
     }
@@ -1024,6 +1146,9 @@ async fn complete_assistant_reply(
         let final_reasoning_for_api = stream.reasoning.clone();
         let reasoning = merge_reasoning(&planning_reasoning_parts, stream.reasoning);
         let response = sanitize_assistant_text_response(&stream.content);
+        if response.trim().is_empty() {
+            return Err(empty_assistant_response_error("Chat stream"));
+        }
         if !generated_api_messages.is_empty() {
             generated_api_messages.push(final_assistant_api_message(
                 &response,
@@ -1056,25 +1181,34 @@ async fn complete_assistant_reply(
             }
         };
         let response = sanitize_assistant_text_response(
-            &message
+            message
                 .get("content")
                 .and_then(|content| content.as_str())
                 .unwrap_or_default(),
         );
-        let reasoning = merge_reasoning(
-            &planning_reasoning_parts,
-            extract_reasoning_content(&message),
-        );
-        if !response.is_empty() {
-            emit_chat_stream_delta(
+        if response.trim().is_empty() {
+            emit_chat_stream_done(
                 app,
                 &conversation.id,
                 &run_id,
                 &assistant_message_id,
-                &response,
-                None,
+                "error",
+                "",
             );
+            return Err(empty_assistant_response_error("Chat API"));
         }
+        let reasoning = merge_reasoning(
+            &planning_reasoning_parts,
+            extract_reasoning_content(&message),
+        );
+        emit_chat_stream_delta(
+            app,
+            &conversation.id,
+            &run_id,
+            &assistant_message_id,
+            &response,
+            None,
+        );
         emit_chat_stream_done(
             app,
             &conversation.id,
@@ -1341,6 +1475,7 @@ fn build_chat_system_prompt(
     available_builtin_tools: &[String],
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
+    assistant_snapshot: Option<&ChatAssistantSnapshot>,
     custom_system_prompt: &str,
 ) -> String {
     build_chat_system_prompt_with_segments(
@@ -1353,6 +1488,7 @@ fn build_chat_system_prompt(
         available_builtin_tools,
         active_skill_id,
         active_skill_detail,
+        assistant_snapshot,
         custom_system_prompt,
     )
     .0
@@ -1368,6 +1504,7 @@ fn build_chat_system_prompt_with_segments(
     available_builtin_tools: &[String],
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
+    assistant_snapshot: Option<&ChatAssistantSnapshot>,
     custom_system_prompt: &str,
 ) -> (String, Vec<ContextUsageSegment>) {
     let mut prompt = String::new();
@@ -1384,6 +1521,18 @@ fn build_chat_system_prompt_with_segments(
         "System prompt",
         &base_prompt,
     );
+    if let Some(assistant) = assistant_snapshot {
+        let assistant_prompt = assistant_prompt_segment(assistant);
+        if !assistant_prompt.trim().is_empty() {
+            append_context_segment(
+                &mut prompt,
+                &mut segments,
+                "assistant",
+                "Assistant",
+                &assistant_prompt,
+            );
+        }
+    }
     append_context_segment(
         &mut prompt,
         &mut segments,
@@ -1435,14 +1584,10 @@ fn build_chat_system_prompt_with_segments(
         || active_skill_id.is_some()
         || chat_tools.skill_fallback_mode != "legacy_full_body";
     if include_catalog {
-        let catalog = skills::format_catalog(
-            registry,
-            active_skill_id,
-            tools_available,
-            |skill_id| {
+        let catalog =
+            skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
                 crate::settings::is_skill_enabled(chat_tools, skill_id)
-            },
-        );
+            });
         if !catalog.is_empty() {
             append_context_segment(&mut prompt, &mut segments, "skills", "Skills", &catalog);
         }
@@ -1472,7 +1617,13 @@ fn build_chat_system_prompt_with_segments(
                 ". Progressive skill loading requires tool support; switch provider or set fallback to SKILL.md only.",
             );
         }
-        append_context_segment(&mut prompt, &mut segments, "skills", "Skills", &skill_prompt);
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "skills",
+            "Skills",
+            &skill_prompt,
+        );
     } else if tools_available && chat_tools.skill_auto_match {
         let builtin_hint = if available_builtin_tools.is_empty() {
             "Kivio built-in tools".to_string()
@@ -1491,7 +1642,10 @@ fn build_chat_system_prompt_with_segments(
             let builtin_hint = if available_builtin_tools.is_empty() {
                 "Kivio built-in tools".to_string()
             } else {
-                format!("Kivio built-in tools ({})", available_builtin_tools.join(", "))
+                format!(
+                    "Kivio built-in tools ({})",
+                    available_builtin_tools.join(", ")
+                )
             };
             append_context_segment(
                 &mut prompt,
@@ -1552,6 +1706,29 @@ fn append_context_segment(
     });
 }
 
+fn assistant_prompt_segment(assistant: &ChatAssistantSnapshot) -> String {
+    let mut parts = vec![format!("Active assistant: {}", assistant.name)];
+    if !assistant.description.trim().is_empty() {
+        parts.push(format!("Assistant purpose: {}", assistant.description.trim()));
+    }
+    if !assistant.system_prompt.trim().is_empty() {
+        parts.push(format!(
+            "Assistant instructions:\n{}",
+            assistant.system_prompt.trim()
+        ));
+    }
+    if !assistant.greeting.trim().is_empty() {
+        parts.push(format!("Assistant greeting: {}", assistant.greeting.trim()));
+    }
+    if !assistant.conversation_starters.is_empty() {
+        parts.push(format!(
+            "Representative starter prompts: {}",
+            assistant.conversation_starters.join(" | ")
+        ));
+    }
+    parts.join("\n\n")
+}
+
 fn merge_context_segments(segments: Vec<ContextUsageSegment>) -> Vec<ContextUsageSegment> {
     let mut merged: Vec<ContextUsageSegment> = Vec::new();
     for segment in segments {
@@ -1570,6 +1747,7 @@ fn merge_context_segments(segments: Vec<ContextUsageSegment>) -> Vec<ContextUsag
 fn context_segment_color(id: &str) -> Option<&'static str> {
     match id {
         "system_prompt" => Some("#7A7A7A"),
+        "assistant" => Some("#8A6FBD"),
         "runtime_context" => Some("#3E8B60"),
         "tool_definitions" => Some("#7553CF"),
         "skills" => Some("#BD8A3E"),
@@ -1784,8 +1962,15 @@ async fn compute_context_state(
     let thinking_enabled = settings.chat.thinking_enabled;
     let skill_registry =
         skills::build_registry(app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
-    let active_skill_id = conversation.active_skill_id.as_deref();
-    let active_skill_detail = active_skill_id.and_then(|id| {
+    let requested_skill_id = conversation.active_skill_id.as_deref().or_else(|| {
+        conversation
+            .assistant_snapshot
+            .as_ref()
+            .and_then(|assistant| assistant.skill_id.as_deref())
+    });
+    let active_skill_id =
+        resolve_forced_skill_id(&settings.chat_tools, &skill_registry, requested_skill_id);
+    let active_skill_detail = active_skill_id.as_deref().and_then(|id| {
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
@@ -1793,19 +1978,21 @@ async fn compute_context_state(
         && !provider_is_apple
         && (settings.chat_tools.enabled
             || crate::settings::chat_native_tools_enabled(&settings.chat_tools));
-    if !tools_capable && effective_chat_tools.skill_fallback_mode == "progressive" {
-        if active_skill_id.is_some() {
-            effective_chat_tools.skill_fallback_mode = "skill_md_only".to_string();
-        }
-    }
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider_supports_tools).await;
+    apply_assistant_tool_preset(&mut tools, conversation.assistant_snapshot.as_ref());
     if let Some(skill) = active_skill_id
+        .as_deref()
         .and_then(|id| skill_registry.find(id))
     {
         apply_active_skill_tool_filter(&mut tools, skill);
     }
     let available_builtin_tools = available_builtin_tool_names(&tools);
     let tools_available = tools_capable && !tools.is_empty();
+    apply_skill_fallback_when_tools_unavailable(
+        &mut effective_chat_tools,
+        active_skill_id.as_deref(),
+        tools_available,
+    );
 
     let (system_prompt, mut segments) = build_chat_system_prompt_with_segments(
         &language,
@@ -1815,8 +2002,9 @@ async fn compute_context_state(
         &effective_chat_tools,
         tools_available,
         &available_builtin_tools,
-        active_skill_id,
+        active_skill_id.as_deref(),
         active_skill_detail.as_ref(),
+        conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
     );
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
@@ -2046,7 +2234,9 @@ fn format_messages_for_context_summary(messages: &[ChatMessage]) -> String {
                 let names = message
                     .attachments
                     .iter()
-                    .map(|attachment| format!("{} ({})", attachment.name, attachment.attachment_type))
+                    .map(|attachment| {
+                        format!("{} ({})", attachment.name, attachment.attachment_type)
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 if !content.is_empty() {
@@ -2113,7 +2303,10 @@ fn emit_chat_context_state(
     );
 }
 
-fn context_status(usage_ratio: Option<f32>, summary: Option<&ConversationContextSummary>) -> String {
+fn context_status(
+    usage_ratio: Option<f32>,
+    summary: Option<&ConversationContextSummary>,
+) -> String {
     if summary.is_some_and(|item| item.stale) {
         return "stale".to_string();
     }
@@ -2174,7 +2367,10 @@ async fn list_tools_for_chat(
         .unwrap_or_default()
 }
 
-fn apply_active_skill_tool_filter(tools: &mut Vec<ChatToolDefinition>, skill: &skills::SkillRecord) {
+fn apply_active_skill_tool_filter(
+    tools: &mut Vec<ChatToolDefinition>,
+    skill: &skills::SkillRecord,
+) {
     if skill.allowed_tools.is_empty() {
         return;
     }
@@ -2187,6 +2383,37 @@ fn apply_active_skill_tool_filter(tools: &mut Vec<ChatToolDefinition>, skill: &s
                 .iter()
                 .any(|recommended| tool_matches_recommended_name(tool, recommended))
     });
+}
+
+fn apply_assistant_tool_preset(
+    tools: &mut Vec<ChatToolDefinition>,
+    assistant_snapshot: Option<&ChatAssistantSnapshot>,
+) {
+    let preset = assistant_snapshot
+        .map(|assistant| assistant.tool_preset.trim())
+        .filter(|preset| !preset.is_empty())
+        .unwrap_or("inherit");
+    match preset {
+        "none" => tools.clear(),
+        "skills" => tools.retain(|tool| tool.source == "skill"),
+        "inherit" | "all" => {}
+        _ => {}
+    }
+}
+
+fn apply_skill_fallback_when_tools_unavailable(
+    chat_tools: &mut crate::settings::ChatToolsConfig,
+    active_skill_id: Option<&str>,
+    tools_available: bool,
+) {
+    if !tools_available
+        && active_skill_id
+            .map(|id| !id.trim().is_empty())
+            .unwrap_or(false)
+        && chat_tools.skill_fallback_mode == "progressive"
+    {
+        chat_tools.skill_fallback_mode = "skill_md_only".to_string();
+    }
 }
 
 fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String> {
@@ -2219,10 +2446,10 @@ fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
     }
 }
 
-/// Kivio 内置工具（Skill 三件套 + 只读联网）始终自动执行，不走审批弹窗。
+/// Kivio 内置工具始终自动执行，不走审批弹窗。
 fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
     (tool.source == "skill" && is_native_skill_tool_name(&tool.name))
-        || (tool.source == "native" && matches!(tool.name.as_str(), "web_search" | "web_fetch"))
+        || tool.source == "native"
 }
 
 fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Option<String> {
@@ -2230,13 +2457,35 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
         return None;
     }
     let list = available_builtin_tools.join(", ");
+    let has_web_search = available_builtin_tools
+        .iter()
+        .any(|tool| tool.as_str() == "web_search");
+    let has_web_fetch = available_builtin_tools
+        .iter()
+        .any(|tool| tool.as_str() == "web_fetch");
+    let zh_live_access_hint = match (has_web_search, has_web_fetch) {
+        (true, true) => "实时搜索或网页读取必须优先用 web_search/web_fetch 或对应 Skill 脚本。",
+        (true, false) => "实时搜索必须优先用 web_search 或对应 Skill 脚本。",
+        (false, true) => "网页读取必须优先用 web_fetch 或对应 Skill 脚本。",
+        (false, false) => "需要联网/API 访问时，请启用对应联网工具或使用对应 Skill 脚本。",
+    };
+    let en_live_access_hint = match (has_web_search, has_web_fetch) {
+        (true, true) => {
+            "Use web_search/web_fetch or the relevant Skill script for live web/API access."
+        }
+        (true, false) => "Use web_search or the relevant Skill script for live web/API access.",
+        (false, true) => "Use web_fetch or the relevant Skill script for web page access.",
+        (false, false) => {
+            "Enable the relevant web tool or use the relevant Skill script for live web/API access."
+        }
+    };
     let prompt = if language.starts_with("zh") {
         format!(
-            "Kivio 内置工具（已启用）：{list}。只允许调用这里列出的内置工具。文件路径须在用户主目录内；可选工作区根目录进一步收紧。write_file、edit_file、run_command 会请求用户确认；run_command 非零退出码代表执行失败。run_python 在 Pyodide 沙盒中运行，导入 numpy、matplotlib、pandas、scipy、sympy、scikit-learn、statsmodels、pillow、seaborn、micropip 等常用包时会自动加载，适合数据运算、统计分析、机器学习基础分析和生成图表；不要为了这些 Python 包使用 host pip 安装，除非用户明确要求操作本机环境。用户要用 Python 跑代码/计算时优先 run_python，不要用 skill_run_script，除非用户点名某个 Skill。"
+            "Kivio 内置工具（已启用）：{list}。只允许调用这里列出的内置工具。文件路径须在用户主目录内；可选工作区根目录进一步收紧。write_file、edit_file、run_command 会请求用户确认；run_command 非零退出码代表执行失败，不要用它运行 Skill 自带脚本，Skill 脚本必须走 skill_run_script。run_command 不得用 pip/pip3/python -m pip 安装包来绕过 run_python 沙盒失败；只有用户明确要求修改本机 Python 环境时，才能设置 allow_host_python_package_install=true 且使用 --user 或虚拟环境。run_python 在 Pyodide 沙盒中运行，无本机文件系统和联网能力；导入 numpy、matplotlib、pandas、scipy、sympy、scikit-learn、statsmodels、pillow、seaborn、micropip 等常用包时会自动加载，适合数据运算、统计分析、机器学习基础分析和生成图表；用 run_python 生成图像/图表时，保存为 Pyodide 当前目录下的相对文件名（例如 output.png），不要保存到 /Users 等本机路径，不要 print base64 或 data:image URL；Kivio 会自动捕获并渲染生成的图片。不要在 run_python 里使用 tavily、requests、httpx、urllib3、aiohttp 等联网/API 客户端，{zh_live_access_hint}不要为了这些 Python 包使用 host pip 安装，除非用户明确要求操作本机环境。用户要用 Python 跑代码/计算时优先 run_python，不要用 skill_run_script，除非用户点名某个 Skill。"
         )
     } else {
         format!(
-            "Kivio built-in tools enabled: {list}. Only call built-in tools listed here. Paths must stay under the user home directory (optional workspace roots further restrict). write_file, edit_file, and run_command require user approval; run_command treats non-zero exit codes as failures. run_python runs in a Pyodide sandbox and auto-loads common packages when imported, including numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip; use it for data computation, statistical analysis, basic machine-learning analysis, code execution, and charts. Do not use host pip to install these Python packages unless the user explicitly asks to modify the host environment. For generic Python requests, use run_python—not skill_run_script—unless the user named a specific skill."
+            "Kivio built-in tools enabled: {list}. Only call built-in tools listed here. Paths must stay under the user home directory (optional workspace roots further restrict). write_file, edit_file, and run_command require user approval; run_command treats non-zero exit codes as failures. Do not use run_command to run Skill bundled scripts; use skill_run_script. Do not use pip/pip3/python -m pip through run_command to bypass run_python sandbox failures; only set allow_host_python_package_install=true when the user explicitly asks to modify the host Python environment, and then use --user or a virtual environment. run_python runs in a Pyodide sandbox with no host filesystem or network access and auto-loads common packages when imported, including numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip; use it for data computation, statistical analysis, basic machine-learning analysis, code execution, and charts. When generating images/charts with run_python, save them to relative filenames in the Pyodide current directory such as output.png; do not save to host paths such as /Users, and do not print base64 or data:image URLs. Kivio captures and renders generated images automatically. Do not use network/API clients such as tavily, requests, httpx, urllib3, or aiohttp in run_python; {en_live_access_hint} Do not use host pip to install these Python packages unless the user explicitly asks to modify the host environment. For generic Python requests, use run_python—not skill_run_script—unless the user named a specific skill."
         )
     };
     Some(prompt)
@@ -2251,6 +2500,7 @@ fn apply_provider_tools_fallback(
     chat_tools: &mut crate::settings::ChatToolsConfig,
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
+    assistant_snapshot: Option<&ChatAssistantSnapshot>,
     custom_system_prompt: &str,
 ) {
     if active_skill_id.is_some() && chat_tools.skill_fallback_mode == "progressive" {
@@ -2266,6 +2516,7 @@ fn apply_provider_tools_fallback(
         &[],
         active_skill_id,
         active_skill_detail,
+        assistant_snapshot,
         custom_system_prompt,
     );
     patch_system_message(runtime_messages, &fallback_prompt);
@@ -2309,12 +2560,13 @@ fn build_chat_api_messages(
         } else {
             message.content.as_str()
         };
+        let sanitized_content = sanitize_image_payloads_for_model(content);
         if Some(idx) == last_user_idx && !last_user_image_paths.is_empty() {
             let mut parts = last_user_image_paths
                 .iter()
                 .map(image_content_part)
                 .collect::<Result<Vec<_>, _>>()?;
-            parts.push(serde_json::json!({ "type": "text", "text": content }));
+            parts.push(serde_json::json!({ "type": "text", "text": sanitized_content }));
             messages.push(serde_json::json!({
                 "role": message.role,
                 "content": parts,
@@ -2322,12 +2574,12 @@ fn build_chat_api_messages(
         } else {
             messages.push(serde_json::json!({
                 "role": message.role,
-                "content": content,
+                "content": sanitized_content,
             }));
         }
         if message.role == "assistant" && !message.api_messages.is_empty() {
             messages.pop();
-            messages.extend(message.api_messages.iter().cloned());
+            messages.extend(message.api_messages.iter().map(sanitize_api_message_for_model));
         }
     }
 
@@ -2368,6 +2620,7 @@ fn build_apple_chat_prompt(
         } else {
             message.content.as_str()
         };
+        let content = sanitize_image_payloads_for_model(content);
         if !content.trim().is_empty() {
             parts.push(format!("{role}:\n{}", content.trim()));
         }
@@ -2715,6 +2968,10 @@ async fn stream_scoped_chat_completion(
             }
             if data == "[DONE]" {
                 let cleaned = sanitize_assistant_text_response(full.trim());
+                if cleaned.trim().is_empty() {
+                    emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", "");
+                    return Err(empty_assistant_response_error("Chat stream"));
+                }
                 emit_chat_stream_done(app, conversation_id, run_id, message_id, "done", &cleaned);
                 return Ok(ChatStreamOutput::new(
                     cleaned,
@@ -2726,40 +2983,39 @@ async fn stream_scoped_chat_completion(
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            let delta = value
-                .get("choices")
-                .and_then(|choices| choices.get(0))
-                .and_then(|choice| choice.get("delta"));
-            if let Some(reasoning) = delta
-                .and_then(|delta| {
-                    delta
-                        .get("reasoning_content")
-                        .or_else(|| delta.get("reasoning"))
-                })
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.is_empty())
-            {
-                reasoning_full.push_str(reasoning);
-                emit_chat_stream_delta(
-                    app,
-                    conversation_id,
-                    run_id,
-                    message_id,
-                    "",
-                    Some(reasoning),
-                );
+            if let Some((reasoning, mode)) = extract_chat_stream_reasoning(&value) {
+                if let Some(reasoning_delta) =
+                    append_chat_stream_text(&mut reasoning_full, reasoning, mode)
+                {
+                    emit_chat_stream_delta(
+                        app,
+                        conversation_id,
+                        run_id,
+                        message_id,
+                        "",
+                        Some(&reasoning_delta),
+                    );
+                }
             }
-            if let Some(content) = delta
-                .and_then(|delta| delta.get("content"))
-                .and_then(|value| value.as_str())
-                .filter(|value| !value.is_empty())
-            {
-                full.push_str(content);
-                emit_chat_stream_delta(app, conversation_id, run_id, message_id, content, None);
+            if let Some((content, mode)) = extract_chat_stream_text(&value) {
+                if let Some(content_delta) = append_chat_stream_text(&mut full, content, mode) {
+                    emit_chat_stream_delta(
+                        app,
+                        conversation_id,
+                        run_id,
+                        message_id,
+                        &content_delta,
+                        None,
+                    );
+                }
             }
         }
     }
     let cleaned = sanitize_assistant_text_response(full.trim());
+    if cleaned.trim().is_empty() {
+        emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", "");
+        return Err(empty_assistant_response_error("Chat stream"));
+    }
     emit_chat_stream_done(app, conversation_id, run_id, message_id, "done", &cleaned);
     Ok(ChatStreamOutput::new(
         cleaned,
@@ -2933,6 +3189,17 @@ async fn stream_anthropic_completion(
                     current_tool_input_parts.clear();
                 }
                 Some(anthropic_adapter::AnthropicSseEvent::MessageStop) => {
+                    if full.trim().is_empty() {
+                        emit_chat_stream_done(
+                            app,
+                            conversation_id,
+                            run_id,
+                            message_id,
+                            "error",
+                            "",
+                        );
+                        return Err(empty_assistant_response_error("Anthropic stream"));
+                    }
                     emit_chat_stream_done(
                         app,
                         conversation_id,
@@ -2948,6 +3215,17 @@ async fn stream_anthropic_completion(
                     ));
                 }
                 Some(anthropic_adapter::AnthropicSseEvent::MessageStopWithReason(_)) => {
+                    if full.trim().is_empty() {
+                        emit_chat_stream_done(
+                            app,
+                            conversation_id,
+                            run_id,
+                            message_id,
+                            "error",
+                            "",
+                        );
+                        return Err(empty_assistant_response_error("Anthropic stream"));
+                    }
                     emit_chat_stream_done(
                         app,
                         conversation_id,
@@ -2976,6 +3254,11 @@ async fn stream_anthropic_completion(
                 None => {}
             }
         }
+    }
+
+    if full.trim().is_empty() {
+        emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", "");
+        return Err(empty_assistant_response_error("Anthropic stream"));
     }
 
     emit_chat_stream_done(
@@ -3077,8 +3360,7 @@ fn extract_openai_tool_calls(message: &Value) -> Vec<PendingToolCall> {
                         .and_then(|value| value.as_str())
                         .unwrap_or("{}")
                         .to_string();
-                    let (arguments, arguments_parse_error) =
-                        parse_tool_arguments(&arguments_raw);
+                    let (arguments, arguments_parse_error) = parse_tool_arguments(&arguments_raw);
                     Some(PendingToolCall {
                         id: call
                             .get("id")
@@ -3106,7 +3388,9 @@ pub(crate) fn parse_tool_arguments(arguments_raw: &str) -> (Value, Option<String
         Ok(arguments) => (arguments, None),
         Err(err) => (
             Value::Null,
-            Some(format!("Tool arguments JSON is invalid or incomplete: {err}")),
+            Some(format!(
+                "Tool arguments JSON is invalid or incomplete: {err}"
+            )),
         ),
     }
 }
@@ -3161,6 +3445,186 @@ fn sanitize_assistant_text_response(content: &str) -> String {
     stripped
 }
 
+fn sanitize_api_message_for_model(message: &Value) -> Value {
+    let mut sanitized = message.clone();
+    if let Some(content) = sanitized.get_mut("content") {
+        sanitize_api_content_for_model(content);
+    }
+    sanitized
+}
+
+fn sanitize_api_content_for_model(content: &mut Value) {
+    match content {
+        Value::String(text) => {
+            *text = sanitize_image_payloads_for_model(text);
+        }
+        Value::Array(parts) => {
+            for part in parts {
+                if let Some(text) = part.get("text").and_then(|value| value.as_str()) {
+                    let sanitized = sanitize_image_payloads_for_model(text);
+                    if let Some(text_value) = part.get_mut("text") {
+                        *text_value = Value::String(sanitized);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_image_payloads_for_model(content: &str) -> String {
+    let without_data_urls = strip_image_data_urls_for_model(content);
+    without_data_urls
+        .lines()
+        .map(|line| {
+            if looks_like_inline_image_base64(line.trim()) {
+                "[image base64 omitted; image is available as a tool artifact]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_image_data_urls_for_model(content: &str) -> String {
+    let mut output = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find("data:image/") {
+        output.push_str(&rest[..start]);
+        let after_start = &rest[start..];
+        let Some(base64_marker) = after_start.find(";base64,") else {
+            output.push_str("data:image/");
+            rest = &after_start["data:image/".len()..];
+            continue;
+        };
+        let payload_start = start + base64_marker + ";base64,".len();
+        let mut payload_end = payload_start;
+        for (offset, ch) in rest[payload_start..].char_indices() {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '=') {
+                payload_end = payload_start + offset + ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        output.push_str("[image data URL omitted; image is available as a tool artifact]");
+        rest = &rest[payload_end..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn looks_like_inline_image_base64(value: &str) -> bool {
+    if value.len() < 128 || !value.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+    }) {
+        return false;
+    }
+    value.starts_with("iVBORw0KGgo")
+        || value.starts_with("/9j/")
+        || value.starts_with("R0lGOD")
+        || value.starts_with("UklGR")
+        || value.starts_with("PHN2Zy")
+        || value.starts_with("PD94bWwg")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatStreamTextMode {
+    Delta,
+    Snapshot,
+}
+
+fn extract_chat_stream_text(value: &Value) -> Option<(&str, ChatStreamTextMode)> {
+    let choice = value.get("choices").and_then(|choices| choices.get(0))?;
+
+    if let Some(content) = choice
+        .get("delta")
+        .and_then(|delta| delta.get("content"))
+        .and_then(|content| content.as_str())
+        .filter(|content| !content.is_empty())
+    {
+        return Some((content, ChatStreamTextMode::Delta));
+    }
+
+    if let Some(content) = choice
+        .get("text")
+        .and_then(|content| content.as_str())
+        .filter(|content| !content.is_empty())
+    {
+        return Some((content, ChatStreamTextMode::Delta));
+    }
+
+    choice
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .filter(|content| !content.is_empty())
+        .map(|content| (content, ChatStreamTextMode::Snapshot))
+}
+
+fn extract_chat_stream_reasoning(value: &Value) -> Option<(&str, ChatStreamTextMode)> {
+    let choice = value.get("choices").and_then(|choices| choices.get(0))?;
+
+    if let Some(reasoning) = choice
+        .get("delta")
+        .and_then(|delta| {
+            delta
+                .get("reasoning_content")
+                .or_else(|| delta.get("reasoning"))
+        })
+        .and_then(|content| content.as_str())
+        .filter(|content| !content.is_empty())
+    {
+        return Some((reasoning, ChatStreamTextMode::Delta));
+    }
+
+    choice
+        .get("message")
+        .and_then(|message| {
+            message
+                .get("reasoning_content")
+                .or_else(|| message.get("reasoning"))
+        })
+        .and_then(|content| content.as_str())
+        .filter(|content| !content.is_empty())
+        .map(|content| (content, ChatStreamTextMode::Snapshot))
+}
+
+fn append_chat_stream_text(
+    full: &mut String,
+    text: &str,
+    mode: ChatStreamTextMode,
+) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+
+    match mode {
+        ChatStreamTextMode::Delta => {
+            full.push_str(text);
+            Some(text.to_string())
+        }
+        ChatStreamTextMode::Snapshot => {
+            if text == full || full.starts_with(text) {
+                return None;
+            }
+            if text.starts_with(full.as_str()) {
+                let delta = text[full.len()..].to_string();
+                full.clear();
+                full.push_str(text);
+                return if delta.is_empty() { None } else { Some(delta) };
+            }
+
+            full.push_str(text);
+            Some(text.to_string())
+        }
+    }
+}
+
+fn empty_assistant_response_error(scope: &str) -> String {
+    format!("{scope} returned an empty assistant response")
+}
+
 fn match_tool_call<'a>(
     tools: &'a [ChatToolDefinition],
     function_name: &str,
@@ -3204,6 +3668,7 @@ fn unknown_tool_record(call: &PendingToolCall, round: u8, error: String) -> Tool
         completed_at: Some(now),
         round,
         sensitive: false,
+        artifacts: Vec::new(),
     }
 }
 
@@ -3228,6 +3693,7 @@ fn invalid_tool_arguments_record(
         completed_at: Some(now),
         round,
         sensitive: false,
+        artifacts: Vec::new(),
     }
 }
 
@@ -3259,6 +3725,7 @@ async fn execute_chat_tool_call(
         completed_at: None,
         round,
         sensitive: tool.sensitive,
+        artifacts: Vec::new(),
     };
     emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
 
@@ -3318,6 +3785,7 @@ async fn execute_chat_tool_call(
     let tool_content = match result {
         Ok(Ok(output)) if !output.is_error => {
             record.status = ToolCallStatus::Success;
+            record.artifacts = output.artifacts.clone();
             record.result_preview = Some(truncate_chars(
                 &format_tool_result_preview(&output.content),
                 max_tool_output_chars,
@@ -3352,6 +3820,12 @@ fn effective_tool_timeout_ms(
     arguments: &Value,
 ) -> u64 {
     let default_timeout_ms = settings.chat_tools.tool_timeout_ms;
+    if tool.source == "skill" && tool.name == "skill_run_script" {
+        return crate::mcp::registry::effective_skill_script_timeout_ms(
+            default_timeout_ms,
+            arguments.get("timeout_ms").and_then(|value| value.as_u64()),
+        );
+    }
     if tool.source == "native" && matches!(tool.name.as_str(), "run_command" | "run_python") {
         return arguments
             .get("timeout_ms")
@@ -3451,6 +3925,7 @@ fn emit_chat_tool_record(
             "durationMs": record.duration_ms,
             "round": record.round,
             "sensitive": record.sensitive,
+            "artifacts": record.artifacts,
         }),
     );
 }
@@ -3854,6 +4329,7 @@ pub(crate) fn chat_update_conversation(
     provider_id: Option<String>,
     model: Option<String>,
     active_skill_id: Option<String>,
+    assistant_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
 
@@ -3863,8 +4339,13 @@ pub(crate) fn chat_update_conversation(
     if let Some(p) = pinned {
         conversation.pinned = p;
     }
-    if folder.is_some() {
-        conversation.folder = folder;
+    if let Some(folder) = folder {
+        let trimmed = folder.trim();
+        conversation.folder = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
     }
     let provider_model_changed = provider_id.is_some() || model.is_some();
     if let Some(provider_id) = provider_id {
@@ -3880,6 +4361,19 @@ pub(crate) fn chat_update_conversation(
         } else {
             Some(trimmed.to_string())
         };
+    }
+    if let Some(assistant_id) = assistant_id {
+        let trimmed = assistant_id.trim();
+        if trimmed.is_empty() {
+            conversation.assistant_id = None;
+            conversation.assistant_snapshot = None;
+            conversation.active_skill_id = None;
+        } else {
+            let snapshot = assistant_snapshot(&app, trimmed)?;
+            conversation.active_skill_id = snapshot.skill_id.clone();
+            conversation.assistant_id = Some(snapshot.id.clone());
+            conversation.assistant_snapshot = Some(snapshot);
+        }
     }
 
     conversation.updated_at = chrono::Local::now().timestamp();
@@ -4101,6 +4595,7 @@ mod tests {
             completed_at: None,
             round: 1,
             sensitive: true,
+            artifacts: Vec::new(),
         };
 
         let summary = format_tool_approval_summary(&record);
@@ -4125,6 +4620,7 @@ mod tests {
             completed_at: None,
             round: 1,
             sensitive: true,
+            artifacts: Vec::new(),
         };
 
         let summary = format_tool_approval_summary(&record);
@@ -4175,12 +4671,193 @@ mod tests {
             &["run_python".to_string()],
             None,
             None,
+            None,
             "",
         );
 
         assert!(prompt.contains("run_python"));
         assert!(!prompt.contains("web_search"));
         assert!(!prompt.contains("web_fetch"));
+    }
+
+    fn test_assistant_snapshot(tool_preset: &str, skill_id: Option<&str>) -> ChatAssistantSnapshot {
+        ChatAssistantSnapshot {
+            id: "asst_test".to_string(),
+            name: "Test Assistant".to_string(),
+            description: String::new(),
+            system_prompt: String::new(),
+            provider_id: String::new(),
+            model: String::new(),
+            skill_id: skill_id.map(str::to_string),
+            tool_preset: tool_preset.to_string(),
+            conversation_starters: Vec::new(),
+            greeting: String::new(),
+        }
+    }
+
+    fn test_mcp_tool() -> ChatToolDefinition {
+        ChatToolDefinition {
+            id: "mcp__demo__search".to_string(),
+            name: "search".to_string(),
+            description: "Search demo".to_string(),
+            source: "mcp".to_string(),
+            server_id: Some("demo".to_string()),
+            server_name: Some("Demo".to_string()),
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+            sensitive: false,
+        }
+    }
+
+    #[test]
+    fn assistant_tool_preset_none_disables_all_tools() {
+        let assistant = test_assistant_snapshot("none", Some("doc"));
+        let mut tools = vec![
+            crate::mcp::types::native_skill_activate_tool(),
+            crate::mcp::types::native_web_fetch_tool(),
+            test_mcp_tool(),
+        ];
+
+        apply_assistant_tool_preset(&mut tools, Some(&assistant));
+
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn assistant_tool_preset_skills_keeps_only_skill_runtime_tools() {
+        let assistant = test_assistant_snapshot("skills", Some("doc"));
+        let mut tools = vec![
+            crate::mcp::types::native_skill_activate_tool(),
+            crate::mcp::types::native_skill_read_file_tool(),
+            crate::mcp::types::native_web_fetch_tool(),
+            test_mcp_tool(),
+        ];
+
+        apply_assistant_tool_preset(&mut tools, Some(&assistant));
+
+        assert_eq!(tools.len(), 2);
+        assert!(tools.iter().all(|tool| tool.source == "skill"));
+        assert!(tools.iter().any(|tool| tool.name == "skill_activate"));
+        assert!(tools.iter().any(|tool| tool.name == "skill_read_file"));
+    }
+
+    #[test]
+    fn assistant_tool_preset_inherit_and_all_leave_tools_unchanged() {
+        for preset in ["inherit", "all", "unexpected"] {
+            let assistant = test_assistant_snapshot(preset, None);
+            let mut tools = vec![
+                crate::mcp::types::native_skill_activate_tool(),
+                crate::mcp::types::native_web_fetch_tool(),
+                test_mcp_tool(),
+            ];
+
+            apply_assistant_tool_preset(&mut tools, Some(&assistant));
+
+            assert_eq!(tools.len(), 3, "preset {preset} should not filter tools");
+        }
+    }
+
+    #[test]
+    fn skill_fallback_switches_to_markdown_when_assistant_disables_tools() {
+        let mut chat_tools = crate::settings::ChatToolsConfig::default();
+
+        apply_skill_fallback_when_tools_unavailable(&mut chat_tools, Some("doc"), false);
+
+        assert_eq!(chat_tools.skill_fallback_mode, "skill_md_only");
+    }
+
+    #[test]
+    fn empty_assistant_response_error_exposes_flow_failure() {
+        let response = empty_assistant_response_error("Chat stream");
+
+        assert_eq!(response, "Chat stream returned an empty assistant response");
+    }
+
+    #[test]
+    fn chat_stream_text_parser_accepts_delta_chunks() {
+        let value = serde_json::json!({
+            "choices": [{ "delta": { "content": "你" } }]
+        });
+        let mut full = String::new();
+        let (text, mode) = extract_chat_stream_text(&value).expect("delta content");
+
+        assert_eq!(mode, ChatStreamTextMode::Delta);
+        assert_eq!(
+            append_chat_stream_text(&mut full, text, mode),
+            Some("你".to_string())
+        );
+        assert_eq!(full, "你");
+    }
+
+    #[test]
+    fn chat_stream_text_parser_converts_message_snapshots_to_deltas() {
+        let first = serde_json::json!({
+            "choices": [{ "message": { "content": "你" } }]
+        });
+        let second = serde_json::json!({
+            "choices": [{ "message": { "content": "你好" } }]
+        });
+        let repeat = serde_json::json!({
+            "choices": [{ "message": { "content": "你好" } }]
+        });
+        let mut full = String::new();
+
+        let (text, mode) = extract_chat_stream_text(&first).expect("first snapshot");
+        assert_eq!(mode, ChatStreamTextMode::Snapshot);
+        assert_eq!(
+            append_chat_stream_text(&mut full, text, mode),
+            Some("你".to_string())
+        );
+
+        let (text, mode) = extract_chat_stream_text(&second).expect("second snapshot");
+        assert_eq!(
+            append_chat_stream_text(&mut full, text, mode),
+            Some("好".to_string())
+        );
+
+        let (text, mode) = extract_chat_stream_text(&repeat).expect("repeat snapshot");
+        assert_eq!(append_chat_stream_text(&mut full, text, mode), None);
+        assert_eq!(full, "你好");
+    }
+
+    #[test]
+    fn chat_stream_reasoning_parser_accepts_message_snapshots() {
+        let value = serde_json::json!({
+            "choices": [{ "message": { "reasoning_content": "思考中" } }]
+        });
+        let mut full = String::new();
+        let (text, mode) = extract_chat_stream_reasoning(&value).expect("reasoning snapshot");
+
+        assert_eq!(mode, ChatStreamTextMode::Snapshot);
+        assert_eq!(
+            append_chat_stream_text(&mut full, text, mode),
+            Some("思考中".to_string())
+        );
+    }
+
+    #[test]
+    fn skill_run_script_timeout_uses_minimum_even_when_model_requests_less() {
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = 60_000;
+        let tool = crate::mcp::types::native_skill_run_script_tool();
+        let arguments = serde_json::json!({ "timeout_ms": 60_000 });
+
+        assert_eq!(
+            effective_tool_timeout_ms(&settings, &tool, &arguments),
+            120_000
+        );
+    }
+
+    #[test]
+    fn skill_run_script_timeout_clamps_large_model_requests() {
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = 60_000;
+        let tool = crate::mcp::types::native_skill_run_script_tool();
+        let arguments = serde_json::json!({ "timeout_ms": 500_000 });
+
+        assert_eq!(
+            effective_tool_timeout_ms(&settings, &tool, &arguments),
+            300_000
+        );
     }
 
     #[test]
@@ -4301,9 +4978,16 @@ mod tests {
                 test_chat_message("msg_user_1", "user", "old user content", 1),
                 test_chat_message("msg_assistant_1", "assistant", "old assistant content", 2),
                 test_chat_message("msg_user_2", "user", "recent user content", 3),
-                test_chat_message("msg_assistant_2", "assistant", "recent assistant content", 4),
+                test_chat_message(
+                    "msg_assistant_2",
+                    "assistant",
+                    "recent assistant content",
+                    4,
+                ),
             ],
             active_skill_id: None,
+            assistant_id: None,
+            assistant_snapshot: None,
             created_at: 1,
             updated_at: 4,
             pinned: false,
@@ -4445,6 +5129,8 @@ mod tests {
                 },
             ],
             active_skill_id: Some("doc".to_string()),
+            assistant_id: None,
+            assistant_snapshot: None,
             created_at: 1,
             updated_at: 2,
             pinned: false,
@@ -4484,5 +5170,84 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("final")
         );
+    }
+
+    #[test]
+    fn sanitize_image_payloads_replaces_data_urls() {
+        let content = "before ![img](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA) after";
+
+        let sanitized = sanitize_image_payloads_for_model(content);
+
+        assert!(sanitized.contains("[image data URL omitted; image is available as a tool artifact]"));
+        assert!(!sanitized.contains("data:image/png;base64"));
+        assert!(!sanitized.contains("iVBORw0KGgo"));
+    }
+
+    #[test]
+    fn sanitize_image_payloads_replaces_raw_base64_lines() {
+        let content = concat!(
+            "stdout:\n",
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+            "done\n"
+        );
+
+        let sanitized = sanitize_image_payloads_for_model(content);
+
+        assert!(sanitized.contains("[image base64 omitted; image is available as a tool artifact]"));
+        assert!(!sanitized.contains("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"));
+        assert!(sanitized.contains("done"));
+    }
+
+    #[test]
+    fn build_chat_api_messages_sanitizes_image_payloads_in_replayed_history() {
+        let conversation = Conversation {
+            id: "conv_test".to_string(),
+            title: "test".to_string(),
+            provider_id: "provider".to_string(),
+            model: "model".to_string(),
+            messages: vec![
+                test_chat_message("msg_user_1", "user", "make an image", 1),
+                ChatMessage {
+                    id: "msg_assistant_1".to_string(),
+                    role: "assistant".to_string(),
+                    content: "![img](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)".to_string(),
+                    attachments: Vec::new(),
+                    reasoning: None,
+                    tool_calls: Vec::new(),
+                    api_messages: vec![
+                        serde_json::json!({
+                            "role": "assistant",
+                            "content": "![img](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)"
+                        }),
+                        serde_json::json!({
+                            "role": "tool",
+                            "content": concat!(
+                                "stdout:\n",
+                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                            )
+                        }),
+                    ],
+                    active_skill_id: None,
+                    timestamp: 2,
+                },
+            ],
+            active_skill_id: None,
+            assistant_id: None,
+            assistant_snapshot: None,
+            created_at: 1,
+            updated_at: 2,
+            pinned: false,
+            folder: None,
+            context_state: ConversationContextState::default(),
+        };
+
+        let messages = build_chat_api_messages("system", &conversation, None, None, &[])
+            .expect("messages should build");
+        let serialized = serde_json::to_string(&messages).expect("messages serialize");
+
+        assert!(serialized.contains("[image data URL omitted; image is available as a tool artifact]"));
+        assert!(serialized.contains("[image base64 omitted; image is available as a tool artifact]"));
+        assert!(!serialized.contains("data:image/png;base64"));
+        assert!(!serialized.contains("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"));
     }
 }

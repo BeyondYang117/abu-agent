@@ -1,11 +1,21 @@
 // Chat API 调用封装
 import { invoke } from '@tauri-apps/api/core'
 import { estimateTokens } from '../lens/markdown'
-import type { Conversation, ConversationContextState, ConversationListItem, PendingAttachment } from './types'
+import type {
+  ChatAssistant,
+  ChatAssistantSnapshot,
+  ChatProject,
+  Conversation,
+  ConversationContextState,
+  ConversationListItem,
+  PendingAttachment,
+} from './types'
 
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 const mockStorageKey = 'kivio-chat-dev-conversations'
+const mockProjectsStorageKey = 'kivio-chat-dev-projects'
+const mockAssistantsStorageKey = 'kivio-chat-dev-assistants'
 
 const nowSeconds = () => Math.floor(Date.now() / 1000)
 
@@ -24,6 +34,179 @@ function saveMockConversations(conversations: Conversation[]) {
   window.localStorage.setItem(mockStorageKey, JSON.stringify(conversations))
 }
 
+function loadMockProjects(): ChatProject[] {
+  try {
+    const raw = window.localStorage.getItem(mockProjectsStorageKey)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveMockProjects(projects: ChatProject[]) {
+  window.localStorage.setItem(mockProjectsStorageKey, JSON.stringify(projects))
+}
+
+function defaultMockAssistants(): ChatAssistant[] {
+  const now = nowSeconds()
+  return [
+    {
+      id: 'asst_builtin_general',
+      name: '通用助手',
+      description: '适合日常问答、梳理想法和处理轻量任务。',
+      icon: 'sparkles',
+      color: '#6A8FBD',
+      system_prompt: '你是 Kivio 的通用助手。回答要清晰、直接，并在信息不足时主动说明假设。',
+      provider_id: '',
+      model: '',
+      skill_id: null,
+      tool_preset: 'inherit',
+      conversation_starters: ['帮我整理一下这个想法', '把这段内容改得更清楚', '给我一个可执行的下一步计划'],
+      greeting: '我可以帮你整理、分析、写作和处理日常 AI 任务。',
+      enabled: true,
+      archived: false,
+      built_in: true,
+      created_at: now - 5,
+      updated_at: now - 5,
+    },
+    {
+      id: 'asst_builtin_translate_polish',
+      name: '翻译润色助手',
+      description: '面向翻译、改写、语气调整和双语表达。',
+      icon: 'languages',
+      color: '#C56646',
+      system_prompt: '你是翻译与润色助手。优先保留原意，输出自然、准确、适合目标语境的表达。',
+      provider_id: '',
+      model: '',
+      skill_id: null,
+      tool_preset: 'inherit',
+      conversation_starters: ['把这段中文翻译成自然英文', '帮我润色这段邮件', '给我三个不同语气的版本'],
+      greeting: '贴文本给我，我会帮你翻译、润色或改成指定语气。',
+      enabled: true,
+      archived: false,
+      built_in: true,
+      created_at: now - 4,
+      updated_at: now - 4,
+    },
+    {
+      id: 'asst_builtin_code_data',
+      name: '编程/数据助手',
+      description: '适合代码解释、调试、脚本和数据分析。',
+      icon: 'code',
+      color: '#4F9D7A',
+      system_prompt: '你是编程和数据助手。回答要具体，优先给出可运行的步骤、代码或排查路径。',
+      provider_id: '',
+      model: '',
+      skill_id: null,
+      tool_preset: 'all',
+      conversation_starters: ['解释这段代码', '帮我定位这个 bug', '用数据分析这个问题'],
+      greeting: '把代码、错误信息或数据问题发给我，我会帮你拆解和验证。',
+      enabled: true,
+      archived: false,
+      built_in: true,
+      created_at: now - 3,
+      updated_at: now - 3,
+    },
+  ]
+}
+
+function loadMockAssistants(): ChatAssistant[] {
+  try {
+    const raw = window.localStorage.getItem(mockAssistantsStorageKey)
+    const parsed = raw ? JSON.parse(raw) : []
+    const assistants = Array.isArray(parsed) ? parsed : []
+    const defaults = defaultMockAssistants()
+    let changed = false
+    for (const assistant of defaults) {
+      if (assistants.some((item) => item.id === assistant.id)) continue
+      assistants.push(assistant)
+      changed = true
+    }
+    assistants.sort((a, b) => b.updated_at - a.updated_at || a.name.localeCompare(b.name, 'zh-CN'))
+    if (changed || !raw) saveMockAssistants(assistants)
+    return assistants
+  } catch {
+    const assistants = defaultMockAssistants()
+    saveMockAssistants(assistants)
+    return assistants
+  }
+}
+
+function saveMockAssistants(assistants: ChatAssistant[]) {
+  window.localStorage.setItem(mockAssistantsStorageKey, JSON.stringify(assistants))
+}
+
+function normalizeAssistant(assistant: ChatAssistant): ChatAssistant {
+  const now = nowSeconds()
+  return {
+    ...assistant,
+    name: assistant.name.trim(),
+    description: assistant.description?.trim() ?? '',
+    icon: assistant.icon?.trim() ?? '',
+    color: assistant.color?.trim() ?? '',
+    system_prompt: (assistant.system_prompt ?? assistant.systemPrompt ?? '').trim(),
+    provider_id: (assistant.provider_id ?? assistant.providerId ?? '').trim(),
+    model: (assistant.model ?? '').trim(),
+    skill_id: (assistant.skill_id ?? assistant.skillId ?? null) || null,
+    tool_preset: assistant.tool_preset ?? assistant.toolPreset ?? 'inherit',
+    conversation_starters: (assistant.conversation_starters ?? assistant.conversationStarters ?? [])
+      .map((starter) => starter.trim())
+      .filter(Boolean)
+      .slice(0, 6),
+    greeting: assistant.greeting?.trim() ?? '',
+    enabled: assistant.enabled ?? true,
+    archived: assistant.archived ?? false,
+    built_in: assistant.built_in ?? assistant.builtIn ?? false,
+    created_at: assistant.created_at ?? assistant.createdAt ?? now,
+    updated_at: now,
+  }
+}
+
+function assistantSnapshot(assistant: ChatAssistant): ChatAssistantSnapshot {
+  return {
+    id: assistant.id,
+    name: assistant.name,
+    description: assistant.description ?? '',
+    system_prompt: assistant.system_prompt ?? assistant.systemPrompt ?? '',
+    provider_id: assistant.provider_id ?? assistant.providerId ?? '',
+    model: assistant.model ?? '',
+    skill_id: assistant.skill_id ?? assistant.skillId ?? null,
+    tool_preset: assistant.tool_preset ?? assistant.toolPreset ?? 'inherit',
+    conversation_starters: assistant.conversation_starters ?? assistant.conversationStarters ?? [],
+    greeting: assistant.greeting ?? '',
+  }
+}
+
+function normalizeProjectName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('项目名称不能为空')
+  if ([...trimmed].length > 80) throw new Error('项目名称不能超过 80 个字符')
+  return trimmed
+}
+
+function loadMockProjectsWithLegacyFolders(): ChatProject[] {
+  const projects = loadMockProjects()
+  const now = nowSeconds()
+  let changed = false
+  for (const folder of loadMockConversations()
+    .map((conversation) => conversation.folder?.trim())
+    .filter((folder): folder is string => Boolean(folder))) {
+    if (projects.some((project) => project.name === folder)) continue
+    projects.push({
+      id: `proj_dev_${crypto.randomUUID()}`,
+      name: folder,
+      created_at: now,
+      updated_at: now,
+    })
+    changed = true
+  }
+  projects.sort((a, b) => b.updated_at - a.updated_at || a.name.localeCompare(b.name, 'zh-CN'))
+  if (changed) saveMockProjects(projects)
+  return projects
+}
+
 function toListItem(conversation: Conversation): ConversationListItem {
   const preview = [...conversation.messages]
     .reverse()
@@ -40,6 +223,11 @@ function toListItem(conversation: Conversation): ConversationListItem {
     updated_at: conversation.updated_at,
     pinned: conversation.pinned,
     folder: conversation.folder,
+    assistant_id: conversation.assistant_id ?? conversation.assistantId ?? null,
+    assistant_name:
+      conversation.assistant_snapshot?.name
+      ?? conversation.assistantSnapshot?.name
+      ?? null,
   }
 }
 
@@ -106,14 +294,29 @@ const mockChatApi = {
     return withMockContext(conversation)
   },
 
-  async createConversation(providerId = 'dev-provider', model = 'dev-model', folder?: string): Promise<Conversation> {
+  async createConversation(
+    providerId?: string,
+    model?: string,
+    folder?: string,
+    assistantId?: string | null,
+  ): Promise<Conversation> {
     const now = nowSeconds()
+    const assistant = assistantId
+      ? loadMockAssistants().find((item) => item.id === assistantId && !item.archived && item.enabled !== false)
+      : undefined
+    const snapshot = assistant ? assistantSnapshot(assistant) : null
     const conversation: Conversation = {
       id: `conv_dev_${crypto.randomUUID()}`,
       title: '新对话',
-      provider_id: providerId,
-      model,
+      provider_id: providerId?.trim() || snapshot?.provider_id || snapshot?.providerId || 'dev-provider',
+      model: model?.trim() || snapshot?.model || 'dev-model',
       messages: [],
+      active_skill_id: snapshot?.skill_id ?? null,
+      activeSkillId: snapshot?.skill_id ?? null,
+      assistant_id: snapshot?.id ?? null,
+      assistantId: snapshot?.id ?? null,
+      assistant_snapshot: snapshot,
+      assistantSnapshot: snapshot,
       created_at: now,
       updated_at: now,
       pinned: false,
@@ -122,6 +325,148 @@ const mockChatApi = {
     const withContext = withMockContext(conversation)
     saveMockConversations([withContext, ...loadMockConversations()])
     return withContext
+  },
+
+  async getProjects(): Promise<ChatProject[]> {
+    return loadMockProjectsWithLegacyFolders()
+  },
+
+  async createProject(name: string, description?: string | null, color?: string | null): Promise<ChatProject> {
+    const normalized = normalizeProjectName(name)
+    const projects = loadMockProjectsWithLegacyFolders()
+    if (projects.some((project) => project.name === normalized)) {
+      throw new Error('项目名称已存在')
+    }
+    const now = nowSeconds()
+    const project: ChatProject = {
+      id: `proj_dev_${crypto.randomUUID()}`,
+      name: normalized,
+      description: description ?? null,
+      color: color ?? null,
+      created_at: now,
+      updated_at: now,
+    }
+    saveMockProjects([project, ...projects])
+    return project
+  },
+
+  async updateProject(
+    projectId: string,
+    updates: { name?: string; description?: string | null; color?: string | null },
+  ): Promise<ChatProject> {
+    const projects = loadMockProjectsWithLegacyFolders()
+    const index = projects.findIndex((project) => project.id === projectId)
+    if (index < 0) throw new Error('项目不存在')
+    const oldName = projects[index].name
+    const nextName = updates.name === undefined ? oldName : normalizeProjectName(updates.name)
+    if (nextName !== oldName && projects.some((project) => project.name === nextName)) {
+      throw new Error('项目名称已存在')
+    }
+    const nextProject: ChatProject = {
+      ...projects[index],
+      name: nextName,
+      description: updates.description !== undefined ? updates.description : projects[index].description,
+      color: updates.color !== undefined ? updates.color : projects[index].color,
+      updated_at: nowSeconds(),
+    }
+    projects[index] = nextProject
+    saveMockProjects(projects)
+
+    if (nextName !== oldName) {
+      const conversations = loadMockConversations().map((conversation) =>
+        conversation.folder === oldName
+          ? { ...conversation, folder: nextName, updated_at: nowSeconds() }
+          : conversation,
+      )
+      saveMockConversations(conversations)
+    }
+    return nextProject
+  },
+
+  async deleteProject(projectId: string): Promise<void> {
+    const projects = loadMockProjectsWithLegacyFolders()
+    const project = projects.find((item) => item.id === projectId)
+    if (!project) throw new Error('项目不存在')
+    saveMockProjects(projects.filter((item) => item.id !== projectId))
+    saveMockConversations(
+      loadMockConversations().map((conversation) =>
+        conversation.folder === project.name
+          ? { ...conversation, folder: undefined, updated_at: nowSeconds() }
+          : conversation,
+      ),
+    )
+  },
+
+  async getAssistants(): Promise<ChatAssistant[]> {
+    return loadMockAssistants().filter((assistant) => !assistant.archived)
+  },
+
+  async createAssistant(assistant: ChatAssistant): Promise<ChatAssistant> {
+    const next = normalizeAssistant({
+      ...assistant,
+      id: assistant.id || `asst_dev_${crypto.randomUUID()}`,
+      built_in: false,
+      created_at: assistant.created_at ?? nowSeconds(),
+    })
+    if (!next.name) throw new Error('助手名称不能为空')
+    const assistants = loadMockAssistants()
+    if (assistants.some((item) => !item.archived && item.name === next.name)) {
+      throw new Error('助手名称已存在')
+    }
+    saveMockAssistants([next, ...assistants])
+    return next
+  },
+
+  async updateAssistant(assistant: ChatAssistant): Promise<ChatAssistant> {
+    const assistants = loadMockAssistants()
+    const index = assistants.findIndex((item) => item.id === assistant.id)
+    if (index < 0) throw new Error('助手不存在')
+    const next = normalizeAssistant({
+      ...assistant,
+      built_in: assistants[index].built_in,
+      created_at: assistants[index].created_at,
+    })
+    if (!next.name) throw new Error('助手名称不能为空')
+    if (assistants.some((item) => item.id !== next.id && !item.archived && item.name === next.name)) {
+      throw new Error('助手名称已存在')
+    }
+    assistants[index] = next
+    saveMockAssistants(assistants)
+    return next
+  },
+
+  async duplicateAssistant(assistantId: string): Promise<ChatAssistant> {
+    const assistants = loadMockAssistants()
+    const source = assistants.find((assistant) => assistant.id === assistantId)
+    if (!source) throw new Error('助手不存在')
+    const baseName = `${source.name} 副本`
+    let name = baseName
+    let suffix = 2
+    while (assistants.some((assistant) => !assistant.archived && assistant.name === name)) {
+      name = `${baseName} ${suffix}`
+      suffix += 1
+    }
+    const copy = normalizeAssistant({
+      ...source,
+      id: `asst_dev_${crypto.randomUUID()}`,
+      name,
+      built_in: false,
+      created_at: nowSeconds(),
+    })
+    saveMockAssistants([copy, ...assistants])
+    return copy
+  },
+
+  async deleteAssistant(assistantId: string): Promise<void> {
+    const assistants = loadMockAssistants()
+    const index = assistants.findIndex((assistant) => assistant.id === assistantId)
+    if (index < 0) throw new Error('助手不存在')
+    assistants[index] = {
+      ...assistants[index],
+      archived: true,
+      updated_at: nowSeconds(),
+    }
+    saveMockAssistants(assistants)
   },
 
   async sendMessage(
@@ -184,16 +529,18 @@ const mockChatApi = {
       providerId?: string
       model?: string
       activeSkillId?: string | null
+      assistantId?: string | null
     }
   ): Promise<Conversation> {
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
     if (index < 0) throw new Error('Conversation not found')
+    const hasFolderUpdate = Object.prototype.hasOwnProperty.call(updates, 'folder')
     const conversation = {
       ...conversations[index],
       title: updates.title ?? conversations[index].title,
       pinned: updates.pinned ?? conversations[index].pinned,
-      folder: updates.folder ?? conversations[index].folder,
+      folder: hasFolderUpdate ? updates.folder || undefined : conversations[index].folder,
       provider_id: updates.providerId ?? conversations[index].provider_id,
       model: updates.model ?? conversations[index].model,
       active_skill_id:
@@ -201,6 +548,26 @@ const mockChatApi = {
           ? updates.activeSkillId || null
           : conversations[index].active_skill_id ?? conversations[index].activeSkillId ?? null,
       updated_at: nowSeconds(),
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'assistantId')) {
+      const assistantId = updates.assistantId?.trim() ?? ''
+      if (!assistantId) {
+        conversation.assistant_id = null
+        conversation.assistantId = null
+        conversation.assistant_snapshot = null
+        conversation.assistantSnapshot = null
+      } else {
+        const assistant = loadMockAssistants().find((item) =>
+          item.id === assistantId && !item.archived && item.enabled !== false
+        )
+        if (!assistant) throw new Error('助手不存在或不可用')
+        const snapshot = assistantSnapshot(assistant)
+        conversation.assistant_id = snapshot.id
+        conversation.assistantId = snapshot.id
+        conversation.assistant_snapshot = snapshot
+        conversation.assistantSnapshot = snapshot
+        conversation.active_skill_id = snapshot.skill_id ?? snapshot.skillId ?? null
+      }
     }
     conversation.activeSkillId = conversation.active_skill_id
     const contextState = estimateMockContext(conversation)
@@ -378,17 +745,128 @@ export const chatApi = {
   async createConversation(
     providerId?: string,
     model?: string,
-    folder?: string
+    folder?: string,
+    assistantId?: string | null,
   ): Promise<Conversation> {
-    if (!isTauriRuntime()) return mockChatApi.createConversation(providerId, model, folder)
+    if (!isTauriRuntime()) return mockChatApi.createConversation(providerId, model, folder, assistantId)
     const result = await invoke<{ success: boolean; conversation: Conversation }>(
       'chat_create_conversation',
-      { providerId, model, folder }
+      { providerId, model, folder, assistantId }
     )
     if (!result.success) {
       throw new Error('Failed to create conversation')
     }
     return result.conversation
+  },
+
+  async getProjects(): Promise<ChatProject[]> {
+    if (!isTauriRuntime()) return mockChatApi.getProjects()
+    const result = await invoke<{ success: boolean; projects: ChatProject[] }>(
+      'chat_get_projects',
+    )
+    if (!result.success) {
+      throw new Error('Failed to get projects')
+    }
+    return result.projects
+  },
+
+  async createProject(
+    name: string,
+    description?: string | null,
+    color?: string | null,
+  ): Promise<ChatProject> {
+    if (!isTauriRuntime()) return mockChatApi.createProject(name, description, color)
+    const result = await invoke<{ success: boolean; project: ChatProject }>(
+      'chat_create_project',
+      { name, description, color },
+    )
+    if (!result.success) {
+      throw new Error('Failed to create project')
+    }
+    return result.project
+  },
+
+  async updateProject(
+    projectId: string,
+    updates: { name?: string; description?: string | null; color?: string | null },
+  ): Promise<ChatProject> {
+    if (!isTauriRuntime()) return mockChatApi.updateProject(projectId, updates)
+    const result = await invoke<{ success: boolean; project: ChatProject }>(
+      'chat_update_project',
+      {
+        projectId,
+        name: updates.name,
+        description: updates.description,
+        color: updates.color,
+      },
+    )
+    if (!result.success) {
+      throw new Error('Failed to update project')
+    }
+    return result.project
+  },
+
+  async deleteProject(projectId: string): Promise<void> {
+    if (!isTauriRuntime()) return mockChatApi.deleteProject(projectId)
+    const result = await invoke<{ success: boolean }>('chat_delete_project', { projectId })
+    if (!result.success) {
+      throw new Error('Failed to delete project')
+    }
+  },
+
+  async getAssistants(): Promise<ChatAssistant[]> {
+    if (!isTauriRuntime()) return mockChatApi.getAssistants()
+    const result = await invoke<{ success: boolean; assistants: ChatAssistant[] }>(
+      'chat_get_assistants',
+    )
+    if (!result.success) {
+      throw new Error('Failed to get assistants')
+    }
+    return result.assistants
+  },
+
+  async createAssistant(assistant: ChatAssistant): Promise<ChatAssistant> {
+    if (!isTauriRuntime()) return mockChatApi.createAssistant(assistant)
+    const result = await invoke<{ success: boolean; assistant: ChatAssistant }>(
+      'chat_create_assistant',
+      { assistant },
+    )
+    if (!result.success) {
+      throw new Error('Failed to create assistant')
+    }
+    return result.assistant
+  },
+
+  async updateAssistant(assistant: ChatAssistant): Promise<ChatAssistant> {
+    if (!isTauriRuntime()) return mockChatApi.updateAssistant(assistant)
+    const result = await invoke<{ success: boolean; assistant: ChatAssistant }>(
+      'chat_update_assistant',
+      { assistant },
+    )
+    if (!result.success) {
+      throw new Error('Failed to update assistant')
+    }
+    return result.assistant
+  },
+
+  async duplicateAssistant(assistantId: string): Promise<ChatAssistant> {
+    if (!isTauriRuntime()) return mockChatApi.duplicateAssistant(assistantId)
+    const result = await invoke<{ success: boolean; assistant: ChatAssistant }>(
+      'chat_duplicate_assistant',
+      { assistantId },
+    )
+    if (!result.success) {
+      throw new Error('Failed to duplicate assistant')
+    }
+    return result.assistant
+  },
+
+  async deleteAssistant(assistantId: string): Promise<void> {
+    if (!isTauriRuntime()) return mockChatApi.deleteAssistant(assistantId)
+    const result = await invoke<{ success: boolean }>('chat_delete_assistant', { assistantId })
+    if (!result.success) {
+      throw new Error('Failed to delete assistant')
+    }
   },
 
   // 发送消息
@@ -437,19 +915,22 @@ export const chatApi = {
       providerId?: string
       model?: string
       activeSkillId?: string | null
+      assistantId?: string | null
     }
   ): Promise<Conversation> {
     if (!isTauriRuntime()) return mockChatApi.updateConversation(conversationId, updates)
+    const hasFolderUpdate = Object.prototype.hasOwnProperty.call(updates, 'folder')
     const result = await invoke<{ success: boolean; conversation: Conversation }>(
       'chat_update_conversation',
       {
         conversationId,
         title: updates.title,
         pinned: updates.pinned,
-        folder: updates.folder,
+        folder: hasFolderUpdate ? updates.folder ?? '' : undefined,
         providerId: updates.providerId,
         model: updates.model,
         activeSkillId: updates.activeSkillId,
+        assistantId: updates.assistantId,
       }
     )
     if (!result.success) {

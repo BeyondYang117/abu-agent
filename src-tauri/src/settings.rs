@@ -623,6 +623,10 @@ fn default_chat_max_tool_rounds() -> u8 {
     30
 }
 
+pub const CHAT_TOOL_MIN_TIMEOUT_MS: u64 = 1_000;
+pub const CHAT_TOOL_MAX_TIMEOUT_MS: u64 = 300_000;
+pub const SKILL_SCRIPT_MIN_TIMEOUT_MS: u64 = 120_000;
+
 fn default_chat_tool_timeout_ms() -> u64 {
     60_000
 }
@@ -1152,7 +1156,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     settings.chat.system_prompt = settings.chat.system_prompt.trim().to_string();
 
     settings.chat_tools.max_tool_rounds = settings.chat_tools.max_tool_rounds.clamp(1, 30);
-    settings.chat_tools.tool_timeout_ms = settings.chat_tools.tool_timeout_ms.clamp(1_000, 60_000);
+    settings.chat_tools.tool_timeout_ms = settings
+        .chat_tools
+        .tool_timeout_ms
+        .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS);
     settings.chat_tools.max_tool_output_chars = settings
         .chat_tools
         .max_tool_output_chars

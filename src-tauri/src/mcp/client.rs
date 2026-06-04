@@ -570,6 +570,7 @@ fn parse_tool_result(value: Value) -> McpToolCallResult {
         content,
         is_error,
         raw: value,
+        artifacts: Vec::new(),
     }
 }
 

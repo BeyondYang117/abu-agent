@@ -9,6 +9,8 @@ import {
 interface ConversationListProps {
   conversations: ConversationListItem[]
   currentConversationId?: string
+  projectFolders: string[]
+  emptyLabel?: string
   onSelectConversation: (id: string) => void
   onRenameConversation: (id: string, title: string) => Promise<void>
   onDeleteConversation: (id: string) => Promise<void>
@@ -18,6 +20,8 @@ interface ConversationListProps {
 export function ConversationList({
   conversations,
   currentConversationId,
+  projectFolders,
+  emptyLabel = '暂无对话',
   onSelectConversation,
   onRenameConversation,
   onDeleteConversation,
@@ -30,12 +34,6 @@ export function ConversationList({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
-
-  const projectFolders = [
-    ...new Set(
-      conversations.map((c) => c.folder).filter((folder): folder is string => Boolean(folder?.trim()))
-    ),
-  ].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 
   const menuConversation = menuState
     ? conversations.find((c) => c.id === menuState.conversationId)
@@ -74,7 +72,7 @@ export function ConversationList({
   if (conversations.length === 0) {
     return (
       <div className="px-3 py-10 text-center text-[13px] text-neutral-400 dark:text-neutral-500">
-        暂无对话
+        {emptyLabel}
       </div>
     )
   }
@@ -122,14 +120,19 @@ export function ConversationList({
               <button
                 type="button"
                 onClick={() => onSelectConversation(conv.id)}
-                className={`min-w-0 flex-1 truncate px-3 py-2 text-left text-[13px] transition-colors ${
+                className={`min-w-0 flex-1 px-3 py-2 text-left text-[13px] transition-colors ${
                   active
                     ? 'font-medium text-neutral-900 dark:text-neutral-100'
                     : 'text-neutral-700 dark:text-neutral-300'
                 }`}
                 title={conv.title}
               >
-                {conv.title}
+                <span className="block truncate">{conv.title}</span>
+                {(conv.assistant_name ?? conv.assistantName) && (
+                  <span className="mt-0.5 block truncate text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
+                    {(conv.assistant_name ?? conv.assistantName)}
+                  </span>
+                )}
               </button>
               <button
                 type="button"

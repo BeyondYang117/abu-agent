@@ -80,6 +80,17 @@ export interface ToolCallRecord {
   sensitive?: boolean
   requires_confirmation?: boolean
   requiresConfirmation?: boolean
+  artifacts?: ChatToolArtifact[]
+}
+
+export interface ChatToolArtifact {
+  name: string
+  mime_type?: string
+  mimeType?: string
+  data_url?: string
+  dataUrl?: string
+  size_bytes?: number | null
+  sizeBytes?: number | null
 }
 
 export interface ChatMessage {
@@ -109,6 +120,65 @@ export interface PendingAttachment {
   type: 'image' | 'file'
   name: string
   path: string
+}
+
+export interface ChatProject {
+  id: string
+  name: string
+  description?: string | null
+  color?: string | null
+  created_at: number
+  updated_at: number
+  createdAt?: number
+  updatedAt?: number
+}
+
+export type AssistantToolPreset = 'inherit' | 'none' | 'skills' | 'all' | string
+
+export interface ChatAssistant {
+  id: string
+  name: string
+  description?: string
+  icon?: string
+  color?: string
+  system_prompt?: string
+  systemPrompt?: string
+  provider_id?: string
+  providerId?: string
+  model?: string
+  skill_id?: string | null
+  skillId?: string | null
+  tool_preset?: AssistantToolPreset
+  toolPreset?: AssistantToolPreset
+  conversation_starters?: string[]
+  conversationStarters?: string[]
+  greeting?: string
+  enabled?: boolean
+  archived?: boolean
+  built_in?: boolean
+  builtIn?: boolean
+  created_at: number
+  updated_at: number
+  createdAt?: number
+  updatedAt?: number
+}
+
+export interface ChatAssistantSnapshot {
+  id: string
+  name: string
+  description?: string
+  system_prompt?: string
+  systemPrompt?: string
+  provider_id?: string
+  providerId?: string
+  model?: string
+  skill_id?: string | null
+  skillId?: string | null
+  tool_preset?: AssistantToolPreset
+  toolPreset?: AssistantToolPreset
+  conversation_starters?: string[]
+  conversationStarters?: string[]
+  greeting?: string
 }
 
 export type ContextUsageStatus =
@@ -177,6 +247,10 @@ export interface Conversation {
   messages: ChatMessage[]
   active_skill_id?: string | null
   activeSkillId?: string | null
+  assistant_id?: string | null
+  assistantId?: string | null
+  assistant_snapshot?: ChatAssistantSnapshot | null
+  assistantSnapshot?: ChatAssistantSnapshot | null
   created_at: number
   updated_at: number
   pinned?: boolean
@@ -196,6 +270,10 @@ export interface ConversationListItem {
   updated_at: number
   pinned?: boolean
   folder?: string
+  assistant_id?: string | null
+  assistantId?: string | null
+  assistant_name?: string | null
+  assistantName?: string | null
 }
 
 export interface ConversationGroup {

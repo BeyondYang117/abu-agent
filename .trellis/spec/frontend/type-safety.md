@@ -293,3 +293,157 @@ conversation.context_state.summary = Some(ConversationContextSummary {
     ..summary_metadata
 });
 ```
+
+## Scenario: Chat Projects MVP Cross-Layer Contract
+
+### 1. Scope / Trigger
+- Trigger: Chat Projects span React sidebar state, browser mock storage, TypeScript Tauri wrappers, Rust Tauri commands, conversation JSON, and a project index JSON file.
+- Apply this contract whenever changing `src/chat/Sidebar.tsx`, `src/chat/ConversationList.tsx`, `src/chat/api.ts`, `src/chat/types.ts`, or `src-tauri/src/chat/**` project/folder behavior.
+
+### 2. Signatures
+- `chat_get_projects() -> { success: true, projects: ChatProject[] }`
+- `chat_create_project(name: string, description?: string, color?: string) -> { success: true, project: ChatProject }`
+- `chat_update_project(projectId: string, name?: string, description?: string, color?: string) -> { success: true, project: ChatProject }`
+- `chat_delete_project(projectId: string) -> { success: true }`
+- `chat_get_conversations(offset: usize, limit: usize, folder?: string) -> { success: true, conversations: ConversationListItem[] }`
+- `chat_create_conversation(providerId?: string, model?: string, folder?: string) -> { success: true, conversation: Conversation }`
+- `chat_update_conversation(conversationId: string, title?: string, pinned?: boolean, folder?: string, providerId?: string, model?: string, activeSkillId?: string) -> { success: true, conversation: Conversation }`
+
+### 3. Contracts
+- MVP project membership is stored as `Conversation.folder`, using the project `name` as the membership key.
+- Projects are also persisted independently in `{app_data_dir}/conversations/projects.json` as `ChatProjectIndex`, so empty projects remain visible.
+- `ChatProject.id` is backend-owned, starts with `proj_`, and is used for project record updates/deletes. Do not use it as conversation membership until a future explicit migration adds a stable `project_id` field.
+- `chat_get_projects` backfills project records from existing non-empty conversation `folder` values for legacy compatibility.
+- Creating or updating a project trims the name, rejects empty names, rejects names longer than 80 characters, and rejects duplicate project names.
+- Renaming a project must migrate every conversation whose `folder` equals the old project name to the new project name.
+- Deleting a project must delete only the project record and move its conversations out of the project by setting `folder` to `None`; it must not delete conversations.
+- Frontend removal from a project sends an explicit empty `folder` to Tauri. Omitting `folder` means “do not change membership”; empty string means “remove membership”.
+- Browser mock mode must mirror the same create/rename/delete/move semantics in localStorage keys `kivio-chat-dev-projects` and `kivio-chat-dev-conversations`.
+- Sidebar project lists must come from persisted projects, not from deriving folders only from visible conversations.
+
+### 4. Validation & Error Matrix
+- Invalid project ID -> backend returns `Err("Invalid project id: ...")`.
+- Missing project ID on update/delete -> backend returns `Err("项目不存在")`.
+- Empty project name -> backend/mock throws `项目名称不能为空`.
+- Duplicate project name -> backend/mock throws `项目名称已存在`.
+- Project name longer than 80 characters -> backend/mock throws `项目名称不能超过 80 个字符`.
+- Deleting the selected project -> frontend clears the selected project and current project-scoped conversation view; conversations remain accessible under “全部聊天”.
+
+### 5. Good/Base/Bad Cases
+- Good: create a project, select it, and create a new conversation; the conversation persists with `folder` equal to that project name.
+- Good: rename a project from `A` to `B`; both the sidebar project name and all conversations formerly in `A` now use `B`.
+- Base: a legacy conversation with `folder: "Research"` appears under an auto-backfilled project named `Research`.
+- Bad: deriving the project menu from the currently filtered conversation list; empty projects and projects outside the current scope disappear.
+- Bad: sending `undefined` for `folder` when the user clicks “移出项目”; Tauri treats omitted `folder` as “unchanged”.
+
+### 6. Tests Required
+- `npm run typecheck` must cover `ChatProject`, project API wrappers, and project props passed through `Sidebar`/`ConversationList`.
+- `npm run lint` must pass after project UI changes.
+- `cargo test --manifest-path src-tauri/Cargo.toml` must pass after changing project storage or command signatures.
+- `npm run build:ui` must pass after changing the Chat lazy route, sidebar, or project dialog/menu.
+- Manual or browser smoke should cover create empty project, project-scoped new chat, move into/out of project, rename migration, and delete without deleting conversations.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+```tsx
+const projectFolders = conversations
+  .map((conversation) => conversation.folder)
+  .filter(Boolean)
+```
+
+#### Correct
+```tsx
+const projects = await chatApi.getProjects()
+const projectFolders = projects.map((project) => project.name)
+```
+
+#### Wrong
+```tsx
+await chatApi.updateConversation(id, { folder: undefined })
+```
+
+#### Correct
+```tsx
+await chatApi.updateConversation(id, { folder: '' })
+```
+
+## Scenario: Chat Assistant Center Cross-Layer Contract
+
+### 1. Scope / Trigger
+- Trigger: Assistant Center spans React routing, browser mock storage, TypeScript Tauri wrappers, Rust commands, assistant index JSON storage, conversation JSON, prompt construction, Skill selection, and context stats.
+- Apply this contract whenever changing Assistant Center UI, reusable assistant profiles, Chat conversation creation/update, assistant prompt injection, or conversation list metadata.
+
+### 2. Signatures
+- `chat_get_assistants() -> { success: true, assistants: ChatAssistant[] }`
+- `chat_create_assistant(assistant: ChatAssistant) -> { success: true, assistant: ChatAssistant }`
+- `chat_update_assistant(assistant: ChatAssistant) -> { success: true, assistant: ChatAssistant }`
+- `chat_duplicate_assistant(assistantId: string) -> { success: true, assistant: ChatAssistant }`
+- `chat_delete_assistant(assistantId: string) -> { success: true }`
+- `chat_create_conversation(providerId?: string, model?: string, folder?: string, assistantId?: string) -> { success: true, conversation: Conversation }`
+- `chat_update_conversation(conversationId: string, ..., activeSkillId?: string, assistantId?: string) -> { success: true, conversation: Conversation }`
+
+### 3. Contracts
+- Assistant profiles are reusable configs stored in `{app_data_dir}/conversations/assistants.json` as `ChatAssistantIndex`; conversation history is not stored inside assistant records.
+- `ChatAssistant.id` is backend-owned or frontend-generated with the `asst_` prefix. Backend rejects IDs outside `asst_*`.
+- Stored Rust fields remain snake_case: `system_prompt`, `provider_id`, `skill_id`, `tool_preset`, `conversation_starters`, `created_at`, `updated_at`.
+- Frontend types may expose camelCase aliases only for compatibility, but Tauri command arguments remain camelCase (`assistantId`, `providerId`, `activeSkillId`).
+- Creating a conversation with an assistant stores both `assistant_id` and `assistant_snapshot` on `Conversation`. The snapshot freezes assistant name, description, system prompt, provider/model override, Skill, tool preset, greeting, and starters for that conversation.
+- Editing an assistant must not silently mutate older conversation behavior. Request construction uses the conversation's `assistant_snapshot`, not the latest assistant profile.
+- Assistant provider/model override is only a default at conversation creation. Later user model changes persist through normal `chat_update_conversation` provider/model fields.
+- Assistant Skill is applied as the conversation default `active_skill_id`; explicit per-send `activeSkillId` can still override where supported.
+- Assistant `tool_preset` is runtime behavior, not only UI metadata: `inherit` follows the global Chat tool settings, `all` uses all globally enabled/available tools, `skills` keeps only Skill runtime tools (`source == "skill"`), and `none` sends no model tools. When an active assistant Skill has no tools available because of provider limits or `tool_preset: 'none'`, request construction switches progressive Skill loading to SKILL.md-only prompt injection.
+- Clearing an assistant sends `assistantId: ''`, clears `assistant_id`, `assistant_snapshot`, and the assistant-provided `active_skill_id`.
+- Assistant Center route is `#chat/assistants`; it must not be parsed as a conversation ID.
+- Conversation list items include `assistant_id` and `assistant_name` so the sidebar can identify assistant-launched chats.
+- Browser mock mode mirrors assistant CRUD and assistant conversation binding in localStorage key `kivio-chat-dev-assistants`.
+
+### 4. Validation & Error Matrix
+- Invalid assistant ID -> backend returns `Err("Invalid assistant id: ...")`.
+- Missing assistant on update/duplicate/delete -> backend/mock returns `助手不存在`.
+- Empty assistant name -> backend/mock returns `助手名称不能为空`.
+- Duplicate active assistant name -> backend/mock returns `助手名称已存在`.
+- Assistant name longer than 64 chars -> backend returns `助手名称不能超过 64 个字符`.
+- Assistant description longer than 240 chars -> backend returns `助手描述不能超过 240 个字符`.
+- Archived or disabled assistant used to create/switch conversation -> backend returns `助手不可用`.
+- `assistantId` omitted from `chat_update_conversation` -> assistant binding is unchanged; empty string explicitly clears it.
+
+### 5. Good/Base/Bad Cases
+- Good: duplicate a built-in assistant, edit the copy, start a chat; the new conversation has `assistant_id` and `assistant_snapshot`.
+- Good: edit an assistant after starting a chat; old chat still uses the stored snapshot while new chats use the updated profile.
+- Good: opening `#chat/assistants` renders Assistant Center and leaves the current conversation state available for return/apply.
+- Base: a conversation without `assistant_id` behaves like normal Chat.
+- Bad: reading the latest assistant profile during `chat_send_message`; that makes old conversations drift when the assistant is edited.
+- Bad: sending `undefined` to clear an assistant; omitted means unchanged, `''` means clear.
+- Bad: routing `chat/assistants` through `getRouteConversationId()` and attempting to load it as `conv_*`.
+
+### 6. Tests Required
+- `npm run typecheck` must cover `ChatAssistant`, `ChatAssistantSnapshot`, assistant API wrappers, Assistant Center props, and conversation/list fields.
+- `npm run lint` must pass after Assistant Center UI changes.
+- `npm run build:ui` must pass after Assistant Center route or Chat lazy route changes.
+- `cargo test --manifest-path src-tauri/Cargo.toml` must pass after assistant storage, prompt construction, or command signature changes.
+- Browser/manual smoke should cover opening `#chat/assistants`, creating/editing/duplicating/deleting an assistant, starting an assistant chat, switching/clearing the current conversation assistant, and verifying the sidebar assistant label.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+```tsx
+await chatApi.updateConversation(conversation.id, { assistantId: undefined })
+```
+
+#### Correct
+```tsx
+await chatApi.updateConversation(conversation.id, { assistantId: '' })
+```
+
+#### Wrong
+```rust
+// Re-resolving the assistant profile during send makes history behavior drift.
+let assistant = get_assistant(app, conversation.assistant_id.as_deref().unwrap())?;
+```
+
+#### Correct
+```rust
+// Use the frozen snapshot stored on the conversation.
+let assistant_snapshot = conversation.assistant_snapshot.as_ref();
+```

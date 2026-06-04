@@ -4,6 +4,7 @@ use serde_json::Value;
 use tokio::process::Command;
 
 use super::{resolve_workspace_path, user_home_dir};
+use crate::settings::{CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS};
 
 const COMMAND_DENYLIST: &[&str] = &[
     "sudo ",
@@ -14,6 +15,14 @@ const COMMAND_DENYLIST: &[&str] = &[
     "mkfs.",
     "dd if=/dev/zero",
     "> /dev/sd",
+];
+
+const HOST_PYTHON_PACKAGE_INSTALL_PATTERNS: &[&str] = &[
+    "pip install",
+    "pip3 install",
+    "python -m pip install",
+    "python3 -m pip install",
+    "uv pip install",
 ];
 
 pub async fn run_command(
@@ -34,6 +43,34 @@ pub async fn run_command(
             return Err("command is blocked by safety policy".to_string());
         }
     }
+    let allow_host_python_package_install = arguments
+        .get("allow_host_python_package_install")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if !allow_host_python_package_install {
+        for denied in HOST_PYTHON_PACKAGE_INSTALL_PATTERNS {
+            if lowered.contains(denied) {
+                return Err(
+                    "run_command cannot install Python packages or modify the host Python environment unless allow_host_python_package_install is true. Use run_python for sandboxed Python instead."
+                        .to_string(),
+                );
+            }
+        }
+    } else if HOST_PYTHON_PACKAGE_INSTALL_PATTERNS
+        .iter()
+        .any(|pattern| lowered.contains(pattern))
+    {
+        if !lowered.contains("--user")
+            && !lowered.contains("venv")
+            && !lowered.contains(".venv")
+            && !lowered.contains("virtualenv")
+        {
+            return Err(
+                "Host Python package installs must target a user or virtual environment; add --user or run inside a venv."
+                    .to_string(),
+            );
+        }
+    }
 
     let cwd = resolve_command_cwd(arguments, workspace_roots)?;
 
@@ -48,7 +85,8 @@ pub async fn run_command(
         .get("timeout_ms")
         .and_then(|v| v.as_u64())
         .unwrap_or(default_timeout_ms)
-        .clamp(1_000, 300_000);
+        .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS)
+        .max(default_timeout_ms);
 
     let output = run_shell_command(command, cwd, timeout_ms).await?;
     let formatted = format_command_output(&output);
@@ -103,17 +141,31 @@ async fn run_shell_command(
     cmd.current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+    #[cfg(target_os = "macos")]
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
     let child = cmd
         .spawn()
         .map_err(|err| format!("Failed to start command: {err}"))?;
+    let child_pid = child.id();
 
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms),
         child.wait_with_output(),
     )
     .await
-    .map_err(|_| format!("Command timed out after {timeout_ms}ms"))?
+    .map_err(|_| {
+        terminate_command_group(child_pid);
+        format!("Command timed out after {timeout_ms}ms")
+    })?
     .map_err(|err| format!("Command failed: {err}"))?;
 
     Ok(CommandOutput {
@@ -122,6 +174,18 @@ async fn run_shell_command(
         stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
     })
 }
+
+#[cfg(target_os = "macos")]
+fn terminate_command_group(child_pid: Option<u32>) {
+    if let Some(pid) = child_pid {
+        unsafe {
+            libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn terminate_command_group(_child_pid: Option<u32>) {}
 
 fn format_command_output(output: &CommandOutput) -> String {
     let mut out = String::new();
@@ -175,5 +239,18 @@ mod tests {
 
         assert!(formatted.contains("exit_code: 1"));
         assert!(formatted.contains("stderr:\nboom"));
+    }
+
+    #[tokio::test]
+    async fn run_command_blocks_host_python_package_installs() {
+        let err = run_command(
+            &[],
+            1_000,
+            &serde_json::json!({ "command": "python3 -m pip install matplotlib" }),
+        )
+        .await
+        .expect_err("pip installs should be blocked");
+
+        assert!(err.contains("allow_host_python_package_install"));
     }
 }

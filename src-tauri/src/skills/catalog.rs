@@ -137,5 +137,4 @@ mod tests {
         assert!(catalog.contains("auto"));
         assert!(!catalog.contains("off"));
     }
-
 }

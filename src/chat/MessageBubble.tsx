@@ -5,7 +5,7 @@ import { ChatMarkdown } from './ChatMarkdown'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
-import type { ChatMessage } from './types'
+import type { ChatMessage, ChatToolArtifact } from './types'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -16,6 +16,70 @@ interface MessageBubbleProps {
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
+}
+
+function artifactDataUrl(artifact: ChatToolArtifact): string {
+  return artifact.dataUrl ?? artifact.data_url ?? ''
+}
+
+function markdownImageSources(content: string): Set<string> {
+  const sources = new Set<string>()
+  for (const match of content.matchAll(/!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    sources.add(match[1].trim().toLowerCase())
+  }
+  return sources
+}
+
+function artifactDisplayKey(name: string): string {
+  try {
+    return decodeURIComponent(name).trim().replace(/^\.?\//, '').replace(/\\/g, '/').toLowerCase()
+  } catch {
+    return name.trim().replace(/^\.?\//, '').replace(/\\/g, '/').toLowerCase()
+  }
+}
+
+function artifactIsReferenced(content: string, artifact: ChatToolArtifact): boolean {
+  const sources = markdownImageSources(content)
+  if (sources.size === 0) return false
+  const dataUrl = artifactDataUrl(artifact)
+  if (dataUrl && content.includes(dataUrl)) return true
+  const name = artifactDisplayKey(artifact.name)
+  const basename = name.split('/').filter(Boolean).pop() ?? name
+  for (const source of sources) {
+    const normalizedSource = artifactDisplayKey(source)
+    if (normalizedSource === name || normalizedSource === basename) {
+      return true
+    }
+  }
+  return false
+}
+
+function GeneratedImageArtifacts({ artifacts }: { artifacts: ChatToolArtifact[] }) {
+  const imageArtifacts = artifacts.filter((artifact) => {
+    const dataUrl = artifactDataUrl(artifact)
+    return dataUrl.startsWith('data:image/')
+  })
+  if (imageArtifacts.length === 0) return null
+
+  return (
+    <div className="mt-3 space-y-3">
+      {imageArtifacts.map((artifact, index) => (
+        <figure key={`${artifact.name}-${index}`} className="m-0">
+          <img
+            src={artifactDataUrl(artifact)}
+            alt={artifact.name || 'Generated image'}
+            loading="lazy"
+            className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
+          />
+          {artifact.name && (
+            <figcaption className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+              {artifact.name}
+            </figcaption>
+          )}
+        </figure>
+      ))}
+    </div>
+  )
 }
 
 export function MessageBubble({
@@ -31,6 +95,12 @@ export function MessageBubble({
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
   const attachments = message.attachments ?? []
   const toolCalls = message.tool_calls ?? message.toolCalls ?? []
+  const toolArtifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? [])
+  const unreferencedToolArtifacts = toolArtifacts.filter(
+    (artifact) => !artifactIsReferenced(message.content, artifact),
+  )
+  const hasAnswerContent = message.content.trim().length > 0
+  const hasGeneratedImages = unreferencedToolArtifacts.length > 0
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
@@ -133,14 +203,19 @@ export function MessageBubble({
             </div>
           </div>
         ) : (
-          message.content.trim().length > 0 && (
+          (hasAnswerContent || hasGeneratedImages) && (
             <section aria-label="回答">
               {(toolCalls.length > 0 || message.reasoning) && (
                 <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
                   回答
                 </div>
               )}
-              <ChatMarkdown content={message.content} />
+              {hasAnswerContent && (
+                <ChatMarkdown content={message.content} artifacts={toolArtifacts} />
+              )}
+              {hasGeneratedImages && (
+                <GeneratedImageArtifacts artifacts={unreferencedToolArtifacts} />
+              )}
             </section>
           )
         )}
