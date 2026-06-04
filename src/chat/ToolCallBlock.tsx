@@ -161,6 +161,63 @@ function getRunningPreview(toolCall: ToolCallRecord): string {
   return ''
 }
 
+function stripPythonFailurePrefix(message: string): string {
+  return message
+    .replace(/^Python\s*(?:执行失败|语法错误|执行超时|沙盒调用失败)(?:（[^）]+）)?[：:]\s*/i, '')
+    .trim()
+}
+
+function cleanPythonExceptionSnippet(message: string): string {
+  const normalized = stripPythonFailurePrefix(message).replace(/\s+/g, ' ').trim()
+  const stackBoundary = normalized.search(
+    /\s+(?=Traceback \(most recent call last\):|File\s+"|File\s+'|await CodeRunner\(|coroutine =|new_error@|[0-9]+@wasm-function|\^+)/,
+  )
+  const clipped = stackBoundary >= 0 ? normalized.slice(0, stackBoundary) : normalized
+  return compactText(clipped, 260)
+}
+
+function extractPythonException(message: string): string {
+  const cleaned = message
+    .replace(/\bstderr:\s*/gi, '\n')
+    .replace(/\bstdout:\s*/gi, '\n')
+  const stackNoise = /(pyodide\.asm\.js|wasm-function|new_error@|_pyodide)/i
+  const exceptionName = /^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit|Fault|Found|Denied|Timeout)\b/
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const tracebackLine = [...lines]
+    .reverse()
+    .find((line) => exceptionName.test(line) && !stackNoise.test(line) && !line.startsWith('PythonError: Traceback'))
+  if (tracebackLine) return cleanPythonExceptionSnippet(tracebackLine)
+
+  const inlineMatches = [
+    ...cleaned.matchAll(
+      /\b([A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit|Fault|Found|Denied|Timeout)\b(?::\s*[^。\r\n]+)?)/g,
+    ),
+  ]
+    .map((match) => cleanPythonExceptionSnippet(match[1] || ''))
+    .filter((value) => value && !stackNoise.test(value) && !value.startsWith('PythonError: Traceback'))
+  const inline = inlineMatches.reverse()[0]
+  return inline || ''
+}
+
+function compactToolError(error: string): string {
+  const lower = error.toLowerCase()
+  if (
+    lower.includes('pyodide.asm.js') ||
+    lower.includes('wasm-function') ||
+    lower.includes('traceback (most recent call last)') ||
+    lower.includes('pythonerror: traceback') ||
+    lower.includes('_pyodide/')
+  ) {
+    const exception = extractPythonException(error)
+    if (exception) return `Python 执行失败：${exception}`
+    return 'Python 执行失败。详情已隐藏，请查看最终回答。'
+  }
+  return compactText(error, 260)
+}
+
 function StatusIcon({ status }: { status: ToolCallStatus }) {
   if (status === 'running') {
     return <Loader2 className="shrink-0 animate-spin" size={12} />
@@ -193,14 +250,14 @@ export function ToolCallBlock({
 }: ToolCallBlockProps) {
   const mergedLabels = { ...defaultLabels, ...labels }
   const status = normalizeStatus(toolCall.status)
-  const [open, setOpen] = useState(defaultOpen || status === 'error')
+  const [open, setOpen] = useState(defaultOpen)
 
   const toolName = getToolName(toolCall)
   const source = getSource(toolCall)
   const duration = formatDuration(getDuration(toolCall))
   const argumentPreview = useMemo(() => getArgumentPreview(toolCall), [toolCall])
   const resultPreview = useMemo(() => getResultPreview(toolCall), [toolCall])
-  const error = toolCall.error ? compactText(toolCall.error, 260) : ''
+  const error = toolCall.error ? compactToolError(toolCall.error) : ''
   const rowPreview = error || resultPreview || (status === 'running' ? getRunningPreview(toolCall) : '') || argumentPreview
   const hasDetails = Boolean(argumentPreview || resultPreview || error)
 

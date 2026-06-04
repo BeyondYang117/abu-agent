@@ -144,6 +144,62 @@ function describePythonError(err: unknown): string {
   }
 }
 
+function pythonStringLiteral(value: string): string {
+  return JSON.stringify(value)
+}
+
+function wrapPythonUserCode(code: string): string {
+  return `
+import traceback as _kivio_traceback
+
+try:
+    exec(${pythonStringLiteral(code)}, globals(), globals())
+except BaseException:
+    _kivio_traceback.print_exc()
+    raise
+`.trim()
+}
+
+function stripPythonOutputLabel(message: string): string {
+  return message
+    .replace(/\bstderr:\s*/i, '')
+    .replace(/\bstdout:\s*/i, '')
+    .trim()
+}
+
+function cleanPythonExceptionSnippet(message: string): string {
+  const normalized = message.replace(/\s+/g, ' ').trim()
+  const stackBoundary = normalized.search(
+    /\s+(?=Traceback \(most recent call last\):|File\s+"|File\s+'|await CodeRunner\(|coroutine =|new_error@|[0-9]+@wasm-function|\^+)/,
+  )
+  const clipped = stackBoundary >= 0 ? normalized.slice(0, stackBoundary) : normalized
+  return compactErrorMessage(clipped)
+}
+
+function summarizePythonTraceback(message: string): string {
+  const cleaned = stripPythonOutputLabel(message)
+  const stackNoise = /(pyodide\.asm\.js|wasm-function|new_error@|_pyodide)/i
+  const exceptionName = /^[A-Za-z_][\w.]*(Error|Exception|Warning|Interrupt|Exit|Fault|Found|Denied|Timeout)\b/
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const exceptionLine = [...lines]
+    .reverse()
+    .find((line) => exceptionName.test(line) && !stackNoise.test(line) && !line.startsWith('PythonError: Traceback'))
+  if (exceptionLine) return cleanPythonExceptionSnippet(exceptionLine)
+
+  const inlineExceptions = [
+    ...cleaned.matchAll(
+      /\b([A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit|Fault|Found|Denied|Timeout)\b(?::\s*[^。\r\n]+)?)/g,
+    ),
+  ]
+    .map((match) => cleanPythonExceptionSnippet(match[1] || ''))
+    .filter((value) => value && !stackNoise.test(value) && !value.startsWith('PythonError: Traceback'))
+  const inlineException = inlineExceptions.reverse()[0]
+  return compactErrorMessage(inlineException || cleaned)
+}
+
 function detectPyodidePackages(code: string): string[] {
   const packages = PYODIDE_PACKAGE_IMPORTS
     .filter(([pattern]) => pattern.test(code))
@@ -233,15 +289,24 @@ sys.stdout = _stdout
 sys.stderr = _stderr
 `)
 
-  await Promise.race([
-    pyodide.runPythonAsync(code),
-    new Promise<never>((_, reject) => {
-      window.setTimeout(
-        () => reject(new Error(`Python execution timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      )
-    }),
-  ])
+  try {
+    await Promise.race([
+      pyodide.runPythonAsync(wrapPythonUserCode(code)),
+      new Promise<never>((_, reject) => {
+        window.setTimeout(
+          () => reject(new Error(`Python execution timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        )
+      }),
+    ])
+  } catch (err) {
+    const output = await formatPythonOutput(pyodide)
+    const message = describePythonError(err)
+    const content = output.content.trim() && output.content.trim() !== '(no output)'
+      ? output.content
+      : message
+    throw Object.assign(new Error(content), { artifacts: output.artifacts })
+  }
   const output = await formatPythonOutput(pyodide)
   const finalCwd = await getPythonCwd(pyodide)
   const scanRoots = collectScanRoots(fs, finalCwd)
@@ -630,7 +695,7 @@ export async function runPythonInSandbox(
           artifacts: retryOutput.artifacts,
         }
       } catch (retryErr) {
-        const retryMessage = describePythonError(retryErr)
+        const retryMessage = summarizePythonTraceback(describePythonError(retryErr))
         return {
           content: `Python 执行失败（已自动重试一次 matplotlib 初始化）：${retryMessage}。建议优先使用 Pillow / numpy 直接生成图片，除非确实需要 matplotlib 图表能力。`,
           isError: true,
@@ -642,9 +707,10 @@ export async function runPythonInSandbox(
     if (lower.includes('timed out')) {
       return { content: `Python 执行超时：${message}`, isError: true, artifacts: [] }
     }
+    const summary = summarizePythonTraceback(message)
     if (message.includes('SyntaxError') || lower.includes('syntaxerror')) {
-      return { content: `Python 语法错误：${message}`, isError: true, artifacts: [] }
+      return { content: `Python 语法错误：${summary}`, isError: true, artifacts: [] }
     }
-    return { content: `Python 执行失败：${message}`, isError: true, artifacts: [] }
+    return { content: `Python 执行失败：${summary}`, isError: true, artifacts: [] }
   }
 }

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -1341,12 +1342,13 @@ async fn push_assistant_message(
         content: content.clone(),
         attachments: vec![],
         reasoning: reasoning.clone(),
-        tool_calls,
         model_messages: assistant_model_messages_for_storage(
             &content,
             reasoning.as_deref(),
             &api_messages,
+            &tool_calls,
         ),
+        tool_calls,
         api_messages,
         active_skill_id: active_skill_id.map(|id| id.to_string()),
         timestamp: chrono::Local::now().timestamp(),
@@ -1375,9 +1377,11 @@ fn assistant_model_messages_for_storage(
     content: &str,
     reasoning: Option<&str>,
     api_messages: &[Value],
+    tool_calls: &[ToolCallRecord],
 ) -> Vec<ModelMessage> {
     if !api_messages.is_empty() {
-        let canonical = model_messages_from_openai_messages(api_messages.to_vec());
+        let mut canonical = model_messages_from_openai_messages(api_messages.to_vec());
+        mark_tool_result_errors(&mut canonical, tool_calls);
         if !canonical.is_empty() {
             return canonical;
         }
@@ -1402,6 +1406,36 @@ fn assistant_model_messages_for_storage(
             role: ModelRole::Assistant,
             content: parts,
         }]
+    }
+}
+
+fn mark_tool_result_errors(messages: &mut [ModelMessage], tool_calls: &[ToolCallRecord]) {
+    let error_by_id: HashMap<&str, bool> = tool_calls
+        .iter()
+        .map(|record| {
+            (
+                record.id.as_str(),
+                matches!(record.status, ToolCallStatus::Error),
+            )
+        })
+        .collect();
+    if error_by_id.is_empty() {
+        return;
+    }
+
+    for message in messages {
+        for part in &mut message.content {
+            if let MessagePart::ToolResult {
+                tool_call_id,
+                is_error,
+                ..
+            } = part
+            {
+                if let Some(failed) = error_by_id.get(tool_call_id.as_str()) {
+                    *is_error = *failed;
+                }
+            }
+        }
     }
 }
 
@@ -4647,6 +4681,69 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("thinking")
         );
+    }
+
+    #[test]
+    fn assistant_model_messages_marks_failed_tool_results_as_error() {
+        let api_messages = vec![
+            serde_json::json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_error",
+                    "type": "function",
+                    "function": {
+                        "name": "run_python",
+                        "arguments": "{\"code\":\"print(1/0)\"}"
+                    }
+                }]
+            }),
+            serde_json::json!({
+                "role": "tool",
+                "tool_call_id": "call_error",
+                "content": "Python 执行失败：ZeroDivisionError: division by zero"
+            }),
+            serde_json::json!({
+                "role": "assistant",
+                "content": "ZeroDivisionError"
+            }),
+        ];
+        let tool_calls = vec![ToolCallRecord {
+            id: "call_error".to_string(),
+            name: "run_python".to_string(),
+            source: "native".to_string(),
+            server_id: None,
+            arguments: "{\"code\":\"print(1/0)\"}".to_string(),
+            status: ToolCallStatus::Error,
+            result_preview: None,
+            error: Some("Python 执行失败：ZeroDivisionError: division by zero".to_string()),
+            duration_ms: Some(31),
+            started_at: Some(1),
+            completed_at: Some(2),
+            round: 1,
+            sensitive: false,
+            artifacts: Vec::new(),
+        }];
+
+        let model_messages = assistant_model_messages_for_storage(
+            "ZeroDivisionError",
+            None,
+            &api_messages,
+            &tool_calls,
+        );
+        let tool_result_is_error = model_messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .find_map(|part| match part {
+                MessagePart::ToolResult {
+                    tool_call_id,
+                    is_error,
+                    ..
+                } if tool_call_id == "call_error" => Some(*is_error),
+                _ => None,
+            });
+
+        assert_eq!(tool_result_is_error, Some(true));
     }
 
     #[test]
