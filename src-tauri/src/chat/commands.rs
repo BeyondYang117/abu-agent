@@ -33,8 +33,8 @@ use crate::state::AppState;
 use super::storage::{
     archive_assistant, assistant_snapshot, conversation_attachments_dir, create_assistant,
     create_project, delete_conversation as delete_conv, delete_project, duplicate_assistant,
-    get_assistants, get_conversations as get_convs, get_projects, load_conversation,
-    save_conversation, update_assistant, update_project,
+    find_reusable_blank_conversation, get_assistants, get_conversations as get_convs, get_projects,
+    load_conversation, save_conversation, update_assistant, update_project,
 };
 use super::{
     Attachment, ChatAssistant, ChatAssistantSnapshot, ChatMessage, ContextUsageSegment,
@@ -114,29 +114,49 @@ pub(crate) fn chat_create_conversation(
             Some(trimmed.to_string())
         }
     });
+    let assistant_id_for_reuse = assistant_snapshot
+        .as_ref()
+        .map(|assistant| assistant.id.clone());
 
-    let now = chrono::Local::now().timestamp();
-    let conversation = Conversation {
-        id: format!("conv_{}", Uuid::new_v4()),
-        title: "新对话".to_string(),
-        provider_id,
-        model,
-        messages: vec![],
-        active_skill_id: assistant_snapshot
-            .as_ref()
-            .and_then(|assistant| assistant.skill_id.clone()),
-        assistant_id: assistant_snapshot
-            .as_ref()
-            .map(|assistant| assistant.id.clone()),
-        assistant_snapshot,
-        created_at: now,
-        updated_at: now,
-        pinned: false,
-        folder,
-        context_state: ConversationContextState::default(),
+    let conversation = {
+        let _create_guard = state
+            .chat_create_conversation_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(conversation) = find_reusable_blank_conversation(
+            &app,
+            &provider_id,
+            &model,
+            folder.as_deref(),
+            assistant_id_for_reuse.as_deref(),
+        )? {
+            conversation
+        } else {
+            let now = chrono::Local::now().timestamp();
+            let conversation = Conversation {
+                id: format!("conv_{}", Uuid::new_v4()),
+                title: "新对话".to_string(),
+                provider_id,
+                model,
+                messages: vec![],
+                active_skill_id: assistant_snapshot
+                    .as_ref()
+                    .and_then(|assistant| assistant.skill_id.clone()),
+                assistant_id: assistant_snapshot
+                    .as_ref()
+                    .map(|assistant| assistant.id.clone()),
+                assistant_snapshot,
+                created_at: now,
+                updated_at: now,
+                pinned: false,
+                folder,
+                context_state: ConversationContextState::default(),
+            };
+
+            save_conversation(&app, &conversation)?;
+            conversation
+        }
     };
-
-    save_conversation(&app, &conversation)?;
 
     Ok(serde_json::json!({
         "success": true,
@@ -926,6 +946,7 @@ async fn complete_assistant_reply(
     let max_rounds = settings.chat_tools.max_tool_rounds.max(1);
     let mut provider_tools_unsupported = false;
     let mut tool_planning_finished = false;
+    let mut planning_final_message: Option<Value> = None;
 
     if !tools.is_empty() {
         let mut tried_skill_only_tools = false;
@@ -997,6 +1018,7 @@ async fn complete_assistant_reply(
             let tool_calls = extract_tool_calls(&message);
             if tool_calls.is_empty() {
                 tool_planning_finished = true;
+                planning_final_message = Some(message);
                 break;
             }
             if let Some(reasoning) = extract_reasoning_content(&message) {
@@ -1105,6 +1127,45 @@ async fn complete_assistant_reply(
             conversation.assistant_snapshot.as_ref(),
             settings.chat.system_prompt.as_str(),
         );
+    }
+
+    if let Some(message) = planning_final_message {
+        let (response, reasoning) =
+            final_response_from_planning_message(&message, &planning_reasoning_parts)?;
+        emit_chat_stream_delta(
+            app,
+            &conversation.id,
+            &run_id,
+            &assistant_message_id,
+            &response,
+            None,
+        );
+        emit_chat_stream_done(
+            app,
+            &conversation.id,
+            &run_id,
+            &assistant_message_id,
+            "done",
+            &response,
+        );
+        if !generated_api_messages.is_empty() {
+            generated_api_messages.push(message);
+        }
+        push_assistant_message(
+            app,
+            state,
+            &settings,
+            conversation,
+            assistant_message_id,
+            response,
+            reasoning,
+            tool_records,
+            generated_api_messages,
+            skill_id.as_deref(),
+            title_from_first_user,
+        )
+        .await?;
+        return Ok(());
     }
 
     let (response, reasoning) = if stream_enabled {
@@ -1602,6 +1663,9 @@ fn build_chat_system_prompt_with_segments(
         let mut runtime = format!(
             "You have access to tools (functions). When the user's request requires action—such as {}—YOU MUST call the appropriate enabled tool instead of describing what to do. Never say \"I cannot run commands\" or \"you can do it yourself\" when an enabled tool is available for that action. Do not call tools that are not listed as enabled.",
             action_examples.join(", ")
+        );
+        runtime.push_str(
+            " Only claim that a tool was used, a script was run, a file was read, or the web was searched after Kivio returns an actual tool result in the conversation.",
         );
         if language.starts_with("zh") {
             runtime.push_str(
@@ -2983,6 +3047,18 @@ fn merge_reasoning(planning_parts: &[String], final_reasoning: Option<String>) -
     } else {
         Some(parts.join("\n\n"))
     }
+}
+
+fn final_response_from_planning_message(
+    message: &Value,
+    planning_reasoning_parts: &[String],
+) -> Result<(String, Option<String>), String> {
+    let response = sanitize_assistant_text_response(&assistant_content_from_api_message(message));
+    if response.trim().is_empty() {
+        return Err(empty_assistant_response_error("Chat tools planning"));
+    }
+    let reasoning = merge_reasoning(planning_reasoning_parts, extract_reasoning_content(message));
+    Ok((response, reasoning))
 }
 
 fn extract_tool_calls(message: &Value) -> Vec<PendingToolCall> {
@@ -4375,6 +4451,38 @@ mod tests {
         let response = empty_assistant_response_error("Chat stream");
 
         assert_eq!(response, "Chat stream returned an empty assistant response");
+    }
+
+    #[test]
+    fn planning_final_message_becomes_final_reply_without_second_request() {
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": "直接回答",
+            "reasoning_content": "final thought"
+        });
+
+        let (response, reasoning) =
+            final_response_from_planning_message(&message, &["plan thought".to_string()])
+                .expect("planning final message should become final reply");
+
+        assert_eq!(response, "直接回答");
+        assert_eq!(reasoning.as_deref(), Some("plan thought\n\nfinal thought"));
+    }
+
+    #[test]
+    fn planning_final_message_rejects_empty_text() {
+        let message = serde_json::json!({
+            "role": "assistant",
+            "content": "<|DSML|tool_calls></|DSML|tool_calls>"
+        });
+
+        let err = final_response_from_planning_message(&message, &[])
+            .expect_err("empty planning final text should fail");
+
+        assert_eq!(
+            err,
+            "Chat tools planning returned an empty assistant response"
+        );
     }
 
     #[test]

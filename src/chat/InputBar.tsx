@@ -10,6 +10,16 @@ import type { PendingAttachment } from './types'
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+function shouldComposerAutoFocus(activeElement: Element | null): boolean {
+  if (!activeElement || activeElement === document.body || activeElement === document.documentElement) {
+    return true
+  }
+  if (activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLInputElement) {
+    return false
+  }
+  return activeElement.closest('[data-chat-composer="true"]') !== null
+}
+
 function isExternalMcpTool(tool: ChatToolDefinition): boolean {
   return tool.source !== 'skill' && tool.source !== 'native'
 }
@@ -161,8 +171,13 @@ export function InputBar({
   }
 
   useEffect(() => {
-    if (autoFocus) textareaRef.current?.focus()
-  }, [autoFocus])
+    if (!autoFocus || disabled) return
+    requestAnimationFrame(() => {
+      if (shouldComposerAutoFocus(document.activeElement)) {
+        textareaRef.current?.focus({ preventScroll: true })
+      }
+    })
+  }, [autoFocus, disabled])
 
   useEffect(() => {
     if (!autoFocus || !isTauriRuntime()) return
@@ -172,7 +187,7 @@ export function InputBar({
     getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (!focused || cancelled) return
       requestAnimationFrame(() => {
-        if (!cancelled && !disabled) {
+        if (!cancelled && !disabled && shouldComposerAutoFocus(document.activeElement)) {
           textareaRef.current?.focus({ preventScroll: true })
         }
       })
@@ -317,6 +332,7 @@ export function InputBar({
           </>
         )}
         <div
+          data-chat-composer="true"
           className={`rounded-[28px] border bg-white px-3 py-2.5 shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-colors dark:bg-neutral-900 dark:shadow-none ${
             dragActive
               ? 'border-[#e8a090] ring-2 ring-[#e8a090]/25 dark:border-[#e8a090]'
@@ -352,6 +368,7 @@ export function InputBar({
               type="button"
               onClick={() => void handleAddAttachment()}
               disabled={disabled}
+              tabIndex={-1}
               className="mb-0.5 shrink-0 rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
               title="添加附件"
               aria-label="添加附件"
@@ -366,6 +383,7 @@ export function InputBar({
                   setToolPanelOpen((open) => !open)
                 }}
                 disabled={disabled}
+                tabIndex={-1}
                 className={`mb-0.5 shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
                   toolPanelOpen || hasToolProblem || enabledSkills.length > 0 || externalMcpTools.length > 0
                     ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
@@ -405,6 +423,7 @@ export function InputBar({
                 type="button"
                 onClick={handleSend}
                 disabled={!canSend}
+                tabIndex={-1}
                 title={sendDisabledReason || (canSend ? '发送' : '输入消息后发送')}
                 aria-label={sendDisabledReason || '发送'}
                 className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all ${

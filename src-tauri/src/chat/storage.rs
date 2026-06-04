@@ -341,6 +341,51 @@ pub fn get_conversations(
     Ok(index.conversations[offset..end].to_vec())
 }
 
+pub fn find_reusable_blank_conversation(
+    app: &AppHandle,
+    provider_id: &str,
+    model: &str,
+    folder: Option<&str>,
+    assistant_id: Option<&str>,
+) -> Result<Option<Conversation>, String> {
+    let mut index = load_index_or_scan(app)?;
+    index
+        .conversations
+        .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    for item in index.conversations {
+        if item.message_count != 0 {
+            continue;
+        }
+        if item.provider_id != provider_id || item.model != model {
+            continue;
+        }
+        if item.folder.as_deref() != folder {
+            continue;
+        }
+        if item.assistant_id.as_deref() != assistant_id {
+            continue;
+        }
+        let conversation = match load_conversation(app, &item.id) {
+            Ok(conversation) => conversation,
+            Err(err) => {
+                eprintln!("skip reusable blank conversation {}: {err}", item.id);
+                continue;
+            }
+        };
+        if conversation.messages.is_empty()
+            && conversation.provider_id == provider_id
+            && conversation.model == model
+            && conversation.folder.as_deref() == folder
+            && conversation.assistant_id.as_deref() == assistant_id
+        {
+            return Ok(Some(conversation));
+        }
+    }
+
+    Ok(None)
+}
+
 pub fn get_projects(app: &AppHandle) -> Result<Vec<ChatProject>, String> {
     let mut project_index = load_project_index(app)?;
     let conversation_index = load_index_or_scan(app)?;

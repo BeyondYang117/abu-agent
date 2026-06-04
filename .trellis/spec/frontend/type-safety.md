@@ -69,6 +69,8 @@ Questions to answer:
 ### 3. Contracts
 - Conversation IDs are backend-owned and must match `conv_*`; frontend must pass IDs returned by chat commands or parsed from `#chat/{conversation_id}`.
 - Stored Rust fields use snake_case (`provider_id`, `created_at`); Tauri command argument names from TypeScript use camelCase (`conversationId`, `providerId`).
+- `chat_create_conversation` must be idempotent for an existing blank conversation with the same provider, model, folder, and assistant. Backend creation must hold the Chat create lock around reusable-blank lookup plus save; frontend should also reuse the current or remembered blank conversation instead of creating another empty file.
+- Chat composer focus belongs on the textarea when the Chat window opens or regains focus. Composer icon buttons may remain mouse-clickable but should not become the default focus target; keep them out of the tab order when they are compact icon-only controls.
 - Chat model defaults live in settings as `defaultModels.chat`; legacy `chatProviderId` and `chatModel` are kept as a compatibility mirror. When the structured chat default is unset, backend sanitization falls back to Lens provider/model, then translator provider/model.
 - Default model slots for title summary and compression live under `defaultModels.titleSummary` and `defaultModels.compression`. If those slots are unset, backend effective-model helpers inherit the effective Chat default.
 - New Chat conversation titles are generated after the first assistant reply using `defaultModels.titleSummary` when configured, or the effective Chat default when unset. Title generation is best effort: provider errors, timeouts, missing keys, or invalid title output must fall back to local first-user-message truncation and must not fail `chat_send_message`.
@@ -79,18 +81,23 @@ Questions to answer:
 - Invalid conversation ID -> backend returns `Err("Invalid conversation id: ...")`; do not construct file paths directly in frontend.
 - Missing conversation file -> backend returns a failed invoke; frontend shows a visible load/send error.
 - Pagination offset beyond loaded index length -> backend returns an empty list, never panics.
+- Repeated `chat_create_conversation` for the same blank Chat scope -> returns the existing blank conversation, not a newly created one.
+- Opening Chat with an empty composer -> active focus should be the composer textarea, not the attachment/tool/send icon buttons.
 - Stream `reason: 'error'` -> frontend clears streaming state, shows an error, and re-enables input.
 - Stream `reason: 'cancelled'` -> frontend clears streaming state without forcing a conversation reload.
 
 ### 5. Good/Base/Bad Cases
 - Good: `ModelSelector` uses `enabledModels.length > 0 ? enabledModels : availableModels`, then persists through `chat_update_conversation`.
+- Good: multiple quick clicks on "新建聊天" settle on one blank `Conversation` until the user sends a message or switches to a different provider/model/folder/assistant scope.
 - Base: `#chat` shows the empty Chat shell; `#chat/{id}` loads the referenced conversation.
 - Bad: listening for `{ kind: 'chunk', text }` on `chat-stream`; backend emits `delta` and `done`, not `text`.
+- Bad: creating a new blank conversation on every click just because the current route is `#chat`; this floods storage and sidebar with empty "新对话" rows.
 
 ### 6. Tests Required
 - `npm run typecheck` must catch mismatches between bridge types and Chat UI props.
 - `npm run lint` must pass without `any` stream payload listeners.
 - `cargo test --manifest-path src-tauri/Cargo.toml` must include settings fallback assertions when changing chat defaults, and title-generation regression tests when changing title summary behavior.
+- Manual/UI smoke must cover repeated New Chat clicks and composer focus when changing Chat shell or InputBar focus behavior.
 - `npm run build:ui` must pass after route or lazy-loaded Chat component changes.
 
 ### 7. Wrong vs Correct
@@ -114,6 +121,24 @@ api.onChatStream((payload) => {
     setStreaming(false)
   }
 })
+```
+
+#### Wrong
+```tsx
+// Lets each click race into a fresh backend create.
+const conv = await chatApi.createConversation(providerId, model, folder)
+applyConversation(conv)
+```
+
+#### Correct
+```tsx
+if (canReuseCurrentBlankConversation()) {
+  applyConversation(currentBlankConversation)
+  syncConversationRoute(currentBlankConversation.id)
+  return
+}
+const conv = await singleInFlightCreateConversationRequest
+applyConversation(conv)
 ```
 
 ## Scenario: Chat Runtime Provider Contract
@@ -230,7 +255,8 @@ if !message.model_messages.is_empty() {
 ### 4. Validation & Error Matrix
 - Missing or disabled MCP config -> no `tools` are sent to the model; Skill-only prompt injection still works.
 - Provider lacks or rejects `tools` -> surface a user-visible Chat tool status and disable tool-dependent sends when a selected Skill recommends unavailable tools; do not break plain Chat or prompt-only Skill use.
-- Provider returns an assistant message with no `tool_calls` during the tool loop -> finalize that exact assistant response immediately. Do not discard it and make a second plain request.
+- Provider returns an assistant message with no `tool_calls` during the tool loop -> finalize that exact assistant response immediately, preserving reasoning. Do not discard it and make a second plain request.
+- A model claims in visible text that it used a tool but returned no structured `tool_calls` and no Kivio `chat-tool` result -> treat it as ordinary assistant text, not evidence that a tool ran.
 - Active Skill `allowed-tools` filtering -> always retain the internal Skill runtime tools (`skill_activate`, `skill_read_file`, `skill_run_script`) so the selected Skill can load itself.
 - Old conversation JSON missing `active_skill_id`, `tool_calls`, or `api_messages` -> deserialize with defaults and render normally.
 - MCP server imported from config -> keep disabled until the user explicitly enables it.
@@ -244,8 +270,10 @@ if !message.model_messages.is_empty() {
 - Good: stream cancellation is checked while opening the streaming request and again while awaiting each `response.chunk()`; polling only between already-received chunks can leave the UI waiting on a blocked network read.
 - Good: pending optimistic user messages are keyed to the conversation that sent them; switching routes during send must not render conversation A's pending user message in conversation B.
 - Good: after a tool-assisted response, later model requests replay hidden `api_messages` so OpenAI-compatible providers see the exact `assistant tool_calls -> tool -> assistant` sequence.
+- Good: a tools-planning model response with plain text and no structured tool call is stored as the final assistant reply without a second model request.
 - Base: a conversation with no Skill and MCP disabled behaves exactly like current Chat.
 - Bad: inserting tool results as visible user/assistant messages; this corrupts previews, editing, deletion, and regeneration semantics.
+- Bad: using visible assistant text like "I ran the tool" to create tool records; only structured provider tool calls or Kivio tool events can create tool traces.
 - Bad: exposing Skill tools as `skill__activate` in the OpenAI schema while the system prompt instructs the model to call `skill_activate`.
 - Bad: adding frontend shell permissions so the webview can spawn arbitrary user-configured MCP commands.
 - Bad: clearing streaming state on conversation switch but leaving a global `pendingUserMessage`; that leaks the old conversation's optimistic user row into the newly selected conversation.
@@ -253,6 +281,7 @@ if !message.model_messages.is_empty() {
 ### 6. Tests Required
 - TypeScript typecheck must cover the new `ChatStreamPayload`, `ChatToolProgressPayload`, `ToolCallRecord`, `SkillMeta`, and settings types.
 - Rust tests must cover settings defaults/sanitization, old conversation deserialization with missing new fields, tool max-round stopping, timeout/cancel behavior, hidden tool transcript replay, Skill runtime tool naming, sensitive script approval, and tool-result message construction.
+- Rust tests must cover the tools-planning no-tool-call finalization path, including empty visible text failure.
 - Rust tests for Streamable HTTP MCP must cover notification/progress events before the response and mismatched JSON-RPC ids before the matching id.
 - UI smoke tests must cover live tool progress, persisted tool trace rendering after reload, Skill switch/clear persistence, and provider-without-tools fallback.
 - Capability review must confirm no frontend `shell:*` permission is added when MCP stdio stays Rust-owned.

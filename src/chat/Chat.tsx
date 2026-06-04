@@ -178,6 +178,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
   const newConversationRequestRef = useRef<Promise<Conversation> | null>(null)
+  const reusableBlankConversationRef = useRef<Conversation | null>(null)
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
   const requestWindowFocus = useWindowInteractionFocus()
@@ -185,6 +186,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const applyConversation = useCallback((conversation: Conversation | null) => {
     setCurrentConversation(conversation)
     setContextState(conversation?.context_state ?? conversation?.contextState ?? null)
+    reusableBlankConversationRef.current =
+      conversation
+      && conversation.messages.length === 0
+      && !(conversation.assistant_id ?? conversation.assistantId)
+        ? conversation
+        : null
   }, [])
 
   const patchContextState = useCallback((nextState: ConversationContextState) => {
@@ -314,10 +321,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   )
 
   const canReuseCurrentBlankConversation = useCallback(() => {
-    if (!currentConversation) return false
-    if (currentConversation.messages.length > 0) return false
-    if (currentConversation.assistant_id ?? currentConversation.assistantId) return false
-    if ((currentConversation.folder ?? '') !== (selectedProject?.name ?? '')) return false
+    const candidate = currentConversation ?? reusableBlankConversationRef.current
+    if (!candidate) return false
+    if (candidate.messages.length > 0) return false
+    if (candidate.assistant_id ?? candidate.assistantId) return false
+    if ((candidate.folder ?? '') !== (selectedProject?.name ?? '')) return false
     return true
   }, [currentConversation, selectedProject?.name])
   const currentAssistantSnapshot =
@@ -914,30 +922,29 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const handleNewConversation = useCallback(async () => {
     setLastAssistantStreamStats(null)
     if (canReuseCurrentBlankConversation()) {
-      const conversationId = currentConversation!.id
+      const conversation = currentConversation ?? reusableBlankConversationRef.current
+      if (!conversation) return
+      const conversationId = conversation.id
       currentConversationIdRef.current = conversationId
+      applyConversation(conversation)
       restoreStreamingPreview(conversationId)
       syncConversationRoute(conversationId)
       setStreamError('')
       return
     }
 
+    let request = newConversationRequestRef.current
     try {
-      if (!newConversationRequestRef.current) {
-        const request = chatApi.createConversation(
+      if (!request) {
+        request = chatApi.createConversation(
           activeProviderId || undefined,
           activeModel || undefined,
           selectedProject?.name,
         )
-        const guardedRequest = request.finally(() => {
-          if (newConversationRequestRef.current === guardedRequest) {
-            newConversationRequestRef.current = null
-          }
-        })
-        newConversationRequestRef.current = guardedRequest
+        newConversationRequestRef.current = request
       }
 
-      const conv = await newConversationRequestRef.current
+      const conv = await request
       currentConversationIdRef.current = conv.id
       applyConversation(conv)
       restoreStreamingPreview(conv.id)
@@ -947,6 +954,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     } catch (err) {
       console.error('Failed to create conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
+    } finally {
+      if (newConversationRequestRef.current === request) {
+        newConversationRequestRef.current = null
+      }
     }
   }, [
     activeModel,

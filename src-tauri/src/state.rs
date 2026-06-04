@@ -36,6 +36,8 @@ pub struct AppState {
     pub pending_chat_tool_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     /// 等待前端 Pyodide 完成的 run_python 调用。
     pub pending_python_runs: Mutex<HashMap<String, oneshot::Sender<PythonRunResult>>>,
+    /// 保护 Chat 空白会话复用的短临界区，避免快速多次新建时并发创建多个空白对话。
+    pub chat_create_conversation_lock: Mutex<()>,
     /// Chat MCP/native tool 列表缓存。key 由工具相关 settings 生成，避免每轮对话重复冷启动 server。
     pub chat_tool_list_cache: Mutex<HashMap<String, (Instant, Vec<ChatToolDefinition>)>>,
     /// Lens 启动前抓到的选中文本：放在这里等前端 enterSelect 来取走。
@@ -240,6 +242,7 @@ mod tests {
             chat_stream_generations: Mutex::new(HashMap::new()),
             pending_chat_tool_approvals: Mutex::new(HashMap::new()),
             pending_python_runs: Mutex::new(HashMap::new()),
+            chat_create_conversation_lock: Mutex::new(()),
             chat_tool_list_cache: Mutex::new(HashMap::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),
