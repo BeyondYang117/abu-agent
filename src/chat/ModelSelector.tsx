@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
+import { isProviderEnabled } from '../settings/utils'
 import { chatTitlebarPillButtonClass } from './platform'
 
 interface ModelSelectorProps {
@@ -32,6 +33,7 @@ export function ModelSelector({
           availableModels: currentModel ? [currentModel] : ['dev-model'],
           enabledModels: currentModel ? [currentModel] : ['dev-model'],
           supportsTools: true,
+          enabled: true,
           apiFormat: 'openai',
         },
       ])
@@ -42,7 +44,9 @@ export function ModelSelector({
     loadProviders()
   }, [loadProviders])
 
-  const currentProvider = providers.find((p) => p.id === currentProviderId)
+  const activeProviders = providers.filter(isProviderEnabled)
+  const currentProvider = activeProviders.find((p) => p.id === currentProviderId)
+    ?? providers.find((p) => p.id === currentProviderId)
   const displayName = currentModel || currentProvider?.enabledModels[0] || '选择模型'
 
   return (
@@ -65,7 +69,7 @@ export function ModelSelector({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div className="absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-            {providers.map((provider) => (
+            {activeProviders.map((provider) => (
               <div key={provider.id} className="px-1 py-1">
                 <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
                   {provider.name}
@@ -92,7 +96,7 @@ export function ModelSelector({
                 ))}
               </div>
             ))}
-            {providers.length === 0 && (
+            {activeProviders.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-neutral-500">暂无可用模型</div>
             )}
           </div>

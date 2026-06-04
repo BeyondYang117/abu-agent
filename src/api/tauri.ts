@@ -329,6 +329,7 @@ export type ModelProvider = {
   availableModels: string[]
   enabledModels: string[]
   supportsTools: boolean
+  enabled: boolean
   apiFormat: string
   modelOverrides?: Record<string, ModelInfo>
 }
@@ -469,6 +470,7 @@ function normalizeProvider(provider: ModelProvider): ModelProvider {
     availableModels: Array.isArray(provider.availableModels) ? provider.availableModels : [],
     enabledModels: Array.isArray(provider.enabledModels) ? provider.enabledModels : [],
     supportsTools: provider.supportsTools !== false,
+    enabled: provider.enabled !== false,
     apiFormat: provider.apiFormat || 'openai',
   }
 }

@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
+import { isProviderEnabled } from '../settings/utils'
 import { chatApi } from './api'
 import type { ChatAssistant, AssistantToolPreset, SkillMeta } from './types'
 
@@ -173,6 +174,11 @@ export function AssistantCenter({
     const normalizedQuery = query.trim().toLowerCase()
     return assistants.filter((assistant) => assistantMatches(assistant, normalizedQuery))
   }, [assistants, query])
+
+  const enabledProviders = useMemo(
+    () => providers.filter(isProviderEnabled),
+    [providers],
+  )
 
   const selectedProvider = providers.find((provider) => provider.id === (draft?.provider_id ?? draft?.providerId))
   const models = providerModels(selectedProvider)
@@ -495,7 +501,7 @@ export function AssistantCenter({
                         className="h-9 w-full rounded-md border border-neutral-200 bg-white px-2 text-[12px] outline-none dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
                       >
                         <option value="">跟随聊天默认</option>
-                        {providers.map((provider) => (
+                        {enabledProviders.map((provider) => (
                           <option key={provider.id} value={provider.id}>
                             {provider.name}
                           </option>

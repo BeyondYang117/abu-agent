@@ -121,9 +121,11 @@ export const parseModelPairValue = (value: string): [string, string] => {
 export const isProviderAvailableOnPlatform = (provider: ModelProvider, platform: Platform) =>
   platform === 'macos' || provider.baseUrl !== 'applefoundation://local'
 
+export const isProviderEnabled = (provider: ModelProvider) => provider.enabled !== false
+
 export const buildModelPairOptions = (providers: ModelProvider[], platform: Platform) =>
   providers
-    .filter(provider => isProviderAvailableOnPlatform(provider, platform))
+    .filter(provider => isProviderEnabled(provider) && isProviderAvailableOnPlatform(provider, platform))
     .flatMap(provider => {
       if (provider.baseUrl === 'applefoundation://local') {
         return [{

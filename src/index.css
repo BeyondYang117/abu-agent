@@ -248,6 +248,19 @@ body {
   overflow: hidden;
 }
 
+.chat-window-shell button:focus {
+  outline: none;
+}
+
+.chat-window-shell button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.dark .chat-window-shell button:focus-visible {
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
+}
+
 /* ===== Chat 内嵌设置（对齐 Chat 侧栏 + Jan 卡片详情区） ===== */
 /* 设置面板容器查询：窗口变窄时收窄导航、模型页改单栏 */
 .settings-embedded.kv,
@@ -1655,6 +1668,7 @@ body {
 }
 .kv-provider-dot.on { background: var(--success); }
 .kv-provider-dot.warn { background: var(--warn); }
+.kv-provider-dot.off { background: var(--text-tertiary); opacity: 0.45; }
 .kv-provider-add {
   margin-top: 2px;
   font-size: 11.5px;

@@ -138,6 +138,9 @@ pub struct ModelProvider {
     pub enabled_models: Vec<String>,
     #[serde(default = "default_true")]
     pub supports_tools: bool,
+    /// 关闭后该供应商不会出现在模型选择器中，已引用它的功能会在保存时切到第一个启用的供应商。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     /// API 格式："openai"（默认）或 "anthropic"
     #[serde(default = "default_api_format")]
     pub api_format: String,
@@ -869,7 +872,10 @@ fn sanitize_default_model_selection(
         return;
     }
 
-    let Some(provider) = providers.iter().find(|p| p.id == selection.provider_id) else {
+    let Some(provider) = providers
+        .iter()
+        .find(|p| p.id == selection.provider_id && p.enabled)
+    else {
         selection.provider_id.clear();
         selection.model.clear();
         return;
@@ -916,6 +922,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 available_models: vec![],
                 enabled_models: vec![old_openai.model.clone()],
                 supports_tools: true,
+                enabled: true,
                 api_format: "openai".to_string(),
                 model_overrides: std::collections::HashMap::new(),
             });
@@ -939,6 +946,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 available_models: vec![],
                 enabled_models: vec![old_ocr.model.clone()],
                 supports_tools: true,
+                enabled: true,
                 api_format: "openai".to_string(),
                 model_overrides: std::collections::HashMap::new(),
             });
@@ -966,12 +974,25 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         });
     }
 
+    let provider_exists = |id: &str| settings.providers.iter().any(|p| p.id == id);
+    let provider_selectable = |id: &str| {
+        settings
+            .providers
+            .iter()
+            .any(|p| p.id == id && p.enabled)
+    };
+    let first_selectable_provider = || settings.providers.iter().find(|p| p.enabled);
+
     // 2. 为空字段设置默认值
-    if settings.translator_provider_id.is_empty() && !settings.providers.is_empty() {
-        settings.translator_provider_id = settings.providers[0].id.clone();
+    if settings.translator_provider_id.is_empty() {
+        if let Some(first) = first_selectable_provider() {
+            settings.translator_provider_id = first.id.clone();
+        }
     }
-    if settings.screenshot_translation.provider_id.is_empty() && !settings.providers.is_empty() {
-        settings.screenshot_translation.provider_id = settings.providers[0].id.clone();
+    if settings.screenshot_translation.provider_id.is_empty() {
+        if let Some(first) = first_selectable_provider() {
+            settings.screenshot_translation.provider_id = first.id.clone();
+        }
     }
     if !settings.chat_provider_id.trim().is_empty()
         && settings.default_models.chat.provider_id.trim().is_empty()
@@ -980,30 +1001,40 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         settings.default_models.chat.model = settings.chat_model.clone();
     }
 
-    let provider_exists = |id: &str| settings.providers.iter().any(|p| p.id == id);
     if settings.providers.is_empty() {
         settings.translator_provider_id.clear();
         settings.default_models = DefaultModelsConfig::default();
         settings.screenshot_translation.provider_id.clear();
         settings.lens.provider_id.clear();
     } else {
-        if !provider_exists(&settings.translator_provider_id) {
-            let first = &settings.providers[0];
-            settings.translator_provider_id = first.id.clone();
-            if let Some(model) = first.enabled_models.first() {
-                settings.translator_model = model.clone();
+        if !provider_selectable(&settings.translator_provider_id) {
+            if let Some(first) = first_selectable_provider() {
+                settings.translator_provider_id = first.id.clone();
+                if let Some(model) = first.enabled_models.first() {
+                    settings.translator_model = model.clone();
+                }
+            } else if !provider_exists(&settings.translator_provider_id) {
+                settings.translator_provider_id.clear();
+                settings.translator_model.clear();
             }
         }
-        if !provider_exists(&settings.screenshot_translation.provider_id) {
-            let first = &settings.providers[0];
-            settings.screenshot_translation.provider_id = first.id.clone();
-            if let Some(model) = first.enabled_models.first() {
-                settings.screenshot_translation.model = model.clone();
+        if !provider_selectable(&settings.screenshot_translation.provider_id) {
+            if let Some(first) = first_selectable_provider() {
+                settings.screenshot_translation.provider_id = first.id.clone();
+                if let Some(model) = first.enabled_models.first() {
+                    settings.screenshot_translation.model = model.clone();
+                }
+            } else if !provider_exists(&settings.screenshot_translation.provider_id) {
+                settings.screenshot_translation.provider_id.clear();
+                settings.screenshot_translation.model.clear();
             }
         }
         // lens provider 可空（空时 call_vision_api 走 translator_provider_id fallback）；
-        // 但若用户填了一个不存在的，重置为空让其走 fallback。
-        if !settings.lens.provider_id.is_empty() && !provider_exists(&settings.lens.provider_id) {
+        // 但若用户填了一个不存在或已禁用的，重置为空让其走 fallback。
+        if !settings.lens.provider_id.is_empty()
+            && (!provider_exists(&settings.lens.provider_id)
+                || !provider_selectable(&settings.lens.provider_id))
+        {
             settings.lens.provider_id.clear();
             settings.lens.model.clear();
         }
@@ -1058,7 +1089,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         let fallback = settings
             .providers
             .iter()
-            .find(|p| p.base_url != APPLE_INTELLIGENCE_BASE_URL)
+            .find(|p| p.enabled && p.base_url != APPLE_INTELLIGENCE_BASE_URL)
             .map(|p| {
                 (
                     p.id.clone(),
@@ -1851,6 +1882,7 @@ mod tests {
             enabled_models: vec!["apple-foundation".to_string()],
             supports_tools: false,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.providers.push(ModelProvider {
@@ -1863,6 +1895,7 @@ mod tests {
             enabled_models: vec!["gpt-4o".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "apple".to_string();
@@ -1898,6 +1931,7 @@ mod tests {
             enabled_models: vec!["apple-foundation".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
 
@@ -1924,6 +1958,7 @@ mod tests {
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         let s = sanitize_settings(s);
@@ -1945,6 +1980,7 @@ mod tests {
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         let s = sanitize_settings(s);
@@ -1969,6 +2005,7 @@ mod tests {
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         let s = sanitize_settings(s);
@@ -1989,6 +2026,7 @@ mod tests {
             enabled_models: vec![],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "p".to_string();
@@ -2015,6 +2053,7 @@ mod tests {
             enabled_models: vec!["gpt-4o".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.providers.push(ModelProvider {
@@ -2027,6 +2066,7 @@ mod tests {
             enabled_models: vec!["vision-model".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "translator".to_string();
@@ -2056,6 +2096,7 @@ mod tests {
             enabled_models: vec!["gpt-4o".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.providers.push(ModelProvider {
@@ -2068,6 +2109,7 @@ mod tests {
             enabled_models: vec!["vision-model".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "translator".to_string();
@@ -2100,6 +2142,7 @@ mod tests {
             enabled_models: vec!["m1".to_string(), "m2".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.chat_provider_id = "chat".to_string();
@@ -2125,6 +2168,7 @@ mod tests {
             enabled_models: vec!["chat-model".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.providers.push(ModelProvider {
@@ -2137,6 +2181,7 @@ mod tests {
             enabled_models: vec!["title-model".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.providers.push(ModelProvider {
@@ -2149,6 +2194,7 @@ mod tests {
             enabled_models: vec!["compression-model".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "chat".to_string();
@@ -2189,6 +2235,7 @@ mod tests {
             enabled_models: vec!["m1".to_string(), "m2".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "chat".to_string();
@@ -2225,6 +2272,7 @@ mod tests {
             enabled_models: vec!["gpt-4o".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.providers.push(ModelProvider {
@@ -2237,6 +2285,7 @@ mod tests {
             enabled_models: vec!["vision-model".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.translator_provider_id = "translator".to_string();
@@ -2371,6 +2420,7 @@ mod tests {
             enabled_models: vec!["m".to_string()],
             supports_tools: true,
             api_format: "openai".to_string(),
+            enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
         s.lens.provider_id = "nonexistent".to_string();
@@ -2379,6 +2429,56 @@ mod tests {
         // 不存在的 provider_id 应被清空 → fallback 到 translator provider/model
         assert_eq!(s.lens.provider_id, "");
         assert_eq!(s.lens.model, "");
+    }
+
+    #[test]
+    fn sanitize_settings_reassigns_disabled_provider_selections() {
+        let mut s = Settings::default();
+        s.providers.push(ModelProvider {
+            id: "disabled".to_string(),
+            name: "Disabled".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://disabled.example/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["off-model".to_string()],
+            supports_tools: true,
+            api_format: "openai".to_string(),
+            enabled: false,
+            model_overrides: std::collections::HashMap::new(),
+        });
+        s.providers.push(ModelProvider {
+            id: "active".to_string(),
+            name: "Active".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://active.example/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["live-model".to_string()],
+            supports_tools: true,
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+        });
+        s.translator_provider_id = "disabled".to_string();
+        s.translator_model = "off-model".to_string();
+        s.screenshot_translation.provider_id = "disabled".to_string();
+        s.screenshot_translation.model = "off-model".to_string();
+        s.lens.provider_id = "disabled".to_string();
+        s.lens.model = "off-model".to_string();
+        s.default_models.chat.provider_id = "disabled".to_string();
+        s.default_models.chat.model = "off-model".to_string();
+
+        let s = sanitize_settings(s);
+
+        assert_eq!(s.translator_provider_id, "active");
+        assert_eq!(s.translator_model, "live-model");
+        assert_eq!(s.screenshot_translation.provider_id, "active");
+        assert_eq!(s.screenshot_translation.model, "live-model");
+        assert_eq!(s.lens.provider_id, "");
+        assert_eq!(s.lens.model, "");
+        assert_eq!(s.default_models.chat.provider_id, "");
+        assert_eq!(s.default_models.chat.model, "");
     }
 
     #[test]

@@ -24,7 +24,7 @@ import {
   type SkillDetail,
 } from '../api/tauri'
 import { i18n } from './i18n'
-import { buildHotkey, formatHotkeyError, getPlatform, stableStringify } from './utils'
+import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, stableStringify } from './utils'
 import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
 import { ModelPairSelect } from './ModelPairSelect'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
@@ -1011,6 +1011,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       availableModels: [],
       enabledModels: [],
       supportsTools: true,
+      enabled: true,
       apiFormat: 'openai',
     }
     setSettings({
@@ -1033,6 +1034,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       availableModels: [],
       enabledModels: [],
       supportsTools: !preset.onDevice,
+      enabled: true,
       apiFormat: 'openai',
     }
     setSettings({
@@ -1043,10 +1045,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   }
 
   /**
-   * 根据 ID 查找提供商（找不到则返回第一个）
+   * 根据 ID 查找已启用的提供商（找不到或已禁用时返回第一个已启用的）
    */
   const resolveProvider = (providers: ModelProvider[], providerId: string) => {
-    return providers.find(p => p.id === providerId) ?? providers[0]
+    const matched = providers.find(p => p.id === providerId)
+    if (matched && isProviderEnabled(matched)) return matched
+    return providers.find(p => isProviderEnabled(p)) ?? providers[0]
   }
 
   /**
@@ -2852,7 +2856,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                           className={`kv-provider-item ${selectedProvider?.id === provider.id ? 'active' : ''}`}
                           data-tauri-drag-region="false"
                         >
-                          <span className={`kv-provider-dot ${configured ? 'on' : 'warn'}`} />
+                          <span className={`kv-provider-dot ${!isProviderEnabled(provider) ? 'off' : configured ? 'on' : 'warn'}`} />
                           <span className="kv-provider-name">{provider.name || t.providerName}</span>
                         </button>
                       )
@@ -2906,8 +2910,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                           <div className="kv-provider-header-toolbar">
                             <span className="kv-row-label">{t.providerName}</span>
                             <div className="kv-provider-header-actions">
-                              <span className={`kv-tag ${configured ? 'ok' : 'warn'}`}>
-                                {isOnDevice ? (lang === 'zh' ? '本地' : 'Local') : configured ? t.connectionOk : t.permissionMissing}
+                              <span className={`kv-tag ${!isProviderEnabled(provider) ? 'warn' : configured ? 'ok' : 'warn'}`}>
+                                {!isProviderEnabled(provider)
+                                  ? (lang === 'zh' ? '已禁用' : 'Disabled')
+                                  : isOnDevice ? (lang === 'zh' ? '本地' : 'Local') : configured ? t.connectionOk : t.permissionMissing}
                               </span>
                               <button
                                 type="button"
@@ -2940,6 +2946,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     const isOnDevice = provider.baseUrl === 'applefoundation://local'
                     return (
                         <SettingsGroup title={lang === 'zh' ? '配置' : 'Configuration'}>
+                          <SettingRow
+                            label={lang === 'zh' ? '启用供应商' : 'Enable provider'}
+                            description={lang === 'zh' ? '关闭后不会出现在各功能的模型选择中；已选中的功能在保存后会切换到其他已启用的供应商。' : 'When off, this provider is hidden from model selectors; features using it switch to another enabled provider on save.'}
+                          >
+                            <Toggle
+                              checked={isProviderEnabled(provider)}
+                              onChange={(enabled) => updateProvider(provider.id, { enabled })}
+                            />
+                          </SettingRow>
+
                           {!isOnDevice && (
                             <>
                               <FieldBlock label={t.baseUrl} description={lang === 'zh' ? 'OpenAI 兼容接口地址。' : 'OpenAI-compatible endpoint.'}>
