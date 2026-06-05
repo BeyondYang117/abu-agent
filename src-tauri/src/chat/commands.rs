@@ -22,7 +22,7 @@ use crate::chat::model::{
 };
 use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{persist_settings, ProviderApiFormat, Settings};
+use crate::settings::{persist_settings, ModelProvider, ProviderApiFormat, Settings};
 use crate::skills;
 use crate::state::AppState;
 
@@ -531,7 +531,8 @@ const FALLBACK_CONTEXT_WINDOW_TOKENS: usize = 200_000;
 const AUTO_COMPRESS_RATIO: f32 = 0.85;
 const CONTEXT_BLOCK_RATIO: f32 = 1.0;
 const KEEP_RECENT_RAW_MESSAGES: usize = 8;
-const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: usize = 1_200;
+const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: usize = 1_600;
+const AUXILIARY_VISION_RESULT_TOKEN_ESTIMATE: usize = 800;
 
 /// 读取附件为 data URL，供前端 `<img>` 预览。`conversation_id` 为空时按本机绝对路径读取（发送前预览）。
 #[tauri::command]
@@ -904,7 +905,7 @@ async fn complete_assistant_reply(
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
     let use_auxiliary_vision =
-        !last_user_image_paths.is_empty() && settings.has_explicit_vision_model();
+        should_route_images_through_auxiliary_vision(&settings, last_user_image_paths);
     let mut auxiliary_tool_records = Vec::new();
     let auxiliary_vision_result = if use_auxiliary_vision {
         let mut record = auxiliary_vision_tool_record(&settings, last_user_image_paths.len());
@@ -1543,11 +1544,207 @@ fn count_tokens_in_value(value: &Value) -> usize {
     match value {
         Value::String(text) => agent_prepare::estimate_tokens(text),
         Value::Array(items) => items.iter().map(count_tokens_in_value).sum(),
-        Value::Object(_) => {
-            agent_prepare::estimate_tokens(&serde_json::to_string(value).unwrap_or_default())
+        Value::Object(map) => {
+            if let Some(kind) = map.get("type").and_then(|value| value.as_str()) {
+                match kind {
+                    "image_url" | "input_image" | "image" => return 0,
+                    "text" | "input_text" => {
+                        return map.get("text").map(count_tokens_in_value).unwrap_or(0);
+                    }
+                    _ => {}
+                }
+            }
+            map.iter()
+                .map(|(key, value)| {
+                    agent_prepare::estimate_tokens(key) + count_tokens_in_value(value)
+                })
+                .sum()
         }
         _ => agent_prepare::estimate_tokens(&value.to_string()),
     }
+}
+
+fn ceil_div_u32(value: u32, divisor: u32) -> usize {
+    value.div_ceil(divisor) as usize
+}
+
+fn estimate_openai_tile_image_tokens(
+    width: u32,
+    height: u32,
+    base_tokens: usize,
+    tile_tokens: usize,
+) -> usize {
+    let mut scaled_width = width.max(1) as f64;
+    let mut scaled_height = height.max(1) as f64;
+    let longest = scaled_width.max(scaled_height);
+    if longest > 2048.0 {
+        let scale = 2048.0 / longest;
+        scaled_width *= scale;
+        scaled_height *= scale;
+    }
+    let shortest = scaled_width.min(scaled_height);
+    if shortest > 768.0 {
+        let scale = 768.0 / shortest;
+        scaled_width *= scale;
+        scaled_height *= scale;
+    }
+    let tiles = (scaled_width / 512.0).ceil().max(1.0) as usize
+        * (scaled_height / 512.0).ceil().max(1.0) as usize;
+    base_tokens + tiles * tile_tokens
+}
+
+fn estimate_openai_patch_image_tokens(
+    width: u32,
+    height: u32,
+    patch_budget: usize,
+    multiplier: f64,
+    max_dimension: u32,
+) -> usize {
+    let patch_budget = patch_budget.max(1);
+    let width = width.max(1);
+    let height = height.max(1);
+    let original_patches = ceil_div_u32(width, 32) * ceil_div_u32(height, 32);
+    let mut scale = 1.0_f64;
+    let longest = width.max(height);
+    if longest > max_dimension.max(1) {
+        scale = scale.min(max_dimension.max(1) as f64 / longest as f64);
+    }
+    if original_patches > patch_budget {
+        let pixel_budget = patch_budget as f64 * 32.0 * 32.0;
+        let shrink_factor = (pixel_budget / (width as f64 * height as f64)).sqrt();
+        let target_width_patches = (width as f64 * shrink_factor) / 32.0;
+        let target_height_patches = (height as f64 * shrink_factor) / 32.0;
+        let width_adjust = target_width_patches.floor().max(1.0) / target_width_patches.max(1.0);
+        let height_adjust = target_height_patches.floor().max(1.0) / target_height_patches.max(1.0);
+        scale = scale.min(shrink_factor * width_adjust.min(height_adjust));
+    }
+    let mut scaled_width = ((width as f64 * scale).floor() as u32).max(1);
+    let mut scaled_height = ((height as f64 * scale).floor() as u32).max(1);
+    while ceil_div_u32(scaled_width, 32) * ceil_div_u32(scaled_height, 32) > patch_budget
+        || scaled_width.max(scaled_height) > max_dimension.max(1)
+    {
+        scaled_width = ((scaled_width as f64 * 0.99).floor() as u32).max(1);
+        scaled_height = ((scaled_height as f64 * 0.99).floor() as u32).max(1);
+    }
+    let patches = ceil_div_u32(scaled_width, 32) * ceil_div_u32(scaled_height, 32);
+    (patches as f64 * multiplier).ceil() as usize
+}
+
+fn estimate_anthropic_image_tokens(model: &str, width: u32, height: u32) -> usize {
+    let lower = model.to_ascii_lowercase();
+    let high_resolution_opus = lower.contains("opus")
+        && (lower.contains("4.7")
+            || lower.contains("4-7")
+            || lower.contains("4.8")
+            || lower.contains("4-8"));
+    let cap = if high_resolution_opus { 4_784 } else { 1_600 };
+    ((width.max(1) as f64 * height.max(1) as f64) / 750.0)
+        .ceil()
+        .min(cap as f64) as usize
+}
+
+fn estimate_gemini_image_tokens(width: u32, height: u32) -> usize {
+    if width <= 384 && height <= 384 {
+        return 258;
+    }
+    let tiles = ceil_div_u32(width.max(1), 768) * ceil_div_u32(height.max(1), 768);
+    tiles.max(1) * 258
+}
+
+fn provider_image_estimator_descriptor(provider: Option<&ModelProvider>, model: &str) -> String {
+    let Some(provider) = provider else {
+        return model.to_ascii_lowercase();
+    };
+    format!(
+        "{} {} {} {}",
+        provider.name, provider.base_url, provider.api_format, model
+    )
+    .to_ascii_lowercase()
+}
+
+fn estimate_image_tokens_for_dimensions(
+    provider: Option<&ModelProvider>,
+    model: &str,
+    width: u32,
+    height: u32,
+) -> usize {
+    // Provider docs meter image context by pixels/tiles, not by base64 payload bytes.
+    let descriptor = provider_image_estimator_descriptor(provider, model);
+    if provider
+        .map(|provider| provider.api_format_kind() == ProviderApiFormat::AnthropicMessages)
+        .unwrap_or(false)
+        || descriptor.contains("anthropic")
+        || descriptor.contains("claude")
+    {
+        return estimate_anthropic_image_tokens(model, width, height);
+    }
+    if descriptor.contains("gemini")
+        || descriptor.contains("google")
+        || descriptor.contains("generativelanguage.googleapis.com")
+    {
+        return estimate_gemini_image_tokens(width, height);
+    }
+
+    if descriptor.contains("gpt-5.4-mini")
+        || descriptor.contains("gpt-5-4-mini")
+        || descriptor.contains("gpt-4.1-mini")
+        || descriptor.contains("gpt-4-1-mini")
+        || descriptor.contains("gpt-5-mini")
+    {
+        return estimate_openai_patch_image_tokens(width, height, 1_536, 1.62, 2_048);
+    }
+    if descriptor.contains("gpt-5.4-nano")
+        || descriptor.contains("gpt-5-4-nano")
+        || descriptor.contains("gpt-4.1-nano")
+        || descriptor.contains("gpt-4-1-nano")
+        || descriptor.contains("gpt-5-nano")
+    {
+        return estimate_openai_patch_image_tokens(width, height, 1_536, 2.46, 2_048);
+    }
+    if descriptor.contains("o4-mini") {
+        return estimate_openai_patch_image_tokens(width, height, 1_536, 1.72, 2_048);
+    }
+    if descriptor.contains("gpt-5.5") || descriptor.contains("gpt-5-5") {
+        return estimate_openai_patch_image_tokens(width, height, 10_000, 1.0, 6_000);
+    }
+    if descriptor.contains("gpt-5.4") || descriptor.contains("gpt-5-4") {
+        return estimate_openai_patch_image_tokens(width, height, 2_500, 1.0, 2_048);
+    }
+    if descriptor.contains("gpt-4o-mini") {
+        return estimate_openai_tile_image_tokens(width, height, 2_833, 5_667);
+    }
+    if descriptor.contains("gpt-5") {
+        return estimate_openai_tile_image_tokens(width, height, 70, 140);
+    }
+    if descriptor.contains("o1") || descriptor.contains("o3") {
+        return estimate_openai_tile_image_tokens(width, height, 75, 150);
+    }
+    if descriptor.contains("computer-use") {
+        return estimate_openai_tile_image_tokens(width, height, 65, 129);
+    }
+    estimate_openai_tile_image_tokens(width, height, 85, 170)
+}
+
+fn estimate_image_tokens_for_path(
+    provider: Option<&ModelProvider>,
+    model: &str,
+    path: &Path,
+) -> usize {
+    match image::image_dimensions(path) {
+        Ok((width, height)) => estimate_image_tokens_for_dimensions(provider, model, width, height),
+        Err(_) => IMAGE_ATTACHMENT_TOKEN_ESTIMATE,
+    }
+}
+
+fn estimate_image_attachment_tokens(
+    provider: Option<&ModelProvider>,
+    model: &str,
+    image_paths: &[PathBuf],
+) -> usize {
+    image_paths
+        .iter()
+        .map(|path| estimate_image_tokens_for_path(provider, model, path))
+        .sum()
 }
 
 fn push_estimated_segment(
@@ -1591,7 +1788,7 @@ fn estimate_tool_segments(tools: &[ChatToolDefinition]) -> Vec<ContextUsageSegme
 fn estimate_messages_segments(
     conversation: &Conversation,
     messages: &[Value],
-    last_user_image_paths: &[PathBuf],
+    attachment_tokens: usize,
 ) -> Vec<ContextUsageSegment> {
     let mut segments = Vec::new();
     let summary_tokens = active_summary(conversation)
@@ -1625,9 +1822,16 @@ fn estimate_messages_segments(
         &mut segments,
         "attachments",
         "Attachments",
-        last_user_image_paths.len() * IMAGE_ATTACHMENT_TOKEN_ESTIMATE,
+        attachment_tokens,
     );
     agent_prepare::merge_context_segments(segments)
+}
+
+fn should_route_images_through_auxiliary_vision(
+    settings: &Settings,
+    image_paths: &[PathBuf],
+) -> bool {
+    !image_paths.is_empty() && settings.has_explicit_vision_model()
 }
 
 async fn compute_context_state(
@@ -1686,9 +1890,23 @@ async fn compute_context_state(
         tools_available,
     );
 
+    let route_images_through_auxiliary_vision =
+        should_route_images_through_auxiliary_vision(&settings, last_user_image_paths);
+    let empty_image_paths: &[PathBuf] = &[];
+    let main_image_paths = if route_images_through_auxiliary_vision {
+        empty_image_paths
+    } else {
+        last_user_image_paths
+    };
+    let attachment_tokens = if route_images_through_auxiliary_vision {
+        last_user_image_paths.len() * AUXILIARY_VISION_RESULT_TOKEN_ESTIMATE
+    } else {
+        estimate_image_attachment_tokens(provider.as_ref(), &conversation.model, main_image_paths)
+    };
+
     let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
         &language,
-        !last_user_image_paths.is_empty(),
+        !main_image_paths.is_empty(),
         thinking_enabled,
         &skill_registry,
         &effective_chat_tools,
@@ -1705,12 +1923,12 @@ async fn compute_context_state(
         conversation,
         last_user_idx,
         last_user_api_content,
-        last_user_image_paths,
+        main_image_paths,
     )?;
     segments.extend(estimate_messages_segments(
         conversation,
         &request_messages,
-        last_user_image_paths,
+        attachment_tokens,
     ));
 
     if tools_available {
@@ -3632,5 +3850,56 @@ mod tests {
         );
         assert!(!serialized.contains("data:image/png;base64"));
         assert!(!serialized.contains("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"));
+    }
+
+    #[test]
+    fn context_token_count_ignores_image_data_url_payloads() {
+        let image_part = serde_json::json!({
+            "type": "image_url",
+            "image_url": {
+                "url": format!(
+                    "data:image/png;base64,{}",
+                    "A".repeat(200_000)
+                )
+            }
+        });
+        let text_part = serde_json::json!({
+            "type": "text",
+            "text": "describe this image"
+        });
+
+        assert_eq!(count_tokens_in_value(&image_part), 0);
+        assert_eq!(
+            count_tokens_in_value(&text_part),
+            agent_prepare::estimate_tokens("describe this image")
+        );
+    }
+
+    #[test]
+    fn image_token_estimates_follow_provider_dimension_rules() {
+        assert_eq!(
+            estimate_image_tokens_for_dimensions(None, "gpt-4o", 1024, 1024),
+            765
+        );
+        assert_eq!(
+            estimate_image_tokens_for_dimensions(None, "gpt-4o", 2048, 4096),
+            1105
+        );
+        assert_eq!(
+            estimate_image_tokens_for_dimensions(None, "gpt-4.1-mini", 1024, 1024),
+            1659
+        );
+        assert_eq!(
+            estimate_image_tokens_for_dimensions(None, "claude-sonnet-4", 1000, 1000),
+            1334
+        );
+        assert_eq!(
+            estimate_image_tokens_for_dimensions(None, "gemini-2.0-flash", 384, 384),
+            258
+        );
+        assert_eq!(
+            estimate_image_tokens_for_dimensions(None, "gemini-2.0-flash", 1024, 1024),
+            1032
+        );
     }
 }

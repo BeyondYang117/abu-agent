@@ -399,6 +399,7 @@ assistant.api_messages = vec![
 - Frontend may render persisted `context_state` immediately, but refreshes through `chat_get_context_stats` when the active conversation/model/skill changes.
 - Stored Rust fields remain snake_case (`estimated_input_tokens`, `context_window_tokens`, `context_state`); frontend types may include camelCase aliases only for compatibility.
 - `ConversationContextState.segments` drives the segmented bar; React must not recompute source buckets from visible messages except in browser-only mocks.
+- Image context estimates must not count `image_url` data URLs as text tokens. Count image payloads from provider/model image-token rules and local image dimensions; when `defaultModels.vision` routes the current image turn through Mixer, estimate the main Chat request as text-only with an auxiliary-vision result placeholder instead of direct image parts.
 - Compression preserves raw visible messages. It stores `summary`, `source_message_ids`, and `source_until_message_id`, then future requests inject a synthetic summary system message and skip old raw messages before the boundary.
 - Compression model selection uses `Settings::effective_compression_model()`, which inherits the effective Chat model when `defaultModels.compression` is unset / auto.
 - Auto-compression runs before send when estimated usage crosses the backend threshold and there is no active fresh summary. Manual compression uses the same backend path.
