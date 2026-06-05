@@ -40,29 +40,9 @@ pub fn resolve_workspace_path(
     raw_path: &str,
     workspace_roots: &[String],
 ) -> Result<PathBuf, String> {
-    let trimmed = raw_path.trim();
-    if trimmed.is_empty() {
-        return Err("路径为空，请提供要访问的文件或目录路径。".to_string());
-    }
-
     let home = user_home_dir()?;
     let home_canon = fs_canonicalize_existing_or_self(&home)?;
-
-    let candidate = {
-        let path = Path::new(trimmed);
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            home.join(path)
-        }
-    };
-
-    for component in candidate.components() {
-        if matches!(component, Component::ParentDir) {
-            return Err("路径不能包含 '..'，请使用明确的文件路径。".to_string());
-        }
-    }
-
+    let candidate = candidate_path(raw_path)?;
     let canonical = fs_canonicalize_existing_or_self(&candidate)?;
     if !canonical.starts_with(&home_canon) {
         return Err("路径不在允许范围内：只能访问用户主目录下的文件。".to_string());
@@ -90,6 +70,11 @@ pub fn resolve_workspace_path(
     }
 
     Ok(canonical)
+}
+
+pub fn resolve_read_path(raw_path: &str) -> Result<PathBuf, String> {
+    let candidate = candidate_path(raw_path)?;
+    fs_canonicalize_existing_or_self(&candidate)
 }
 
 pub fn assert_writable_path(path: &Path) -> Result<(), String> {
@@ -120,6 +105,30 @@ pub fn assert_writable_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn candidate_path(raw_path: &str) -> Result<PathBuf, String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("路径为空，请提供要访问的文件或目录路径。".to_string());
+    }
+
+    let candidate = {
+        let path = Path::new(trimmed);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            user_home_dir()?.join(path)
+        }
+    };
+
+    for component in candidate.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err("路径不能包含 '..'，请使用明确的文件路径。".to_string());
+        }
+    }
+
+    Ok(candidate)
+}
+
 fn fs_canonicalize_existing_or_self(path: &Path) -> Result<PathBuf, String> {
     if path.exists() {
         fs::canonicalize(path).map_err(|err| format!("Resolve path failed: {err}"))
@@ -136,5 +145,19 @@ mod tests {
     fn rejects_parent_dir_traversal() {
         let err = resolve_workspace_path("../etc/passwd", &[]).unwrap_err();
         assert!(err.contains(".."));
+    }
+
+    #[test]
+    fn resolve_read_path_allows_temp_paths() {
+        let file = std::env::temp_dir().join(format!("kivio_read_{}.txt", uuid::Uuid::new_v4()));
+        fs::write(&file, "hello").expect("write temp file");
+
+        let resolved = resolve_read_path(&file.to_string_lossy()).expect("resolve read path");
+        assert_eq!(
+            resolved,
+            fs::canonicalize(&file).expect("canonical temp file")
+        );
+
+        let _ = fs::remove_file(file);
     }
 }

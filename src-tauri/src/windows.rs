@@ -1,7 +1,22 @@
 use tauri::{
-    window::Color, AppHandle, LogicalPosition, Manager, TitleBarStyle, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    window::Color, AppHandle, LogicalPosition, LogicalSize, Manager, TitleBarStyle, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder,
 };
+
+/// 侧栏收起时主内容区最小宽度（与前端 `CHAT_MIN_SIZE_COLLAPSED` 一致）。
+pub const CHAT_MIN_INNER_WIDTH_COLLAPSED: f64 = 400.0;
+/// 侧栏展开时整窗最小宽度（260px 侧栏 + 主内容区最小宽度）。
+pub const CHAT_MIN_INNER_WIDTH_EXPANDED: f64 = 660.0;
+pub const CHAT_MIN_INNER_HEIGHT: f64 = 400.0;
+
+pub fn apply_chat_window_min_size(window: &WebviewWindow, sidebar_expanded: bool) {
+    let width = if sidebar_expanded {
+        CHAT_MIN_INNER_WIDTH_EXPANDED
+    } else {
+        CHAT_MIN_INNER_WIDTH_COLLAPSED
+    };
+    let _ = window.set_min_size(Some(LogicalSize::new(width, CHAT_MIN_INNER_HEIGHT)));
+}
 
 #[cfg(target_os = "macos")]
 const CHAT_TRAFFIC_LIGHT_X: f64 = 14.0;
@@ -176,7 +191,7 @@ pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html#chat".into()))
             .title("Kivio")
             .inner_size(1280.0, 800.0)
-            .min_inner_size(860.0, 560.0)
+            .min_inner_size(CHAT_MIN_INNER_WIDTH_COLLAPSED, CHAT_MIN_INNER_HEIGHT)
             .resizable(true)
             .visible_on_all_workspaces(false)
             .skip_taskbar(false)

@@ -2129,8 +2129,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 <SettingsGroup title={lang === 'zh' ? 'Kivio 内置工具' : 'Kivio built-in tools'}>
                   <p className="kv-row-desc mb-2">
                     {lang === 'zh'
-                      ? 'Chat 原生工具。未配置工作区根目录时，文件与终端命令可访问用户主目录；配置后仅限所列目录。'
-                      : 'Native Chat tools. Without workspace roots, file and shell tools may access the user home directory; configured roots restrict access further.'}
+                      ? 'Chat 原生工具。read_file 可读取 Kivio 能访问的本地文本文件；写入、编辑与终端命令仍受用户主目录和工作区根目录限制。'
+                      : 'Native Chat tools. read_file can read local text files Kivio can access; write, edit, and shell tools remain limited by the user home and workspace roots.'}
                   </p>
                   <SettingRow label={lang === 'zh' ? '读取文件' : 'Read file'} description={lang === 'zh' ? 'read_file，无需确认' : 'read_file, no approval'}>
                     <Toggle

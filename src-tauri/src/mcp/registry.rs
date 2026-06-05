@@ -422,7 +422,7 @@ async fn call_native_tool(
             });
         }
         "web_fetch" => crate::native_tools::web_fetch(&state.http, &arguments).await?,
-        "read_file" => crate::native_tools::read_file(roots, &arguments)?,
+        "read_file" => crate::native_tools::read_file(&arguments)?,
         "write_file" => crate::native_tools::write_file(roots, &arguments)?,
         "edit_file" => crate::native_tools::edit_file(roots, &arguments)?,
         "run_command" => {

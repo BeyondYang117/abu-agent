@@ -8,6 +8,9 @@ import type { ChatToolDefinition } from '../api/tauri'
 import type { PendingAttachment } from './types'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
+const DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'xlsm', 'csv', 'tsv']
+const SUPPORTED_ATTACHMENT_EXTENSIONS = [...IMAGE_EXTENSIONS, ...DOCUMENT_EXTENSIONS]
+const SUPPORTED_ATTACHMENT_LABEL = '图片、PDF、Word、Excel/CSV/TSV'
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 function shouldComposerAutoFocus(activeElement: Element | null): boolean {
@@ -86,9 +89,12 @@ export function InputBar({
     (next: PendingAttachment[], options?: { imagesOnly?: boolean }) => {
       const filtered = options?.imagesOnly
         ? next.filter((attachment) => attachment.type === 'image')
-        : next
+        : next.filter((attachment) => {
+          const ext = attachment.name.split('.').pop()?.toLowerCase() ?? ''
+          return SUPPORTED_ATTACHMENT_EXTENSIONS.includes(ext)
+        })
       if (filtered.length === 0) {
-        setAttachmentError(options?.imagesOnly ? '请拖入图片文件' : '没有可添加的文件')
+        setAttachmentError(options?.imagesOnly ? '请拖入图片文件' : `仅支持${SUPPORTED_ATTACHMENT_LABEL}`)
         return
       }
 
@@ -100,7 +106,7 @@ export function InputBar({
           return true
         })
         if (dedupedNext.length === 0) {
-          setAttachmentError('图片已添加')
+          setAttachmentError('附件已添加')
           return prev
         }
         setAttachmentError('')
@@ -148,8 +154,16 @@ export function InputBar({
         directory: false,
         filters: [
           {
+            name: '支持的附件',
+            extensions: SUPPORTED_ATTACHMENT_EXTENSIONS,
+          },
+          {
             name: '图片',
             extensions: IMAGE_EXTENSIONS,
+          },
+          {
+            name: '文档与表格',
+            extensions: DOCUMENT_EXTENSIONS,
           },
         ],
       })
@@ -243,7 +257,7 @@ export function InputBar({
 
       if (event.payload.type === 'drop') {
         setDragActive(false)
-        addAttachments(attachmentsFromPaths(event.payload.paths), { imagesOnly: true })
+        addAttachments(attachmentsFromPaths(event.payload.paths))
       }
     }).then((handler) => {
       if (cancelled) {
@@ -252,7 +266,7 @@ export function InputBar({
         unlisten = handler
       }
     }).catch((err) => {
-      console.error('Failed to listen for chat image drops:', err)
+      console.error('Failed to listen for chat attachment drops:', err)
     })
 
     return () => {
@@ -267,7 +281,7 @@ export function InputBar({
   const wrapperClass =
     layout === 'inline'
       ? 'w-full'
-      : 'shrink-0 px-6 pb-8 pt-2'
+      : 'chat-composer-footer shrink-0 px-6 pb-8 pt-2'
 
   const innerClass = layout === 'inline' ? 'w-full' : 'mx-auto w-full max-w-3xl'
   const externalMcpTools = enabledTools.filter(isExternalMcpTool)
@@ -334,7 +348,7 @@ export function InputBar({
         )}
         <div
           data-chat-composer="true"
-          className={`rounded-[28px] border bg-white px-3 py-2.5 shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-colors dark:bg-neutral-900 dark:shadow-none ${
+          className={`chat-composer-shell rounded-[28px] border bg-white px-3 py-2.5 shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-colors dark:bg-neutral-900 dark:shadow-none ${
             dragActive
               ? 'border-[#e8a090] ring-2 ring-[#e8a090]/25 dark:border-[#e8a090]'
               : 'border-neutral-200/90 dark:border-neutral-700'
@@ -342,7 +356,7 @@ export function InputBar({
         >
           {dragActive && (
             <div className="chat-motion-fade-up mb-2 rounded-2xl border border-dashed border-[#e8a090]/70 bg-[#e8a090]/10 px-3 py-2 text-center text-[13px] font-medium text-[#a35f51] dark:text-[#f1b4a7]">
-              松开即可添加图片
+              松开即可添加附件
             </div>
           )}
           {attachments.length > 0 && (

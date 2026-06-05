@@ -53,7 +53,7 @@ export function MessageList({
 
   return (
     <div ref={scrollRef} className="custom-scrollbar flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
+      <div className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
         {messages.map((msg) => (
           <MessageBubble
             key={msg.id}

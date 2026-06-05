@@ -1,5 +1,9 @@
 export const CHAT_DEFAULT_SIZE = { width: 1280, height: 800 }
-export const CHAT_MIN_SIZE = { width: 860, height: 560 }
+/** 侧栏收起时可缩到的最小尺寸 */
+export const CHAT_MIN_SIZE_COLLAPSED = { width: 400, height: 400 }
+/** 侧栏展开时整窗最小尺寸（260px 侧栏 + 主内容区） */
+export const CHAT_MIN_SIZE_EXPANDED = { width: 660, height: 400 }
+export const CHAT_MIN_SIZE = CHAT_MIN_SIZE_COLLAPSED
 
 const CHAT_LAST_ROUTE_KEY = 'kivio-chat-last-route'
 const CHAT_WINDOW_SIZE_KEY = 'kivio-chat-window-size'

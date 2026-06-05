@@ -39,6 +39,9 @@
       "binaries/kivio-ai-helper",
       "binaries/kivio-ocr-helper"
     ],
+    "resources": [
+      "builtin-skills/"
+    ],
     "windows": {
       "wix": {
         "version": "2.6.3"

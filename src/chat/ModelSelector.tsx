@@ -50,13 +50,13 @@ export function ModelSelector({
   const displayName = currentModel || currentProvider?.enabledModels[0] || '选择模型'
 
   return (
-    <div className="relative" data-tauri-drag-region="false">
+    <div className="relative max-w-full min-w-0" data-tauri-drag-region="false">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={chatTitlebarPillButtonClass}
+        className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
       >
-        <span className="max-w-[200px] truncate font-medium text-neutral-800 dark:text-neutral-200">
+        <span className="chat-model-selector-label max-w-[200px] truncate font-medium text-neutral-800 dark:text-neutral-200">
           {displayName}
         </span>
         <ChevronDown
@@ -68,7 +68,7 @@ export function ModelSelector({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="chat-motion-popover absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+          <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
             {activeProviders.map((provider) => (
               <div key={provider.id} className="px-1 py-1">
                 <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">

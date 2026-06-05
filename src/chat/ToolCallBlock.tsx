@@ -62,6 +62,21 @@ function previewValue(value: unknown, max = 220): string {
   }
 }
 
+function parsedArguments(toolCall: ToolCallRecord): Record<string, unknown> | null {
+  const value = toolCall.arguments ?? toolCall.args ?? toolCall.input
+  if (!value) return null
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
 function normalizeStatus(status?: string): ToolCallStatus {
   switch (status) {
     case 'running':
@@ -109,12 +124,28 @@ function getDuration(toolCall: ToolCallRecord): number | undefined {
 
 function getToolName(toolCall: ToolCallRecord): string {
   const raw = toolCall.tool_name || toolCall.toolName || toolCall.name || 'Tool'
+  const args = parsedArguments(toolCall)
+  const command = typeof args?.command === 'string' ? args.command : ''
+  const relativePath = typeof args?.relative_path === 'string'
+    ? args.relative_path
+    : typeof args?.relativePath === 'string'
+      ? args.relativePath
+      : ''
+  const hasOffset = args?.offset != null
+
   if (raw === 'skill_activate') return '激活 Skill'
   if (raw === 'skill_read_file') return '读取 Skill 文件'
+  if (
+    raw === 'skill_run_script' &&
+    (relativePath.endsWith('pdf_text_digest.py') || relativePath.endsWith('pdf_extract_digest.py'))
+  ) {
+    return '生成 PDF 摘要上下文'
+  }
   if (raw === 'skill_run_script') return '执行 Skill 脚本'
-  if (raw === 'read_file') return '读取文件'
+  if (raw === 'read_file') return hasOffset ? '读取文件片段' : '读取文件'
   if (raw === 'write_file') return '写入文件'
   if (raw === 'edit_file') return '编辑文件'
+  if (raw === 'run_command' && /\bpdftotext\b/.test(command)) return '提取 PDF 文本'
   if (raw === 'run_command') return '终端命令'
   if (raw === 'run_python') return 'Python'
   if (raw === 'web_search') return '联网搜索'
@@ -145,6 +176,16 @@ function getArgumentPreview(toolCall: ToolCallRecord): string {
 }
 
 function getResultPreview(toolCall: ToolCallRecord): string {
+  const rawName = toolCall.tool_name || toolCall.toolName || toolCall.name || ''
+  const args = parsedArguments(toolCall)
+  const relativePath = typeof args?.relative_path === 'string'
+    ? args.relative_path
+    : typeof args?.relativePath === 'string'
+      ? args.relativePath
+      : ''
+  if (rawName === 'skill_run_script' && relativePath.endsWith('pdf_extract_digest.py')) {
+    return '已提取 PDF 文本并生成摘要上下文'
+  }
   const raw =
     toolCall.result_preview ||
     toolCall.resultPreview ||

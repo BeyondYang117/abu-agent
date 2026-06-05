@@ -2,14 +2,14 @@ use std::fs;
 
 use serde_json::Value;
 
-use super::{assert_writable_path, resolve_workspace_path, MAX_READ_FILE_BYTES};
+use super::{assert_writable_path, resolve_read_path, resolve_workspace_path, MAX_READ_FILE_BYTES};
 
-pub fn read_file(workspace_roots: &[String], arguments: &Value) -> Result<String, String> {
+pub fn read_file(arguments: &Value) -> Result<String, String> {
     let path = arguments
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "read_file requires path".to_string())?;
-    let full = resolve_workspace_path(path, workspace_roots)?;
+    let full = resolve_read_path(path)?;
     if !full.is_file() {
         return Err(format!("不是可读取的文件: {path}"));
     }
@@ -119,6 +119,17 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
+
+    #[test]
+    fn read_file_allows_temp_paths() {
+        let file = std::env::temp_dir().join(format!("kivio_read_{}.txt", uuid::Uuid::new_v4()));
+        fs::write(&file, "alpha\nbeta\n").expect("write");
+
+        let content = read_file(&json!({ "path": file.to_string_lossy() })).expect("read");
+        assert_eq!(content, "alpha\nbeta\n");
+
+        let _ = fs::remove_file(file);
+    }
 
     #[test]
     fn edit_file_requires_unique_match_by_default() {

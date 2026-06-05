@@ -14,6 +14,11 @@ const MAX_SCAN_DEPTH: usize = 6;
 
 const SKIP_DIR_NAMES: &[&str] = &[".git", "node_modules", ".svn", ".hg"];
 
+struct SkillScanRoot {
+    path: PathBuf,
+    source: &'static str,
+}
+
 pub fn user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -24,34 +29,60 @@ pub fn user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn bundled_skills_dir(app: &AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?.join("builtin-skills");
+    resource_dir.is_dir().then_some(resource_dir)
+}
+
+fn dev_builtin_skills_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin-skills");
+    dir.is_dir().then_some(dir)
+}
+
 pub fn scan_roots(app: &AppHandle, extra_paths: &[String]) -> Result<Vec<PathBuf>, String> {
-    let mut roots = vec![user_skills_dir(app)?];
-    roots.extend(
-        extra_paths
-            .iter()
-            .map(PathBuf::from)
-            .filter(|path| path.is_dir()),
-    );
+    Ok(scan_root_entries(app, extra_paths)?
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect())
+}
+
+fn scan_root_entries(
+    app: &AppHandle,
+    extra_paths: &[String],
+) -> Result<Vec<SkillScanRoot>, String> {
+    let mut roots = vec![SkillScanRoot {
+        path: user_skills_dir(app)?,
+        source: "user",
+    }];
+    roots.extend(extra_paths.iter().map(PathBuf::from).filter_map(|path| {
+        path.is_dir().then_some(SkillScanRoot {
+            path,
+            source: "external",
+        })
+    }));
+    if let Some(dir) = bundled_skills_dir(app).or_else(dev_builtin_skills_dir) {
+        if !roots.iter().any(|root| root.path == dir) {
+            roots.push(SkillScanRoot {
+                path: dir,
+                source: "builtin",
+            });
+        }
+    }
     Ok(roots)
 }
 
 pub fn build_registry(app: &AppHandle, extra_paths: &[String]) -> Result<SkillRegistry, String> {
     let mut registry = SkillRegistry::default();
-    let roots = scan_roots(app, extra_paths)?;
+    let roots = scan_root_entries(app, extra_paths)?;
 
-    for (priority, root) in roots.iter().enumerate() {
-        let source = if priority == 0 {
-            "user".to_string()
-        } else {
-            "external".to_string()
-        };
-        collect_skill_files(root, 0, &mut registry, &source)?;
+    for root in roots {
+        collect_skill_files(&root.path, 0, &mut registry, root.source)?;
     }
 
+    dedup_records(&mut registry.records, &mut registry.warnings);
     registry
         .records
         .sort_by(|a, b| a.meta.name.to_lowercase().cmp(&b.meta.name.to_lowercase()));
-    dedup_records(&mut registry.records, &mut registry.warnings);
     Ok(registry)
 }
 

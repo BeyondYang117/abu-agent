@@ -303,8 +303,8 @@ export function AssistantCenter({
         </button>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[250px] shrink-0 flex-col border-r border-neutral-200/80 bg-[#f7f7f8] dark:border-neutral-800 dark:bg-[#1c1c1e]">
+      <div className="assistant-center-layout flex min-h-0 flex-1">
+        <aside className="assistant-center-sidebar flex w-[250px] shrink-0 flex-col border-r border-neutral-200/80 bg-[#f7f7f8] dark:border-neutral-800 dark:bg-[#1c1c1e]">
           <div className="space-y-2 p-3">
             <button
               type="button"

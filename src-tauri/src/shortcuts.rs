@@ -793,6 +793,7 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
     let existing_window = app.get_webview_window("main");
     let window = ensure_chat_window(app)?;
     apply_chat_window_chrome(&window);
+    crate::windows::apply_chat_window_min_size(&window, false);
     let _ = window.set_always_on_top(false);
     let _ = window.set_skip_taskbar(false);
 

@@ -30,8 +30,14 @@ import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToo
 import { SettingsShell, type SettingsShellHandle, type SettingsTab } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { estimateTokens } from '../lens/markdown'
-import { forgetRememberedChatRoute } from './persistence'
+import {
+  CHAT_MIN_SIZE_COLLAPSED,
+  CHAT_MIN_SIZE_EXPANDED,
+  forgetRememberedChatRoute,
+  rememberChatSize,
+} from './persistence'
 import { runPythonInSandbox } from './pyodideRunner'
+import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { TypewriterText } from './TypewriterText'
 import { pickRandomChatEmptyGreeting } from './utils'
 
@@ -116,6 +122,49 @@ function toolMatchesRecommendation(tool: ChatToolDefinition, recommended: string
     tool.id === name ||
     `${tool.serverId ?? ''}:${tool.name}` === name
   )
+}
+
+function attachmentExtension(name: string): string {
+  return name.split('.').pop()?.toLowerCase() ?? ''
+}
+
+function documentSkillNameForAttachment(attachment: PendingAttachment): string | null {
+  if (attachment.type === 'image') return null
+  switch (attachmentExtension(attachment.name)) {
+    case 'pdf':
+      return 'pdf'
+    case 'doc':
+    case 'docx':
+      return 'docx'
+    case 'xls':
+    case 'xlsx':
+    case 'xlsm':
+    case 'csv':
+    case 'tsv':
+      return 'xlsx'
+    default:
+      return null
+  }
+}
+
+function findEnabledSkillId(skills: SkillMeta[], skillName: string): string | null {
+  const normalized = skillName.toLowerCase()
+  return skills.find((skill) => (
+    skill.id.toLowerCase() === normalized || skill.name.toLowerCase() === normalized
+  ))?.id ?? null
+}
+
+function inferSingleAttachmentSkillId(
+  attachments: PendingAttachment[],
+  skills: SkillMeta[],
+): string | null {
+  const skillNames = Array.from(new Set(
+    attachments
+      .map(documentSkillNameForAttachment)
+      .filter((name): name is string => Boolean(name)),
+  ))
+  if (skillNames.length !== 1) return null
+  return findEnabledSkillId(skills, skillNames[0])
 }
 
 function isLocallyCancelledPayload(
@@ -1112,6 +1161,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
 
       const conversationId = conversation!.id
+      const attachmentSkillId = effectiveSkillId
+        ?? inferSingleAttachmentSkillId(attachments, enabledSkills)
       conversationIdForRun = conversationId
       const snapshot = ensureStreamSnapshot(conversationId)
       snapshot.streaming = true
@@ -1127,7 +1178,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         conversationId,
         trimmed,
         attachments,
-        null,
+        attachmentSkillId,
       )
       applyAssistantStreamStats(updatedConv)
       setPendingUserMessage(null)
@@ -1314,6 +1365,37 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setSidebarCollapsed(true)
   }, [])
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+    let cancelled = false
+
+    void (async () => {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      const { LogicalSize } = await import('@tauri-apps/api/dpi')
+      const min = sidebarCollapsed ? CHAT_MIN_SIZE_COLLAPSED : CHAT_MIN_SIZE_EXPANDED
+      const win = getCurrentWindow()
+      await win.setMinSize(new LogicalSize(min.width, min.height))
+      if (cancelled) return
+
+      if (!sidebarCollapsed) {
+        const scaleFactor = await win.scaleFactor()
+        const size = await win.innerSize()
+        const logical = size.toLogical(scaleFactor)
+        if (logical.width < min.width) {
+          const nextHeight = Math.max(logical.height, min.height)
+          await win.setSize(new LogicalSize(min.width, nextHeight))
+          rememberChatSize(min.width, nextHeight)
+        }
+      }
+    })().catch((err) => {
+      console.error('[Chat] Failed to update window min size:', err)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sidebarCollapsed])
+
   const handleSidebarSelectProject = useCallback((project: ChatProject | null) => {
     runAfterLeavingSettings(() => handleSelectProject(project))
   }, [handleSelectProject, runAfterLeavingSettings])
@@ -1395,9 +1477,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         ) : (
           <div className="chat-main-pane relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
             <header
-              className={`${chatTitlebarRowClass} gap-2 ${
-                sidebarCollapsed && usesNativeTitlebar ? chatTitlebarMacInsetClass : 'px-6'
-              } ${sidebarCollapsed ? 'pr-4' : ''}`}
+              className={`chat-titlebar-row ${chatTitlebarRowClass} min-w-0 gap-2 overflow-hidden ${
+                sidebarCollapsed && usesNativeTitlebar
+                  ? `${chatTitlebarMacInsetClass} chat-titlebar-row--collapsed-mac`
+                  : 'px-6'
+              } ${sidebarCollapsed ? 'pr-3' : ''}`}
               data-tauri-drag-region
             >
               {!usesNativeTitlebar && <WindowControls />}
@@ -1410,57 +1494,62 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   }}
                 />
               )}
-              <div data-tauri-drag-region="false">
-                <ModelSelector
-                  currentProviderId={activeProviderId}
-                  currentModel={activeModel}
-                  onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
-                />
-              </div>
-              {currentAssistantSnapshot && (
-                <div className={chatTitlebarPillButtonClass} data-tauri-drag-region="false">
-                  <button
-                    type="button"
-                    onClick={openAssistantCenter}
-                    className="flex min-w-0 items-center gap-1.5"
-                    title="打开助手中心"
-                  >
-                    <Bot size={15} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
-                    <span className="max-w-[150px] truncate text-[13px] font-medium text-neutral-800 dark:text-neutral-200">
-                      {currentAssistantSnapshot.name}
-                    </span>
-                  </button>
-                  <span
-                    aria-hidden
-                    className="h-4 w-px shrink-0 bg-neutral-200/90 dark:bg-neutral-700"
+              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
+                  <ModelSelector
+                    currentProviderId={activeProviderId}
+                    currentModel={activeModel}
+                    onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
                   />
-                  <button
-                    type="button"
-                    onClick={() => void handleApplyAssistant(null)}
-                    className={chatTitlebarPillIconClass}
-                    title="清除助手"
-                    aria-label="清除助手"
-                  >
-                    <X size={13} strokeWidth={1.9} />
-                  </button>
                 </div>
-              )}
-              <ContextIndicator
-                contextState={contextState}
-                messageCount={displayMessages.length}
-                loading={contextLoading}
-                compressing={contextCompressing}
-                error={contextError}
-                onRefresh={handleRefreshContext}
-                onCompress={() => void handleCompressContext()}
-              />
-              <div className="min-w-0 flex-1" data-tauri-drag-region />
+                {currentAssistantSnapshot && (
+                  <div className={`${chatTitlebarPillButtonClass} chat-titlebar-assistant-pill min-w-0 shrink`} data-tauri-drag-region="false">
+                    <button
+                      type="button"
+                      onClick={openAssistantCenter}
+                      className="flex min-w-0 items-center gap-1.5"
+                      title={currentAssistantSnapshot.name}
+                    >
+                      <Bot size={15} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
+                      <span className="chat-titlebar-assistant-label max-w-[150px] truncate text-[13px] font-medium text-neutral-800 dark:text-neutral-200">
+                        {currentAssistantSnapshot.name}
+                      </span>
+                    </button>
+                    <span
+                      aria-hidden
+                      className="chat-titlebar-assistant-divider h-4 w-px shrink-0 bg-neutral-200/90 dark:bg-neutral-700"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleApplyAssistant(null)}
+                      className={chatTitlebarPillIconClass}
+                      title="清除助手"
+                      aria-label="清除助手"
+                    >
+                      <X size={13} strokeWidth={1.9} />
+                    </button>
+                  </div>
+                )}
+                <div className="shrink-0" data-tauri-drag-region="false">
+                  <ContextIndicator
+                    contextState={contextState}
+                    messageCount={displayMessages.length}
+                    loading={contextLoading}
+                    compressing={contextCompressing}
+                    error={contextError}
+                    onRefresh={handleRefreshContext}
+                    onCompress={() => void handleCompressContext()}
+                  />
+                </div>
+              </div>
+              <div className="min-w-5 flex-1" data-tauri-drag-region />
             </header>
 
             <div className="flex min-h-0 flex-1 flex-col">
               {showEmptyHero ? (
                 <div className="chat-empty-hero flex flex-1 flex-col items-center justify-center px-6 pb-16">
-                  <div className="chat-motion-fade-up relative z-10 w-full max-w-3xl space-y-8">
+                  <ChatDotGridBackground />
+                  <div className="chat-empty-hero-stack chat-motion-fade-up relative z-10 w-full max-w-3xl space-y-8">
                     <h2
                       className="chat-empty-hero-title text-center text-[1.75rem] leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]"
                       aria-label={

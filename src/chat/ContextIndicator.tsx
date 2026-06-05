@@ -135,7 +135,7 @@ export function ContextIndicator({
         >
           <span className="size-3 rounded-full bg-white dark:bg-[#212121]" />
         </span>
-        <span className="min-w-[2.2rem] text-left tabular-nums">{percentLabel}</span>
+        <span className="chat-titlebar-context-label min-w-[2.2rem] text-left tabular-nums">{percentLabel}</span>
       </button>
 
       {open && (

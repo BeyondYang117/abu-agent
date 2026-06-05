@@ -335,7 +335,13 @@ pub(crate) async fn chat_send_message(
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let message_attachments = save_message_attachments(&app, &conversation_id, attachments)?;
-    let api_content = compose_user_content_for_api(&content, &message_attachments);
+    let attachments_dir = if message_attachments.is_empty() {
+        None
+    } else {
+        Some(conversation_attachments_dir(&app, &conversation_id)?)
+    };
+    let api_content =
+        compose_user_content_for_api(&content, &message_attachments, attachments_dir.as_deref());
     let title_source = title_source_for_user_message(&content, &message_attachments);
     let last_user_image_paths =
         stored_image_paths_for_attachments(&app, &conversation_id, &message_attachments)?;
@@ -599,6 +605,13 @@ fn mime_type_for_attachment(name: &str) -> &'static str {
         "heic" => "image/heic",
         "heif" => "image/heif",
         "pdf" => "application/pdf",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xlsm" => "application/vnd.ms-excel.sheet.macroenabled.12",
+        "csv" => "text/csv",
+        "tsv" => "text/tab-separated-values",
         "txt" => "text/plain",
         "md" => "text/markdown",
         _ => "application/octet-stream",
@@ -698,7 +711,67 @@ fn attachment_type_label(attachment_type: &str) -> &'static str {
     }
 }
 
-fn compose_user_content_for_api(content: &str, attachments: &[Attachment]) -> String {
+fn attachment_extension(name: &str) -> String {
+    Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn attachment_skill_for_name(name: &str) -> Option<&'static str> {
+    match attachment_extension(name).as_str() {
+        "pdf" => Some("pdf"),
+        "doc" | "docx" => Some("docx"),
+        "xls" | "xlsx" | "xlsm" | "csv" | "tsv" => Some("xlsx"),
+        _ => None,
+    }
+}
+
+fn attachment_format_label(attachment: &Attachment) -> &'static str {
+    if attachment.attachment_type == "image" {
+        return "图片";
+    }
+
+    match attachment_extension(&attachment.name).as_str() {
+        "pdf" => "PDF",
+        "doc" | "docx" => "Word 文档",
+        "xls" | "xlsx" | "xlsm" => "Excel 工作簿",
+        "csv" => "CSV 表格",
+        "tsv" => "TSV 表格",
+        "txt" | "md" => "文本文件",
+        _ => attachment_type_label(&attachment.attachment_type),
+    }
+}
+
+fn stored_attachment_path_for_prompt(
+    attachment: &Attachment,
+    attachment_dir: Option<&Path>,
+) -> String {
+    attachment_dir
+        .map(|dir| dir.join(&attachment.path).display().to_string())
+        .unwrap_or_else(|| attachment.path.clone())
+}
+
+fn attachment_processing_hint(attachment: &Attachment) -> String {
+    if attachment.attachment_type == "image" {
+        return "图片附件会随本轮请求发送给视觉模型。".to_string();
+    }
+
+    if let Some(skill) = attachment_skill_for_name(&attachment.name) {
+        format!(
+            "推荐复用现成 `{skill}` Skill：需要读取或分析该文件时，先调用 skill_activate(name=\"{skill}\")，再按该 Skill 的 SKILL.md / reference / scripts 流程处理安全副本路径。"
+        )
+    } else {
+        "此文件已保存为 Kivio 安全副本；仅在有可用读取工具或对应 Skill 时处理正文。".to_string()
+    }
+}
+
+fn compose_user_content_for_api(
+    content: &str,
+    attachments: &[Attachment],
+    attachment_dir: Option<&Path>,
+) -> String {
     let trimmed = content.trim();
     if attachments.is_empty() {
         return trimmed.to_string();
@@ -713,20 +786,26 @@ fn compose_user_content_for_api(content: &str, attachments: &[Attachment]) -> St
     let attachment_lines = attachments
         .iter()
         .map(|attachment| {
+            let stored_path = stored_attachment_path_for_prompt(attachment, attachment_dir);
             format!(
-                "- {} ({})",
+                "- {} ({})\n  - 附件 ID：{}\n  - Kivio 安全副本路径：{}\n  - 处理建议：{}",
                 attachment.name,
-                attachment_type_label(&attachment.attachment_type)
+                attachment_format_label(attachment),
+                attachment.id,
+                stored_path,
+                attachment_processing_hint(attachment)
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
     let capability_note = match (has_images, has_files) {
         (true, true) => {
-            "图片附件会随本轮请求发送给视觉模型；普通文件当前只保存元数据，模型不会读取文件正文。"
+            "图片附件会随本轮请求发送给视觉模型；文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析。"
         }
         (true, false) => "图片附件会随本轮请求发送给视觉模型。",
-        (false, true) => "当前聊天只保存文件元数据，模型不会读取文件正文。",
+        (false, true) => {
+            "文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析；不要仅凭文件名臆测内容。"
+        }
         (false, false) => "",
     };
     let attachment_note = format!(
@@ -2520,7 +2599,18 @@ pub(crate) async fn chat_regenerate_message(
         .messages
         .last()
         .filter(|message| message.role == "user")
-        .map(|message| compose_user_content_for_api(&message.content, &message.attachments));
+        .map(|message| {
+            let attachment_dir = if message.attachments.is_empty() {
+                None
+            } else {
+                conversation_attachments_dir(&app, &conversation_id).ok()
+            };
+            compose_user_content_for_api(
+                &message.content,
+                &message.attachments,
+                attachment_dir.as_deref(),
+            )
+        });
     let last_user_image_paths = conversation
         .messages
         .last()
@@ -2732,11 +2822,32 @@ mod tests {
                 name: "screen.png".to_string(),
                 path: "att_1-screen.png".to_string(),
             }],
+            None,
         );
 
         assert!(content.contains("看看这个"));
         assert!(content.contains("screen.png"));
         assert!(content.contains("图片附件会随本轮请求发送给视觉模型"));
+    }
+
+    #[test]
+    fn compose_user_content_for_api_recommends_document_skill() {
+        let content = compose_user_content_for_api(
+            "总结一下",
+            &[Attachment {
+                id: "att_1".to_string(),
+                attachment_type: "file".to_string(),
+                name: "report.PDF".to_string(),
+                path: "att_1-report.PDF".to_string(),
+            }],
+            Some(Path::new("/Users/test/Library/Application Support/com.zmair.kivio/conversations/conv_1_attachments")),
+        );
+
+        assert!(content.contains("report.PDF"));
+        assert!(content.contains("PDF"));
+        assert!(content.contains("skill_activate(name=\"pdf\")"));
+        assert!(content.contains("Kivio 安全副本路径"));
+        assert!(content.contains("不要仅凭文件名臆测内容"));
     }
 
     #[test]

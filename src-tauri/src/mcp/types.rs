@@ -215,7 +215,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__read_file".to_string(),
         name: "read_file".to_string(),
-        description: "Read a text file under the user home directory. Optional offset/limit are 1-based line numbers.".to_string(),
+        description: "Read any local text file that Kivio can access. Optional offset/limit are 1-based line numbers.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
