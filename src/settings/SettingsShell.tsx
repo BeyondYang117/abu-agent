@@ -105,6 +105,155 @@ function defaultChatTools(): ChatToolsConfig {
   }
 }
 
+const BUILTIN_SKILL_IDS = new Set(['pdf', 'docx', 'xlsx'])
+
+function isBuiltinSkill(skill: SkillMeta): boolean {
+  return BUILTIN_SKILL_IDS.has(skill.id)
+}
+
+function skillSourceLabel(skill: SkillMeta, lang: string): string {
+  if (isBuiltinSkill(skill)) {
+    return lang === 'zh' ? '内置' : 'Built-in'
+  }
+  if (skill.source === 'external') {
+    return lang === 'zh' ? '外部' : 'External'
+  }
+  return lang === 'zh' ? '用户' : 'User'
+}
+
+function SkillRow({
+  skill,
+  lang,
+  expanded,
+  enabled,
+  onToggleExpanded,
+  onToggleEnabled,
+  onPreview,
+}: {
+  skill: SkillMeta
+  lang: string
+  expanded: boolean
+  enabled: boolean
+  onToggleExpanded: (skillId: string) => void
+  onToggleEnabled: (skillId: string, enabled: boolean) => void
+  onPreview: (skillId: string) => void
+}) {
+  const fileCount = skill.files?.length ?? 0
+  return (
+    <div className={`chat-motion-row bg-white dark:bg-neutral-950/40 ${enabled ? '' : 'opacity-70'}`}>
+      <div className="flex h-9 items-center gap-2 px-2.5">
+        <button
+          type="button"
+          className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md text-left transition-colors hover:bg-black/[0.035] dark:hover:bg-white/[0.045]"
+          onClick={() => onToggleExpanded(skill.id)}
+          aria-expanded={expanded}
+          data-tauri-drag-region="false"
+        >
+          <ChevronRight
+            size={13}
+            className={`shrink-0 text-neutral-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
+            strokeWidth={2.25}
+          />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-neutral-900 dark:text-neutral-100">
+            {skill.name}
+          </span>
+        </button>
+        <span
+          className={`inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-medium ${
+            enabled
+              ? 'bg-emerald-500/10 text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-300'
+              : 'bg-neutral-200/70 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400'
+          }`}
+        >
+          <span className={`size-1.5 rounded-full ${enabled ? 'bg-emerald-500' : 'bg-neutral-400'}`} />
+          {enabled ? (lang === 'zh' ? '启用' : 'On') : (lang === 'zh' ? '关闭' : 'Off')}
+        </span>
+        <Toggle checked={enabled} onChange={(nextEnabled) => onToggleEnabled(skill.id, nextEnabled)} />
+      </div>
+      <div className={`chat-motion-reveal ${expanded ? 'is-open' : ''}`}>
+        <div className="px-3 pb-3 pl-8">
+          <p className="kv-panel-body">{skill.description}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="kv-chip">{skillSourceLabel(skill, lang)}</span>
+            {fileCount > 0 && (
+              <span className="kv-chip">
+                {fileCount} {lang === 'zh' ? '个附属文件' : 'files'}
+              </span>
+            )}
+            {skill.disableModelInvocation && (
+              <span className="kv-chip">{lang === 'zh' ? '仅手动触发' : 'Manual only'}</span>
+            )}
+            {skill.recommendedTools.map((tool) => (
+              <span key={tool} className="kv-chip">{tool}</span>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="kv-btn sm mt-2"
+            onClick={() => onPreview(skill.id)}
+            data-tauri-drag-region="false"
+          >
+            <ExternalLink size={10} />
+            {lang === 'zh' ? '查看完整内容' : 'View details'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SkillListSection({
+  title,
+  emptyText,
+  skills,
+  lang,
+  expandedSkillIds,
+  disabledSkillIds,
+  onToggleExpanded,
+  onToggleEnabled,
+  onPreview,
+}: {
+  title: string
+  emptyText: string
+  skills: SkillMeta[]
+  lang: string
+  expandedSkillIds: string[]
+  disabledSkillIds: string[]
+  onToggleExpanded: (skillId: string) => void
+  onToggleEnabled: (skillId: string, enabled: boolean) => void
+  onPreview: (skillId: string) => void
+}) {
+  const enabledCount = skills.filter((skill) => !disabledSkillIds.includes(skill.id)).length
+  return (
+    <div className="w-full max-w-[680px] space-y-2 py-2">
+      <div className="flex items-center justify-between px-1">
+        <div className="text-[12px] font-semibold text-neutral-800 dark:text-neutral-100">{title}</div>
+        <span className="kv-tag ok">{enabledCount} / {skills.length}</span>
+      </div>
+      {skills.length > 0 ? (
+        <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm [&>*+*]:border-t [&>*+*]:border-neutral-200 dark:border-neutral-800 dark:bg-neutral-950/40 dark:[&>*+*]:border-neutral-800">
+          {skills.map((skill) => (
+            <SkillRow
+              key={skill.id}
+              skill={skill}
+              lang={lang}
+              expanded={expandedSkillIds.includes(skill.id)}
+              enabled={!disabledSkillIds.includes(skill.id)}
+              onToggleExpanded={onToggleExpanded}
+              onToggleEnabled={onToggleEnabled}
+              onPreview={onPreview}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="kv-panel">
+          <div className="kv-panel-body">{emptyText}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData['defaultModels'] {
   return {
     chat: { providerId: chatProviderId, model: chatModel },
@@ -228,6 +377,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [mcpTestFeedback, setMcpTestFeedback] = useState<Record<string, { ok: boolean; message: string; tools: ChatToolDefinition[] }>>({})
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skills, setSkills] = useState<SkillMeta[]>([])
+  const [expandedSkillIds, setExpandedSkillIds] = useState<string[]>([])
   const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
   // 更新检查状态：'idle' / 'checking' / 'up-to-date' / 'available'
@@ -258,6 +408,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
   const lang = settings?.settingsLanguage || 'zh'
   const t = i18n[lang]
+  const chatTools = settings?.chatTools || defaultChatTools()
   // 判断是否有未保存的更改
   const hasUnsavedChanges = settings ? stableStringify(settings) !== initialSettingsSnapshot : false
 
@@ -979,6 +1130,24 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
   }, [lang])
 
+  const handleToggleSkillExpanded = useCallback((skillId: string) => {
+    setExpandedSkillIds((current) => (
+      current.includes(skillId)
+        ? current.filter((id) => id !== skillId)
+        : [...current, skillId]
+    ))
+  }, [])
+
+  const handleToggleSkillEnabled = useCallback((skillId: string, enabled: boolean) => {
+    const disabled = chatTools.disabledSkillIds ?? []
+    const next = enabled
+      ? disabled.filter((id) => id !== skillId)
+      : disabled.includes(skillId)
+        ? disabled
+        : [...disabled, skillId]
+    updateChatTools({ disabledSkillIds: next })
+  }, [chatTools.disabledSkillIds, updateChatTools])
+
   useEffect(() => {
     if (activeTab === 'skill') {
       void refreshChatSkills()
@@ -1451,7 +1620,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     },
     skill: {
       title: 'Skill',
-      subtitle: lang === 'zh' ? '管理用户导入与本地 Skill 库。' : 'Manage imported and local Skills.',
+      subtitle: lang === 'zh' ? '管理内置与用户 Skill。' : 'Manage built-in and user Skills.',
     },
     webSearch: {
       title: t.tabWebSearch,
@@ -1469,11 +1638,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     },
   }
   const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
-  const chatTools = settings.chatTools || defaultChatTools()
   const chatProvider = settings.providers.find((provider) => provider.id === settings.chatProviderId)
     ?? settings.providers.find((provider) => provider.id === settings.lens?.providerId)
     ?? settings.providers.find((provider) => provider.id === settings.translatorProviderId)
   const chatProviderSupportsTools = chatProvider?.supportsTools !== false
+  const disabledSkillIds = chatTools.disabledSkillIds ?? []
+  const builtinSkills = skills.filter(isBuiltinSkill)
+  const userSkills = skills.filter((skill) => !isBuiltinSkill(skill))
+  const enabledSkillCount = skills.filter((skill) => !disabledSkillIds.includes(skill.id)).length
 
   const categoryNav =
     variant === 'embedded' ? (
@@ -2688,77 +2860,50 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   {skillError && <div className="kv-inline-error">{skillError}</div>}
                   <SettingRow label={t.enabled} description={t.skillCatalogEnableHint}>
                     <span className="kv-tag ok">
-                      {skills.filter((skill) => !(chatTools.disabledSkillIds ?? []).includes(skill.id)).length}
+                      {enabledSkillCount}
                       {' / '}
                       {skills.length}
                     </span>
                   </SettingRow>
-                  <div className="space-y-2 py-2">
-                    {skills.map((skill) => {
-                      const skillEnabled = !(chatTools.disabledSkillIds ?? []).includes(skill.id)
-                      return (
-                        <div
-                          key={skill.id}
-                          className="kv-panel flex items-start gap-3"
-                        >
-                          <button
-                            type="button"
-                            className="min-w-0 flex-1 text-left transition-colors hover:opacity-90"
-                            onClick={() => void handlePreviewSkill(skill.id)}
-                            data-tauri-drag-region="false"
-                          >
-                            <div className="flex min-w-0 items-start gap-2">
-                              <Sparkles size={14} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
-                              <div className="min-w-0 flex-1">
-                                <div className="kv-panel-title !mb-0">
-                                  {skill.name}
-                                  <span className="kv-tag ml-2">{skill.source}</span>
-                                </div>
-                                <div className="kv-panel-body">{skill.description}</div>
-                                {(skill.files?.length ?? 0) > 0 && (
-                                  <div className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400">
-                                    {skill.files?.length} {lang === 'zh' ? '个附属文件' : 'bundled files'}
-                                  </div>
-                                )}
-                                {skill.disableModelInvocation && (
-                                  <div className="mt-1">
-                                    <span className="kv-chip">{lang === 'zh' ? '仅手动触发' : 'Manual only'}</span>
-                                  </div>
-                                )}
-                                {skill.recommendedTools.length > 0 && (
-                                  <div className="mt-1 flex flex-wrap gap-1">
-                                    {skill.recommendedTools.map((tool) => (
-                                      <span key={tool} className="kv-chip">{tool}</span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </button>
-                          <Toggle
-                            checked={skillEnabled}
-                            onChange={(enabled) => {
-                              const disabled = chatTools.disabledSkillIds ?? []
-                              const next = enabled
-                                ? disabled.filter((id) => id !== skill.id)
-                                : disabled.includes(skill.id)
-                                  ? disabled
-                                  : [...disabled, skill.id]
-                              updateChatTools({ disabledSkillIds: next })
-                            }}
-                          />
-                        </div>
-                      )
-                    })}
-                    {!skillsLoading && skills.length === 0 && (
-                      <div className="kv-panel">
-                        <div className="kv-panel-title">{lang === 'zh' ? '暂无 Skill' : 'No skills'}</div>
-                        <div className="kv-panel-body">
-                          {lang === 'zh' ? '暂无 Skill。可导入文件夹/zip，或打开 Skill 文件夹手动添加后刷新。' : 'No skills yet. Import a folder or zip, or add skills manually and refresh.'}
-                        </div>
+                  {skillsLoading && (
+                    <div className="kv-panel chat-motion-fade-up">
+                      <div className="kv-panel-body">{lang === 'zh' ? '正在加载 Skill...' : 'Loading skills...'}</div>
+                    </div>
+                  )}
+                  {!skillsLoading && skills.length === 0 && (
+                    <div className="kv-panel">
+                      <div className="kv-panel-title">{lang === 'zh' ? '暂无 Skill' : 'No skills'}</div>
+                      <div className="kv-panel-body">
+                        {lang === 'zh' ? '暂无 Skill。可导入文件夹/zip，或打开 Skill 文件夹手动添加后刷新。' : 'No skills yet. Import a folder or zip, or add skills manually and refresh.'}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
+                  {!skillsLoading && skills.length > 0 && (
+                    <div className="space-y-3 py-2">
+                      <SkillListSection
+                        title={lang === 'zh' ? '内置 Skill' : 'Built-in skills'}
+                        emptyText={lang === 'zh' ? '当前没有内置 Skill。' : 'No built-in skills.'}
+                        skills={builtinSkills}
+                        lang={lang}
+                        expandedSkillIds={expandedSkillIds}
+                        disabledSkillIds={disabledSkillIds}
+                        onToggleExpanded={handleToggleSkillExpanded}
+                        onToggleEnabled={handleToggleSkillEnabled}
+                        onPreview={handlePreviewSkill}
+                      />
+                      <SkillListSection
+                        title={lang === 'zh' ? '用户 Skill' : 'User skills'}
+                        emptyText={lang === 'zh' ? '当前没有用户导入的 Skill。' : 'No imported user skills.'}
+                        skills={userSkills}
+                        lang={lang}
+                        expandedSkillIds={expandedSkillIds}
+                        disabledSkillIds={disabledSkillIds}
+                        onToggleExpanded={handleToggleSkillExpanded}
+                        onToggleEnabled={handleToggleSkillEnabled}
+                        onPreview={handlePreviewSkill}
+                      />
+                    </div>
+                  )}
                 </SettingsGroup>
               </>
             )}

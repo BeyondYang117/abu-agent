@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import type { Components, UrlTransform } from 'react-markdown'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -89,26 +90,28 @@ function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, string>
   return lookup
 }
 
-export function ChatMarkdown({ content, artifacts = [] }: ChatMarkdownProps) {
-  const normalized = normalizeMarkdownForRender(content)
-  const artifactLookup = buildArtifactLookup(artifacts)
-  const components: Components = {
-    ...markdownComponents,
-    img: ({ src, alt }) => {
-      const rawSrc = typeof src === 'string' ? src : ''
-      const resolvedSrc = rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)
-        ? artifactLookup.get(artifactKey(rawSrc)) ?? artifactLookup.get(artifactBasename(rawSrc)) ?? rawSrc
-        : rawSrc
-      return (
-        <img
-          src={resolvedSrc}
-          alt={alt ?? ''}
-          loading="lazy"
-          className="my-3 max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
-        />
-      )
-    },
-  }
+function ChatMarkdownComponent({ content, artifacts = [] }: ChatMarkdownProps) {
+  const normalized = useMemo(() => normalizeMarkdownForRender(content), [content])
+  const components = useMemo<Components>(() => {
+    const artifactLookup = buildArtifactLookup(artifacts)
+    return {
+      ...markdownComponents,
+      img: ({ src, alt }) => {
+        const rawSrc = typeof src === 'string' ? src : ''
+        const resolvedSrc = rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)
+          ? artifactLookup.get(artifactKey(rawSrc)) ?? artifactLookup.get(artifactBasename(rawSrc)) ?? rawSrc
+          : rawSrc
+        return (
+          <img
+            src={resolvedSrc}
+            alt={alt ?? ''}
+            loading="lazy"
+            className="my-3 max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
+          />
+        )
+      },
+    }
+  }, [artifacts])
 
   return (
     <div className={proseClass}>
@@ -125,3 +128,6 @@ export function ChatMarkdown({ content, artifacts = [] }: ChatMarkdownProps) {
     </div>
   )
 }
+
+// memo：仅当 content / artifacts 变化时才重渲染（配合 MessageBubble 的 memo）
+export const ChatMarkdown = memo(ChatMarkdownComponent)

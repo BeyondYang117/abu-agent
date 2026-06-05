@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
+import { Check, ChevronDown, Copy, Trash2 } from 'lucide-react'
+import { copyToClipboard } from '../utils/clipboard'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
 import { ChatMarkdown } from './ChatMarkdown'
@@ -82,7 +84,7 @@ function GeneratedImageArtifacts({ artifacts }: { artifacts: ChatToolArtifact[] 
   )
 }
 
-export function MessageBubble({
+function MessageBubbleComponent({
   message,
   conversationId,
   tokensPerSec,
@@ -104,17 +106,31 @@ export function MessageBubble({
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [toolsExpanded, setToolsExpanded] = useState(false)
+  // 工具调用超过 4 个时默认折叠（与思考过程一致）
+  const toolsCollapsible = toolCalls.length > 4
 
   useEffect(() => {
     setDraft(message.content)
     setIsEditing(false)
   }, [message.id, message.content])
 
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(message.content)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
+  }
+
+  const bubbleActionBtn =
+    'rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-neutral-800 dark:hover:text-neutral-300'
+
   if (isUser) {
     const hasText = message.content.trim().length > 0
     return (
-      <div className="chat-motion-fade-up flex justify-end py-2">
-        <div className="flex max-w-[85%] flex-col items-end gap-2">
+      <div className="group chat-motion-fade-up flex justify-end py-2">
+        <div className="flex max-w-[85%] flex-col items-end gap-1">
           {attachments.length > 0 && (
             <ChatAttachments
               attachments={attachments}
@@ -127,6 +143,30 @@ export function MessageBubble({
               <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
                 {message.content}
               </div>
+            </div>
+          )}
+          {hasText && (
+            <div className="flex items-center gap-0.5 pr-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
+              <button
+                type="button"
+                onClick={() => void handleCopy()}
+                className={bubbleActionBtn}
+                title={copied ? '已复制' : '复制'}
+                aria-label={copied ? '已复制' : '复制'}
+              >
+                {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={2} />}
+              </button>
+              {onDeleteMessage && (
+                <button
+                  type="button"
+                  onClick={() => void onDeleteMessage(message.id)}
+                  className={bubbleActionBtn}
+                  title="删除"
+                  aria-label="删除"
+                >
+                  <Trash2 size={14} strokeWidth={2} />
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -146,6 +186,16 @@ export function MessageBubble({
     }
   }
 
+  const toolList = toolCalls.map((toolCall, index) => (
+    <ToolCallErrorBoundary key={toolCall.id || toolCall.call_id || toolCall.callId || index}>
+      <ToolCallBlock toolCall={toolCall} />
+    </ToolCallErrorBoundary>
+  ))
+  // 折叠时仅隐藏较早的，始终保留最新 4 个可见
+  const RECENT_TOOL_COUNT = 4
+  const olderTools = toolsCollapsible ? toolList.slice(0, toolList.length - RECENT_TOOL_COUNT) : []
+  const recentTools = toolsCollapsible ? toolList.slice(toolList.length - RECENT_TOOL_COUNT) : toolList
+
   return (
     <div className="chat-motion-fade-up flex justify-start py-3">
       <div className="max-w-[85%] min-w-0">
@@ -154,16 +204,35 @@ export function MessageBubble({
             aria-label="工具调用"
             className={message.content.trim().length > 0 || message.reasoning ? 'mb-3' : ''}
           >
-            <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
-              工具调用
-            </div>
-            {toolCalls.map((toolCall, index) => (
-              <ToolCallErrorBoundary
-                key={toolCall.id || toolCall.call_id || toolCall.callId || index}
+            {toolsCollapsible ? (
+              <button
+                type="button"
+                onClick={() => setToolsExpanded((value) => !value)}
+                className="mb-1 flex w-full items-center gap-1 text-left text-[11px] font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+                aria-expanded={toolsExpanded}
+                data-tauri-drag-region="false"
               >
-                <ToolCallBlock toolCall={toolCall} />
-              </ToolCallErrorBoundary>
-            ))}
+                <span>
+                  工具调用 · {toolCalls.length} 个
+                  {!toolsExpanded ? ` · 显示最新 ${RECENT_TOOL_COUNT} 个` : ''}
+                </span>
+                <ChevronDown
+                  size={12}
+                  strokeWidth={2}
+                  className={`ml-auto shrink-0 transition-transform duration-300 ${toolsExpanded ? 'rotate-180' : ''}`}
+                />
+              </button>
+            ) : (
+              <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+                工具调用
+              </div>
+            )}
+            {toolsCollapsible && (
+              <div className={`chat-motion-reveal ${toolsExpanded ? 'is-open' : ''}`}>
+                <div>{olderTools}</div>
+              </div>
+            )}
+            {recentTools}
           </section>
         )}
 
@@ -255,3 +324,6 @@ export function MessageBubble({
     </div>
   )
 }
+
+// memo：流式生成时历史消息 props 不变 → 跳过重渲染，避免每个 token 重新解析 Markdown
+export const MessageBubble = memo(MessageBubbleComponent)

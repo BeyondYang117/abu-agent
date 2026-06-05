@@ -346,7 +346,7 @@ export function ToolCallBlock({
           <ChevronDown
             size={11}
             strokeWidth={2}
-            className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+            className={`shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
           />
         )}
       </button>

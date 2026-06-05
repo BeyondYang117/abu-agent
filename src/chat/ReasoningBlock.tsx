@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 
 const COLLAPSE_LINE_LIMIT = 3
 const CHARS_PER_LINE = 60
@@ -73,12 +73,14 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
 
   const titleClass =
     'mb-1 flex w-full items-center gap-1 text-left text-[11px] font-medium text-neutral-400 transition-colors dark:text-neutral-500'
+  const streamingPreview = streaming && showCollapsed
   const bodyClass = [
     'chat-motion-reasoning-body',
     'whitespace-pre-wrap text-sm leading-relaxed text-neutral-400 dark:text-neutral-500',
     streaming ? 'opacity-95' : 'opacity-90',
     showCollapsed ? 'is-collapsed' : 'is-open',
     contentPulse ? 'reasoning-stream-tail' : '',
+    streamingPreview ? 'reasoning-rolling' : '',
   ].join(' ')
 
   const handleToggle = () => {
@@ -104,12 +106,12 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
           data-tauri-drag-region="false"
         >
           {streaming ? (
-            <Loader2 size={11} strokeWidth={2} className="shrink-0 animate-spin" />
-          ) : null}
-          <span>思考过程</span>
-          {streaming && showCollapsed ? (
-            <span className="font-normal text-neutral-400 dark:text-neutral-500">· 生成中</span>
-          ) : null}
+            <span className="reasoning-shimmer-text">
+              思考过程{showCollapsed ? ' · 生成中' : ''}
+            </span>
+          ) : (
+            <span>思考过程</span>
+          )}
           <ChevronDown
             size={12}
             strokeWidth={2}
@@ -119,12 +121,10 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
       ) : (
         <div className={titleClass}>
           {streaming ? (
-            <Loader2 size={11} strokeWidth={2} className="shrink-0 animate-spin" />
-          ) : null}
-          <span>思考过程</span>
-          {streaming ? (
-            <span className="font-normal text-neutral-400 dark:text-neutral-500">· 生成中</span>
-          ) : null}
+            <span className="reasoning-shimmer-text">思考过程 · 生成中</span>
+          ) : (
+            <span>思考过程</span>
+          )}
         </div>
       )}
 
@@ -133,7 +133,7 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
         className={bodyClass}
         style={bodyMaxHeight == null ? undefined : { maxHeight: `${bodyMaxHeight}px` }}
       >
-        {showCollapsed && collapsedPreview.truncated ? (
+        {showCollapsed && collapsedPreview.truncated && !streaming ? (
           <span className="mr-0.5 opacity-50">…</span>
         ) : null}
         {showCollapsed ? collapsedPreview.preview : reasoning}

@@ -348,10 +348,10 @@ export function InputBar({
         )}
         <div
           data-chat-composer="true"
-          className={`chat-composer-shell rounded-[28px] border bg-white px-3 py-2.5 shadow-[0_2px_12px_rgba(0,0,0,0.06)] transition-colors dark:bg-neutral-900 dark:shadow-none ${
+          className={`chat-composer-shell rounded-[28px] border bg-white px-3 py-2.5 transition-[box-shadow,border-color] duration-200 dark:bg-neutral-900 ${
             dragActive
-              ? 'border-[#e8a090] ring-2 ring-[#e8a090]/25 dark:border-[#e8a090]'
-              : 'border-neutral-200/90 dark:border-neutral-700'
+              ? 'border-[#e8a090] shadow-[0_2px_12px_rgba(0,0,0,0.06)] ring-2 ring-[#e8a090]/25 dark:border-[#e8a090] dark:shadow-none'
+              : 'border-neutral-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_32px_-14px_rgba(0,0,0,0.14)] focus-within:border-neutral-300 focus-within:shadow-[0_1px_3px_rgba(0,0,0,0.05),0_18px_44px_-16px_rgba(0,0,0,0.20)] dark:border-neutral-700 dark:shadow-none dark:focus-within:border-neutral-600'
           }`}
         >
           {dragActive && (

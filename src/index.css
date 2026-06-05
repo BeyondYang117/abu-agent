@@ -81,6 +81,46 @@ body {
   animation: reasoning-tail-pulse 0.22s ease-out;
 }
 
+/* 思考过程「生成中」标签：柔和光带扫过 */
+@keyframes reasoning-shimmer {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -180% 0;
+  }
+}
+
+.reasoning-shimmer-text {
+  background-image: linear-gradient(
+    100deg,
+    rgba(115, 115, 115, 0.45) 30%,
+    rgba(115, 115, 115, 1) 50%,
+    rgba(115, 115, 115, 0.45) 70%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: reasoning-shimmer 2.4s linear infinite;
+}
+
+.dark .reasoning-shimmer-text {
+  background-image: linear-gradient(
+    100deg,
+    rgba(150, 150, 150, 0.4) 30%,
+    rgba(205, 205, 205, 1) 50%,
+    rgba(150, 150, 150, 0.4) 70%
+  );
+}
+
+/* 流式折叠预览：顶部渐隐，旧行平滑淡出而非硬截断 */
+.reasoning-rolling {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.7em);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.7em);
+}
+
 /* 自定义滚动条 — 悬浮胶囊式 */
 .custom-scrollbar {
   scrollbar-width: thin;
@@ -597,6 +637,13 @@ body {
   .chat-motion-reasoning-body {
     transition: none;
     transform: none;
+  }
+
+  .reasoning-shimmer-text {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: inherit;
   }
 
   .chat-motion-reveal {

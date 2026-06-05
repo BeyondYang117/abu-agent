@@ -86,11 +86,6 @@ export function ContextIndicator({
     null,
   )
   const usageRatio = valueFrom(contextState?.usage_ratio, contextState?.usageRatio, null)
-  const contextWindowEstimated = valueFrom(
-    contextState?.context_window_estimated,
-    contextState?.contextWindowEstimated,
-    true,
-  )
   const status = contextState?.status ?? 'unknown'
   const lastCompressedAt = valueFrom(
     contextState?.last_compressed_at,
@@ -139,41 +134,46 @@ export function ContextIndicator({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-9 z-40 w-[17.5rem] max-w-[calc(100vw-2rem)] rounded-lg border border-neutral-200 bg-white p-2.5 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
-          <div className="mb-2 flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-[13px] font-semibold leading-tight text-neutral-900 dark:text-neutral-50">
+        <div className="chat-motion-popover absolute left-0 top-9 z-40 w-[18rem] max-w-[calc(100vw-2rem)] rounded-xl border border-neutral-200/90 bg-white p-3 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-[13px] font-semibold leading-none text-neutral-900 dark:text-neutral-50">
                 Context
-              </div>
-              <div className="truncate text-[10px] leading-tight text-neutral-500 dark:text-neutral-400">
-                {readableStatus(status)}{contextWindowEstimated ? ' estimate' : ''}
-              </div>
+              </span>
+              <span
+                className="shrink-0 rounded-full px-1.5 py-[2px] text-[10px] font-medium leading-none"
+                style={{ color, backgroundColor: `${color}1F` }}
+              >
+                {readableStatus(status)}
+              </span>
             </div>
             <button
               type="button"
-              className="-mr-0.5 -mt-0.5 rounded p-0.5 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+              className="-mr-1 -mt-1 rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
               aria-label="Close context panel"
               onClick={() => setOpen(false)}
             >
-              <X size={13} />
+              <X size={14} />
             </button>
           </div>
 
-          <div className="mb-2 flex items-baseline justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-[18px] font-semibold leading-none text-neutral-900 dark:text-neutral-50">
-                {fullness}
-              </div>
-              <div className="mt-0.5 truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div className="text-[24px] font-semibold leading-none tracking-tight text-neutral-900 dark:text-neutral-50">
+              {fullness}
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
                 {tokenLine}
               </div>
-            </div>
-            <div className="shrink-0 text-right text-[10px] leading-tight text-neutral-500 dark:text-neutral-400">
-              {messageCount} msgs · {compressedMessageCount} cmp
+              {messageCount > 0 && (
+                <div className="mt-0.5 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
+                  {messageCount} msgs{compressedMessageCount > 0 ? ` · ${compressedMessageCount} cmp` : ''}
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="mb-2 flex h-1.5 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
+          <div className="mb-2.5 flex h-2 overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
             {segments.length === 0 ? (
               <div className="h-full w-full bg-neutral-300 dark:bg-neutral-700" />
             ) : (
@@ -194,9 +194,9 @@ export function ContextIndicator({
             )}
           </div>
 
-          <div className="max-h-32 space-y-0.5 overflow-auto">
+          <div className="max-h-32 space-y-1 overflow-auto">
             {segments.map((segment) => (
-              <div key={segment.id} className="flex items-center gap-1.5 text-[11px] leading-tight">
+              <div key={segment.id} className="flex items-center gap-2 text-[11px] leading-tight">
                 <span
                   className="size-1.5 shrink-0 rounded-full"
                   style={{ backgroundColor: segment.color || '#7A7A7A' }}
@@ -211,32 +211,36 @@ export function ContextIndicator({
             ))}
           </div>
 
-          <div className="mt-2 border-t border-neutral-100 pt-2 text-[10px] leading-snug text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate">Last compressed</span>
-              <span className="shrink-0">{formatTimestamp(lastCompressedAt)}</span>
+          {(lastCompressedAt || summary?.stale || contextWarning || error) && (
+            <div className="mt-2.5 border-t border-neutral-100 pt-2.5 text-[10px] leading-snug text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+              {lastCompressedAt && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate">Last compressed</span>
+                  <span className="shrink-0">{formatTimestamp(lastCompressedAt)}</span>
+                </div>
+              )}
+              {summary?.stale && (
+                <div className="mt-0.5 text-[#A15C2F] dark:text-[#E0A06E]">
+                  Summary will be ignored until recompressed.
+                </div>
+              )}
+              {contextWarning && (
+                <div className="mt-0.5 text-[#A15C2F] dark:text-[#E0A06E]">
+                  {contextWarning}
+                </div>
+              )}
+              {error && (
+                <div className="mt-0.5 text-[#C24135] dark:text-[#F08A80]">
+                  {error}
+                </div>
+              )}
             </div>
-            {summary?.stale && (
-              <div className="mt-0.5 text-[#A15C2F] dark:text-[#E0A06E]">
-                Summary will be ignored until recompressed.
-              </div>
-            )}
-            {contextWarning && (
-              <div className="mt-0.5 text-[#A15C2F] dark:text-[#E0A06E]">
-                {contextWarning}
-              </div>
-            )}
-            {error && (
-              <div className="mt-0.5 text-[#C24135] dark:text-[#F08A80]">
-                {error}
-              </div>
-            )}
-          </div>
+          )}
 
-          <div className="mt-2 flex justify-end gap-1.5">
+          <div className="mt-2.5 flex justify-end gap-1.5">
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:text-neutral-300 dark:hover:bg-neutral-800"
               aria-label="Refresh context"
               onClick={onRefresh}
               disabled={loading}
@@ -246,7 +250,7 @@ export function ContextIndicator({
             </button>
             <button
               type="button"
-              className="inline-flex items-center gap-1 rounded-md bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+              className="inline-flex items-center gap-1 rounded-md bg-neutral-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
               aria-label="Compress context"
               onClick={onCompress}
               disabled={!canCompress}

@@ -46,9 +46,11 @@ interface NavRowProps {
   onClick?: () => void
   disabled?: boolean
   active?: boolean
+  /** 图标在 hover 时的微动效（group-hover transform 工具类） */
+  iconMotion?: string
 }
 
-function NavRow({ icon, label, shortcut, onClick, disabled, active }: NavRowProps) {
+function NavRow({ icon, label, shortcut, onClick, disabled, active, iconMotion }: NavRowProps) {
   return (
     <button
       type="button"
@@ -60,7 +62,9 @@ function NavRow({ icon, label, shortcut, onClick, disabled, active }: NavRowProp
           : 'text-neutral-800 hover:bg-black/[0.04] dark:text-neutral-200 dark:hover:bg-white/[0.06]'
       }`}
     >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 dark:text-neutral-400">
+      <span
+        className={`flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 transition duration-300 ease-out will-change-transform group-hover:text-neutral-800 group-active:scale-90 dark:text-neutral-400 dark:group-hover:text-neutral-200 ${iconMotion ?? ''}`}
+      >
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
@@ -297,30 +301,35 @@ export const Sidebar = memo(function Sidebar({
           label="新建聊天"
           shortcut={`${modLabel}N`}
           onClick={onNewConversation}
+          iconMotion="group-hover:-rotate-6 group-hover:scale-110"
         />
         <NavRow
           icon={<FolderPlus size={17} strokeWidth={1.75} />}
           label="新建项目"
           shortcut={`${modLabel}P`}
           onClick={openCreateProjectDialog}
+          iconMotion="group-hover:-translate-y-px group-hover:scale-110"
         />
         <NavRow
           icon={<Search size={17} strokeWidth={1.75} />}
           label="搜索"
           shortcut={`${modLabel}K`}
           onClick={() => onSearchOpenChange(!searchOpen)}
+          iconMotion="group-hover:rotate-[10deg] group-hover:scale-110"
         />
         <NavRow
           icon={<LayoutGrid size={17} strokeWidth={1.75} />}
           label="助手中心"
           active={assistantCenterActive}
           onClick={onOpenAssistantCenter}
+          iconMotion="group-hover:rotate-3 group-hover:scale-110"
         />
         <NavRow
           icon={<SettingsIcon size={17} strokeWidth={1.75} />}
           label="设置"
           active={settingsActive}
           onClick={onOpenSettings}
+          iconMotion="group-hover:rotate-90"
         />
       </nav>
 

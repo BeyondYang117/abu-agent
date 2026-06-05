@@ -5,7 +5,7 @@ mod runtime;
 mod types;
 
 pub use catalog::format_catalog;
-pub use discover::{build_registry, user_skills_dir};
+pub use discover::{build_registry, build_registry_metadata, user_skills_dir};
 pub use parse::parse_skill_markdown;
 pub use runtime::{
     activate_skill, extract_relative_path, extract_script_args, extract_skill_name, lookup_skill,
@@ -35,7 +35,7 @@ pub fn chat_skills_list(
 ) -> SkillListResult {
     let paths = skill_scan_paths
         .unwrap_or_else(|| state.settings_read().chat_tools.skill_scan_paths.clone());
-    match build_registry(&app, &paths) {
+    match build_registry_metadata(&app, &paths) {
         Ok(registry) => SkillListResult {
             success: true,
             skills: registry.metas(),

@@ -296,6 +296,7 @@ if !message.model_messages.is_empty() {
 - Tool traces are metadata on the related assistant message, not standalone `role: 'tool'` timeline messages in the UI.
 - Skill selection is conversation-pinned and user-switchable. Sending a message snapshots the active Skill ID onto the generated assistant message.
 - Claude-style Skills use progressive loading: list metadata in the catalog, load `SKILL.md` through `skill_activate`, read supporting files through `skill_read_file`, and run bundled scripts through `skill_run_script`.
+- `chat_skills_list` is a catalog/readiness path and should use metadata-only registry discovery. Do not index every bundled supporting file for the list UI; full file indexing belongs to `chat_skills_read`, runtime activation, and tool execution paths.
 - Native and Skill runtime tools must expose prompt-facing OpenAI names (`web_search`, `skill_activate`, `skill_read_file`, `skill_run_script`). MCP tools must keep namespaced OpenAI names such as `mcp__server_id__tool_name` to avoid collisions.
 - Tool approval policy defaults to read-only tools auto-running and sensitive tools requiring confirmation.
 - `skill_run_script` is sensitive by default, only accepts paths under `scripts/`, and must run through the Rust-owned Skill runtime. `skill_activate`, `skill_read_file`, and `web_search` are read-like and may run automatically under the default policy.
@@ -337,6 +338,7 @@ if !message.model_messages.is_empty() {
 - Rust tests must cover the tools-planning no-tool-call finalization path, including empty visible text failure.
 - Rust tests for Streamable HTTP MCP must cover notification/progress events before the response and mismatched JSON-RPC ids before the matching id.
 - UI smoke tests must cover live tool progress, persisted tool trace rendering after reload, Skill switch/clear persistence, and provider-without-tools fallback.
+- Rust regression tests must cover that metadata registry discovery skips bundled file indexing while full registry discovery still includes supporting files.
 - Capability review must confirm no frontend `shell:*` permission is added when MCP stdio stays Rust-owned.
 
 ### 7. Wrong vs Correct

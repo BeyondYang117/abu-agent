@@ -54,11 +54,26 @@ fn scan_root_entries(
 }
 
 pub fn build_registry(app: &AppHandle, extra_paths: &[String]) -> Result<SkillRegistry, String> {
+    build_registry_inner(app, extra_paths, true)
+}
+
+pub fn build_registry_metadata(
+    app: &AppHandle,
+    extra_paths: &[String],
+) -> Result<SkillRegistry, String> {
+    build_registry_inner(app, extra_paths, false)
+}
+
+fn build_registry_inner(
+    app: &AppHandle,
+    extra_paths: &[String],
+    include_files: bool,
+) -> Result<SkillRegistry, String> {
     let mut registry = SkillRegistry::default();
     let roots = scan_root_entries(app, extra_paths)?;
 
     for root in roots {
-        collect_skill_files(&root.path, 0, &mut registry, root.source)?;
+        collect_skill_files(&root.path, 0, &mut registry, root.source, include_files)?;
     }
 
     dedup_records(&mut registry.records, &mut registry.warnings);
@@ -91,6 +106,7 @@ fn collect_skill_files(
     depth: usize,
     registry: &mut SkillRegistry,
     source: &str,
+    include_files: bool,
 ) -> Result<(), String> {
     if depth > MAX_SCAN_DEPTH || !root.is_dir() {
         return Ok(());
@@ -98,7 +114,7 @@ fn collect_skill_files(
 
     let skill_md = root.join("SKILL.md");
     if skill_md.is_file() {
-        match load_skill_at(&skill_md, source) {
+        match load_skill_at(&skill_md, source, include_files) {
             Ok(record) => registry.records.push(record),
             Err(err) => registry
                 .warnings
@@ -124,18 +140,26 @@ fn collect_skill_files(
         if SKIP_DIR_NAMES.contains(&name) {
             continue;
         }
-        collect_skill_files(&path, depth + 1, registry, source)?;
+        collect_skill_files(&path, depth + 1, registry, source, include_files)?;
     }
     Ok(())
 }
 
-fn load_skill_at(skill_md_path: &Path, source: &str) -> Result<super::types::SkillRecord, String> {
+fn load_skill_at(
+    skill_md_path: &Path,
+    source: &str,
+    include_files: bool,
+) -> Result<super::types::SkillRecord, String> {
     let raw = fs::read_to_string(skill_md_path)
         .map_err(|err| format!("Read skill {} failed: {err}", skill_md_path.display()))?;
     let base_dir = skill_md_path
         .parent()
         .ok_or_else(|| "Skill path has no parent directory".to_string())?;
-    let files = index_skill_files(base_dir)?;
+    let files = if include_files {
+        index_skill_files(base_dir)?
+    } else {
+        Vec::new()
+    };
     let mut warnings = Vec::new();
     parse_skill_record(skill_md_path, &raw, source, files, &mut warnings)
 }
@@ -210,4 +234,43 @@ pub fn folder_slug_for_path(path: &Path) -> String {
         .and_then(|name| name.to_str())
         .map(slugify)
         .unwrap_or_else(|| "skill".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_skill_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kivio-skill-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            r#"---
+name: skill-test
+description: Test skill.
+---
+
+# Skill body
+"#,
+        )
+        .unwrap();
+        fs::write(dir.join("scripts").join("run.sh"), "echo ok").unwrap();
+        dir
+    }
+
+    #[test]
+    fn metadata_registry_skips_bundled_file_indexing() {
+        let dir = temp_skill_dir();
+        let skill_md = dir.join("SKILL.md");
+
+        let metadata_record = load_skill_at(&skill_md, "user", false).unwrap();
+        assert!(metadata_record.meta.files.is_empty());
+
+        let full_record = load_skill_at(&skill_md, "user", true).unwrap();
+        assert_eq!(full_record.meta.files.len(), 1);
+        assert_eq!(full_record.meta.files[0].relative_path, "scripts/run.sh");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

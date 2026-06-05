@@ -551,7 +551,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   useEffect(() => {
     void loadDefaultModel()
-    void loadSkills()
+    const timer = window.setTimeout(() => {
+      void loadSkills()
+    }, 120)
+    return () => window.clearTimeout(timer)
   }, [loadDefaultModel, loadSkills])
 
   useEffect(() => {
@@ -1225,7 +1228,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const handleDeleteMessage = useCallback(
     async (messageId: string) => {
       if (!currentConversation) return
-      if (!window.confirm('确定删除这条助手回复吗？')) return
+      if (!window.confirm('确定删除这条消息吗？')) return
       try {
         const updated = await chatApi.deleteMessage(currentConversation.id, messageId)
         applyConversation(updated)
@@ -1477,7 +1480,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         ) : (
           <div className="chat-main-pane relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
             <header
-              className={`chat-titlebar-row ${chatTitlebarRowClass} min-w-0 gap-2 overflow-hidden ${
+              className={`chat-titlebar-row ${chatTitlebarRowClass} min-w-0 gap-2 ${
                 sidebarCollapsed && usesNativeTitlebar
                   ? `${chatTitlebarMacInsetClass} chat-titlebar-row--collapsed-mac`
                   : 'px-6'
@@ -1494,7 +1497,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   }}
                 />
               )}
-              <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              <div className="flex min-w-0 items-center gap-1.5">
                 <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
                   <ModelSelector
                     currentProviderId={activeProviderId}

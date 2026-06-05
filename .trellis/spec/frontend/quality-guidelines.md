@@ -39,6 +39,12 @@ Questions to answer:
 - Always include a `prefers-reduced-motion` fallback when adding a new Chat animation utility.
 - Use small entrance/reveal motions for state continuity; do not change Chat routing, persistence, or streaming data flow to support cosmetic motion.
 
+### Chat Markdown rendering
+
+- Keep Chat message Markdown rendering on the eager Chat load path. `MessageBubble` should statically import `ChatMarkdown` so conversation history and first assistant content render with Markdown immediately.
+- Do not lazy-load `ChatMarkdown` at the individual message boundary just to reduce the Chat chunk size. A plain-text fallback flash is worse for the Chat client than the bundle-size win.
+- Markdown parser optimizations should target memoization, normalized input stability, and avoiding unnecessary historical-message rerenders.
+
 ### Pyodide image/chart execution
 
 - When `run_python` code imports `matplotlib`, force the `Agg` backend before running user code.

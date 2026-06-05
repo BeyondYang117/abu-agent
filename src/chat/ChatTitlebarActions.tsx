@@ -23,11 +23,17 @@ export function ChatTitlebarActions({
       <button
         type="button"
         onClick={onToggleSidebar}
-        className={chatTitlebarPillIconClass}
+        className={`${chatTitlebarPillIconClass} group`}
         title={toggleLabel}
         aria-label={toggleLabel}
       >
-        <ToggleIcon size={15} strokeWidth={1.75} />
+        <ToggleIcon
+          size={15}
+          strokeWidth={1.75}
+          className={`transition-transform duration-300 ease-out will-change-transform group-hover:scale-110 group-active:scale-90 ${
+            sidebarExpanded ? 'group-hover:-translate-x-0.5' : 'group-hover:translate-x-0.5'
+          }`}
+        />
       </button>
       <span
         aria-hidden
@@ -36,11 +42,15 @@ export function ChatTitlebarActions({
       <button
         type="button"
         onClick={onNewConversation}
-        className={chatTitlebarPillIconClass}
+        className={`${chatTitlebarPillIconClass} group`}
         title="新建聊天"
         aria-label="新建聊天"
       >
-        <SquarePen size={15} strokeWidth={1.75} />
+        <SquarePen
+          size={15}
+          strokeWidth={1.75}
+          className="transition-transform duration-300 ease-out will-change-transform group-hover:-rotate-6 group-hover:scale-110 group-active:scale-90"
+        />
       </button>
     </div>
   )
