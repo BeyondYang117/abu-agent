@@ -107,11 +107,13 @@ chat_get_conversations(
 - 事件分离（`chat-stream` vs `lens-stream`）
 - 便于独立扩展功能
 
-**流程**：
+**流程**（当前实现；Agent 层标准化见 [CHAT_AGENT_RUNTIME_PRD.md](./CHAT_AGENT_RUNTIME_PRD.md)）：
 ```
-用户发送 → chat_send_message → call_vision_api → 流式响应
+用户发送 → chat_send_message → complete_assistant_reply
                                       ↓
-                              发送 chat-stream 事件
+                    chat/model (LanguageModelProvider) + 多轮 tool loop
+                                      ↓
+                              chat-stream / chat-tool 事件
                                       ↓
                               前端累积显示
 ```
@@ -208,11 +210,13 @@ chatApi.sendMessage()
   ↓
 chat_send_message (Rust)
   ↓
-call_vision_api()
+complete_assistant_reply
+  ├─ context 估算 / 可选压缩
+  ├─ Agent tool loop（规划：带 tools；合成：无 tools）→ chat/model
+  ├─ mcp/registry 执行工具（native / skill / mcp）
+  └─ 持久化 model_messages + api_messages
   ↓
-流式响应 → 发送 chat-stream 事件
-  ↓
-[Event Stream]
+chat-stream / chat-tool / chat-tool-confirm 事件
   ↓
 前端监听器累积内容
   ↓
@@ -220,6 +224,8 @@ MessageList 实时显示
   ↓
 完成后保存到文件
 ```
+
+> **说明**：Lens 仍使用 `lens_ask` 与 `lens-stream`；Chat 不复用该路径。
 
 ### 对话加载流程
 ```
@@ -347,6 +353,23 @@ chat_get_conversations (Rust)
 
 ---
 
+## Chat 运行时分层（Model + Agent）
+
+| 层 | 目录/模块 | 职责 |
+|----|-----------|------|
+| **Model** | `src-tauri/src/chat/model/` | Provider 协议：`GenerateRequest`、`StreamPart`、`LanguageModelProvider` |
+| **Agent**（规划中） | `src-tauri/src/chat/agent/` | Tool loop、Step、prepare/stop/finish；详见 [CHAT_AGENT_RUNTIME_PRD.md](./CHAT_AGENT_RUNTIME_PRD.md) |
+| **Tools** | `src-tauri/src/mcp/`、`native_tools/` | 工具定义、MCP 协议、内置工具执行 |
+| **Orchestration** | `src-tauri/src/chat/commands.rs` | Tauri 命令、会话 IO、事件 emit |
+
+规范索引：
+
+- Provider 契约：`.trellis/spec/frontend/type-safety.md`（Scenario: Chat Runtime Provider Contract）
+- Agent 契约（草案）：`.trellis/spec/frontend/type-safety.md`（Scenario: Chat Agent Runtime）
+- Provider 标准化任务：`.trellis/tasks/06-04-normalize-chat-runtime-framework/prd.md`
+
+---
+
 ## 测试计划
 
 ### 单元测试
@@ -376,6 +399,6 @@ chat_get_conversations (Rust)
 
 ---
 
-**文档版本**: v1.0  
-**最后更新**: 2026-06-03  
+**文档版本**: v1.1  
+**最后更新**: 2026-06-04  
 **维护者**: abu

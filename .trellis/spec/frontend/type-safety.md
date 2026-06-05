@@ -219,6 +219,59 @@ if !message.model_messages.is_empty() {
 }
 ```
 
+## Scenario: Chat Agent Runtime
+
+> **Product spec**: [docs/CHAT_AGENT_RUNTIME_PRD.md](../../../docs/CHAT_AGENT_RUNTIME_PRD.md) (v1.1). State machine and lifecycle: PRD §6.1. Implement `src-tauri/src/chat/agent/` per that PRD.
+
+### 1. Scope / Trigger
+- Trigger: Changes to multi-step tool loop, `complete_assistant_reply`, `run_agent_loop`, step/stop/prepare/finish, `AgentHost`, or extraction from `commands.rs`.
+- Applies to `chat_send_message` and `chat_regenerate_message` (both use `complete_assistant_reply`). Apple local provider stays a pre-agent shortcut in `commands.rs`.
+
+### 2. Signatures (target, Phase B+)
+- `run_agent_loop(config: AgentRunConfig, host: &dyn AgentHost, executor: &dyn ToolExecutor) -> Result<AgentRunResult, String>`
+- `AgentRunEntry`: `send` | `regenerate`
+- `prepare_agent_step(input: PrepareStepInput) -> PreparedStep`
+- `evaluate_stop_after_model_step` / tool-loop exit per PRD §6.1
+- `on_model_step_finish` then `on_tool_batch_finish` -> `AgentStepResult`
+- `ToolExecutor::call(ctx, tool, arguments, skill_cache) -> Result<McpToolCallResult, String>`
+- `AgentPhase`: `tool_loop` | `synthesis` | `plain`
+- `AgentStreamPolicy`: `planning_no_done_until_no_tools` | `synthesis_always_done` | `synthesis_defer_empty`
+
+### 3. Contracts
+- `chat/agent` must not depend on `chat/commands.rs`; use `AgentHost` for emit, approval, and generation checks.
+- Agent code must call models only via `generate_with_chat_provider` / `stream_with_chat_provider` and `GenerateRequest`; no provider JSON in `agent/`.
+- Tool execution must go through `ToolExecutor` (default: registry adapter), not duplicate MCP/native/skill branches inside `loop_.rs`.
+- **Natural stop**: After `extract_tool_calls` and `pending_tool_calls_from_dsml` are both empty, finalize with that assistant output; do not run `synthesis` for the same user turn.
+- **Step limit**: When tool loop exhausts `max_tool_rounds` without natural stop, inject the existing system message then run `synthesis` without tools.
+- **Plain**: When `active_tools` is empty, skip tool loop and run `synthesis` only (same as today when `tools.is_empty()`).
+- **Cancelled**: Respect `run_generation` / `wait_for_chat_cancel`; emit `chat-stream` done `cancelled` with stable `runId`.
+- Tauri event payloads unchanged; Agent converts `StreamPart` in stream adapter only.
+- Persisted `model_messages` / `api_messages` rules stay identical to Chat MCP + Skill scenario below.
+- `chatTools.parallelToolCallsInStep` (Phase C): default `false`.
+
+### 4. Validation & Error Matrix
+- Tools enabled but provider rejects tools -> existing skill-only then plain fallback; Agent must not panic.
+- Unknown tool name / invalid arguments JSON -> same as today.
+- Provider tools unsupported mid-run -> `ProviderToolsUnsupported`; fall back then synthesis.
+- DSML in streamed content -> parse before natural-stop check; no premature planning `done` when tools pending.
+- Tool loop produced persisted tool results, but final synthesis stream/API returns empty visible text -> Agent must preserve the run by emitting and storing a localized fallback assistant reply with the tool records and hidden transcript; plain no-tool empty responses still fail and may roll back the user message.
+- Regenerate path -> same agent loop semantics as send.
+
+### 5. Good/Base/Bad Cases
+- Good: `commands` implements `AgentHost`, builds `AgentRunConfig`, calls `run_agent_loop`; persistence stays in commands.
+- Good: `prepare_agent_step` centralizes skill filter + assistant preset + capability checks.
+- Good: `SynthesisDeferEmpty` is used only after tool records exist, so a model that executed tools but failed to summarize does not make the whole user turn disappear after reload.
+- Bad: `agent/` imports `commands` or calls `emit_*` without `AgentHost`.
+- Bad: Second synthesis request after natural stop with no tool_calls.
+- Bad: Treating every empty synthesis as recoverable; plain no-tool empty replies are still provider failures.
+
+### 6. Tests Required
+- Rust tests in `src-tauri/src/chat/agent/` (stop, prepare; mocks for `ToolExecutor` / `AgentHost`).
+- Rust stream policy tests must cover `SynthesisDeferEmpty`: empty output validates without emitting `done`, while non-empty output still emits normal `done`.
+- Regression: PRD §10.2 manual smoke (12 items) before merging Phase B.
+- Phase B gate: PRD §12.2 normalize checklist unless documented exception.
+- `cargo test --manifest-path src-tauri/Cargo.toml` after Agent changes.
+
 ## Scenario: Chat MCP + Skill Cross-Layer Contract
 
 ### 1. Scope / Trigger

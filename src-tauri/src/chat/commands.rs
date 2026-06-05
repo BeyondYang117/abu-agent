@@ -2,8 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use base64::{engine::general_purpose, Engine as _};
@@ -13,21 +12,17 @@ use tauri_plugin_shell::ShellExt;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use crate::api::extract_status_code;
 use crate::apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
+use crate::chat::agent::{prepare as agent_prepare, stop as agent_stop};
 use crate::chat::model::{
     generate_request_from_openai_messages, model_messages_from_openai_messages,
-    openai_messages_from_model_messages, pending_tool_calls_from_openai_message,
-    AnthropicMessagesProvider, AppleLocalProvider, GenerateOptions, GenerateOutput,
-    LanguageModelProvider, MessagePart, ModelError, ModelMessage, ModelRole, OpenAiChatProvider,
-    PendingToolCall, StreamPart, StreamSink,
+    openai_messages_from_model_messages, AnthropicMessagesProvider, AppleLocalProvider,
+    GenerateOptions, GenerateOutput, LanguageModelProvider, MessagePart, ModelMessage, ModelRole,
+    OpenAiChatProvider,
 };
 use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{
-    chat_no_think_instruction, default_chat_system_prompt, persist_settings, ProviderApiFormat,
-    Settings,
-};
+use crate::settings::{persist_settings, ProviderApiFormat, Settings};
 use crate::skills;
 use crate::state::AppState;
 
@@ -38,9 +33,8 @@ use super::storage::{
     load_conversation, save_conversation, update_assistant, update_project,
 };
 use super::{
-    Attachment, ChatAssistant, ChatAssistantSnapshot, ChatMessage, ContextUsageSegment,
-    Conversation, ConversationContextState, ConversationContextSummary, ToolCallRecord,
-    ToolCallStatus,
+    Attachment, ChatAssistant, ChatMessage, ContextUsageSegment, Conversation,
+    ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
 };
 
 /// 获取对话列表
@@ -445,6 +439,7 @@ pub(crate) async fn chat_send_message(
         Some(api_content.as_str()),
         &last_user_image_paths,
         forced_skill_id.as_deref(),
+        crate::chat::agent::AgentRunEntry::Send,
     )
     .await
     {
@@ -802,6 +797,7 @@ async fn complete_assistant_reply(
     last_user_api_content: Option<&str>,
     last_user_image_paths: &[PathBuf],
     active_skill_id: Option<&str>,
+    entry: crate::chat::agent::AgentRunEntry,
 ) -> Result<(), String> {
     let settings = state.settings_read().clone();
     let provider = settings
@@ -848,20 +844,23 @@ async fn complete_assistant_reply(
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
-    let tools_capable = chat_tools_capable(&provider, &effective_chat_tools);
+    let tools_capable = agent_prepare::chat_tools_capable(&provider, &effective_chat_tools);
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider.supports_tools).await;
-    apply_assistant_tool_preset(&mut tools, conversation.assistant_snapshot.as_ref());
+    agent_prepare::apply_assistant_tool_preset(
+        &mut tools,
+        conversation.assistant_snapshot.as_ref(),
+    );
     if let Some(skill) = active_skill_record.as_ref() {
-        apply_active_skill_tool_filter(&mut tools, skill);
+        agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
     let tools_available = tools_capable && !tools.is_empty();
-    apply_skill_fallback_when_tools_unavailable(
+    agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
         skill_id.as_deref(),
         tools_available,
     );
-    let available_builtin_tools = available_builtin_tool_names(&tools);
-    let system_prompt = build_chat_system_prompt(
+    let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
+    let system_prompt = agent_prepare::build_chat_system_prompt(
         &language,
         !last_user_image_paths.is_empty(),
         thinking_enabled,
@@ -934,411 +933,69 @@ async fn complete_assistant_reply(
         return Ok(());
     }
 
-    let mut runtime_messages = build_chat_api_messages(
+    let runtime_messages = build_chat_api_messages(
         &system_prompt,
         conversation,
         last_user_idx,
         last_user_api_content,
         last_user_image_paths,
     )?;
-    let mut generated_api_messages = Vec::new();
-    let mut tool_records = Vec::new();
-    let mut planning_reasoning_parts: Vec<String> = Vec::new();
-    let max_rounds = settings.chat_tools.max_tool_rounds.max(1);
-    let mut provider_tools_unsupported = false;
-    let mut tool_planning_finished = false;
-    let mut planning_final_message: Option<Value> = None;
-    let mut planning_final_already_streamed = false;
-
-    if !tools.is_empty() {
-        let mut tried_skill_only_tools = false;
-        let mut skill_cache = skills::SkillRunCache::default();
-        for round in 0..max_rounds {
-            if !state.is_chat_generation_active(&conversation.id, run_generation) {
-                emit_chat_stream_done(
-                    app,
-                    &conversation.id,
-                    &run_id,
-                    &assistant_message_id,
-                    "cancelled",
-                    "",
-                );
-                return Err("cancelled".to_string());
-            }
-            let planning_result = if stream_enabled {
-                match stream_scoped_chat_completion_inner(
-                    app,
-                    state,
-                    &provider,
-                    &conversation.model,
-                    runtime_messages.clone(),
-                    Some(&tools),
-                    retry_attempts,
-                    thinking_enabled,
-                    &conversation.id,
-                    &run_id,
-                    &assistant_message_id,
-                    run_generation,
-                    "Chat tools planning",
-                    ChatStreamFinishPolicy::WhenNoToolCalls,
-                )
-                .await
-                {
-                    Ok(stream) => {
-                        if stream.cancelled {
-                            return Err("cancelled".to_string());
-                        }
-                        Ok(ChatPlanningStep {
-                            message: stream.to_openai_compatible_message(),
-                            streamed: true,
-                        })
-                    }
-                    Err(err) => Err(err),
-                }
-            } else {
-                tokio::select! {
-                    result = call_chat_completion_message(
-                        state,
-                        &provider,
-                        &conversation.model,
-                        runtime_messages.clone(),
-                        Some(&tools),
-                        retry_attempts,
-                        thinking_enabled,
-                        "Chat tools planning",
-                    ) => result.map(|message| ChatPlanningStep {
-                        message,
-                        streamed: false,
-                    }),
-                    _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
-                        emit_chat_stream_done(
-                            app,
-                            &conversation.id,
-                            &run_id,
-                            &assistant_message_id,
-                            "cancelled",
-                            "",
-                        );
-                        return Err("cancelled".to_string());
-                    }
-                }
-            };
-            let message = match planning_result {
-                Ok(step) => {
-                    planning_final_already_streamed = step.streamed;
-                    step.message
-                }
-                Err(err) if is_tools_unsupported_error(&err) => {
-                    let skill_only: Vec<ChatToolDefinition> = tools
-                        .iter()
-                        .filter(|tool| tool.source == "skill")
-                        .cloned()
-                        .collect();
-                    if !tried_skill_only_tools
-                        && skill_only.len() < tools.len()
-                        && !skill_only.is_empty()
-                    {
-                        eprintln!(
-                            "Chat provider {} rejected tools; retrying with skill-native tools only",
-                            provider.id
-                        );
-                        tools = skill_only;
-                        tried_skill_only_tools = true;
-                        continue;
-                    }
-                    eprintln!(
-                        "Chat provider {} rejected tools; falling back to plain chat",
-                        provider.id
-                    );
-                    provider_tools_unsupported = true;
-                    break;
-                }
-                Err(err) => return Err(err),
-            };
-            let tool_calls = extract_tool_calls(&message);
-            if tool_calls.is_empty() {
-                tool_planning_finished = true;
-                planning_final_message = Some(message);
-                break;
-            }
-            planning_final_already_streamed = false;
-            if let Some(reasoning) = extract_reasoning_content(&message) {
-                if !stream_enabled {
-                    emit_chat_stream_delta(
-                        app,
-                        &conversation.id,
-                        &run_id,
-                        &assistant_message_id,
-                        "",
-                        Some(&reasoning),
-                    );
-                }
-                planning_reasoning_parts.push(reasoning);
-            }
-
-            let assistant_message = assistant_api_message_for_tool_calls(&message, &tool_calls);
-            runtime_messages.push(assistant_message);
-            generated_api_messages.push(runtime_messages.last().cloned().unwrap_or(Value::Null));
-            for tool_call in tool_calls {
-                let Some(tool) = match_tool_call(&tools, &tool_call.function_name) else {
-                    let disabled = disabled_builtin_tool_feedback(&tool_call.function_name);
-                    if disabled.is_none() {
-                        let error = format!("Unknown tool requested: {}", tool_call.function_name);
-                        let record = unknown_tool_record(&tool_call, round + 1, error);
-                        emit_chat_tool_record(
-                            app,
-                            &conversation.id,
-                            &run_id,
-                            &assistant_message_id,
-                            &record,
-                        );
-                        tool_records.push(record);
-                    }
-                    let content = disabled.unwrap_or_else(|| {
-                        format!("Unknown tool requested: {}", tool_call.function_name)
-                    });
-                    let tool_message = serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": content,
-                    });
-                    runtime_messages.push(tool_message.clone());
-                    generated_api_messages.push(tool_message);
-                    continue;
-                };
-                let tool_call_id = tool_call.id.clone();
-                if let Some(error) = tool_call.arguments_parse_error.clone() {
-                    let record = invalid_tool_arguments_record(&tool_call, tool, round + 1, error);
-                    emit_chat_tool_record(
-                        app,
-                        &conversation.id,
-                        &run_id,
-                        &assistant_message_id,
-                        &record,
-                    );
-                    let tool_message = serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": "Tool arguments JSON is invalid or incomplete. Retry this tool call with a compact, valid JSON object for arguments.",
-                    });
-                    runtime_messages.push(tool_message.clone());
-                    generated_api_messages.push(tool_message);
-                    tool_records.push(record);
-                    continue;
-                }
-                let (record, tool_content) = execute_chat_tool_call(
-                    app,
-                    state.inner(),
-                    &conversation.id,
-                    &run_id,
-                    &assistant_message_id,
-                    run_generation,
-                    round + 1,
-                    tool,
-                    tool_call,
-                    &mut skill_cache,
-                )
-                .await;
-                let tool_message = serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": tool_content,
-                });
-                runtime_messages.push(tool_message.clone());
-                generated_api_messages.push(tool_message);
-                tool_records.push(record);
-            }
-        }
-        if !provider_tools_unsupported && !tool_planning_finished {
-            runtime_messages.push(serde_json::json!({
-                "role": "system",
-                "content": "已达到本轮工具调用轮次上限。请根据对话中已有的工具返回结果直接回答用户，不要再调用任何工具。"
-            }));
-        }
+    let mut fallback_chat_tools = effective_chat_tools.clone();
+    if skill_id.is_some() && fallback_chat_tools.skill_fallback_mode == "progressive" {
+        fallback_chat_tools.skill_fallback_mode = "skill_md_only".to_string();
     }
+    let provider_tools_fallback_system_prompt = agent_prepare::build_chat_system_prompt(
+        &language,
+        !last_user_image_paths.is_empty(),
+        thinking_enabled,
+        &skill_registry,
+        &fallback_chat_tools,
+        false,
+        &[],
+        skill_id.as_deref(),
+        active_skill_detail.as_ref(),
+        conversation.assistant_snapshot.as_ref(),
+        settings.chat.system_prompt.as_str(),
+    );
 
-    if provider_tools_unsupported {
-        apply_provider_tools_fallback(
-            &mut runtime_messages,
-            &language,
-            !last_user_image_paths.is_empty(),
-            thinking_enabled,
-            &skill_registry,
-            &mut effective_chat_tools,
-            skill_id.as_deref(),
-            active_skill_detail.as_ref(),
-            conversation.assistant_snapshot.as_ref(),
-            settings.chat.system_prompt.as_str(),
-        );
-    }
-
-    if let Some(message) = planning_final_message {
-        let (response, reasoning) =
-            final_response_from_planning_message(&message, &planning_reasoning_parts)?;
-        if !planning_final_already_streamed {
-            emit_chat_stream_delta(
-                app,
-                &conversation.id,
-                &run_id,
-                &assistant_message_id,
-                &response,
-                None,
-            );
-            emit_chat_stream_done(
-                app,
-                &conversation.id,
-                &run_id,
-                &assistant_message_id,
-                "done",
-                &response,
-            );
-        }
-        if !generated_api_messages.is_empty() {
-            generated_api_messages.push(message);
-        }
-        push_assistant_message(
-            app,
-            state,
-            &settings,
-            conversation,
-            assistant_message_id,
-            response,
-            reasoning,
-            tool_records,
-            generated_api_messages,
-            skill_id.as_deref(),
-            title_from_first_user,
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let (response, reasoning) = if stream_enabled {
-        let stream = stream_scoped_chat_completion(
-            app,
-            state,
-            &provider,
-            &conversation.model,
-            runtime_messages,
-            retry_attempts,
-            thinking_enabled,
-            &conversation.id,
-            &run_id,
-            &assistant_message_id,
-            run_generation,
-        )
-        .await?;
-        if stream.cancelled {
-            if !tool_records.is_empty() {
-                let stored_content = if stream.content.trim().is_empty() {
-                    "已停止生成。".to_string()
-                } else {
-                    stream.content.clone()
-                };
-                let final_reasoning_for_api = stream.reasoning.clone();
-                let reasoning = merge_reasoning(&planning_reasoning_parts, stream.reasoning);
-                if !generated_api_messages.is_empty() {
-                    generated_api_messages.push(final_assistant_api_message(
-                        &stored_content,
-                        final_reasoning_for_api.as_deref(),
-                    ));
-                }
-                push_assistant_message(
-                    app,
-                    state,
-                    &settings,
-                    conversation,
-                    assistant_message_id,
-                    stored_content,
-                    reasoning,
-                    tool_records,
-                    generated_api_messages,
-                    skill_id.as_deref(),
-                    title_from_first_user,
-                )
-                .await?;
-            }
-            return Err("cancelled".to_string());
-        }
-        let final_reasoning_for_api = stream.reasoning.clone();
-        let reasoning = merge_reasoning(&planning_reasoning_parts, stream.reasoning);
-        let response = sanitize_assistant_text_response(&stream.content);
-        if response.trim().is_empty() {
-            return Err(empty_assistant_response_error("Chat stream"));
-        }
-        if !generated_api_messages.is_empty() {
-            generated_api_messages.push(final_assistant_api_message(
-                &response,
-                final_reasoning_for_api.as_deref(),
-            ));
-        }
-        (response, reasoning)
-    } else {
-        let message = tokio::select! {
-            result = call_chat_completion_message(
-                state,
-                &provider,
-                &conversation.model,
-                runtime_messages,
-                None,
-                retry_attempts,
-                thinking_enabled,
-                "Chat API",
-            ) => result?,
-            _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
-                emit_chat_stream_done(
-                    app,
-                    &conversation.id,
-                    &run_id,
-                    &assistant_message_id,
-                    "cancelled",
-                    "",
-                );
-                return Err("cancelled".to_string());
-            }
-        };
-        let response = sanitize_assistant_text_response(
-            message
-                .get("content")
-                .and_then(|content| content.as_str())
-                .unwrap_or_default(),
-        );
-        if response.trim().is_empty() {
-            emit_chat_stream_done(
-                app,
-                &conversation.id,
-                &run_id,
-                &assistant_message_id,
-                "error",
-                "",
-            );
-            return Err(empty_assistant_response_error("Chat API"));
-        }
-        let reasoning = merge_reasoning(
-            &planning_reasoning_parts,
-            extract_reasoning_content(&message),
-        );
-        emit_chat_stream_delta(
-            app,
-            &conversation.id,
-            &run_id,
-            &assistant_message_id,
-            &response,
-            None,
-        );
-        emit_chat_stream_done(
-            app,
-            &conversation.id,
-            &run_id,
-            &assistant_message_id,
-            "done",
-            &response,
-        );
-        if !generated_api_messages.is_empty() {
-            generated_api_messages.push(message);
-        }
-        (response, reasoning)
+    let host = ChatAgentHost {
+        app: app.clone(),
+        state: state.inner(),
     };
+    let executor = RegistryToolExecutor {
+        app: app.clone(),
+        state: state.inner(),
+    };
+    let result = crate::chat::agent::run_agent_loop(
+        crate::chat::agent::AgentRunConfig {
+            entry,
+            state: state.inner(),
+            conversation_id: conversation.id.clone(),
+            run_id: run_id.clone(),
+            message_id: assistant_message_id.clone(),
+            generation: run_generation,
+            provider,
+            model: conversation.model.clone(),
+            runtime_messages,
+            tools,
+            settings: settings.clone(),
+            effective_chat_tools,
+            language,
+            has_image: !last_user_image_paths.is_empty(),
+            thinking_enabled,
+            stream_enabled,
+            retry_attempts,
+            skill_registry,
+            active_skill_id: skill_id.clone(),
+            active_skill_detail,
+            assistant_snapshot: conversation.assistant_snapshot.clone(),
+            custom_system_prompt: settings.chat.system_prompt.clone(),
+            provider_tools_fallback_system_prompt,
+        },
+        &host,
+        &executor,
+    )
+    .await?;
 
     push_assistant_message(
         app,
@@ -1346,10 +1003,10 @@ async fn complete_assistant_reply(
         &settings,
         conversation,
         assistant_message_id,
-        response,
-        reasoning,
-        tool_records,
-        generated_api_messages,
+        result.content,
+        result.reasoning,
+        result.tool_records,
+        result.api_messages,
         skill_id.as_deref(),
         title_from_first_user,
     )
@@ -1546,7 +1203,7 @@ async fn generate_title_with_model(
         )
         .await
         .ok()?;
-        assistant_content_from_api_message(&message)
+        agent_stop::assistant_content_from_api_message(&message)
     };
 
     sanitize_generated_title(&raw)
@@ -1604,34 +1261,6 @@ fn sanitize_generated_title(raw: &str) -> Option<String> {
     Some(generate_title(&title))
 }
 
-fn final_assistant_api_message(content: &str, reasoning: Option<&str>) -> Value {
-    let mut message = serde_json::json!({
-        "role": "assistant",
-        "content": content,
-    });
-    if let Some(reasoning) = reasoning.map(str::trim).filter(|value| !value.is_empty()) {
-        message["reasoning_content"] = Value::String(reasoning.to_string());
-    }
-    message
-}
-
-fn assistant_content_from_api_message(message: &Value) -> String {
-    message
-        .get("content")
-        .and_then(|content| content.as_str())
-        .unwrap_or_default()
-        .trim()
-        .to_string()
-}
-
-fn chat_tools_capable(
-    provider: &crate::settings::ModelProvider,
-    chat_tools: &crate::settings::ChatToolsConfig,
-) -> bool {
-    provider.supports_tools
-        && (chat_tools.enabled || crate::settings::chat_native_tools_enabled(chat_tools))
-}
-
 fn resolve_forced_skill_id(
     chat_tools: &crate::settings::ChatToolsConfig,
     registry: &skills::SkillRegistry,
@@ -1652,320 +1281,6 @@ fn resolve_forced_skill_id(
     } else {
         None
     }
-}
-
-fn build_chat_system_prompt(
-    language: &str,
-    has_image: bool,
-    thinking_enabled: bool,
-    registry: &skills::SkillRegistry,
-    chat_tools: &crate::settings::ChatToolsConfig,
-    tools_available: bool,
-    available_builtin_tools: &[String],
-    active_skill_id: Option<&str>,
-    active_skill_detail: Option<&skills::SkillDetail>,
-    assistant_snapshot: Option<&ChatAssistantSnapshot>,
-    custom_system_prompt: &str,
-) -> String {
-    build_chat_system_prompt_with_segments(
-        language,
-        has_image,
-        thinking_enabled,
-        registry,
-        chat_tools,
-        tools_available,
-        available_builtin_tools,
-        active_skill_id,
-        active_skill_detail,
-        assistant_snapshot,
-        custom_system_prompt,
-    )
-    .0
-}
-
-fn build_chat_system_prompt_with_segments(
-    language: &str,
-    has_image: bool,
-    thinking_enabled: bool,
-    registry: &skills::SkillRegistry,
-    chat_tools: &crate::settings::ChatToolsConfig,
-    tools_available: bool,
-    available_builtin_tools: &[String],
-    active_skill_id: Option<&str>,
-    active_skill_detail: Option<&skills::SkillDetail>,
-    assistant_snapshot: Option<&ChatAssistantSnapshot>,
-    custom_system_prompt: &str,
-) -> (String, Vec<ContextUsageSegment>) {
-    let mut prompt = String::new();
-    let mut segments = Vec::new();
-    let base_prompt = if custom_system_prompt.trim().is_empty() {
-        default_chat_system_prompt(language, has_image)
-    } else {
-        custom_system_prompt.trim().to_string()
-    };
-    append_context_segment(
-        &mut prompt,
-        &mut segments,
-        "system_prompt",
-        "System prompt",
-        &base_prompt,
-    );
-    if let Some(assistant) = assistant_snapshot {
-        let assistant_prompt = assistant_prompt_segment(assistant);
-        if !assistant_prompt.trim().is_empty() {
-            append_context_segment(
-                &mut prompt,
-                &mut segments,
-                "assistant",
-                "Assistant",
-                &assistant_prompt,
-            );
-        }
-    }
-    append_context_segment(
-        &mut prompt,
-        &mut segments,
-        "runtime_context",
-        "Runtime context",
-        &crate::settings::chat_current_datetime_context(language),
-    );
-
-    if tools_available {
-        let mut action_examples = vec!["activating a skill", "reading a file", "running a script"];
-        if available_builtin_tools
-            .iter()
-            .any(|tool| matches!(tool.as_str(), "web_search" | "web_fetch"))
-        {
-            action_examples.push("using the web");
-        }
-        let mut runtime = format!(
-            "You have access to tools (functions). When the user's request requires action—such as {}—YOU MUST call the appropriate enabled tool instead of describing what to do. Never say \"I cannot run commands\" or \"you can do it yourself\" when an enabled tool is available for that action. Do not call tools that are not listed as enabled.",
-            action_examples.join(", ")
-        );
-        runtime.push_str(
-            " Only claim that a tool was used, a script was run, a file was read, or the web was searched after Kivio returns an actual tool result in the conversation.",
-        );
-        if language.starts_with("zh") {
-            runtime.push_str(
-                " 若用户只问今天/明天/星期几等可由上文「当前本地时间」直接推算的日期问题，直接回答，不要调用工具。",
-            );
-        } else {
-            runtime.push_str(
-                " If the user only asks for today/tomorrow/weekday derivable from the system local time above, answer directly without calling tools.",
-            );
-        }
-        append_context_segment(
-            &mut prompt,
-            &mut segments,
-            "runtime_context",
-            "Runtime context",
-            &runtime,
-        );
-        if let Some(native_prompt) = native_tools_prompt(available_builtin_tools, language) {
-            append_context_segment(
-                &mut prompt,
-                &mut segments,
-                "native_tools",
-                "Native tools",
-                &native_prompt,
-            );
-        }
-    }
-
-    let include_catalog = chat_tools.skill_auto_match
-        || active_skill_id.is_some()
-        || chat_tools.skill_fallback_mode != "legacy_full_body";
-    if include_catalog {
-        let catalog =
-            skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
-                crate::settings::is_skill_enabled(chat_tools, skill_id)
-            });
-        if !catalog.is_empty() {
-            append_context_segment(&mut prompt, &mut segments, "skills", "Skills", &catalog);
-        }
-    }
-
-    if !chat_tools.skill_auto_match {
-        append_context_segment(
-            &mut prompt,
-            &mut segments,
-            "skills",
-            "Skills",
-            "Only activate skills that are enabled in Settings (listed in the catalog below).",
-        );
-    }
-
-    let fallback = chat_tools.skill_fallback_mode.as_str();
-    if let Some(skill_id) = active_skill_id.filter(|id| !id.trim().is_empty()) {
-        let mut skill_prompt = format!("User pinned skill for this message: {skill_id}");
-        if tools_available {
-            skill_prompt.push_str(
-                ". Call skill_activate with this name only because the user pinned it; otherwise prefer Kivio built-in tools when they fit.",
-            );
-        } else if matches!(fallback, "skill_md_only" | "legacy_full_body") {
-            skill_prompt.push_str(". Follow the Active Skill instructions below.");
-        } else {
-            skill_prompt.push_str(
-                ". Progressive skill loading requires tool support; switch provider or set fallback to SKILL.md only.",
-            );
-        }
-        append_context_segment(
-            &mut prompt,
-            &mut segments,
-            "skills",
-            "Skills",
-            &skill_prompt,
-        );
-    } else if tools_available && chat_tools.skill_auto_match {
-        let builtin_hint = if available_builtin_tools.is_empty() {
-            "Kivio built-in tools".to_string()
-        } else {
-            format!("Kivio 内置工具（{}）", available_builtin_tools.join(", "))
-        };
-        if language.starts_with("zh") {
-            append_context_segment(
-                &mut prompt,
-                &mut segments,
-                "skills",
-                "Skills",
-                &format!("Skill 目录仅供参考：仅当用户明确需要某个 Skill 的能力（或点名 Skill 名称）时才 skill_activate。泛泛请求若已启用 {builtin_hint} 能覆盖，应优先使用对应内置工具；不要只因 Skill 描述里提到 Python/脚本/联网就激活无关 Skill。"),
-            );
-        } else {
-            let builtin_hint = if available_builtin_tools.is_empty() {
-                "Kivio built-in tools".to_string()
-            } else {
-                format!(
-                    "Kivio built-in tools ({})",
-                    available_builtin_tools.join(", ")
-                )
-            };
-            append_context_segment(
-                &mut prompt,
-                &mut segments,
-                "skills",
-                "Skills",
-                &format!("The skill catalog is optional: call skill_activate only when the user clearly needs that skill (or names it). For generic requests covered by enabled {builtin_hint}, prefer the corresponding built-in tool instead of activating an unrelated skill just because its description mentions Python, scripts, or web access."),
-            );
-        }
-    }
-
-    if matches!(fallback, "skill_md_only" | "legacy_full_body") {
-        if let Some(skill) = active_skill_detail {
-            if !skill.body.trim().is_empty() {
-                append_context_segment(
-                    &mut prompt,
-                    &mut segments,
-                    "skills",
-                    "Skills",
-                    &format!("Active Skill:\n{}", skill.body),
-                );
-            }
-        }
-    }
-
-    if !thinking_enabled && !tools_available {
-        append_context_segment(
-            &mut prompt,
-            &mut segments,
-            "runtime_context",
-            "Runtime context",
-            chat_no_think_instruction(language),
-        );
-    }
-    (prompt, merge_context_segments(segments))
-}
-
-fn append_context_segment(
-    prompt: &mut String,
-    segments: &mut Vec<ContextUsageSegment>,
-    id: &str,
-    label: &str,
-    content: &str,
-) {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    if !prompt.is_empty() {
-        prompt.push_str("\n\n");
-    }
-    prompt.push_str(trimmed);
-    segments.push(ContextUsageSegment {
-        id: id.to_string(),
-        label: label.to_string(),
-        estimated_tokens: estimate_tokens(trimmed),
-        color: context_segment_color(id).map(str::to_string),
-    });
-}
-
-fn assistant_prompt_segment(assistant: &ChatAssistantSnapshot) -> String {
-    let mut parts = vec![format!("Active assistant: {}", assistant.name)];
-    if !assistant.description.trim().is_empty() {
-        parts.push(format!(
-            "Assistant purpose: {}",
-            assistant.description.trim()
-        ));
-    }
-    if !assistant.system_prompt.trim().is_empty() {
-        parts.push(format!(
-            "Assistant instructions:\n{}",
-            assistant.system_prompt.trim()
-        ));
-    }
-    if !assistant.greeting.trim().is_empty() {
-        parts.push(format!("Assistant greeting: {}", assistant.greeting.trim()));
-    }
-    if !assistant.conversation_starters.is_empty() {
-        parts.push(format!(
-            "Representative starter prompts: {}",
-            assistant.conversation_starters.join(" | ")
-        ));
-    }
-    parts.join("\n\n")
-}
-
-fn merge_context_segments(segments: Vec<ContextUsageSegment>) -> Vec<ContextUsageSegment> {
-    let mut merged: Vec<ContextUsageSegment> = Vec::new();
-    for segment in segments {
-        if segment.estimated_tokens == 0 {
-            continue;
-        }
-        if let Some(existing) = merged.iter_mut().find(|item| item.id == segment.id) {
-            existing.estimated_tokens += segment.estimated_tokens;
-        } else {
-            merged.push(segment);
-        }
-    }
-    merged
-}
-
-fn context_segment_color(id: &str) -> Option<&'static str> {
-    match id {
-        "system_prompt" => Some("#7A7A7A"),
-        "assistant" => Some("#8A6FBD"),
-        "runtime_context" => Some("#3E8B60"),
-        "tool_definitions" => Some("#7553CF"),
-        "skills" => Some("#BD8A3E"),
-        "mcp" => Some("#B04B8D"),
-        "native_tools" => Some("#4E7FB8"),
-        "summarized_conversation" => Some("#BF3F66"),
-        "conversation" => Some("#D07652"),
-        "attachments" => Some("#6A8FBD"),
-        _ => None,
-    }
-}
-
-fn estimate_tokens(text: &str) -> usize {
-    let mut ascii = 0usize;
-    let mut non_ascii = 0usize;
-    for ch in text.chars() {
-        if ch.is_ascii() {
-            ascii += 1;
-        } else {
-            non_ascii += 1;
-        }
-    }
-    ascii.div_ceil(4) + non_ascii
 }
 
 fn context_window_for_model(model: &str) -> (usize, bool) {
@@ -2049,10 +1364,12 @@ fn mark_summary_stale_if_needed(conversation: &mut Conversation, changed_index: 
 
 fn count_tokens_in_value(value: &Value) -> usize {
     match value {
-        Value::String(text) => estimate_tokens(text),
+        Value::String(text) => agent_prepare::estimate_tokens(text),
         Value::Array(items) => items.iter().map(count_tokens_in_value).sum(),
-        Value::Object(_) => estimate_tokens(&serde_json::to_string(value).unwrap_or_default()),
-        _ => estimate_tokens(&value.to_string()),
+        Value::Object(_) => {
+            agent_prepare::estimate_tokens(&serde_json::to_string(value).unwrap_or_default())
+        }
+        _ => agent_prepare::estimate_tokens(&value.to_string()),
     }
 }
 
@@ -2069,7 +1386,7 @@ fn push_estimated_segment(
         id: id.to_string(),
         label: label.to_string(),
         estimated_tokens: tokens,
-        color: context_segment_color(id).map(str::to_string),
+        color: agent_prepare::context_segment_color(id).map(str::to_string),
     });
 }
 
@@ -2091,7 +1408,7 @@ fn estimate_tool_segments(tools: &[ChatToolDefinition]) -> Vec<ContextUsageSegme
         };
         push_estimated_segment(&mut segments, id, label, count_tokens_in_value(&tool_value));
     }
-    merge_context_segments(segments)
+    agent_prepare::merge_context_segments(segments)
 }
 
 fn estimate_messages_segments(
@@ -2101,7 +1418,7 @@ fn estimate_messages_segments(
 ) -> Vec<ContextUsageSegment> {
     let mut segments = Vec::new();
     let summary_tokens = active_summary(conversation)
-        .map(|summary| estimate_tokens(&summary.content))
+        .map(|summary| agent_prepare::estimate_tokens(&summary.content))
         .unwrap_or_default();
     push_estimated_segment(
         &mut segments,
@@ -2133,7 +1450,7 @@ fn estimate_messages_segments(
         "Attachments",
         last_user_image_paths.len() * IMAGE_ATTACHMENT_TOKEN_ESTIMATE,
     );
-    merge_context_segments(segments)
+    agent_prepare::merge_context_segments(segments)
 }
 
 async fn compute_context_state(
@@ -2174,22 +1491,25 @@ async fn compute_context_state(
         && (settings.chat_tools.enabled
             || crate::settings::chat_native_tools_enabled(&settings.chat_tools));
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider_supports_tools).await;
-    apply_assistant_tool_preset(&mut tools, conversation.assistant_snapshot.as_ref());
+    agent_prepare::apply_assistant_tool_preset(
+        &mut tools,
+        conversation.assistant_snapshot.as_ref(),
+    );
     if let Some(skill) = active_skill_id
         .as_deref()
         .and_then(|id| skill_registry.find(id))
     {
-        apply_active_skill_tool_filter(&mut tools, skill);
+        agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
-    let available_builtin_tools = available_builtin_tool_names(&tools);
+    let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let tools_available = tools_capable && !tools.is_empty();
-    apply_skill_fallback_when_tools_unavailable(
+    agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
         active_skill_id.as_deref(),
         tools_available,
     );
 
-    let (system_prompt, mut segments) = build_chat_system_prompt_with_segments(
+    let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
         &language,
         !last_user_image_paths.is_empty(),
         thinking_enabled,
@@ -2220,7 +1540,7 @@ async fn compute_context_state(
         segments.extend(estimate_tool_segments(&tools));
     }
 
-    let segments = merge_context_segments(segments);
+    let segments = agent_prepare::merge_context_segments(segments);
     let estimated_input_tokens = segments
         .iter()
         .map(|segment| segment.estimated_tokens)
@@ -2339,7 +1659,7 @@ async fn compress_conversation_context(
 
     let source_text = format_messages_for_context_summary(&source_messages);
     let prompt = build_context_compression_prompt(&source_text);
-    let token_estimate_before = estimate_tokens(&source_text);
+    let token_estimate_before = agent_prepare::estimate_tokens(&source_text);
     let retry_attempts = if settings.retry_enabled {
         settings.retry_attempts as usize
     } else {
@@ -2369,7 +1689,7 @@ async fn compress_conversation_context(
             "Chat context compression",
         )
         .await?;
-        assistant_content_from_api_message(&message)
+        agent_stop::assistant_content_from_api_message(&message)
     };
     let summary_content = sanitize_context_summary(&raw_summary);
     if summary_content.trim().is_empty() {
@@ -2391,7 +1711,7 @@ async fn compress_conversation_context(
         source_message_ids,
         source_until_message_id,
         token_estimate_before,
-        token_estimate_after: estimate_tokens(&summary_content),
+        token_estimate_after: agent_prepare::estimate_tokens(&summary_content),
         created_at,
         provider_id,
         model,
@@ -2520,32 +1840,6 @@ fn context_status(
     }
 }
 
-fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommended: &str) -> bool {
-    let recommended = recommended.trim();
-    if recommended.is_empty() {
-        return false;
-    }
-    tool.name == recommended
-        || tool.id == recommended
-        || tool.openai_tool_name() == recommended
-        || tool
-            .server_id
-            .as_deref()
-            .map(|server_id| format!("{server_id}:{}", tool.name) == recommended)
-            .unwrap_or(false)
-}
-
-fn is_native_skill_tool_name(name: &str) -> bool {
-    matches!(
-        name,
-        "skill_activate" | "skill_read_file" | "skill_run_script"
-    )
-}
-
-fn is_kivio_builtin_tool(tool: &ChatToolDefinition) -> bool {
-    tool.source == "native" && !is_native_skill_tool_name(&tool.name)
-}
-
 async fn list_tools_for_chat(
     state: &AppState,
     settings: &Settings,
@@ -2560,168 +1854,6 @@ async fn list_tools_for_chat(
     mcp::registry::list_enabled_tool_defs(state)
         .await
         .unwrap_or_default()
-}
-
-fn apply_active_skill_tool_filter(
-    tools: &mut Vec<ChatToolDefinition>,
-    skill: &skills::SkillRecord,
-) {
-    if skill.allowed_tools.is_empty() {
-        return;
-    }
-    tools.retain(|tool| {
-        tool.source == "skill"
-            || is_native_skill_tool_name(&tool.name)
-            || is_kivio_builtin_tool(tool)
-            || skill
-                .allowed_tools
-                .iter()
-                .any(|recommended| tool_matches_recommended_name(tool, recommended))
-    });
-}
-
-fn apply_assistant_tool_preset(
-    tools: &mut Vec<ChatToolDefinition>,
-    assistant_snapshot: Option<&ChatAssistantSnapshot>,
-) {
-    let preset = assistant_snapshot
-        .map(|assistant| assistant.tool_preset.trim())
-        .filter(|preset| !preset.is_empty())
-        .unwrap_or("inherit");
-    match preset {
-        "none" => tools.clear(),
-        "skills" => tools.retain(|tool| tool.source == "skill"),
-        "inherit" | "all" => {}
-        _ => {}
-    }
-}
-
-fn apply_skill_fallback_when_tools_unavailable(
-    chat_tools: &mut crate::settings::ChatToolsConfig,
-    active_skill_id: Option<&str>,
-    tools_available: bool,
-) {
-    if !tools_available
-        && active_skill_id
-            .map(|id| !id.trim().is_empty())
-            .unwrap_or(false)
-        && chat_tools.skill_fallback_mode == "progressive"
-    {
-        chat_tools.skill_fallback_mode = "skill_md_only".to_string();
-    }
-}
-
-fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String> {
-    let mut names = tools
-        .iter()
-        .filter(|tool| is_kivio_builtin_tool(tool))
-        .map(|tool| tool.name.clone())
-        .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    names
-}
-
-fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
-    const BUILTIN_NAMES: &[&str] = &[
-        "web_search",
-        "web_fetch",
-        "read_file",
-        "write_file",
-        "edit_file",
-        "run_command",
-        "run_python",
-    ];
-    if BUILTIN_NAMES.contains(&function_name) {
-        Some(format!(
-            "Kivio tool `{function_name}` is not enabled for this chat. Do not call it again; answer using the available context and enabled tools only."
-        ))
-    } else {
-        None
-    }
-}
-
-/// Kivio 内置工具始终自动执行，不走审批弹窗。
-fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
-    (tool.source == "skill" && is_native_skill_tool_name(&tool.name)) || tool.source == "native"
-}
-
-fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Option<String> {
-    if available_builtin_tools.is_empty() {
-        return None;
-    }
-    let list = available_builtin_tools.join(", ");
-    let has_web_search = available_builtin_tools
-        .iter()
-        .any(|tool| tool.as_str() == "web_search");
-    let has_web_fetch = available_builtin_tools
-        .iter()
-        .any(|tool| tool.as_str() == "web_fetch");
-    let zh_live_access_hint = match (has_web_search, has_web_fetch) {
-        (true, true) => "实时搜索或网页读取必须优先用 web_search/web_fetch 或对应 Skill 脚本。",
-        (true, false) => "实时搜索必须优先用 web_search 或对应 Skill 脚本。",
-        (false, true) => "网页读取必须优先用 web_fetch 或对应 Skill 脚本。",
-        (false, false) => "需要联网/API 访问时，请启用对应联网工具或使用对应 Skill 脚本。",
-    };
-    let en_live_access_hint = match (has_web_search, has_web_fetch) {
-        (true, true) => {
-            "Use web_search/web_fetch or the relevant Skill script for live web/API access."
-        }
-        (true, false) => "Use web_search or the relevant Skill script for live web/API access.",
-        (false, true) => "Use web_fetch or the relevant Skill script for web page access.",
-        (false, false) => {
-            "Enable the relevant web tool or use the relevant Skill script for live web/API access."
-        }
-    };
-    let prompt = if language.starts_with("zh") {
-        format!(
-            "Kivio 内置工具（已启用）：{list}。只允许调用这里列出的内置工具。文件路径须在用户主目录内；可选工作区根目录进一步收紧。write_file、edit_file、run_command 会请求用户确认；run_command 非零退出码代表执行失败，不要用它运行 Skill 自带脚本，Skill 脚本必须走 skill_run_script。run_command 不得用 pip/pip3/python -m pip 安装包来绕过 run_python 沙盒失败；只有用户明确要求修改本机 Python 环境时，才能设置 allow_host_python_package_install=true 且使用 --user 或虚拟环境。run_python 在 Pyodide 沙盒中运行，无本机文件系统和联网能力；导入 numpy、matplotlib、pandas、scipy、sympy、scikit-learn、statsmodels、pillow、seaborn、micropip 等常用包时会自动加载，适合数据运算、统计分析、机器学习基础分析和生成图表；用 run_python 生成图像/图表时，保存为 Pyodide 当前目录下的相对文件名（例如 output.png），不要保存到 /Users 等本机路径，不要 print base64 或 data:image URL；Kivio 会自动捕获并渲染生成的图片。不要在 run_python 里使用 tavily、requests、httpx、urllib3、aiohttp 等联网/API 客户端，{zh_live_access_hint}不要为了这些 Python 包使用 host pip 安装，除非用户明确要求操作本机环境。用户要用 Python 跑代码/计算时优先 run_python，不要用 skill_run_script，除非用户点名某个 Skill。"
-        )
-    } else {
-        format!(
-            "Kivio built-in tools enabled: {list}. Only call built-in tools listed here. Paths must stay under the user home directory (optional workspace roots further restrict). write_file, edit_file, and run_command require user approval; run_command treats non-zero exit codes as failures. Do not use run_command to run Skill bundled scripts; use skill_run_script. Do not use pip/pip3/python -m pip through run_command to bypass run_python sandbox failures; only set allow_host_python_package_install=true when the user explicitly asks to modify the host Python environment, and then use --user or a virtual environment. run_python runs in a Pyodide sandbox with no host filesystem or network access and auto-loads common packages when imported, including numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip; use it for data computation, statistical analysis, basic machine-learning analysis, code execution, and charts. When generating images/charts with run_python, save them to relative filenames in the Pyodide current directory such as output.png; do not save to host paths such as /Users, and do not print base64 or data:image URLs. Kivio captures and renders generated images automatically. Do not use network/API clients such as tavily, requests, httpx, urllib3, or aiohttp in run_python; {en_live_access_hint} Do not use host pip to install these Python packages unless the user explicitly asks to modify the host environment. For generic Python requests, use run_python—not skill_run_script—unless the user named a specific skill."
-        )
-    };
-    Some(prompt)
-}
-
-fn apply_provider_tools_fallback(
-    runtime_messages: &mut [Value],
-    language: &str,
-    has_image: bool,
-    thinking_enabled: bool,
-    registry: &skills::SkillRegistry,
-    chat_tools: &mut crate::settings::ChatToolsConfig,
-    active_skill_id: Option<&str>,
-    active_skill_detail: Option<&skills::SkillDetail>,
-    assistant_snapshot: Option<&ChatAssistantSnapshot>,
-    custom_system_prompt: &str,
-) {
-    if active_skill_id.is_some() && chat_tools.skill_fallback_mode == "progressive" {
-        chat_tools.skill_fallback_mode = "skill_md_only".to_string();
-    }
-    let fallback_prompt = build_chat_system_prompt(
-        language,
-        has_image,
-        thinking_enabled,
-        registry,
-        chat_tools,
-        false,
-        &[],
-        active_skill_id,
-        active_skill_detail,
-        assistant_snapshot,
-        custom_system_prompt,
-    );
-    patch_system_message(runtime_messages, &fallback_prompt);
-}
-
-fn patch_system_message(messages: &mut [Value], prompt: &str) {
-    if let Some(first) = messages.first_mut() {
-        if first.get("role").and_then(|role| role.as_str()) == Some("system") {
-            first["content"] = Value::String(prompt.to_string());
-        }
-    }
 }
 
 fn build_chat_api_messages(
@@ -2835,6 +1967,106 @@ fn build_apple_chat_prompt(
     parts.join("\n\n")
 }
 
+struct ChatAgentHost<'a> {
+    app: AppHandle,
+    state: &'a AppState,
+}
+
+impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
+    fn emit_stream_delta(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        message_id: &str,
+        delta: &str,
+        reasoning_delta: Option<&str>,
+    ) {
+        emit_chat_stream_delta(
+            &self.app,
+            conversation_id,
+            run_id,
+            message_id,
+            delta,
+            reasoning_delta,
+        );
+    }
+
+    fn emit_stream_done(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        message_id: &str,
+        reason: &str,
+        full: &str,
+    ) {
+        emit_chat_stream_done(&self.app, conversation_id, run_id, message_id, reason, full);
+    }
+
+    fn emit_tool_record(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        message_id: &str,
+        record: &ToolCallRecord,
+    ) {
+        emit_chat_tool_record(&self.app, conversation_id, run_id, message_id, record);
+    }
+
+    fn request_tool_approval<'a>(
+        &'a self,
+        ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
+        record: &'a ToolCallRecord,
+    ) -> crate::chat::agent::AgentHostFuture<'a, bool> {
+        Box::pin(async move {
+            request_tool_approval(
+                &self.app,
+                self.state,
+                ctx.conversation_id,
+                ctx.run_id,
+                ctx.message_id,
+                ctx.generation,
+                record,
+            )
+            .await
+        })
+    }
+
+    fn is_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
+        self.state
+            .is_chat_generation_active(conversation_id, generation)
+    }
+
+    fn wait_for_generation_inactive<'a>(
+        &'a self,
+        conversation_id: &'a str,
+        generation: u64,
+    ) -> crate::chat::agent::AgentHostFuture<'a, ()> {
+        Box::pin(async move {
+            wait_for_chat_cancel(self.state, conversation_id, generation).await;
+        })
+    }
+}
+
+struct RegistryToolExecutor<'a> {
+    app: AppHandle,
+    state: &'a AppState,
+}
+
+impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
+    fn call<'a>(
+        &'a self,
+        _ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
+        tool: &'a ChatToolDefinition,
+        arguments: Value,
+        skill_cache: &'a mut skills::SkillRunCache,
+    ) -> crate::chat::agent::ToolExecutorFuture<'a> {
+        Box::pin(async move {
+            mcp::registry::call_tool(&self.app, self.state, tool, arguments, Some(skill_cache))
+                .await
+        })
+    }
+}
+
 async fn call_chat_completion_message(
     state: &State<'_, AppState>,
     provider: &crate::settings::ModelProvider,
@@ -2858,154 +2090,6 @@ async fn call_chat_completion_message(
     let output =
         generate_with_chat_provider(state.inner(), provider, retry_attempts, request).await?;
     Ok(output.to_openai_compatible_message())
-}
-
-struct ChatPlanningStep {
-    message: Value,
-    streamed: bool,
-}
-
-#[derive(Clone, Copy)]
-enum ChatStreamFinishPolicy {
-    Always,
-    WhenNoToolCalls,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn stream_scoped_chat_completion(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    provider: &crate::settings::ModelProvider,
-    model: &str,
-    messages: Vec<Value>,
-    retry_attempts: usize,
-    thinking_enabled: bool,
-    conversation_id: &str,
-    run_id: &str,
-    message_id: &str,
-    generation: u64,
-) -> Result<ChatStreamOutput, String> {
-    stream_scoped_chat_completion_inner(
-        app,
-        state,
-        provider,
-        model,
-        messages,
-        None,
-        retry_attempts,
-        thinking_enabled,
-        conversation_id,
-        run_id,
-        message_id,
-        generation,
-        "Chat stream",
-        ChatStreamFinishPolicy::Always,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn stream_scoped_chat_completion_inner(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    provider: &crate::settings::ModelProvider,
-    model: &str,
-    messages: Vec<Value>,
-    tools: Option<&[ChatToolDefinition]>,
-    retry_attempts: usize,
-    thinking_enabled: bool,
-    conversation_id: &str,
-    run_id: &str,
-    message_id: &str,
-    generation: u64,
-    label: &str,
-    finish_policy: ChatStreamFinishPolicy,
-) -> Result<ChatStreamOutput, String> {
-    let request = generate_request_from_openai_messages(
-        model,
-        messages,
-        tools,
-        GenerateOptions {
-            stream: true,
-            thinking_enabled,
-            ..GenerateOptions::default()
-        },
-        label,
-    );
-    let accumulator = Arc::new(Mutex::new(ChatStreamAccumulator::default()));
-    let mut sink = ChatTauriStreamSink::new(
-        app.clone(),
-        conversation_id,
-        run_id,
-        message_id,
-        accumulator.clone(),
-        matches!(finish_policy, ChatStreamFinishPolicy::WhenNoToolCalls),
-    );
-    let output = tokio::select! {
-        result = stream_with_chat_provider(
-            state.inner(),
-            provider,
-            retry_attempts,
-            request,
-            &mut sink,
-        ) => result?,
-        _ = wait_for_chat_cancel(state.inner(), conversation_id, generation) => {
-            let snapshot = chat_stream_snapshot(&accumulator);
-            emit_chat_stream_done(
-                app,
-                conversation_id,
-                run_id,
-                message_id,
-                "cancelled",
-                snapshot.content.trim(),
-            );
-            return Ok(ChatStreamOutput::new(
-                snapshot.content.trim().to_string(),
-                snapshot.reasoning.trim().to_string(),
-                true,
-            ));
-        }
-    };
-    let snapshot = chat_stream_snapshot(&accumulator);
-    let raw_content = if output.text.trim().is_empty() {
-        snapshot.content
-    } else {
-        output.text
-    };
-    let cleaned = sanitize_assistant_text_response(raw_content.trim());
-    let reasoning = output.reasoning.unwrap_or(snapshot.reasoning);
-    let stream_output = ChatStreamOutput::from_generate_output(
-        cleaned,
-        raw_content,
-        reasoning,
-        output.tool_calls,
-        output.finish_reason,
-        false,
-    );
-    let tool_calls_from_stream = !stream_output.tool_calls.is_empty()
-        || !pending_tool_calls_from_dsml(&stream_output.raw_content).is_empty();
-    let should_emit_done = match finish_policy {
-        ChatStreamFinishPolicy::Always => true,
-        ChatStreamFinishPolicy::WhenNoToolCalls => !tool_calls_from_stream,
-    };
-    if stream_output.content.trim().is_empty()
-        && (matches!(finish_policy, ChatStreamFinishPolicy::Always) || !tool_calls_from_stream)
-    {
-        emit_chat_stream_done(app, conversation_id, run_id, message_id, "error", "");
-        return Err(empty_assistant_response_error(label));
-    }
-    if should_emit_done {
-        sink.flush_pending_text();
-        emit_chat_stream_done(
-            app,
-            conversation_id,
-            run_id,
-            message_id,
-            "done",
-            &stream_output.content,
-        );
-    }
-    Ok(stream_output)
 }
 
 async fn generate_with_chat_provider(
@@ -3032,355 +2116,6 @@ async fn generate_with_chat_provider(
         }
     }
     .map_err(|err| err.to_string())
-}
-
-async fn stream_with_chat_provider(
-    state: &AppState,
-    provider: &crate::settings::ModelProvider,
-    retry_attempts: usize,
-    request: crate::chat::model::GenerateRequest,
-    sink: &mut (dyn StreamSink + Send),
-) -> Result<GenerateOutput, String> {
-    match provider.api_format_kind() {
-        ProviderApiFormat::OpenAiChat => {
-            OpenAiChatProvider::new(state, provider, retry_attempts)
-                .stream(request, sink)
-                .await
-        }
-        ProviderApiFormat::AnthropicMessages => {
-            AnthropicMessagesProvider::new(state, provider, retry_attempts)
-                .stream(request, sink)
-                .await
-        }
-        ProviderApiFormat::AppleLocal => {
-            AppleLocalProvider::new(state.apple_intelligence.clone())
-                .stream(request, sink)
-                .await
-        }
-    }
-    .map_err(|err| err.to_string())
-}
-
-#[derive(Default)]
-struct ChatStreamAccumulator {
-    content: String,
-    reasoning: String,
-}
-
-struct ChatStreamSnapshot {
-    content: String,
-    reasoning: String,
-}
-
-fn chat_stream_snapshot(accumulator: &Arc<Mutex<ChatStreamAccumulator>>) -> ChatStreamSnapshot {
-    let guard = accumulator.lock().unwrap_or_else(|err| err.into_inner());
-    ChatStreamSnapshot {
-        content: guard.content.clone(),
-        reasoning: guard.reasoning.clone(),
-    }
-}
-
-struct ChatTauriStreamSink {
-    app: AppHandle,
-    conversation_id: String,
-    run_id: String,
-    message_id: String,
-    accumulator: Arc<Mutex<ChatStreamAccumulator>>,
-    buffer_tool_planning_text: bool,
-    text_buffer: String,
-    text_suppressed: bool,
-}
-
-impl ChatTauriStreamSink {
-    fn new(
-        app: AppHandle,
-        conversation_id: &str,
-        run_id: &str,
-        message_id: &str,
-        accumulator: Arc<Mutex<ChatStreamAccumulator>>,
-        buffer_tool_planning_text: bool,
-    ) -> Self {
-        Self {
-            app,
-            conversation_id: conversation_id.to_string(),
-            run_id: run_id.to_string(),
-            message_id: message_id.to_string(),
-            accumulator,
-            buffer_tool_planning_text,
-            text_buffer: String::new(),
-            text_suppressed: false,
-        }
-    }
-
-    fn emit_text_delta(&self, delta: &str) {
-        emit_chat_stream_delta(
-            &self.app,
-            &self.conversation_id,
-            &self.run_id,
-            &self.message_id,
-            delta,
-            None,
-        );
-    }
-
-    fn handle_text_delta(&mut self, delta: String) {
-        self.accumulator
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .content
-            .push_str(&delta);
-
-        if self.text_suppressed {
-            return;
-        }
-        if !self.buffer_tool_planning_text {
-            self.emit_text_delta(&delta);
-            return;
-        }
-
-        self.text_buffer.push_str(&delta);
-        if crate::chat::dsml_tools::contains_dsml_tool_markup(&self.text_buffer) {
-            self.text_buffer.clear();
-            self.text_suppressed = true;
-            return;
-        }
-        if should_flush_tool_planning_text_buffer(&self.text_buffer) {
-            self.flush_pending_text();
-        }
-    }
-
-    fn flush_pending_text(&mut self) {
-        if self.text_suppressed || self.text_buffer.is_empty() {
-            return;
-        }
-        let delta = std::mem::take(&mut self.text_buffer);
-        self.emit_text_delta(&delta);
-    }
-}
-
-impl StreamSink for ChatTauriStreamSink {
-    fn emit(&mut self, part: StreamPart) -> Result<(), ModelError> {
-        match part {
-            StreamPart::TextDelta { delta } => {
-                self.handle_text_delta(delta);
-            }
-            StreamPart::ReasoningDelta { delta } => {
-                self.accumulator
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .reasoning
-                    .push_str(&delta);
-                emit_chat_stream_delta(
-                    &self.app,
-                    &self.conversation_id,
-                    &self.run_id,
-                    &self.message_id,
-                    "",
-                    Some(&delta),
-                );
-            }
-            StreamPart::Error { message } => return Err(ModelError::new(message)),
-            StreamPart::Finish { .. }
-            | StreamPart::ToolCallStart { .. }
-            | StreamPart::ToolCallDelta { .. }
-            | StreamPart::ToolCallDone { .. }
-            | StreamPart::ToolResult { .. } => {}
-        }
-        Ok(())
-    }
-}
-
-fn should_flush_tool_planning_text_buffer(buffer: &str) -> bool {
-    let trimmed = buffer.trim_start();
-    if trimmed.starts_with('<') && trimmed.len() < 64 {
-        return false;
-    }
-    buffer.chars().count() >= 12 || buffer.contains('\n')
-}
-
-struct ChatStreamOutput {
-    content: String,
-    raw_content: String,
-    reasoning: Option<String>,
-    tool_calls: Vec<PendingToolCall>,
-    finish_reason: Option<String>,
-    cancelled: bool,
-}
-
-impl ChatStreamOutput {
-    fn new(content: String, reasoning: String, cancelled: bool) -> Self {
-        Self::from_generate_output(
-            content.clone(),
-            content,
-            reasoning,
-            Vec::new(),
-            None,
-            cancelled,
-        )
-    }
-
-    fn from_generate_output(
-        content: String,
-        raw_content: String,
-        reasoning: String,
-        tool_calls: Vec<PendingToolCall>,
-        finish_reason: Option<String>,
-        cancelled: bool,
-    ) -> Self {
-        Self {
-            content,
-            raw_content,
-            reasoning: if reasoning.trim().is_empty() {
-                None
-            } else {
-                Some(reasoning)
-            },
-            tool_calls,
-            finish_reason,
-            cancelled,
-        }
-    }
-
-    fn to_openai_compatible_message(&self) -> Value {
-        let content = if self.raw_content.trim().is_empty() {
-            self.content.clone()
-        } else {
-            self.raw_content.clone()
-        };
-        let mut message = final_assistant_api_message(&content, self.reasoning.as_deref());
-        if !self.tool_calls.is_empty() {
-            message["tool_calls"] = Value::Array(
-                self.tool_calls
-                    .iter()
-                    .map(|call| {
-                        serde_json::json!({
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.function_name,
-                                "arguments": call.arguments_raw,
-                            }
-                        })
-                    })
-                    .collect(),
-            );
-        }
-        if let Some(finish_reason) = self
-            .finish_reason
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            message["finish_reason"] = Value::String(finish_reason.to_string());
-        }
-        message
-    }
-}
-
-fn extract_reasoning_content(message: &Value) -> Option<String> {
-    message
-        .get("reasoning_content")
-        .or_else(|| message.get("reasoning"))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn merge_reasoning(planning_parts: &[String], final_reasoning: Option<String>) -> Option<String> {
-    let mut parts = planning_parts
-        .iter()
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if let Some(reasoning) = final_reasoning
-        .as_deref()
-        .map(str::trim)
-        .filter(|reasoning| !reasoning.is_empty())
-    {
-        parts.push(reasoning.to_string());
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n"))
-    }
-}
-
-fn final_response_from_planning_message(
-    message: &Value,
-    planning_reasoning_parts: &[String],
-) -> Result<(String, Option<String>), String> {
-    let response = sanitize_assistant_text_response(&assistant_content_from_api_message(message));
-    if response.trim().is_empty() {
-        return Err(empty_assistant_response_error("Chat tools planning"));
-    }
-    let reasoning = merge_reasoning(planning_reasoning_parts, extract_reasoning_content(message));
-    Ok((response, reasoning))
-}
-
-fn extract_tool_calls(message: &Value) -> Vec<PendingToolCall> {
-    let from_api = extract_openai_tool_calls(message);
-    if !from_api.is_empty() {
-        return from_api;
-    }
-    let content = assistant_content_from_api_message(message);
-    pending_tool_calls_from_dsml(&content)
-}
-
-fn extract_openai_tool_calls(message: &Value) -> Vec<PendingToolCall> {
-    pending_tool_calls_from_openai_message(message)
-}
-
-fn pending_tool_calls_from_dsml(content: &str) -> Vec<PendingToolCall> {
-    crate::chat::dsml_tools::extract_dsml_tool_calls(content)
-        .into_iter()
-        .map(|call| {
-            let arguments = Value::Object(call.arguments);
-            let arguments_raw =
-                serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_string());
-            PendingToolCall {
-                id: format!("tool_{}", Uuid::new_v4()),
-                function_name: call.name,
-                arguments,
-                arguments_raw,
-                arguments_parse_error: None,
-            }
-        })
-        .collect()
-}
-
-fn assistant_api_message_for_tool_calls(message: &Value, tool_calls: &[PendingToolCall]) -> Value {
-    if message
-        .get("tool_calls")
-        .and_then(|value| value.as_array())
-        .is_some_and(|calls| !calls.is_empty())
-    {
-        return message.clone();
-    }
-    serde_json::json!({
-        "role": "assistant",
-        "content": Value::Null,
-        "tool_calls": tool_calls.iter().map(|call| {
-            serde_json::json!({
-                "id": call.id,
-                "type": "function",
-                "function": {
-                    "name": call.function_name,
-                    "arguments": call.arguments_raw,
-                }
-            })
-        }).collect::<Vec<_>>(),
-    })
-}
-
-fn sanitize_assistant_text_response(content: &str) -> String {
-    let stripped = crate::chat::dsml_tools::strip_dsml_tool_markup(content);
-    if stripped.is_empty() && crate::chat::dsml_tools::contains_dsml_tool_markup(content) {
-        return String::new();
-    }
-    stripped
 }
 
 fn sanitize_api_message_for_model(message: &Value) -> Value {
@@ -3466,315 +2201,6 @@ fn looks_like_inline_image_base64(value: &str) -> bool {
         || value.starts_with("UklGR")
         || value.starts_with("PHN2Zy")
         || value.starts_with("PD94bWwg")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChatStreamTextMode {
-    Delta,
-    Snapshot,
-}
-
-fn extract_chat_stream_text(value: &Value) -> Option<(&str, ChatStreamTextMode)> {
-    let choice = value.get("choices").and_then(|choices| choices.get(0))?;
-
-    if let Some(content) = choice
-        .get("delta")
-        .and_then(|delta| delta.get("content"))
-        .and_then(|content| content.as_str())
-        .filter(|content| !content.is_empty())
-    {
-        return Some((content, ChatStreamTextMode::Delta));
-    }
-
-    if let Some(content) = choice
-        .get("text")
-        .and_then(|content| content.as_str())
-        .filter(|content| !content.is_empty())
-    {
-        return Some((content, ChatStreamTextMode::Delta));
-    }
-
-    choice
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .filter(|content| !content.is_empty())
-        .map(|content| (content, ChatStreamTextMode::Snapshot))
-}
-
-fn extract_chat_stream_reasoning(value: &Value) -> Option<(&str, ChatStreamTextMode)> {
-    let choice = value.get("choices").and_then(|choices| choices.get(0))?;
-
-    if let Some(reasoning) = choice
-        .get("delta")
-        .and_then(|delta| {
-            delta
-                .get("reasoning_content")
-                .or_else(|| delta.get("reasoning"))
-        })
-        .and_then(|content| content.as_str())
-        .filter(|content| !content.is_empty())
-    {
-        return Some((reasoning, ChatStreamTextMode::Delta));
-    }
-
-    choice
-        .get("message")
-        .and_then(|message| {
-            message
-                .get("reasoning_content")
-                .or_else(|| message.get("reasoning"))
-        })
-        .and_then(|content| content.as_str())
-        .filter(|content| !content.is_empty())
-        .map(|content| (content, ChatStreamTextMode::Snapshot))
-}
-
-fn append_chat_stream_text(
-    full: &mut String,
-    text: &str,
-    mode: ChatStreamTextMode,
-) -> Option<String> {
-    if text.is_empty() {
-        return None;
-    }
-
-    match mode {
-        ChatStreamTextMode::Delta => {
-            full.push_str(text);
-            Some(text.to_string())
-        }
-        ChatStreamTextMode::Snapshot => {
-            if text == full || full.starts_with(text) {
-                return None;
-            }
-            if text.starts_with(full.as_str()) {
-                let delta = text[full.len()..].to_string();
-                full.clear();
-                full.push_str(text);
-                return if delta.is_empty() { None } else { Some(delta) };
-            }
-
-            full.push_str(text);
-            Some(text.to_string())
-        }
-    }
-}
-
-fn empty_assistant_response_error(scope: &str) -> String {
-    format!("{scope} returned an empty assistant response")
-}
-
-fn match_tool_call<'a>(
-    tools: &'a [ChatToolDefinition],
-    function_name: &str,
-) -> Option<&'a ChatToolDefinition> {
-    tools
-        .iter()
-        .find(|tool| tool.openai_tool_name() == function_name || tool.name == function_name)
-}
-
-fn is_tools_unsupported_error(err: &str) -> bool {
-    let Some(code) = extract_status_code(err) else {
-        return false;
-    };
-    if !matches!(code, 400 | 404 | 422 | 501) {
-        return false;
-    }
-    let lower = err.to_ascii_lowercase();
-    lower.contains("tools")
-        || lower.contains("tool_choice")
-        || lower.contains("tool_calls")
-        || lower.contains("function calling")
-        || lower.contains("function_call")
-        || lower.contains("function call")
-        || lower.contains("not support")
-        || (code == 400 && lower.contains("tool"))
-}
-
-fn unknown_tool_record(call: &PendingToolCall, round: u8, error: String) -> ToolCallRecord {
-    let now = chrono::Local::now().timestamp();
-    ToolCallRecord {
-        id: call.id.clone(),
-        name: call.function_name.clone(),
-        source: "unknown".to_string(),
-        server_id: None,
-        arguments: call.arguments_raw.clone(),
-        status: ToolCallStatus::Error,
-        result_preview: None,
-        error: Some(error),
-        duration_ms: Some(0),
-        started_at: Some(now),
-        completed_at: Some(now),
-        round,
-        sensitive: false,
-        artifacts: Vec::new(),
-    }
-}
-
-fn invalid_tool_arguments_record(
-    call: &PendingToolCall,
-    tool: &ChatToolDefinition,
-    round: u8,
-    error: String,
-) -> ToolCallRecord {
-    let now = chrono::Local::now().timestamp();
-    ToolCallRecord {
-        id: call.id.clone(),
-        name: tool.name.clone(),
-        source: tool.source.clone(),
-        server_id: tool.server_id.clone(),
-        arguments: call.arguments_raw.clone(),
-        status: ToolCallStatus::Error,
-        result_preview: None,
-        error: Some(error),
-        duration_ms: Some(0),
-        started_at: Some(now),
-        completed_at: Some(now),
-        round,
-        sensitive: false,
-        artifacts: Vec::new(),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn execute_chat_tool_call(
-    app: &AppHandle,
-    state: &AppState,
-    conversation_id: &str,
-    run_id: &str,
-    message_id: &str,
-    generation: u64,
-    round: u8,
-    tool: &ChatToolDefinition,
-    call: PendingToolCall,
-    skill_cache: &mut skills::SkillRunCache,
-) -> (ToolCallRecord, String) {
-    let now = chrono::Local::now().timestamp();
-    let mut record = ToolCallRecord {
-        id: call.id.clone(),
-        name: tool.name.clone(),
-        source: tool.source.clone(),
-        server_id: tool.server_id.clone(),
-        arguments: call.arguments_raw.clone(),
-        status: ToolCallStatus::Pending,
-        result_preview: None,
-        error: None,
-        duration_ms: None,
-        started_at: Some(now),
-        completed_at: None,
-        round,
-        sensitive: tool.sensitive,
-        artifacts: Vec::new(),
-    };
-    emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-
-    let settings = state.settings_read().clone();
-    let requires_approval = if builtin_tool_bypasses_approval(tool) {
-        false
-    } else {
-        match settings.chat_tools.approval_policy.as_str() {
-            "auto" => false,
-            "always_confirm" => true,
-            _ => tool.sensitive,
-        }
-    };
-    if requires_approval {
-        let approved = request_tool_approval(
-            app,
-            state,
-            conversation_id,
-            run_id,
-            message_id,
-            generation,
-            &record,
-        )
-        .await;
-        if !approved {
-            record.status = ToolCallStatus::Skipped;
-            record.completed_at = Some(chrono::Local::now().timestamp());
-            record.error = Some("Tool call was not approved".to_string());
-            emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-            let content = record.error.clone().unwrap_or_default();
-            return (record, content);
-        }
-    }
-
-    record.status = ToolCallStatus::Running;
-    emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-    let started = Instant::now();
-    let timeout_ms = effective_tool_timeout_ms(&settings, tool, &call.arguments);
-    let result = tokio::select! {
-        result = timeout(
-            Duration::from_millis(timeout_ms),
-            mcp::registry::call_tool(app, state, tool, call.arguments.clone(), Some(skill_cache)),
-        ) => result,
-        _ = wait_for_chat_cancel(state, conversation_id, generation) => {
-            record.status = ToolCallStatus::Cancelled;
-            record.duration_ms = Some(started.elapsed().as_millis() as u64);
-            record.completed_at = Some(chrono::Local::now().timestamp());
-            record.error = Some("Tool call cancelled".to_string());
-            emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-            let content = record.error.clone().unwrap_or_default();
-            return (record, content);
-        }
-    };
-    record.duration_ms = Some(started.elapsed().as_millis() as u64);
-    record.completed_at = Some(chrono::Local::now().timestamp());
-    let max_tool_output_chars = settings.chat_tools.max_tool_output_chars;
-    let tool_content = match result {
-        Ok(Ok(output)) if !output.is_error => {
-            record.status = ToolCallStatus::Success;
-            record.artifacts = output.artifacts.clone();
-            record.result_preview = Some(truncate_chars(
-                &format_tool_result_preview(&output.content),
-                max_tool_output_chars,
-            ));
-            truncate_tool_content_for_model(&output.content, max_tool_output_chars)
-        }
-        Ok(Ok(output)) => {
-            record.status = ToolCallStatus::Error;
-            record.error = Some(truncate_chars(&output.content, 1000));
-            truncate_tool_content_for_model(&output.content, max_tool_output_chars)
-        }
-        Ok(Err(err)) => {
-            record.status = ToolCallStatus::Error;
-            record.error = Some(err.clone());
-            truncate_tool_content_for_model(&err, max_tool_output_chars)
-        }
-        Err(_) => {
-            record.status = ToolCallStatus::Error;
-            let err =
-                format!("工具调用超时（{timeout_ms}ms）。请缩小任务，或在设置中调高工具超时时间。");
-            record.error = Some(err.clone());
-            err
-        }
-    };
-    emit_chat_tool_record(app, conversation_id, run_id, message_id, &record);
-    (record, tool_content)
-}
-
-fn effective_tool_timeout_ms(
-    settings: &Settings,
-    tool: &ChatToolDefinition,
-    arguments: &Value,
-) -> u64 {
-    let default_timeout_ms = settings.chat_tools.tool_timeout_ms;
-    if tool.source == "skill" && tool.name == "skill_run_script" {
-        return crate::mcp::registry::effective_skill_script_timeout_ms(
-            default_timeout_ms,
-            arguments.get("timeout_ms").and_then(|value| value.as_u64()),
-        );
-    }
-    if tool.source == "native" && matches!(tool.name.as_str(), "run_command" | "run_python") {
-        return arguments
-            .get("timeout_ms")
-            .and_then(|value| value.as_u64())
-            .unwrap_or(default_timeout_ms)
-            .clamp(1_000, 300_000)
-            .max(default_timeout_ms);
-    }
-    default_timeout_ms
 }
 
 async fn request_tool_approval(
@@ -3924,18 +2350,6 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     out
 }
 
-fn truncate_tool_content_for_model(value: &str, max_chars: usize) -> String {
-    let char_count = value.chars().count();
-    if char_count <= max_chars {
-        return value.to_string();
-    }
-    let mut truncated = value.chars().take(max_chars).collect::<String>();
-    truncated.push_str(&format!(
-        "\n\n[Tool output truncated: original {char_count} chars, showing first {max_chars}.]"
-    ));
-    truncated
-}
-
 fn format_chat_missing_api_key_error(provider_name: &str) -> String {
     let provider = provider_name.trim();
     if provider.is_empty() {
@@ -4006,65 +2420,6 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
         summary.push_str(&truncate_chars(&record.arguments, 800));
         summary
     }
-}
-
-/// UI/storage preview for Tavily-style JSON stdout (`answer` is often null for search).
-fn format_tool_result_preview(content: &str) -> String {
-    let trimmed = content.trim();
-    let json_str = trimmed
-        .strip_prefix("stdout:")
-        .map(str::trim)
-        .unwrap_or(trimmed);
-    let Ok(value) = serde_json::from_str::<Value>(json_str) else {
-        return content.to_string();
-    };
-
-    if let Some(answer) = value
-        .get("answer")
-        .and_then(|answer| answer.as_str())
-        .map(str::trim)
-        .filter(|answer| !answer.is_empty())
-    {
-        return format!("答: {answer}");
-    }
-
-    let Some(results) = value.get("results").and_then(|results| results.as_array()) else {
-        return content.to_string();
-    };
-
-    if results.is_empty() {
-        return "无搜索结果".to_string();
-    }
-
-    let query = value
-        .get("query")
-        .and_then(|query| query.as_str())
-        .unwrap_or_default();
-    let query_label = if query.is_empty() {
-        String::new()
-    } else {
-        format!("「{query}」")
-    };
-    let first = &results[0];
-    let title = first
-        .get("title")
-        .or_else(|| first.get("url"))
-        .and_then(|title| title.as_str())
-        .unwrap_or_default();
-    let snippet = first
-        .get("content")
-        .or_else(|| first.get("raw_content"))
-        .and_then(|content| content.as_str())
-        .unwrap_or_default();
-    let snippet: String = snippet.chars().take(80).collect();
-    let head = format!("{} 条结果{query_label}", results.len());
-    if title.is_empty() && snippet.is_empty() {
-        return head;
-    }
-    if snippet.is_empty() {
-        return format!("{head}: {title}");
-    }
-    format!("{head}: {title} — {snippet}")
 }
 
 fn image_content_part(path: &PathBuf) -> Result<serde_json::Value, String> {
@@ -4199,6 +2554,7 @@ pub(crate) async fn chat_regenerate_message(
         last_user_api_content.as_deref(),
         &last_user_image_paths,
         None,
+        crate::chat::agent::AgentRunEntry::Regenerate,
     )
     .await
     {
@@ -4399,24 +2755,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_reasoning_keeps_planning_and_final_sections() {
-        let reasoning = merge_reasoning(
-            &[
-                "  planning round one  ".to_string(),
-                String::new(),
-                "planning round two".to_string(),
-            ],
-            Some(" final answer reasoning ".to_string()),
-        )
-        .expect("reasoning should be merged");
-
-        assert_eq!(
-            reasoning,
-            "planning round one\n\nplanning round two\n\nfinal answer reasoning"
-        );
-    }
-
-    #[test]
     fn generate_title_truncates_unicode_safely() {
         let title = generate_title("附件: 这是一张非常非常非常非常非常非常非常长的图片文件名.png");
 
@@ -4454,69 +2792,6 @@ mod tests {
     fn sanitize_generated_title_rejects_empty_output() {
         assert_eq!(sanitize_generated_title("\n\n  "), None);
         assert_eq!(sanitize_generated_title("标题：..."), None);
-    }
-
-    #[test]
-    fn is_tools_unsupported_error_detects_provider_rejection_messages() {
-        assert!(is_tools_unsupported_error(
-            "Chat tools planning Error: 400 Bad Request - tools not supported (attempt 1/3)"
-        ));
-        assert!(is_tools_unsupported_error(
-            "Chat tools planning Error: 422 Unprocessable Entity - invalid tool_choice (attempt 1/1)"
-        ));
-        assert!(is_tools_unsupported_error(
-            "Chat tools planning Error: 400 Bad Request - function call is not supported (attempt 1/3)"
-        ));
-        assert!(is_tools_unsupported_error(
-            "Chat tools planning Error: 400 Bad Request - tools[0]: unknown variant `function`, expected `web_search_20250305` or `web_search_20260209` (attempt 1/1)"
-        ));
-        assert!(!is_tools_unsupported_error(
-            "Chat tools planning Error: 429 Too Many Requests - rate limited (attempt 1/3)"
-        ));
-        assert!(!is_tools_unsupported_error("network timeout"));
-    }
-
-    #[test]
-    fn is_native_skill_tool_name_matches_runtime_tools() {
-        assert!(is_native_skill_tool_name("skill_activate"));
-        assert!(is_native_skill_tool_name("skill_run_script"));
-        assert!(!is_native_skill_tool_name("web_search"));
-    }
-
-    #[test]
-    fn format_tool_result_preview_summarizes_tavily_search_json() {
-        let raw = r#"stdout:
-{
-  "answer": null,
-  "query": "吉林市 明天 天气",
-  "results": [
-    {
-      "title": "吉林市天气预报",
-      "content": "明天晴有时多云，最高33℃"
-    }
-  ]
-}"#;
-        let preview = format_tool_result_preview(raw);
-        assert!(preview.contains("1 条结果"));
-        assert!(preview.contains("吉林市天气预报"));
-        assert!(preview.contains("33"));
-        assert!(!preview.contains("\"answer\": null"));
-    }
-
-    #[test]
-    fn truncate_tool_content_for_model_marks_truncated_output() {
-        let content = "abcdef";
-        let truncated = truncate_tool_content_for_model(content, 3);
-
-        assert!(truncated.starts_with("abc"));
-        assert!(truncated.contains("Tool output truncated"));
-        assert!(truncated.contains("original 6 chars"));
-        assert!(truncated.contains("first 3"));
-    }
-
-    #[test]
-    fn truncate_tool_content_for_model_keeps_short_output_unchanged() {
-        assert_eq!(truncate_tool_content_for_model("abc", 3), "abc");
     }
 
     #[test]
@@ -4566,356 +2841,6 @@ mod tests {
         let summary = format_tool_approval_summary(&record);
         assert!(summary.contains("Path: /tmp/project/out.txt"));
         assert!(summary.contains("Raw arguments"));
-    }
-
-    #[test]
-    fn extract_tool_calls_parses_dsml_when_api_tool_calls_missing() {
-        const SAMPLE: &str = concat!(
-            "<|DSML|tool_calls><|DSML|invoke name=\"skill_run_script\">",
-            "<|DSML|parameter name=\"name\" string=\"true\">tavily-multi-key</|DSML|parameter>",
-            "<|DSML|parameter name=\"relative_path\" string=\"true\">scripts/tavily_cli.py</|DSML|parameter>",
-            "</|DSML|invoke></|DSML|tool_calls>",
-        );
-        let message = serde_json::json!({
-            "role": "assistant",
-            "content": SAMPLE,
-        });
-        let calls = extract_tool_calls(&message);
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].function_name, "skill_run_script");
-        assert_eq!(
-            calls[0]
-                .arguments
-                .get("name")
-                .and_then(|value| value.as_str()),
-            Some("tavily-multi-key")
-        );
-    }
-
-    #[test]
-    fn chat_prompt_omits_disabled_web_tools() {
-        let registry = skills::SkillRegistry::default();
-        let mut chat_tools = crate::settings::ChatToolsConfig::default();
-        chat_tools.native_tools.skill_runtime = true;
-        chat_tools.native_tools.run_python = true;
-        chat_tools.native_tools.web_search = false;
-        chat_tools.native_tools.web_fetch = false;
-
-        let prompt = build_chat_system_prompt(
-            "zh-CN",
-            false,
-            false,
-            &registry,
-            &chat_tools,
-            true,
-            &["run_python".to_string()],
-            None,
-            None,
-            None,
-            "",
-        );
-
-        assert!(prompt.contains("run_python"));
-        assert!(!prompt.contains("web_search"));
-        assert!(!prompt.contains("web_fetch"));
-    }
-
-    fn test_assistant_snapshot(tool_preset: &str, skill_id: Option<&str>) -> ChatAssistantSnapshot {
-        ChatAssistantSnapshot {
-            id: "asst_test".to_string(),
-            name: "Test Assistant".to_string(),
-            description: String::new(),
-            system_prompt: String::new(),
-            provider_id: String::new(),
-            model: String::new(),
-            skill_id: skill_id.map(str::to_string),
-            tool_preset: tool_preset.to_string(),
-            conversation_starters: Vec::new(),
-            greeting: String::new(),
-        }
-    }
-
-    fn test_mcp_tool() -> ChatToolDefinition {
-        ChatToolDefinition {
-            id: "mcp__demo__search".to_string(),
-            name: "search".to_string(),
-            description: "Search demo".to_string(),
-            source: "mcp".to_string(),
-            server_id: Some("demo".to_string()),
-            server_name: Some("Demo".to_string()),
-            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
-            sensitive: false,
-        }
-    }
-
-    #[test]
-    fn assistant_tool_preset_none_disables_all_tools() {
-        let assistant = test_assistant_snapshot("none", Some("doc"));
-        let mut tools = vec![
-            crate::mcp::types::native_skill_activate_tool(),
-            crate::mcp::types::native_web_fetch_tool(),
-            test_mcp_tool(),
-        ];
-
-        apply_assistant_tool_preset(&mut tools, Some(&assistant));
-
-        assert!(tools.is_empty());
-    }
-
-    #[test]
-    fn assistant_tool_preset_skills_keeps_only_skill_runtime_tools() {
-        let assistant = test_assistant_snapshot("skills", Some("doc"));
-        let mut tools = vec![
-            crate::mcp::types::native_skill_activate_tool(),
-            crate::mcp::types::native_skill_read_file_tool(),
-            crate::mcp::types::native_web_fetch_tool(),
-            test_mcp_tool(),
-        ];
-
-        apply_assistant_tool_preset(&mut tools, Some(&assistant));
-
-        assert_eq!(tools.len(), 2);
-        assert!(tools.iter().all(|tool| tool.source == "skill"));
-        assert!(tools.iter().any(|tool| tool.name == "skill_activate"));
-        assert!(tools.iter().any(|tool| tool.name == "skill_read_file"));
-    }
-
-    #[test]
-    fn assistant_tool_preset_inherit_and_all_leave_tools_unchanged() {
-        for preset in ["inherit", "all", "unexpected"] {
-            let assistant = test_assistant_snapshot(preset, None);
-            let mut tools = vec![
-                crate::mcp::types::native_skill_activate_tool(),
-                crate::mcp::types::native_web_fetch_tool(),
-                test_mcp_tool(),
-            ];
-
-            apply_assistant_tool_preset(&mut tools, Some(&assistant));
-
-            assert_eq!(tools.len(), 3, "preset {preset} should not filter tools");
-        }
-    }
-
-    #[test]
-    fn skill_fallback_switches_to_markdown_when_assistant_disables_tools() {
-        let mut chat_tools = crate::settings::ChatToolsConfig::default();
-
-        apply_skill_fallback_when_tools_unavailable(&mut chat_tools, Some("doc"), false);
-
-        assert_eq!(chat_tools.skill_fallback_mode, "skill_md_only");
-    }
-
-    #[test]
-    fn empty_assistant_response_error_exposes_flow_failure() {
-        let response = empty_assistant_response_error("Chat stream");
-
-        assert_eq!(response, "Chat stream returned an empty assistant response");
-    }
-
-    #[test]
-    fn planning_final_message_becomes_final_reply_without_second_request() {
-        let message = serde_json::json!({
-            "role": "assistant",
-            "content": "直接回答",
-            "reasoning_content": "final thought"
-        });
-
-        let (response, reasoning) =
-            final_response_from_planning_message(&message, &["plan thought".to_string()])
-                .expect("planning final message should become final reply");
-
-        assert_eq!(response, "直接回答");
-        assert_eq!(reasoning.as_deref(), Some("plan thought\n\nfinal thought"));
-    }
-
-    #[test]
-    fn planning_final_message_rejects_empty_text() {
-        let message = serde_json::json!({
-            "role": "assistant",
-            "content": "<|DSML|tool_calls></|DSML|tool_calls>"
-        });
-
-        let err = final_response_from_planning_message(&message, &[])
-            .expect_err("empty planning final text should fail");
-
-        assert_eq!(
-            err,
-            "Chat tools planning returned an empty assistant response"
-        );
-    }
-
-    #[test]
-    fn tool_planning_text_buffer_delays_possible_dsml_prefix() {
-        assert!(!should_flush_tool_planning_text_buffer("<|DSML|"));
-        assert!(!should_flush_tool_planning_text_buffer("   <invoke"));
-        assert!(should_flush_tool_planning_text_buffer(
-            "普通回答已经足够长，可以开始流式显示了"
-        ));
-        assert!(should_flush_tool_planning_text_buffer("first line\n"));
-    }
-
-    #[test]
-    fn chat_stream_text_parser_accepts_delta_chunks() {
-        let value = serde_json::json!({
-            "choices": [{ "delta": { "content": "你" } }]
-        });
-        let mut full = String::new();
-        let (text, mode) = extract_chat_stream_text(&value).expect("delta content");
-
-        assert_eq!(mode, ChatStreamTextMode::Delta);
-        assert_eq!(
-            append_chat_stream_text(&mut full, text, mode),
-            Some("你".to_string())
-        );
-        assert_eq!(full, "你");
-    }
-
-    #[test]
-    fn chat_stream_text_parser_converts_message_snapshots_to_deltas() {
-        let first = serde_json::json!({
-            "choices": [{ "message": { "content": "你" } }]
-        });
-        let second = serde_json::json!({
-            "choices": [{ "message": { "content": "你好" } }]
-        });
-        let repeat = serde_json::json!({
-            "choices": [{ "message": { "content": "你好" } }]
-        });
-        let mut full = String::new();
-
-        let (text, mode) = extract_chat_stream_text(&first).expect("first snapshot");
-        assert_eq!(mode, ChatStreamTextMode::Snapshot);
-        assert_eq!(
-            append_chat_stream_text(&mut full, text, mode),
-            Some("你".to_string())
-        );
-
-        let (text, mode) = extract_chat_stream_text(&second).expect("second snapshot");
-        assert_eq!(
-            append_chat_stream_text(&mut full, text, mode),
-            Some("好".to_string())
-        );
-
-        let (text, mode) = extract_chat_stream_text(&repeat).expect("repeat snapshot");
-        assert_eq!(append_chat_stream_text(&mut full, text, mode), None);
-        assert_eq!(full, "你好");
-    }
-
-    #[test]
-    fn chat_stream_reasoning_parser_accepts_message_snapshots() {
-        let value = serde_json::json!({
-            "choices": [{ "message": { "reasoning_content": "思考中" } }]
-        });
-        let mut full = String::new();
-        let (text, mode) = extract_chat_stream_reasoning(&value).expect("reasoning snapshot");
-
-        assert_eq!(mode, ChatStreamTextMode::Snapshot);
-        assert_eq!(
-            append_chat_stream_text(&mut full, text, mode),
-            Some("思考中".to_string())
-        );
-    }
-
-    #[test]
-    fn skill_run_script_timeout_uses_minimum_even_when_model_requests_less() {
-        let mut settings = Settings::default();
-        settings.chat_tools.tool_timeout_ms = 60_000;
-        let tool = crate::mcp::types::native_skill_run_script_tool();
-        let arguments = serde_json::json!({ "timeout_ms": 60_000 });
-
-        assert_eq!(
-            effective_tool_timeout_ms(&settings, &tool, &arguments),
-            120_000
-        );
-    }
-
-    #[test]
-    fn skill_run_script_timeout_clamps_large_model_requests() {
-        let mut settings = Settings::default();
-        settings.chat_tools.tool_timeout_ms = 60_000;
-        let tool = crate::mcp::types::native_skill_run_script_tool();
-        let arguments = serde_json::json!({ "timeout_ms": 500_000 });
-
-        assert_eq!(
-            effective_tool_timeout_ms(&settings, &tool, &arguments),
-            300_000
-        );
-    }
-
-    #[test]
-    fn disabled_builtin_tool_feedback_is_hidden_model_feedback() {
-        let feedback = disabled_builtin_tool_feedback("web_search")
-            .expect("disabled builtin tools should produce model feedback");
-
-        assert!(feedback.contains("not enabled"));
-        assert!(feedback.contains("web_search"));
-        assert!(disabled_builtin_tool_feedback("mcp__server__tool").is_none());
-    }
-
-    #[test]
-    fn extract_openai_tool_calls_preserves_invalid_arguments_error() {
-        let message = serde_json::json!({
-            "role": "assistant",
-            "tool_calls": [{
-                "id": "call_write",
-                "type": "function",
-                "function": {
-                    "name": "write_file",
-                    "arguments": "{\"path\":\"/tmp/out.html\",\"content\":\"unterminated"
-                }
-            }]
-        });
-
-        let calls = extract_openai_tool_calls(&message);
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].function_name, "write_file");
-        assert!(calls[0].arguments.is_null());
-        assert!(calls[0]
-            .arguments_parse_error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("invalid or incomplete"));
-    }
-
-    #[test]
-    fn patch_system_message_replaces_first_system_entry() {
-        let mut messages = vec![
-            serde_json::json!({ "role": "system", "content": "old" }),
-            serde_json::json!({ "role": "user", "content": "hi" }),
-        ];
-        patch_system_message(&mut messages, "new prompt");
-        assert_eq!(
-            messages[0].get("content").and_then(|value| value.as_str()),
-            Some("new prompt")
-        );
-    }
-
-    #[test]
-    fn final_assistant_api_message_omits_reasoning_without_tool_calls() {
-        let message = final_assistant_api_message("done", None);
-
-        assert_eq!(
-            message.get("role").and_then(|value| value.as_str()),
-            Some("assistant")
-        );
-        assert_eq!(
-            message.get("content").and_then(|value| value.as_str()),
-            Some("done")
-        );
-        assert!(message.get("reasoning_content").is_none());
-    }
-
-    #[test]
-    fn final_assistant_api_message_keeps_reasoning_when_requested() {
-        let message = final_assistant_api_message("done", Some(" thinking "));
-
-        assert_eq!(
-            message
-                .get("reasoning_content")
-                .and_then(|value| value.as_str()),
-            Some("thinking")
-        );
     }
 
     #[test]
@@ -4981,24 +2906,6 @@ mod tests {
         assert_eq!(tool_result_is_error, Some(true));
     }
 
-    #[test]
-    fn assistant_content_from_api_message_trims_missing_or_null_content() {
-        assert_eq!(
-            assistant_content_from_api_message(&serde_json::json!({
-                "role": "assistant",
-                "content": " answer "
-            })),
-            "answer"
-        );
-        assert_eq!(
-            assistant_content_from_api_message(&serde_json::json!({
-                "role": "assistant",
-                "content": null
-            })),
-            ""
-        );
-    }
-
     fn test_chat_message(id: &str, role: &str, content: &str, timestamp: i64) -> ChatMessage {
         ChatMessage {
             id: id.to_string(),
@@ -5057,13 +2964,6 @@ mod tests {
                 ..ConversationContextState::default()
             },
         }
-    }
-
-    #[test]
-    fn estimate_tokens_counts_ascii_and_cjk() {
-        assert_eq!(estimate_tokens("abcd"), 1);
-        assert_eq!(estimate_tokens("abcde"), 2);
-        assert_eq!(estimate_tokens("你好ab"), 3);
     }
 
     #[test]

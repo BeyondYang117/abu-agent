@@ -1,4 +1,5 @@
 // Chat 模块：AI 客户端核心功能
+pub mod agent;
 pub mod commands;
 pub mod dsml_tools;
 pub mod model;
