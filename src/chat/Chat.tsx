@@ -1460,7 +1460,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             <div className="flex min-h-0 flex-1 flex-col">
               {showEmptyHero ? (
                 <div className="chat-empty-hero flex flex-1 flex-col items-center justify-center px-6 pb-16">
-                  <div className="relative z-10 w-full max-w-3xl space-y-8">
+                  <div className="chat-motion-fade-up relative z-10 w-full max-w-3xl space-y-8">
                     <h2
                       className="chat-empty-hero-title text-center text-[1.75rem] leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]"
                       aria-label={

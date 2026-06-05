@@ -43,7 +43,9 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
   )
   const [open, setOpen] = useState(false)
   const [contentPulse, setContentPulse] = useState(false)
+  const [bodyMaxHeight, setBodyMaxHeight] = useState<number | null>(null)
   const userExpandedRef = useRef(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   const showCollapsed = collapsible && !open
 
@@ -60,11 +62,22 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
     }
   }, [streaming, collapsible])
 
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!body || !collapsible) {
+      setBodyMaxHeight(null)
+      return
+    }
+    setBodyMaxHeight(body.scrollHeight)
+  }, [collapsible, open, reasoning, showCollapsed])
+
   const titleClass =
     'mb-1 flex w-full items-center gap-1 text-left text-[11px] font-medium text-neutral-400 transition-colors dark:text-neutral-500'
   const bodyClass = [
+    'chat-motion-reasoning-body',
     'whitespace-pre-wrap text-sm leading-relaxed text-neutral-400 dark:text-neutral-500',
     streaming ? 'opacity-95' : 'opacity-90',
+    showCollapsed ? 'is-collapsed' : 'is-open',
     contentPulse ? 'reasoning-stream-tail' : '',
   ].join(' ')
 
@@ -115,7 +128,11 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
         </div>
       )}
 
-      <div className={bodyClass}>
+      <div
+        ref={bodyRef}
+        className={bodyClass}
+        style={bodyMaxHeight == null ? undefined : { maxHeight: `${bodyMaxHeight}px` }}
+      >
         {showCollapsed && collapsedPreview.truncated ? (
           <span className="mr-0.5 opacity-50">…</span>
         ) : null}

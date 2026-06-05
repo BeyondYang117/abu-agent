@@ -80,13 +80,19 @@ export const ConversationList = memo(function ConversationList({
   return (
     <>
       <div className="space-y-0.5 py-1">
-        {conversations.map((conv) => {
+        {conversations.map((conv, index) => {
           const active = currentConversationId === conv.id
           const isRenaming = renamingId === conv.id
 
           if (isRenaming) {
             return (
-              <div key={conv.id} className="px-1 py-0.5">
+              <div
+                key={conv.id}
+                className="chat-motion-row px-1 py-0.5"
+                style={{
+                  ['--chat-motion-delay' as string]: `${Math.min(index, 12) * 18}ms`,
+                }}
+              >
                 <input
                   ref={renameInputRef}
                   type="text"
@@ -111,11 +117,14 @@ export const ConversationList = memo(function ConversationList({
           return (
             <div
               key={conv.id}
-              className={`group relative flex min-w-0 items-center rounded-lg ${
+              className={`chat-motion-row group relative flex min-w-0 items-center rounded-lg ${
                 active
                   ? 'bg-black/[0.06] dark:bg-white/[0.1]'
                   : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
               }`}
+              style={{
+                ['--chat-motion-delay' as string]: `${Math.min(index, 12) * 18}ms`,
+              }}
             >
               <button
                 type="button"

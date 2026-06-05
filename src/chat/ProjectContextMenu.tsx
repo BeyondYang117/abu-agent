@@ -38,7 +38,7 @@ export function ProjectContextMenu({
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed z-[200] min-w-[180px] rounded-xl border border-neutral-200/90 bg-white py-1.5 shadow-lg dark:border-neutral-700 dark:bg-[#2a2a2c]"
+      className="chat-motion-popover fixed z-[200] min-w-[180px] rounded-xl border border-neutral-200/90 bg-white py-1.5 shadow-lg dark:border-neutral-700 dark:bg-[#2a2a2c]"
       style={{ left: anchor.left, top: anchor.top }}
       role="menu"
     >

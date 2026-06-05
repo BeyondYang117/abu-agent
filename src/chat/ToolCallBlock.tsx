@@ -268,11 +268,12 @@ export function ToolCallBlock({
         onClick={() => {
           if (hasDetails) setOpen((value) => !value)
         }}
+        aria-expanded={hasDetails ? open : undefined}
         className={`max-w-full min-w-0 inline-flex items-center gap-1.5 rounded-md py-0.5 transition-colors ${
           hasDetails
             ? 'hover:text-neutral-700 dark:hover:text-neutral-200'
             : 'cursor-default'
-        }`}
+        } ${status === 'running' ? 'chat-motion-soft-pulse px-1 text-neutral-600 dark:text-neutral-300' : ''}`}
       >
         <StatusIcon status={status} />
         <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
@@ -309,33 +310,35 @@ export function ToolCallBlock({
         )}
       </button>
 
-      {open && hasDetails && (
-        <div className="mt-1.5 ml-1.5 space-y-1.5 border-l border-black/[0.08] pl-2.5 dark:border-white/[0.1]">
-          {argumentPreview && (
-            <div>
-              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                {mergedLabels.arguments}
+      {hasDetails && (
+        <div className={`chat-motion-reveal ${open ? 'is-open' : ''}`} aria-hidden={!open}>
+          <div className="mt-1.5 ml-1.5 space-y-1.5 border-l border-black/[0.08] pl-2.5 dark:border-white/[0.1]">
+            {argumentPreview && (
+              <div>
+                <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+                  {mergedLabels.arguments}
+                </div>
+                <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
+                  {argumentPreview}
+                </div>
               </div>
-              <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
-                {argumentPreview}
+            )}
+            {resultPreview && (
+              <div>
+                <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+                  {mergedLabels.result}
+                </div>
+                <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
+                  {resultPreview}
+                </div>
               </div>
-            </div>
-          )}
-          {resultPreview && (
-            <div>
-              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                {mergedLabels.result}
+            )}
+            {error && (
+              <div className="whitespace-pre-wrap break-words text-red-500">
+                {error}
               </div>
-              <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
-                {resultPreview}
-              </div>
-            </div>
-          )}
-          {error && (
-            <div className="whitespace-pre-wrap break-words text-red-500">
-              {error}
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>

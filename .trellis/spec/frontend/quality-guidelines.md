@@ -32,6 +32,13 @@ Questions to answer:
 
 <!-- Patterns that must always be used -->
 
+### Chat motion utilities
+
+- Keep routine Chat interaction motion centralized in `src/index.css` as reusable `chat-motion-*` utilities.
+- Prefer applying those classes from Chat components over adding component-local keyframes or animation libraries.
+- Always include a `prefers-reduced-motion` fallback when adding a new Chat animation utility.
+- Use small entrance/reveal motions for state continuity; do not change Chat routing, persistence, or streaming data flow to support cosmetic motion.
+
 ### Pyodide image/chart execution
 
 - When `run_python` code imports `matplotlib`, force the `Agg` backend before running user code.

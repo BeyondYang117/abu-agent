@@ -96,7 +96,7 @@ function FileAttachmentChip({
         : 'flex max-w-full items-center gap-2 rounded-lg border border-neutral-200/80 px-2.5 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-200'
 
   return (
-    <div className={chipClass}>
+    <div className={`chat-motion-fade-up ${chipClass}`}>
       <button
         type="button"
         onClick={() => void openAttachment(attachment, conversationId)}
@@ -135,7 +135,7 @@ export function ChatAttachments({
       {images.length > 0 && (
         <div className={variant === 'composer' ? 'flex flex-wrap gap-2' : 'flex flex-col gap-2'}>
           {images.map((attachment) => (
-            <div key={attachment.id} className={variant === 'composer' ? 'relative h-20 w-28 shrink-0' : 'relative'}>
+            <div key={attachment.id} className={variant === 'composer' ? 'chat-motion-fade-up relative h-20 w-28 shrink-0' : 'chat-motion-fade-up relative'}>
               <ImagePreview
                 attachment={attachment}
                 conversationId={conversationId}

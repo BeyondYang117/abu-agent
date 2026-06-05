@@ -68,7 +68,7 @@ export function ModelSelector({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+          <div className="chat-motion-popover absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
             {activeProviders.map((provider) => (
               <div key={provider.id} className="px-1 py-1">
                 <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">

@@ -88,7 +88,7 @@ export function MessageList({
         )}
 
         {streaming && !streamingContent && !streamingReasoning && streamingToolCalls.length === 0 && (
-          <div className="flex justify-start py-3">
+          <div className="chat-motion-fade-up flex justify-start py-3">
             <div className="flex items-center gap-2 text-sm text-neutral-400">
               <span className="flex gap-1">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" />
@@ -101,7 +101,7 @@ export function MessageList({
         )}
 
         {error && (
-          <div className="flex justify-start py-3">
+          <div className="chat-motion-fade-up flex justify-start py-3">
             <p className="max-w-[85%] text-sm leading-relaxed text-red-600 dark:text-red-400">
               {error}
             </p>

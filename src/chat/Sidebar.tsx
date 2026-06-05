@@ -334,7 +334,7 @@ export const Sidebar = memo(function Sidebar({
           <button
             type="button"
             onClick={() => onSelectProject(null)}
-            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
+            className={`chat-motion-row flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
               !selectedProject
                 ? 'bg-black/[0.06] font-medium text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-100'
                 : 'text-neutral-700 hover:bg-black/[0.04] dark:text-neutral-300 dark:hover:bg-white/[0.06]'
@@ -345,16 +345,19 @@ export const Sidebar = memo(function Sidebar({
           </button>
 
           <div className="mt-1 space-y-0.5">
-            {projects.map((project) => {
+            {projects.map((project, index) => {
               const active = selectedProject?.id === project.id
               return (
                 <div
                   key={project.id}
-                  className={`group flex min-w-0 items-center rounded-lg ${
+                  className={`chat-motion-row group flex min-w-0 items-center rounded-lg ${
                     active
                       ? 'bg-black/[0.06] dark:bg-white/[0.1]'
                       : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                   }`}
+                  style={{
+                    ['--chat-motion-delay' as string]: `${Math.min(index + 1, 12) * 18}ms`,
+                  }}
                 >
                   <button
                     type="button"
@@ -430,7 +433,7 @@ export const Sidebar = memo(function Sidebar({
           )}
 
           {searchOpen && (
-            <div className="px-3 pb-2">
+            <div className="chat-motion-search-reveal px-3 pb-2">
               <div className="relative">
                 <Search
                   size={15}

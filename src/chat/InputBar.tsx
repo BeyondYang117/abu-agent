@@ -283,7 +283,8 @@ export function InputBar({
           <>
             <div className="fixed inset-0 z-30" onClick={() => setToolPanelOpen(false)} aria-hidden />
             <div
-              className="absolute bottom-full left-10 z-40 mb-2 w-[min(272px,calc(100vw-32px))] overflow-hidden rounded-xl border border-neutral-200/90 bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
+              className="chat-motion-popover absolute bottom-full left-10 z-40 mb-2 w-[min(272px,calc(100vw-32px))] overflow-hidden rounded-xl border border-neutral-200/90 bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
+              style={{ ['--chat-popover-origin' as string]: 'bottom left' }}
               data-tauri-drag-region="false"
             >
               <div className="space-y-1.5 px-3 py-2">
@@ -340,12 +341,12 @@ export function InputBar({
           }`}
         >
           {dragActive && (
-            <div className="mb-2 rounded-2xl border border-dashed border-[#e8a090]/70 bg-[#e8a090]/10 px-3 py-2 text-center text-[13px] font-medium text-[#a35f51] dark:text-[#f1b4a7]">
+            <div className="chat-motion-fade-up mb-2 rounded-2xl border border-dashed border-[#e8a090]/70 bg-[#e8a090]/10 px-3 py-2 text-center text-[13px] font-medium text-[#a35f51] dark:text-[#f1b4a7]">
               松开即可添加图片
             </div>
           )}
           {attachments.length > 0 && (
-            <div className="mb-2 px-1">
+            <div className="chat-motion-fade-up mb-2 px-1">
               <ChatAttachments
                 attachments={attachments}
                 variant="composer"
@@ -354,12 +355,12 @@ export function InputBar({
             </div>
           )}
           {attachmentError && (
-            <div className="mb-2 px-1 text-[12px] text-red-500 dark:text-red-400">
+            <div className="chat-motion-fade-up mb-2 px-1 text-[12px] text-red-500 dark:text-red-400">
               {attachmentError}
             </div>
           )}
           {(sendDisabledReason || toolStatusHint) && !attachmentError && (
-            <div className="mb-2 px-1 text-[12px] text-amber-600 dark:text-amber-300">
+            <div className="chat-motion-fade-up mb-2 px-1 text-[12px] text-amber-600 dark:text-amber-300">
               {sendDisabledReason || toolStatusHint}
             </div>
           )}
@@ -412,7 +413,7 @@ export function InputBar({
                 type="button"
                 onClick={onCancel}
                 disabled={cancelling}
-                className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white shadow-sm transition-all hover:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
+                className="chat-motion-fade-up mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white shadow-sm transition-all hover:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
                 title={cancelling ? '正在停止' : '停止生成'}
                 aria-label={cancelling ? '正在停止' : '停止生成'}
               >
@@ -428,7 +429,7 @@ export function InputBar({
                 aria-label={sendDisabledReason || '发送'}
                 className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all ${
                   canSend
-                    ? 'bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585]'
+                    ? 'chat-motion-soft-pulse bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585]'
                     : 'bg-neutral-200 text-neutral-400 dark:bg-neutral-700 dark:text-neutral-500'
                 }`}
               >

@@ -113,7 +113,7 @@ export function MessageBubble({
   if (isUser) {
     const hasText = message.content.trim().length > 0
     return (
-      <div className="flex justify-end py-2">
+      <div className="chat-motion-fade-up flex justify-end py-2">
         <div className="flex max-w-[85%] flex-col items-end gap-2">
           {attachments.length > 0 && (
             <ChatAttachments
@@ -147,7 +147,7 @@ export function MessageBubble({
   }
 
   return (
-    <div className="flex justify-start py-3">
+    <div className="chat-motion-fade-up flex justify-start py-3">
       <div className="max-w-[85%] min-w-0">
         {toolCalls.length > 0 && !isEditing && (
           <section
