@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_shell::ShellExt;
 
 use crate::state::AppState;

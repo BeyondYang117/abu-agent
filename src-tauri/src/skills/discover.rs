@@ -29,16 +29,6 @@ pub fn user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn bundled_skills_dir(app: &AppHandle) -> Option<PathBuf> {
-    let resource_dir = app.path().resource_dir().ok()?.join("builtin-skills");
-    resource_dir.is_dir().then_some(resource_dir)
-}
-
-fn dev_builtin_skills_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("builtin-skills");
-    dir.is_dir().then_some(dir)
-}
-
 pub fn scan_roots(app: &AppHandle, extra_paths: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(scan_root_entries(app, extra_paths)?
         .into_iter()
@@ -60,14 +50,6 @@ fn scan_root_entries(
             source: "external",
         })
     }));
-    if let Some(dir) = bundled_skills_dir(app).or_else(dev_builtin_skills_dir) {
-        if !roots.iter().any(|root| root.path == dir) {
-            roots.push(SkillScanRoot {
-                path: dir,
-                source: "builtin",
-            });
-        }
-    }
     Ok(roots)
 }
 
