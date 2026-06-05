@@ -11,9 +11,11 @@ use crate::lens_commands::{
 };
 use crate::settings::Settings;
 use crate::state::AppState;
+#[cfg(target_os = "macos")]
+use crate::windows::apply_macos_traffic_light_position;
 use crate::windows::{
-    apply_chat_window_chrome, apply_frameless_window_chrome, apply_macos_traffic_light_position,
-    ensure_chat_window, ensure_main_window, ensure_settings_window,
+    apply_chat_window_chrome, apply_frameless_window_chrome, ensure_chat_window,
+    ensure_main_window, ensure_settings_window,
 };
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
