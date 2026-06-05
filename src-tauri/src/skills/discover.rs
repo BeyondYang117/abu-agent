@@ -29,6 +29,14 @@ pub fn user_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn bundled_skills_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join("skills"))
+        .filter(|dir| dir.is_dir())
+}
+
 pub fn scan_roots(app: &AppHandle, extra_paths: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(scan_root_entries(app, extra_paths)?
         .into_iter()
@@ -40,10 +48,17 @@ fn scan_root_entries(
     app: &AppHandle,
     extra_paths: &[String],
 ) -> Result<Vec<SkillScanRoot>, String> {
-    let mut roots = vec![SkillScanRoot {
+    let mut roots = Vec::new();
+    if let Some(path) = bundled_skills_dir(app) {
+        roots.push(SkillScanRoot {
+            path,
+            source: "builtin",
+        });
+    }
+    roots.push(SkillScanRoot {
         path: user_skills_dir(app)?,
         source: "user",
-    }];
+    });
     roots.extend(extra_paths.iter().map(PathBuf::from).filter_map(|path| {
         path.is_dir().then_some(SkillScanRoot {
             path,

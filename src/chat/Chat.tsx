@@ -1438,6 +1438,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       onPointerMove={requestWindowFocus}
       onPointerDownCapture={requestWindowFocus}
     >
+      {!usesNativeTitlebar && <WindowControls />}
       <div className="flex h-full min-h-0 w-full">
         <Sidebar
           currentConversationId={currentConversation?.id}
@@ -1458,7 +1459,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         />
 
         {chatView === 'settings' ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
             <SettingsShell
               ref={settingsRef}
               variant="embedded"
@@ -1469,7 +1470,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             />
           </div>
         ) : chatView === 'assistants' ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
             <AssistantCenter
               skills={enabledSkills}
               currentAssistantId={currentAssistantId}
@@ -1485,10 +1486,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 sidebarCollapsed && usesNativeTitlebar
                   ? `${chatTitlebarMacInsetClass} chat-titlebar-row--collapsed-mac`
                   : 'px-6'
-              } ${sidebarCollapsed ? 'pr-3' : ''}`}
+              } ${sidebarCollapsed ? 'pr-3' : ''} ${!usesNativeTitlebar ? 'chat-win-titlebar-safe' : ''}`}
               data-tauri-drag-region
             >
-              {!usesNativeTitlebar && <WindowControls />}
               {sidebarCollapsed && (
                 <ChatTitlebarActions
                   sidebarExpanded={false}

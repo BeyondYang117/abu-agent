@@ -13,7 +13,6 @@ import { ConversationList } from './ConversationList'
 import { ChatSectionMenu } from './ChatSectionMenu'
 import { ProjectContextMenu } from './ProjectContextMenu'
 import { ProjectDialog } from './ProjectDialog'
-import { WindowControls } from './WindowControls'
 import { chatApi } from './api'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { chatTitlebarMacInsetClass, chatTitlebarRowClass, isMac } from './platform'
@@ -286,7 +285,6 @@ export const Sidebar = memo(function Sidebar({
         className={`${chatTitlebarRowClass} ${chatTitlebarMacInsetClass} pr-3`}
         data-tauri-drag-region
       >
-        {!isMac && <WindowControls />}
         <ChatTitlebarActions
           sidebarExpanded
           onToggleSidebar={onToggleCollapsed}

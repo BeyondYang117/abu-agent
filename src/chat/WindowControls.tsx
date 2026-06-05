@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { Minus, Square, X } from 'lucide-react'
 import { api } from '../api/tauri'
 
 const isMac =
@@ -29,10 +30,10 @@ export function WindowControls() {
     return (
       <div className="chat-win-controls chat-win-controls--win" data-tauri-drag-region="false">
         <button type="button" className="chat-win-btn" onClick={handleMinimize} aria-label="最小化">
-          <span aria-hidden>—</span>
+          <Minus size={14} strokeWidth={1.9} aria-hidden />
         </button>
         <button type="button" className="chat-win-btn" onClick={handleMaximize} aria-label="最大化">
-          <span aria-hidden>□</span>
+          <Square size={12} strokeWidth={1.9} aria-hidden />
         </button>
         <button
           type="button"
@@ -40,7 +41,7 @@ export function WindowControls() {
           onClick={handleClose}
           aria-label="关闭"
         >
-          <span aria-hidden>×</span>
+          <X size={14} strokeWidth={2.1} aria-hidden />
         </button>
       </div>
     )

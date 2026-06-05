@@ -273,7 +273,7 @@ export function AssistantCenter({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white text-neutral-900 dark:bg-[#212121] dark:text-neutral-100">
-      <header className="flex h-[52px] shrink-0 items-center gap-2 border-b border-neutral-200/80 px-5 dark:border-neutral-800">
+      <header className="assistant-center-header flex h-[52px] shrink-0 items-center gap-2 border-b border-neutral-200/80 px-5 dark:border-neutral-800">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Bot size={18} strokeWidth={1.8} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
           <div className="min-w-0">
