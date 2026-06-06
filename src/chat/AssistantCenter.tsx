@@ -4,8 +4,6 @@ import {
   BookOpen,
   Check,
   Copy,
-  Filter,
-  Info,
   Pencil,
   Play,
   Plus,
@@ -14,7 +12,6 @@ import {
   Search,
   Trash2,
   Wrench,
-  X,
 } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
@@ -355,7 +352,6 @@ export function AssistantCenter({
   const [query, setQuery] = useState('')
   const [view, setView] = useState<CenterView>('list')
   const [tab, setTab] = useState<SuiteTab>('plaza')
-  const [filter, setFilter] = useState<'all' | 'builtin' | 'user' | 'enabled'>('all')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -404,12 +400,9 @@ export function AssistantCenter({
       if (tab === 'plaza' && !builtIn) return false
       if (tab === 'installed' && assistant.installed === false) return false
       if (tab === 'mine' && builtIn) return false
-      if (filter === 'builtin' && !builtIn) return false
-      if (filter === 'user' && builtIn) return false
-      if (filter === 'enabled' && assistant.enabled === false) return false
       return true
     })
-  }, [assistants, filter, query, tab])
+  }, [assistants, query, tab])
 
   const enabledProviders = useMemo(
     () => providers.filter(isProviderEnabled),
@@ -524,31 +517,8 @@ export function AssistantCenter({
   }
 
   const renderList = () => (
-    <div className="space-y-6">
-      <section className="overflow-hidden rounded-md border border-emerald-100 bg-emerald-50 px-5 py-4 dark:border-emerald-900/40 dark:bg-emerald-950/20">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[13px] font-medium text-emerald-900 dark:text-emerald-100">
-              <Info size={15} />
-              本地内置套件
-            </div>
-            <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-emerald-800/80 dark:text-emerald-100/70">
-              专家套件面向角色和场景组织快捷命令、知识技能和连接能力，在对话里输入 @ 或 / 即可围绕当前套件工作。
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={handleCreate}
-            className="flex h-9 shrink-0 items-center justify-center gap-2 rounded-md bg-white px-3 text-[13px] font-medium text-emerald-950 shadow-sm hover:bg-emerald-100 dark:bg-emerald-100 dark:text-emerald-950 dark:hover:bg-emerald-200"
-          >
-            <Plus size={15} />
-            让 Kivio 帮我创建
-          </button>
-        </div>
-      </section>
-
-      <div className="flex flex-col gap-3 border-b border-neutral-200 pb-3 dark:border-neutral-800 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 items-center gap-5">
+    <div className="space-y-4">
+      <div className="assistant-center-tabs flex min-w-0 items-center gap-1 border-b border-neutral-200 pb-2 dark:border-neutral-800">
           {[
             ['plaza', '套件广场', builtInCount],
             ['installed', '已安装', installedCount],
@@ -558,32 +528,18 @@ export function AssistantCenter({
               key={value}
               type="button"
               onClick={() => setTab(value as SuiteTab)}
-              className={`flex items-center gap-2 text-[17px] font-semibold ${
+              className={`flex h-8 items-center gap-2 rounded-md px-2.5 text-[13px] font-medium transition-colors ${
                 tab === value
-                  ? 'text-neutral-950 dark:text-neutral-50'
-                  : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
+                  ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50'
+                  : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-900 dark:hover:text-neutral-200'
               }`}
             >
               {label}
-              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[12px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-[11px] text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">
                 {count}
               </span>
             </button>
           ))}
-        </div>
-        <label className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3 text-[13px] text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200">
-          <Filter size={15} className="text-neutral-500" />
-          <select
-            value={filter}
-            onChange={(event) => setFilter(event.target.value as typeof filter)}
-            className="bg-transparent text-[13px] outline-none"
-          >
-            <option value="all">全部</option>
-            <option value="builtin">内置</option>
-            <option value="user">自定义</option>
-            <option value="enabled">已启用</option>
-          </select>
-        </label>
       </div>
 
       {loading ? (
@@ -593,20 +549,20 @@ export function AssistantCenter({
           没有匹配的套件
         </div>
       ) : (
-        <div className="grid gap-5 xl:grid-cols-2">
+        <div className="grid gap-3 xl:grid-cols-2">
           {filteredAssistants.map((assistant) => {
             const stats = suiteStats(assistant)
             const builtIn = assistant.built_in ?? assistant.builtIn ?? false
             return (
               <article
                 key={assistant.id}
-                className="min-w-0 rounded-md bg-neutral-50 p-4 transition-colors hover:bg-neutral-100 dark:bg-neutral-900/60 dark:hover:bg-neutral-900"
+                className="min-w-0 rounded-md bg-neutral-50 p-3.5 transition-colors hover:bg-neutral-100 dark:bg-neutral-900/60 dark:hover:bg-neutral-900"
               >
-                <div className="flex min-w-0 gap-4">
+                <div className="flex min-w-0 gap-3">
                   <button
                     type="button"
                     onClick={() => openDetail(assistant)}
-                    className="grid size-12 shrink-0 place-items-center rounded-md border border-neutral-200 bg-white text-[18px] font-semibold text-neutral-600 hover:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300"
+                    className="grid size-11 shrink-0 place-items-center rounded-md border border-neutral-200 bg-white text-[17px] font-semibold text-neutral-600 hover:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300"
                     style={{ color: assistant.color || '#6A8FBD' }}
                     aria-label={`打开 ${assistant.name}`}
                   >
@@ -618,7 +574,7 @@ export function AssistantCenter({
                     className="min-w-0 flex-1 text-left"
                   >
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-[16px] font-semibold text-neutral-950 dark:text-neutral-50">
+                      <span className="truncate text-[15px] font-semibold text-neutral-950 dark:text-neutral-50">
                         {assistant.name}
                       </span>
                       {builtIn && (
@@ -630,7 +586,7 @@ export function AssistantCenter({
                     <div className="mt-0.5 truncate text-[12px] font-medium text-neutral-500">
                       @{assistant.author || (builtIn ? 'Kivio' : 'Local')}
                     </div>
-                    <p className="mt-3 line-clamp-2 text-[13px] leading-relaxed text-neutral-600 dark:text-neutral-400">
+                    <p className="mt-2 line-clamp-2 text-[12px] leading-relaxed text-neutral-600 dark:text-neutral-400">
                       {assistant.description || '未设置描述'}
                     </p>
                   </button>
@@ -645,7 +601,7 @@ export function AssistantCenter({
                     <Plus size={20} />
                   </button>
                 </div>
-                <div className="mt-5 flex items-center justify-between gap-3 text-[13px] text-neutral-500 dark:text-neutral-400">
+                <div className="mt-4 flex items-center justify-between gap-3 text-[12px] text-neutral-500 dark:text-neutral-400">
                   <div className="flex min-w-0 flex-wrap gap-x-4 gap-y-1">
                     <span>{stats.skills} 个技能</span>
                     <span>{stats.connectors} 个数据连接</span>
@@ -1110,27 +1066,33 @@ export function AssistantCenter({
   return (
     <div className="h-full min-h-0 bg-white text-neutral-900 dark:bg-[#212121] dark:text-neutral-100">
       <main className="custom-scrollbar h-full min-h-0 overflow-y-auto px-6 py-6">
-        <div className="mx-auto max-w-7xl space-y-6">
-          <header className="assistant-center-header flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <h1 className="text-[30px] font-semibold tracking-normal text-neutral-950 dark:text-neutral-50">
+        <div className="mx-auto max-w-7xl space-y-4">
+          <header className="assistant-center-header flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="grid size-9 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                aria-label="返回聊天"
+                title="返回聊天"
+              >
+                <ArrowLeft size={16} />
+              </button>
+              <h1 className="truncate text-[24px] font-semibold tracking-normal text-neutral-950 dark:text-neutral-50">
                 专家套件
               </h1>
-              <p className="mt-2 text-[15px] leading-relaxed text-neutral-500 dark:text-neutral-400">
-                专家套件是面向角色和行业的工具套件，在对话中组合助手、技能、连接和快捷命令。
-              </p>
-            </div>
-            <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
               <button
                 type="button"
                 onClick={() => void loadAssistants(selectedId)}
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                className="grid size-9 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
                 aria-label="刷新套件"
                 title="刷新"
               >
                 <RefreshCw size={16} />
               </button>
-              <div className="relative min-w-0 flex-1 sm:w-[280px]">
+            </div>
+            <div className="assistant-center-toolbar ml-auto flex min-w-0 flex-1 items-center justify-end gap-2">
+              <div className="assistant-center-search relative min-w-[180px] flex-1 sm:max-w-[360px]">
                 <Search
                   size={16}
                   className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400"
@@ -1140,25 +1102,16 @@ export function AssistantCenter({
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="搜索套件..."
-                  className="h-10 w-full rounded-md border border-neutral-200 bg-white pl-9 pr-3 text-[14px] outline-none placeholder:text-neutral-400 focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                  className="h-9 w-full rounded-md border border-neutral-200 bg-white pl-9 pr-3 text-[13px] outline-none placeholder:text-neutral-400 focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
                 />
               </div>
               <button
                 type="button"
                 onClick={handleCreate}
-                className="flex h-10 shrink-0 items-center justify-center gap-2 rounded-md bg-neutral-950 px-4 text-[14px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-950 dark:hover:bg-neutral-200"
+                className="flex h-9 shrink-0 items-center justify-center gap-2 rounded-md bg-neutral-950 px-3 text-[13px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-950 dark:hover:bg-neutral-200"
               >
-                <Plus size={17} />
+                <Plus size={16} />
                 创建
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="grid h-10 w-10 shrink-0 place-items-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
-                aria-label="关闭套件中心"
-                title="关闭"
-              >
-                <X size={17} />
               </button>
             </div>
           </header>
