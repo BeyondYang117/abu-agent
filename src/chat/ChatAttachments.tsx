@@ -105,7 +105,7 @@ function FileAttachmentChip({
 }) {
   const chipClass =
     variant === 'composer'
-      ? 'flex max-w-full items-center gap-2 rounded-full border border-neutral-200/90 bg-neutral-50 px-2.5 py-1.5 text-[12px] text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200'
+      ? 'inline-flex max-w-[min(100%,13rem)] items-center gap-1 rounded-lg border border-neutral-200/90 bg-neutral-50 py-0.5 pl-1.5 pr-0.5 text-[11px] text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200'
       : variant === 'user'
         ? 'flex max-w-full items-center gap-2 rounded-lg bg-black/[0.05] px-2.5 py-2 text-sm text-neutral-700 dark:bg-white/[0.08] dark:text-neutral-200'
         : 'flex max-w-full items-center gap-2 rounded-lg border border-neutral-200/80 px-2.5 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-200'
@@ -115,19 +115,29 @@ function FileAttachmentChip({
       <button
         type="button"
         onClick={() => void openAttachment(attachment, conversationId)}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
+        className={`flex min-w-0 items-center text-left hover:opacity-80 ${variant === 'composer' ? 'gap-1' : 'flex-1 gap-2'}`}
         title={attachment.name}
       >
-        <FileText size={15} strokeWidth={1.8} className="shrink-0 text-neutral-500" />
+        <FileText
+          size={variant === 'composer' ? 12 : 15}
+          strokeWidth={1.8}
+          className="shrink-0 text-neutral-500"
+        />
         <span className="min-w-0 truncate">{attachment.name}</span>
       </button>
       {onRemove ? (
         <button
           type="button"
           onClick={() => onRemove(attachment.id)}
-          className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-black/[0.06] hover:text-neutral-700 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100"
+          className={
+            variant === 'composer'
+              ? 'flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-neutral-400 hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.08] dark:hover:text-neutral-200'
+              : 'shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-black/[0.06] hover:text-neutral-700 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100'
+          }
+          title="移除"
+          aria-label="移除"
         >
-          移除
+          {variant === 'composer' ? <X size={11} strokeWidth={2.4} /> : '移除'}
         </button>
       ) : null}
     </div>
@@ -146,7 +156,7 @@ export function ChatAttachments({
   const files = attachments.filter((item) => item.type !== 'image')
 
   return (
-    <div className={variant === 'composer' ? 'space-y-2' : 'mt-2 space-y-2'}>
+    <div className={variant === 'composer' ? 'space-y-1.5' : 'mt-2 space-y-2'}>
       {images.length > 0 && (
         <div className={variant === 'composer' ? 'flex flex-wrap gap-2' : 'flex flex-col gap-2'}>
           {images.map((attachment) => (
@@ -177,7 +187,7 @@ export function ChatAttachments({
         </div>
       )}
       {files.length > 0 && (
-        <div className="flex flex-col gap-1.5">
+        <div className={variant === 'composer' ? 'flex flex-wrap gap-1.5' : 'flex flex-col gap-1.5'}>
           {files.map((attachment) => (
             <FileAttachmentChip
               key={attachment.id}

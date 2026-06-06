@@ -8,10 +8,30 @@ import { api, type ChatToolDefinition } from '../api/tauri'
 import type { PendingAttachment } from './types'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
-const DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'xlsm', 'csv', 'tsv']
-const SUPPORTED_ATTACHMENT_EXTENSIONS = [...IMAGE_EXTENSIONS, ...DOCUMENT_EXTENSIONS]
-const SUPPORTED_ATTACHMENT_LABEL = '图片、PDF、Word、Excel/CSV/TSV'
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+function isAttachableClipboardFile(file: File): boolean {
+  return Boolean(file.name?.trim()) || file.size > 0
+}
+
+function insertTextAtCursor(
+  textarea: HTMLTextAreaElement,
+  text: string,
+  currentValue: string,
+  setValue: (value: string) => void,
+) {
+  const start = textarea.selectionStart
+  const end = textarea.selectionEnd
+  const next = `${currentValue.slice(0, start)}${text}${currentValue.slice(end)}`
+  setValue(next)
+  const caret = start + text.length
+  requestAnimationFrame(() => {
+    textarea.selectionStart = caret
+    textarea.selectionEnd = caret
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
+  })
+}
 
 function shouldComposerAutoFocus(activeElement: Element | null): boolean {
   if (!activeElement || activeElement === document.body || activeElement === document.documentElement) {
@@ -123,12 +143,9 @@ export function InputBar({
     (next: PendingAttachment[], options?: { imagesOnly?: boolean }) => {
       const filtered = options?.imagesOnly
         ? next.filter((attachment) => attachment.type === 'image')
-        : next.filter((attachment) => {
-          const ext = attachment.name.split('.').pop()?.toLowerCase() ?? ''
-          return SUPPORTED_ATTACHMENT_EXTENSIONS.includes(ext)
-        })
+        : next.filter((attachment) => attachment.name.trim() !== '')
       if (filtered.length === 0) {
-        setAttachmentError(options?.imagesOnly ? '请拖入图片文件' : `仅支持${SUPPORTED_ATTACHMENT_LABEL}`)
+        setAttachmentError(options?.imagesOnly ? '请拖入图片文件' : '未识别到可添加的文件')
         return
       }
 
@@ -181,7 +198,10 @@ export function InputBar({
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (disabled || !isTauriRuntime()) return
 
-    const clipboardFiles = Array.from(e.clipboardData.files)
+    // 先阻止默认粘贴，避免复制文件时文件名作为纯文本落入输入框
+    e.preventDefault()
+
+    const attachableClipboardFiles = Array.from(e.clipboardData.files).filter(isAttachableClipboardFile)
     const nativePaths: string[] = []
     try {
       const native = await api.chatReadClipboardFiles()
@@ -193,14 +213,16 @@ export function InputBar({
     }
 
     const hasNativeFiles = nativePaths.length > 0
-    const hasClipboardFiles = clipboardFiles.some((file) => {
-      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-      return SUPPORTED_ATTACHMENT_EXTENSIONS.includes(ext)
-    })
+    const hasClipboardFiles = attachableClipboardFiles.length > 0
 
-    if (!hasNativeFiles && !hasClipboardFiles) return
+    if (!hasNativeFiles && !hasClipboardFiles) {
+      const text = e.clipboardData.getData('text/plain')
+      if (text && textareaRef.current) {
+        insertTextAtCursor(textareaRef.current, text, input, setInput)
+      }
+      return
+    }
 
-    e.preventDefault()
     setAttachmentError('')
 
     try {
@@ -208,9 +230,8 @@ export function InputBar({
 
       if (hasNativeFiles) {
         pastedAttachments.push(...attachmentsFromPaths(nativePaths))
-      } else for (const [index, file] of clipboardFiles.entries()) {
+      } else for (const [index, file] of attachableClipboardFiles.entries()) {
         const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-        if (!SUPPORTED_ATTACHMENT_EXTENSIONS.includes(ext)) continue
 
         if (file.type.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext)) {
           const imageExt = file.type.startsWith('image/')
@@ -252,7 +273,7 @@ export function InputBar({
       }
 
       if (pastedAttachments.length === 0) {
-        setAttachmentError(`仅支持${SUPPORTED_ATTACHMENT_LABEL}`)
+        setAttachmentError('未识别到可添加的文件')
         return
       }
 
@@ -273,20 +294,6 @@ export function InputBar({
       const selected = await open({
         multiple: true,
         directory: false,
-        filters: [
-          {
-            name: '支持的附件',
-            extensions: SUPPORTED_ATTACHMENT_EXTENSIONS,
-          },
-          {
-            name: '图片',
-            extensions: IMAGE_EXTENSIONS,
-          },
-          {
-            name: '文档与表格',
-            extensions: DOCUMENT_EXTENSIONS,
-          },
-        ],
       })
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
       if (paths.length === 0) return

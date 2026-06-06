@@ -635,10 +635,10 @@ pub(crate) fn chat_save_pasted_attachment(
     data_base64: String,
 ) -> Result<serde_json::Value, String> {
     let safe_name = sanitize_attachment_name(&name);
-    if !is_supported_attachment_extension(&safe_name) {
+    if !is_attachable_file_name(&safe_name) {
         return Ok(serde_json::json!({
             "success": false,
-            "error": "不支持的附件类型",
+            "error": "无效的文件名",
         }));
     }
 
@@ -695,7 +695,7 @@ pub(crate) fn chat_read_clipboard_files() -> Result<serde_json::Value, String> {
         .filter(|path| path.is_file())
         .filter_map(|path| {
             let name = path.file_name()?.to_string_lossy().to_string();
-            if !is_supported_attachment_extension(&name) {
+            if !is_attachable_file_name(&name) {
                 return None;
             }
             Some(serde_json::json!({
@@ -720,12 +720,8 @@ fn write_pasted_attachment_bytes(name: &str, bytes: &[u8]) -> Result<(PathBuf, S
     Ok((path, name.to_string()))
 }
 
-fn is_supported_attachment_extension(name: &str) -> bool {
-    matches!(
-        attachment_extension(name).as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "heif"
-            | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "xlsm" | "csv" | "tsv"
-    )
+fn is_attachable_file_name(name: &str) -> bool {
+    !name.trim().is_empty()
 }
 
 fn resolve_attachment_file_path(
@@ -3984,10 +3980,12 @@ mod tests {
     }
 
     #[test]
-    fn supported_attachment_extensions_include_documents() {
-        assert!(is_supported_attachment_extension("notes.pdf"));
-        assert!(is_supported_attachment_extension("sheet.xlsx"));
-        assert!(!is_supported_attachment_extension("archive.zip"));
+    fn attachable_file_names_accept_any_non_empty_name() {
+        assert!(is_attachable_file_name("notes.pdf"));
+        assert!(is_attachable_file_name("sheet.xlsx"));
+        assert!(is_attachable_file_name("archive.zip"));
+        assert!(is_attachable_file_name("main.rs"));
+        assert!(!is_attachable_file_name("   "));
     }
 
     #[test]
