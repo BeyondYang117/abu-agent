@@ -106,7 +106,7 @@ All translation and Lens hotkeys are remappable in Settings. Kivio Agent can als
 ## Quick Start
 
 1. **[Download the latest release](https://github.com/abu/kivio/releases/latest)**.
-   - macOS: choose the Apple Silicon or Intel DMG for your Mac.
+   - macOS: choose the Apple Silicon DMG.
    - Windows: choose the MSI or NSIS `.exe` installer.
 2. **Install and launch.**
    - macOS needs Accessibility and Screen Recording permissions for global hotkeys, paste-back, and screenshot capture.
@@ -160,11 +160,11 @@ If you used v2.4.4 or earlier under the old **KeyLingo** name, Kivio migrates yo
 
 ## Changelog
 
-- **v2.6.6** — Major Kivio Agent refresh: added local memory, expanded Assistant Center behavior, improved projects/sidebar polish, image/file attachment handling, image preview/viewer support, and a stronger Agent runtime for tool planning and image-generation side tasks. Document workflows now ship with bundled Pyodide, common data/document packages, and looser readable-file mounting for PDF/Word/Excel analysis. Provider tool support is now assumed by default, so the old provider-level tools toggle is gone.
+- **v2.6.7** — General polish release: restored the native-feeling Windows chat window frame with rounded corners and border, simplified Assistant Center so toolbar controls no longer collide with Windows window controls, and refreshed release packaging so macOS Apple Silicon DMG is built locally while GitHub Actions publishes Windows MSI/NSIS installers.
+- **v2.6.6** — Major Kivio Agent refresh: added local memory, expanded Assistant Center behavior, improved projects/sidebar polish, image/file attachment handling, image preview/viewer support, and a stronger Agent runtime for tool planning and image-generation side tasks. Document workflows now ship with bundled Pyodide, common data/document packages, and looser readable-file mounting for PDF/Word/Excel analysis. Provider tool support is assumed by default.
 - **v2.6.5** — Packaged the first full Kivio Agent wave: Chat client polish, MCP/Skill/native tool integration, bundled `pdf`/`docx`/`xlsx` Skills, document workflow improvements, Mixer auxiliary model routing, better tool/error display, and more stable Windows/macOS chat window chrome.
 - **v2.6.3** — Lens stability release: Esc close behavior is more reliable, screenshot follow-up context no longer repeats the Lens prompt on every turn, answer panels have better scroll room, and Settings hotkey editing handles Esc/Enter/save/clear flows more cleanly.
 - **v2.6.2** — Lens gained optional web search with Tavily and Exa, inline source blocks, and search-aware answers for current or ambiguous screen content. Settings opening and provider/model configuration were also smoothed out.
-- **v2.6.1** — Redesigned Settings with a cleaner sidebar, denser provider/model controls, refreshed visual styling, Windows freeze-frame capture options, and several Lens window lifecycle and capture-geometry fixes.
 
 See [GitHub Releases](https://github.com/abu/kivio/releases) for the full history. Kivio checks for updates on launch and points you to the latest release.
 
@@ -191,6 +191,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - Installers must include Pyodide core files, `python_stdlib.zip`, `pyodide-lock.json`, and local wheels for common packages such as `numpy`, `pandas`, `matplotlib`, `scipy`, `sympy`, `scikit-learn`, `statsmodels`, `pillow`, `seaborn`, `openpyxl`, `xlrd`, `et_xmlfile`, and `micropip`.
 - `run_python` must prefer packaged local Pyodide resources. CDN loading is only a fallback.
 - Before publishing, inspect the final DMG / MSI / NSIS artifacts and verify both bundled Skills and the Python/Pyodide runtime resources are present.
+- Current release flow builds the macOS Apple Silicon DMG locally and lets GitHub Actions publish the Windows MSI / NSIS installers.
 - Follow [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md) instead of releasing from memory.
 
 ## License
@@ -303,7 +304,7 @@ Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个�
 ## 快速开始
 
 1. **[下载最新版](https://github.com/abu/kivio/releases/latest)**。
-   - macOS：按你的芯片选择 Apple Silicon 或 Intel DMG。
+   - macOS：选择 Apple Silicon DMG。
    - Windows：选择 MSI 或 NSIS `.exe` 安装包。
 2. **安装并启动**。
    - macOS 需要授予辅助功能和屏幕录制权限，用于全局热键、粘回原应用和截图捕获。
@@ -357,11 +358,11 @@ Lens 仍然是从屏幕内容到答案的最快路径：
 
 ## 更新日志
 
-- **v2.6.6** —— Kivio Agent 大更新：新增本地记忆，扩展助手中心能力，优化项目/侧边栏体验，改进图片与文件附件、图片查看器，以及面向工具规划和图片生成副任务的 Agent 运行时。文档工作流随包带 Pyodide、常用数据/文档库，并放宽可读取本地文件挂载，PDF / Word / Excel 分析更稳。模型供应商默认支持工具调用，旧的服务商工具开关已移除。
+- **v2.6.7** —— 通用体验优化：恢复 Windows Chat 窗口接近原生应用的圆角、描边和边界效果；精简助手中心顶部工具栏，避免搜索、创建等控件和 Windows 右上角窗口按钮重叠；同步发布流程，macOS Apple Silicon DMG 改为本机构建上传，GitHub Actions 只发布 Windows MSI / NSIS 安装包。
+- **v2.6.6** —— Kivio Agent 大更新：新增本地记忆，扩展助手中心能力，优化项目/侧边栏体验，改进图片与文件附件、图片查看器，以及面向工具规划和图片生成副任务的 Agent 运行时。文档工作流随包带 Pyodide、常用数据/文档库，并放宽可读取本地文件挂载，PDF / Word / Excel 分析更稳。模型供应商默认支持工具调用。
 - **v2.6.5** —— 打包第一波完整 Kivio Agent 能力：Chat 客户端体验、MCP / Skill / 内置工具、内置 `pdf` / `docx` / `xlsx` Skills、文档工作流、Mixer 辅助模型路由、工具错误展示，以及更稳定的 Windows / macOS Chat 窗口外观。
 - **v2.6.3** —— Lens 稳定性版本：Esc 关闭更可靠，截图追问不再每轮重复注入 Lens 提问提示词，回答区域滚动空间更合理，设置页热键编辑的 Esc / Enter / 保存 / 清空流程更稳。
 - **v2.6.2** —— Lens 新增 Tavily / Exa 联网搜索、内联来源块和带来源的回答，适合需要实时信息或外部上下文的屏幕问题；同时优化设置窗口打开和服务商/模型配置体验。
-- **v2.6.1** —— 重设计设置界面：更清晰的侧边栏、更紧凑的服务商/模型控制、更新的视觉风格、Windows 冻结帧截图选项，以及多处 Lens 窗口生命周期和截图坐标修复。
 
 完整历史见 [GitHub Releases](https://github.com/abu/kivio/releases)。Kivio 启动时会检查更新，并指向最新版本。
 
@@ -388,6 +389,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - 安装包必须包含 Pyodide 核心文件、`python_stdlib.zip`、`pyodide-lock.json`，以及 `numpy`、`pandas`、`matplotlib`、`scipy`、`sympy`、`scikit-learn`、`statsmodels`、`pillow`、`seaborn`、`openpyxl`、`xlrd`、`et_xmlfile`、`micropip` 等本地 wheels。
 - `run_python` 必须优先使用随包 Pyodide 资源；CDN 只能作为兜底。
 - 发布前必须检查最终 DMG / MSI / NSIS，确认 Skills 和 Python / Pyodide 运行时资源都在安装包里。
+- 当前发布流程是在本机构建并上传 macOS Apple Silicon DMG，GitHub Actions 只发布 Windows MSI / NSIS 安装包。
 - 具体流程见 [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md)，不要凭记忆发版。
 
 ## 许可证
