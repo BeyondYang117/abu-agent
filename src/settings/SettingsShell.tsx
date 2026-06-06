@@ -2320,7 +2320,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       model={settings.defaultModels.vision.model || ''}
                       providers={settings.providers}
                       platform={platform}
-                      inheritLabel={t.mixerAutoModel}
+                      inheritLabel={t.mixerAutoVisionModel}
                       onChange={(providerId, model) => {
                         updateDefaultModel('vision', providerId, model)
                       }}
