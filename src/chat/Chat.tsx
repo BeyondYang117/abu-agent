@@ -219,6 +219,22 @@ function isLocallyCancelledPayload(
   return !cancelledRunId || !payload.runId || payload.runId === cancelledRunId
 }
 
+function isPlainBlankConversation(conversation: Conversation | null): boolean {
+  return Boolean(
+    conversation
+    && conversation.messages.length === 0
+    && !(conversation.assistant_id ?? conversation.assistantId),
+  )
+}
+
+function conversationUsesModel(
+  conversation: Conversation,
+  providerId: string,
+  model: string,
+): boolean {
+  return conversation.provider_id === providerId && conversation.model === model
+}
+
 export default function Chat({ onSettingsChange }: ChatProps) {
   const [chatView, setChatView] = useState<ChatView>(() => {
     const path = hashPath()
@@ -386,8 +402,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     locallyCancelledRunIdRef.current = null
   }, [])
 
-  const activeProviderId = currentConversation?.provider_id || draftProviderId
-  const activeModel = currentConversation?.model || draftModel
+  const currentConversationIsBlank = isPlainBlankConversation(currentConversation)
+  const activeProviderId = currentConversation && !currentConversationIsBlank
+    ? currentConversation.provider_id
+    : draftProviderId
+  const activeModel = currentConversation && !currentConversationIsBlank
+    ? currentConversation.model
+    : draftModel
   const storedActiveSkillId = currentConversation
     ? currentConversation.active_skill_id ?? currentConversation.activeSkillId ?? null
     : null
@@ -418,9 +439,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (!candidate) return false
     if (candidate.messages.length > 0) return false
     if (candidate.assistant_id ?? candidate.assistantId) return false
+    if (!conversationUsesModel(candidate, activeProviderId, activeModel)) return false
     if ((candidate.folder ?? '') !== (selectedProject?.name ?? '')) return false
     return true
-  }, [currentConversation, selectedProject?.name])
+  }, [activeModel, activeProviderId, currentConversation, selectedProject?.name])
   const currentAssistantSnapshot =
     currentConversation?.assistant_snapshot ?? currentConversation?.assistantSnapshot ?? null
   const currentAssistantId =
@@ -1204,6 +1226,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     let conversationIdForRun: string | null = null
     try {
       let conversation = currentConversation
+      if (
+        conversation
+        && isPlainBlankConversation(conversation)
+        && !conversationUsesModel(conversation, activeProviderId, activeModel)
+      ) {
+        conversation = null
+      }
       if (!conversation) {
         conversation = await chatApi.createConversation(
           activeProviderId || undefined,
