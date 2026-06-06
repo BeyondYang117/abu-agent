@@ -300,7 +300,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, basic ML, chart/data code, document analysis, and sandbox-compatible package installs. Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported; missing compatible packages may be installed inside the sandbox with micropip. To analyze Kivio attachment safe copies, pass their paths in files; Kivio mounts them into the Pyodide filesystem for this run. stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, basic ML, chart/data code, document analysis, and sandbox-compatible package installs. Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported; missing compatible packages may be installed inside the sandbox with micropip. To analyze local documents or Kivio attachments, pass readable file paths in files; Kivio copies them into the Pyodide filesystem for this run. stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -310,7 +310,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
                 "code": { "type": "string", "description": "Python source code" },
                 "files": {
                     "type": "array",
-                    "description": "Optional Kivio chat attachment safe-copy paths or temp file paths to mount into the Pyodide filesystem for this run",
+                    "description": "Optional readable local file paths to copy into the Pyodide filesystem for this run",
                     "items": { "type": "string" },
                     "maxItems": 8
                 },

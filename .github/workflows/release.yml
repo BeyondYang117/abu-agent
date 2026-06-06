@@ -21,7 +21,6 @@ on:
         type: choice
         options:
           - all
-          - macos-arm64
           - macos-intel
           - windows
 
@@ -38,11 +37,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-26 = Tahoe runner with Xcode 17 + macOS 26 SDK,需要它来编译
-          # Apple Intelligence sidecar(import FoundationModels)。低版本 macOS runner SDK 没这个 framework。
-          - id: macos-arm64
-            platform: macos-26
-            args: "--bundles dmg"
           - id: macos-intel
             platform: macos-26-intel
             args: "--bundles dmg"
@@ -89,7 +83,7 @@ jobs:
           releaseBody: |
             Automated build artifacts for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
-            - macOS: DMG (Apple Silicon + Intel)
+            - macOS: DMG (Intel; Apple Silicon is built and uploaded locally)
             - Windows: MSI + NSIS (.exe)
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}

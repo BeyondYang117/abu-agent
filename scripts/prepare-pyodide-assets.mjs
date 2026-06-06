@@ -45,6 +45,21 @@ const PYPI_WHEELS = [
     version: '0.13.2',
     pyodideDeps: ['numpy', 'pandas', 'matplotlib'],
   },
+  {
+    name: 'openpyxl',
+    version: '3.1.5',
+    pyodideDeps: ['pandas'],
+  },
+  {
+    name: 'et_xmlfile',
+    version: '2.0.0',
+    pyodideDeps: [],
+  },
+  {
+    name: 'xlrd',
+    version: '2.0.1',
+    pyodideDeps: ['pandas'],
+  },
 ]
 
 function readJson(path) {

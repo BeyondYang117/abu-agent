@@ -7,7 +7,6 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 
 use crate::{
-    chat::storage::conversations_dir,
     settings::{
         ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
         SKILL_SCRIPT_MIN_TIMEOUT_MS,
@@ -25,7 +24,7 @@ use super::{
 };
 
 const TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-const MAX_PYTHON_INPUT_FILE_BYTES: u64 = 24 * 1024 * 1024;
+const MAX_PYTHON_INPUT_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_PYTHON_INPUT_FILES: usize = 8;
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,31 +58,8 @@ fn sanitize_python_input_name(path: &Path) -> String {
     }
 }
 
-fn path_is_chat_attachment(path: &Path, app: &AppHandle) -> bool {
-    let Ok(conversations) = conversations_dir(app).and_then(|dir| {
-        fs::canonicalize(dir).map_err(|err| format!("Resolve conversations dir failed: {err}"))
-    }) else {
-        return false;
-    };
-    if !path.starts_with(&conversations) {
-        return false;
-    }
-    path.parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .map(|name| name.ends_with("_attachments"))
-        .unwrap_or(false)
-}
-
-fn path_is_temp_file(path: &Path) -> bool {
-    let Ok(temp) = fs::canonicalize(std::env::temp_dir()) else {
-        return false;
-    };
-    path.starts_with(temp)
-}
-
 fn collect_python_input_files(
-    app: &AppHandle,
+    _app: &AppHandle,
     arguments: &Value,
 ) -> Result<Vec<PythonInputFilePayload>, String> {
     let Some(files) = arguments.get("files") else {
@@ -112,12 +88,6 @@ fn collect_python_input_files(
                 "run_python input is not a file: {}",
                 path.display()
             ));
-        }
-        if !path_is_chat_attachment(&path, app) && !path_is_temp_file(&path) {
-            return Err(
-                "run_python input files must be Kivio chat attachment safe copies or temp files"
-                    .to_string(),
-            );
         }
         let metadata =
             fs::metadata(&path).map_err(|err| format!("Read input metadata failed: {err}"))?;

@@ -20,6 +20,8 @@ const PYODIDE_PACKAGE_IMPORTS: Array<[RegExp, string]> = [
   [/(^|\n)\s*(import|from)\s+(PIL|pillow)\b/, 'pillow'],
   [/(^|\n)\s*(import|from)\s+seaborn\b/, 'seaborn'],
   [/(^|\n)\s*(import|from)\s+micropip\b/, 'micropip'],
+  [/(^|\n)\s*(import|from)\s+openpyxl\b/, 'openpyxl'],
+  [/(^|\n)\s*(import|from)\s+xlrd\b/, 'xlrd'],
 ]
 const PYTHON_SANDBOX_FAILURE_GUIDANCE =
   '不要使用 run_command/pip 安装或修改本机 Python 环境来绕过沙盒；请直接基于已有数据用文本/表格回答，除非用户明确要求修改本机环境。'
@@ -27,7 +29,7 @@ const PYTHON_IMAGE_ARTIFACT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif
 const PYTHON_ARTIFACT_SCAN_ROOTS = ['/home/pyodide', '/tmp']
 const MAX_PYTHON_IMAGE_ARTIFACT_BYTES = 12 * 1024 * 1024
 const MAX_PYTHON_IMAGE_ARTIFACTS = 12
-const MAX_PYTHON_INPUT_FILE_BYTES = 24 * 1024 * 1024
+const MAX_PYTHON_INPUT_FILE_BYTES = 100 * 1024 * 1024
 const PYODIDE_IMPORT_PACKAGE_ALIASES: Record<string, string> = {
   PIL: 'pillow',
   bs4: 'beautifulsoup4',
@@ -36,6 +38,8 @@ const PYODIDE_IMPORT_PACKAGE_ALIASES: Record<string, string> = {
   skimage: 'scikit-image',
   tavily: 'tavily-python',
   yaml: 'pyyaml',
+  openpyxl: 'openpyxl',
+  xlrd: 'xlrd',
 }
 
 type PyodideFsStat = {
