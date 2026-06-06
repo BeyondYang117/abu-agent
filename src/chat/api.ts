@@ -1,6 +1,6 @@
 // Chat API 调用封装
 import { invoke } from '@tauri-apps/api/core'
-import { estimateTokens } from '../lens/markdown'
+import { estimateTokens } from '../utils/tokens'
 import type {
   ChatAssistant,
   ChatAssistantSnapshot,

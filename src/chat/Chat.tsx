@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Wrench, X } from 'lucide-react'
 import { Sidebar } from './Sidebar'
-import { AssistantCenter } from './AssistantCenter'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
-import { MessageList, type AssistantStreamStats } from './MessageList'
+import type { AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
 import { WindowControls } from './WindowControls'
@@ -14,6 +13,7 @@ import {
   chatTitlebarPillButtonClass,
   chatTitlebarPillIconClass,
   chatTitlebarRowClass,
+  isWindows,
   usesNativeTitlebar,
 } from './platform'
 import type {
@@ -27,19 +27,47 @@ import type {
   ToolCallRecord,
 } from './types'
 import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToolProgressPayload } from '../api/tauri'
-import { SettingsShell, type SettingsShellHandle, type SettingsTab } from '../settings/SettingsShell'
+import type { SettingsShellHandle, SettingsTab } from '../settings/SettingsShell'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
-import { estimateTokens } from '../lens/markdown'
+import { estimateTokens } from '../utils/tokens'
 import {
   CHAT_MIN_SIZE_COLLAPSED,
   CHAT_MIN_SIZE_EXPANDED,
   forgetRememberedChatRoute,
   rememberChatSize,
 } from './persistence'
-import { runPythonInSandbox } from './pyodideRunner'
 import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { TypewriterText } from './TypewriterText'
 import { pickRandomChatEmptyGreeting } from './utils'
+import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/chatTools'
+
+const AssistantCenter = lazy(() => import('./AssistantCenter').then((module) => ({
+  default: module.AssistantCenter,
+})))
+
+const SettingsShell = lazy(() => import('../settings/SettingsShell').then((module) => ({
+  default: module.SettingsShell,
+})))
+
+const MessageList = lazy(() => import('./MessageList').then((module) => ({
+  default: module.MessageList,
+})))
+
+function ChatPaneLoading() {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-white dark:bg-[#212121]">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
+    </div>
+  )
+}
+
+function MessageListLoading() {
+  return (
+    <div className="flex flex-1 items-center justify-center bg-white dark:bg-[#212121]">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
+    </div>
+  )
+}
 
 type ChatView = 'conversation' | 'settings' | 'assistants'
 
@@ -71,6 +99,20 @@ function isChatAssistantCenterPath(path: string): boolean {
 
 function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+function scheduleIdleTask(callback: () => void, timeout = 1200): () => void {
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (cb: () => void, options?: { timeout?: number }) => number
+    cancelIdleCallback?: (handle: number) => void
+  }
+  if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
+    const handle = idleWindow.requestIdleCallback(callback, { timeout })
+    return () => idleWindow.cancelIdleCallback?.(handle)
+  }
+
+  const handle = window.setTimeout(callback, timeout)
+  return () => window.clearTimeout(handle)
 }
 
 function toolEventToRecord(payload: ChatToolProgressPayload): ToolCallRecord {
@@ -414,8 +456,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
       const provider = settings.providers.find((item) => item.id === activeProviderId)
       const anyMcpEnabled = chatTools.enabled && chatTools.servers.some((server) => server.enabled)
-      const anyNativeEnabled = Boolean(chatTools.nativeTools?.webSearch)
-      const skillRuntimeEnabled = Boolean(chatTools.nativeTools?.skillRuntime)
+      const anyNativeEnabled = hasEnabledNativeBuiltinTool(chatTools.nativeTools)
+      const skillRuntimeEnabled = hasEnabledSkillRuntime(chatTools.nativeTools)
       const requested = anyMcpEnabled || anyNativeEnabled || skillRuntimeEnabled
       setToolsRequested(requested)
       if (!requested) {
@@ -552,14 +594,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   useEffect(() => {
     void loadDefaultModel()
-    const timer = window.setTimeout(() => {
+    const cancelIdleLoad = scheduleIdleTask(() => {
       void loadSkills()
-    }, 120)
-    return () => window.clearTimeout(timer)
+    })
+    return cancelIdleLoad
   }, [loadDefaultModel, loadSkills])
 
   useEffect(() => {
-    void refreshToolIndicator()
+    return scheduleIdleTask(() => {
+      void refreshToolIndicator()
+    }, 1500)
   }, [refreshToolIndicator])
 
   const openEmbeddedSettings = useCallback((tab: SettingsTab = 'chat') => {
@@ -593,9 +637,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       action()
       return
     }
+    if (!settingsRef.current) {
+      setChatView('conversation')
+      syncConversationRoute(currentConversationIdRef.current)
+      action()
+      return
+    }
     pendingAfterSettingsCloseRef.current = action
     settingsRef.current?.requestClose()
-  }, [chatView])
+  }, [chatView, syncConversationRoute])
 
   const handleSettingsChange = useCallback(() => {
     onSettingsChange()
@@ -866,6 +916,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         if (cancelled) return
         void (async () => {
           try {
+            const { runPythonInSandbox } = await import('./pyodideRunner')
             const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs)
             await api.chatPythonComplete(
               payload.runId,
@@ -1433,7 +1484,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   return (
     <div
-      className={`chat-window-shell${usesNativeTitlebar ? ' chat-window-shell--native-titlebar' : ''}`}
+      className={`chat-window-shell${usesNativeTitlebar ? ' chat-window-shell--native-titlebar' : ''}${isWindows ? ' chat-window-shell--solid' : ''}`}
       onPointerEnter={requestWindowFocus}
       onPointerMove={requestWindowFocus}
       onPointerDownCapture={requestWindowFocus}
@@ -1460,24 +1511,28 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
         {chatView === 'settings' ? (
           <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
-            <SettingsShell
-              ref={settingsRef}
-              variant="embedded"
-              initialTab={settingsInitialTab}
-              reserveTrafficLightSpace={sidebarCollapsed && usesNativeTitlebar}
-              onClose={handleSettingsClose}
-              onSettingsChange={handleSettingsChange}
-            />
+            <Suspense fallback={<ChatPaneLoading />}>
+              <SettingsShell
+                ref={settingsRef}
+                variant="embedded"
+                initialTab={settingsInitialTab}
+                reserveTrafficLightSpace={sidebarCollapsed && usesNativeTitlebar}
+                onClose={handleSettingsClose}
+                onSettingsChange={handleSettingsChange}
+              />
+            </Suspense>
           </div>
         ) : chatView === 'assistants' ? (
           <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
-            <AssistantCenter
-              skills={enabledSkills}
-              currentAssistantId={currentAssistantId}
-              onStartAssistantChat={(assistant) => void handleStartAssistantChat(assistant)}
-              onApplyAssistant={currentConversation ? (assistantId) => void handleApplyAssistant(assistantId) : undefined}
-              onClose={handleAssistantCenterClose}
-            />
+            <Suspense fallback={<ChatPaneLoading />}>
+              <AssistantCenter
+                skills={enabledSkills}
+                currentAssistantId={currentAssistantId}
+                onStartAssistantChat={(assistant) => void handleStartAssistantChat(assistant)}
+                onApplyAssistant={currentConversation ? (assistantId) => void handleApplyAssistant(assistantId) : undefined}
+                onClose={handleAssistantCenterClose}
+              />
+            </Suspense>
           </div>
         ) : (
           <div className="chat-main-pane relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
@@ -1620,20 +1675,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 </div>
               ) : (
                 <>
-                  <MessageList
-                    conversationId={currentConversation?.id}
-                    messages={displayMessages}
-                    streaming={streaming}
-                    streamingContent={streamingContent}
-                    streamingReasoning={streamingReasoning}
-                    reasoningStreaming={reasoningStreaming}
-                    streamingToolCalls={streamingToolCalls}
-                    error={streamError}
-                    lastAssistantStreamStats={lastAssistantStreamStats}
-                    onUpdateMessage={handleUpdateMessage}
-                    onRegenerateMessage={handleRegenerateMessage}
-                    onDeleteMessage={handleDeleteMessage}
-                  />
+                  <Suspense fallback={<MessageListLoading />}>
+                    <MessageList
+                      conversationId={currentConversation?.id}
+                      messages={displayMessages}
+                      streaming={streaming}
+                      streamingContent={streamingContent}
+                      streamingReasoning={streamingReasoning}
+                      reasoningStreaming={reasoningStreaming}
+                      streamingToolCalls={streamingToolCalls}
+                      error={streamError}
+                      lastAssistantStreamStats={lastAssistantStreamStats}
+                      onUpdateMessage={handleUpdateMessage}
+                      onRegenerateMessage={handleRegenerateMessage}
+                      onDeleteMessage={handleDeleteMessage}
+                    />
+                  </Suspense>
                   <InputBar
                     onSend={(content, attachments) => void handleSendMessage(content, attachments)}
                     disabled={streaming || sendInFlightRef.current}

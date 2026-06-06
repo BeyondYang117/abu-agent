@@ -1,16 +1,28 @@
 import { useEffect, useRef } from 'react'
+import { isWindows } from './platform'
 
 const GRID_SPACING = 20
 const DOT_RADIUS = 1
 const PATTERN_MIN_SEC = 7
 const PATTERN_MAX_SEC = 12
+const TARGET_FRAME_MS = 1000 / 20
+const MAX_CANVAS_DPR = 1.5
+const MAX_CANVAS_DPR_WINDOWS = 1
+const ALPHA_BUCKETS = 12
 
 type Dot = {
   x: number
   y: number
+  normX: number
+  normY: number
+  diag: number
+  diagRev: number
+  ringDistance: number
   base: number
   phase: number
   speed: number
+  fade: number
+  focus: number
 }
 
 type PatternId =
@@ -59,6 +71,9 @@ function pickNextPattern(previous?: PatternId): PatternId {
 
 function buildDots(width: number, height: number): Dot[] {
   const dots: Dot[] = []
+  const cx = width * 0.5
+  const cy = height * 0.42
+  const maxR = Math.hypot(width, height) * 0.55
   for (let y = GRID_SPACING / 2; y < height; y += GRID_SPACING) {
     for (let x = GRID_SPACING / 2; x < width; x += GRID_SPACING) {
       const gx = Math.floor(x / GRID_SPACING)
@@ -66,12 +81,21 @@ function buildDots(width: number, height: number): Dot[] {
       const seed = (gx * 73856093) ^ (gy * 19349663)
       const depth = seededUnit(seed)
       const rhythm = seededUnit(seed * 48271)
+      const normX = x / width
+      const normY = y / height
       dots.push({
         x,
         y,
+        normX,
+        normY,
+        diag: (normX + normY) * 0.5,
+        diagRev: (normX + (1 - normY)) * 0.5,
+        ringDistance: Math.hypot(x - cx, y - cy) / maxR,
         base: 0.08 + depth * 0.14,
         phase: rhythm * Math.PI * 2,
         speed: 0.3 + depth * 0.5,
+        fade: centerFade(x, y, width, height),
+        focus: contentFocus(x, y, width, height),
       })
     }
   }
@@ -105,8 +129,7 @@ function patternProgress(localSec: number, durationSec: number): number {
 }
 
 function linearBand(
-  axisValue: number,
-  axisMax: number,
+  norm: number,
   localSec: number,
   durationSec: number,
   direction: 1 | -1,
@@ -114,7 +137,6 @@ function linearBand(
 ): number {
   const base = patternProgress(localSec, durationSec)
   const center = direction === 1 ? base : 1.16 - base
-  const norm = axisValue / axisMax
   const main = gaussianBand(norm, center, 0.085)
   const trail = gaussianBand(norm, center + trailOffset * direction, 0.1) * 0.4
   return Math.min(1, main + trail)
@@ -122,69 +144,54 @@ function linearBand(
 
 function computePatternGlow(
   id: PatternId,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
+  dot: Dot,
   localSec: number,
   durationSec: number,
 ): number {
-  const focus = contentFocus(x, y, width, height)
-
   switch (id) {
     case 'band-lr':
-      return linearBand(x, width, localSec, durationSec, 1, -0.11) * focus
+      return linearBand(dot.normX, localSec, durationSec, 1, -0.11) * dot.focus
     case 'band-rl':
-      return linearBand(x, width, localSec, durationSec, -1, 0.11) * focus
+      return linearBand(dot.normX, localSec, durationSec, -1, 0.11) * dot.focus
     case 'band-tb':
-      return linearBand(y, height, localSec, durationSec, 1, -0.11) * focus
+      return linearBand(dot.normY, localSec, durationSec, 1, -0.11) * dot.focus
     case 'band-bt':
-      return linearBand(y, height, localSec, durationSec, -1, 0.11) * focus
+      return linearBand(dot.normY, localSec, durationSec, -1, 0.11) * dot.focus
     case 'band-diag': {
-      const diag = (x / width + y / height) * 0.5
       const center = patternProgress(localSec, durationSec)
-      const main = gaussianBand(diag, center, 0.07)
-      const trail = gaussianBand(diag, center - 0.09, 0.085) * 0.38
-      return Math.min(1, (main + trail) * focus)
+      const main = gaussianBand(dot.diag, center, 0.07)
+      const trail = gaussianBand(dot.diag, center - 0.09, 0.085) * 0.38
+      return Math.min(1, (main + trail) * dot.focus)
     }
     case 'band-diag-rev': {
-      const diag = (x / width + (height - y) / height) * 0.5
       const center = patternProgress(localSec, durationSec)
-      const main = gaussianBand(diag, center, 0.07)
-      const trail = gaussianBand(diag, center - 0.09, 0.085) * 0.38
-      return Math.min(1, (main + trail) * focus)
+      const main = gaussianBand(dot.diagRev, center, 0.07)
+      const trail = gaussianBand(dot.diagRev, center - 0.09, 0.085) * 0.38
+      return Math.min(1, (main + trail) * dot.focus)
     }
     case 'ring-out': {
-      const cx = width * 0.5
-      const cy = height * 0.42
-      const maxR = Math.hypot(width, height) * 0.55
-      const dist = Math.hypot(x - cx, y - cy) / maxR
       const center = patternProgress(localSec, durationSec)
-      const main = gaussianBand(dist, center, 0.09)
-      const trail = gaussianBand(dist, center - 0.08, 0.1) * 0.35
-      return Math.min(1, (main + trail) * focus)
+      const main = gaussianBand(dot.ringDistance, center, 0.09)
+      const trail = gaussianBand(dot.ringDistance, center - 0.08, 0.1) * 0.35
+      return Math.min(1, (main + trail) * dot.focus)
     }
     case 'ring-in': {
-      const cx = width * 0.5
-      const cy = height * 0.42
-      const maxR = Math.hypot(width, height) * 0.55
-      const dist = Math.hypot(x - cx, y - cy) / maxR
       const center = 1.16 - patternProgress(localSec, durationSec)
-      const main = gaussianBand(dist, center, 0.09)
-      const trail = gaussianBand(dist, center + 0.08, 0.1) * 0.35
-      return Math.min(1, (main + trail) * focus)
+      const main = gaussianBand(dot.ringDistance, center, 0.09)
+      const trail = gaussianBand(dot.ringDistance, center + 0.08, 0.1) * 0.35
+      return Math.min(1, (main + trail) * dot.focus)
     }
     case 'wave-h': {
-      const phase = (x / width) * Math.PI * 5 - localSec * 2.4
+      const phase = dot.normX * Math.PI * 5 - localSec * 2.4
       const wave = Math.pow(Math.max(0, Math.sin(phase)), 2.2)
-      const drift = gaussianBand(x / width, patternProgress(localSec, durationSec), 0.22) * 0.35
-      return Math.min(1, (wave * 0.65 + drift) * focus)
+      const drift = gaussianBand(dot.normX, patternProgress(localSec, durationSec), 0.22) * 0.35
+      return Math.min(1, (wave * 0.65 + drift) * dot.focus)
     }
     case 'wave-v': {
-      const phase = (y / height) * Math.PI * 5 - localSec * 2.4
+      const phase = dot.normY * Math.PI * 5 - localSec * 2.4
       const wave = Math.pow(Math.max(0, Math.sin(phase)), 2.2)
-      const drift = gaussianBand(y / height, patternProgress(localSec, durationSec), 0.22) * 0.35
-      return Math.min(1, (wave * 0.65 + drift) * focus)
+      const drift = gaussianBand(dot.normY, patternProgress(localSec, durationSec), 0.22) * 0.35
+      return Math.min(1, (wave * 0.65 + drift) * dot.focus)
     }
     default:
       return 0
@@ -216,7 +223,10 @@ function prefersReducedMotion(): boolean {
 export function ChatDotGridBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const frameRef = useRef<number>()
+  const frameTimerRef = useRef<number>()
   const dotsRef = useRef<Dot[]>([])
+  const bucketsRef = useRef<Dot[][]>(Array.from({ length: ALPHA_BUCKETS }, () => []))
+  const sizeRef = useRef({ width: 0, height: 0, dpr: 0 })
   const patternRef = useRef<ActivePattern | null>(null)
   const darkRef = useRef(readDarkMode())
   const reducedMotionRef = useRef(prefersReducedMotion())
@@ -225,15 +235,38 @@ export function ChatDotGridBackground() {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true })
     if (!ctx) return
+    const buckets = bucketsRef.current
+    let disposed = false
+
+    const clearScheduledFrame = () => {
+      if (frameRef.current) {
+        window.cancelAnimationFrame(frameRef.current)
+        frameRef.current = undefined
+      }
+      if (frameTimerRef.current) {
+        window.clearTimeout(frameTimerRef.current)
+        frameTimerRef.current = undefined
+      }
+    }
 
     const resize = () => {
       const parent = canvas.parentElement
       if (!parent) return
       const width = Math.max(1, Math.floor(parent.clientWidth))
       const height = Math.max(1, Math.floor(parent.clientHeight))
-      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const maxDpr = isWindows ? MAX_CANVAS_DPR_WINDOWS : MAX_CANVAS_DPR
+      const dpr = Math.min(window.devicePixelRatio || 1, maxDpr)
+      if (
+        sizeRef.current.width === width &&
+        sizeRef.current.height === height &&
+        sizeRef.current.dpr === dpr
+      ) {
+        return
+      }
+
+      sizeRef.current = { width, height, dpr }
       canvas.width = Math.floor(width * dpr)
       canvas.height = Math.floor(height * dpr)
       canvas.style.width = `${width}px`
@@ -263,37 +296,69 @@ export function ChatDotGridBackground() {
       const { pattern, localSec } = resolvePattern(nowSec, patternRef.current)
       patternRef.current = pattern
 
+      for (const bucket of buckets) {
+        bucket.length = 0
+      }
+
       for (const dot of dotsRef.current) {
         const band = reducedMotion
           ? 0
-          : computePatternGlow(pattern.id, dot.x, dot.y, width, height, localSec, pattern.durationSec)
+          : computePatternGlow(pattern.id, dot, localSec, pattern.durationSec)
         const pulse = reducedMotion ? 0 : Math.sin(nowSec * dot.speed + dot.phase) * 0.012
-        const alpha = (dot.base * (0.48 + band * 0.52) + band * 0.34 + pulse) * centerFade(dot.x, dot.y, width, height)
+        const alpha = (dot.base * (0.48 + band * 0.52) + band * 0.34 + pulse) * dot.fade
         if (alpha <= 0.01) continue
 
+        const bucketIndex = Math.max(1, Math.min(ALPHA_BUCKETS - 1, Math.round(alpha * (ALPHA_BUCKETS - 1))))
+        buckets[bucketIndex].push(dot)
+      }
+
+      const channel = dark ? '255, 255, 255' : '0, 0, 0'
+      for (let bucketIndex = 1; bucketIndex < buckets.length; bucketIndex += 1) {
+        const dots = buckets[bucketIndex]
+        if (dots.length === 0) continue
+
         ctx.beginPath()
-        ctx.arc(dot.x, dot.y, DOT_RADIUS, 0, Math.PI * 2)
-        ctx.fillStyle = dark
-          ? `rgba(255, 255, 255, ${alpha})`
-          : `rgba(0, 0, 0, ${alpha})`
+        for (const dot of dots) {
+          ctx.moveTo(dot.x + DOT_RADIUS, dot.y)
+          ctx.arc(dot.x, dot.y, DOT_RADIUS, 0, Math.PI * 2)
+        }
+        ctx.fillStyle = `rgba(${channel}, ${bucketIndex / (ALPHA_BUCKETS - 1)})`
         ctx.fill()
       }
     }
 
+    const startAnimation = () => {
+      clearScheduledFrame()
+      if (disposed || document.hidden) return
+      if (reducedMotionRef.current) {
+        draw(performance.now())
+        return
+      }
+      frameRef.current = window.requestAnimationFrame(loop)
+    }
+
     const loop = (time: number) => {
       draw(time)
-      frameRef.current = window.requestAnimationFrame(loop)
+      frameTimerRef.current = window.setTimeout(() => {
+        if (!disposed && !document.hidden && !reducedMotionRef.current) {
+          frameRef.current = window.requestAnimationFrame(loop)
+        }
+      }, TARGET_FRAME_MS)
     }
 
     resize()
     patternRef.current = null
-    frameRef.current = window.requestAnimationFrame(loop)
+    startAnimation()
 
-    const resizeObserver = new ResizeObserver(() => resize())
+    const resizeObserver = new ResizeObserver(() => {
+      resize()
+      startAnimation()
+    })
     resizeObserver.observe(canvas.parentElement ?? canvas)
 
     const themeObserver = new MutationObserver(() => {
       darkRef.current = readDarkMode()
+      if (reducedMotionRef.current || document.hidden) draw(performance.now())
     })
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -303,15 +368,34 @@ export function ChatDotGridBackground() {
     const motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)')
     const onMotionChange = () => {
       reducedMotionRef.current = motionMedia.matches
+      startAnimation()
     }
     motionMedia.addEventListener('change', onMotionChange)
 
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        clearScheduledFrame()
+        return
+      }
+      startAnimation()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     return () => {
+      disposed = true
       resizeObserver.disconnect()
       themeObserver.disconnect()
       motionMedia.removeEventListener('change', onMotionChange)
-      if (frameRef.current) window.cancelAnimationFrame(frameRef.current)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      clearScheduledFrame()
       patternRef.current = null
+      dotsRef.current = []
+      for (const bucket of buckets) {
+        bucket.length = 0
+      }
+      sizeRef.current = { width: 0, height: 0, dpr: 0 }
+      canvas.width = 0
+      canvas.height = 0
     }
   }, [])
 

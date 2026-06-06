@@ -1,6 +1,6 @@
 import { RefreshCw, X, Archive } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { formatTokens } from '../lens/markdown'
+import { formatTokens } from '../utils/tokens'
 import type { ConversationContextState, ContextUsageSegment } from './types'
 
 interface ContextIndicatorProps {

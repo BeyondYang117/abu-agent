@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, Copy, Gauge, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import { copyToClipboard } from '../utils/clipboard'
-import { estimateTokens } from '../lens/markdown'
+import { estimateTokens } from '../utils/tokens'
 import { formatAssistantMessageTime } from './messageFormat'
 
 interface AssistantMessageMetaProps {

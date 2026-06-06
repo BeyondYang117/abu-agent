@@ -213,7 +213,7 @@ pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        builder = builder.decorations(false).transparent(true).shadow(false);
+        builder = builder.decorations(false).transparent(false).shadow(false);
     }
 
     builder.build().map_err(|e| e.to_string())

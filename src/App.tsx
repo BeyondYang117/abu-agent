@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { api } from './api/tauri'
 import { i18n, type Lang } from './settings/i18n'
 import { useWindowInteractionFocus } from './utils/windowFocus'
-import { usesNativeTitlebar } from './chat/platform'
+import { isWindows, usesNativeTitlebar } from './chat/platform'
 import {
   getRememberedChatRoute,
   getRememberedChatSize,
@@ -443,7 +443,7 @@ function App() {
   }
   if (mode === 'chat') {
     return (
-      <div className={usesNativeTitlebar ? 'h-full w-full' : 'window-container h-full w-full'}>
+      <div className={usesNativeTitlebar || isWindows ? 'h-full w-full' : 'window-container h-full w-full'}>
         <Suspense
           fallback={
             <div className="flex h-full w-full items-center justify-center bg-white dark:bg-[#212121]">

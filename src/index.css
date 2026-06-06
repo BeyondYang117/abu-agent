@@ -296,6 +296,16 @@ body {
   box-shadow: none;
 }
 
+.chat-window-shell--solid {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.dark .chat-window-shell--solid {
+  box-shadow: none;
+}
+
 .chat-main-pane {
   container-type: size;
   container-name: chat-main;

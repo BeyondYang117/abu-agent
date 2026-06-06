@@ -1,6 +1,9 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ChatMessage, ToolCallRecord } from './types'
 import { MessageBubble } from './MessageBubble'
+
+const INITIAL_VISIBLE_MESSAGES = 60
+const LOAD_MORE_MESSAGES = 60
 
 export interface AssistantStreamStats {
   messageId: string
@@ -41,6 +44,8 @@ export function MessageList({
   const stickToBottomRef = useRef(true)
   const prevCountRef = useRef(0)
   const lastScrollTopRef = useRef(0)
+  const pendingPrependScrollHeightRef = useRef<number | null>(null)
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_MESSAGES)
 
   const lastAssistantId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -48,6 +53,20 @@ export function MessageList({
     }
     return null
   }, [messages])
+
+  const hiddenMessageCount = Math.max(0, messages.length - visibleLimit)
+  const visibleMessages = hiddenMessageCount > 0
+    ? messages.slice(hiddenMessageCount)
+    : messages
+
+  const loadOlderMessages = useCallback(() => {
+    const el = scrollRef.current
+    if (el) {
+      pendingPrependScrollHeightRef.current = el.scrollHeight
+      stickToBottomRef.current = false
+    }
+    setVisibleLimit((limit) => Math.min(messages.length, limit + LOAD_MORE_MESSAGES))
+  }, [messages.length])
 
   // 滚轮向上 = 明确的离开底部意图，立即解除跟随（不设缓冲，消除“挣扎感”）
   const handleWheel = (e: React.WheelEvent) => {
@@ -59,6 +78,9 @@ export function MessageList({
     const el = scrollRef.current
     if (!el) return
     const { scrollTop, scrollHeight, clientHeight } = el
+    if (scrollTop <= 24 && hiddenMessageCount > 0) {
+      loadOlderMessages()
+    }
     if (scrollTop < lastScrollTopRef.current - 1) {
       stickToBottomRef.current = false
     } else if (scrollHeight - scrollTop - clientHeight <= 32) {
@@ -69,10 +91,25 @@ export function MessageList({
 
   // 切换会话：重置跟随并瞬间定位到底部
   useLayoutEffect(() => {
+    setVisibleLimit(INITIAL_VISIBLE_MESSAGES)
+    pendingPrependScrollHeightRef.current = null
     stickToBottomRef.current = true
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [conversationId])
+
+  useLayoutEffect(() => {
+    const previousScrollHeight = pendingPrependScrollHeightRef.current
+    if (previousScrollHeight == null) return
+    pendingPrependScrollHeightRef.current = null
+    const el = scrollRef.current
+    if (!el) return
+    const delta = el.scrollHeight - previousScrollHeight
+    if (delta > 0) {
+      el.scrollTop += delta
+      lastScrollTopRef.current = el.scrollTop
+    }
+  }, [visibleLimit])
 
   // 自己发出新消息时强制回到底部（即使刚才正往上翻历史）
   useLayoutEffect(() => {
@@ -93,7 +130,19 @@ export function MessageList({
   return (
     <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="custom-scrollbar flex-1 overflow-y-auto">
       <div className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
-        {messages.map((msg) => (
+        {hiddenMessageCount > 0 && (
+          <div className="flex justify-center py-2">
+            <button
+              type="button"
+              onClick={loadOlderMessages}
+              className="rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-500 shadow-sm transition-colors hover:border-neutral-300 hover:text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:border-neutral-600 dark:hover:text-neutral-200"
+            >
+              加载更早 {Math.min(hiddenMessageCount, LOAD_MORE_MESSAGES)} 条
+            </button>
+          </div>
+        )}
+
+        {visibleMessages.map((msg) => (
           <MessageBubble
             key={msg.id}
             message={msg}
