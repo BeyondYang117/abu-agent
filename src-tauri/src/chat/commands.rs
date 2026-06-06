@@ -38,6 +38,19 @@ use super::{
     ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
 };
 
+fn chat_memory_prompt_for_request(
+    app: &AppHandle,
+    settings: &Settings,
+) -> (Option<String>, Option<String>) {
+    if !settings.chat_memory.enabled {
+        return (None, None);
+    }
+    match crate::chat::memory::l1_prompt_block(app) {
+        Ok(prompt) => (prompt, None),
+        Err(err) => (None, Some(err)),
+    }
+}
+
 /// 获取对话列表
 #[tauri::command]
 pub(crate) fn chat_get_conversations(
@@ -1030,7 +1043,15 @@ async fn complete_assistant_reply(
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
-    let tools_capable = agent_prepare::chat_tools_capable(&provider, &effective_chat_tools);
+    let (memory_prompt, memory_warning) = chat_memory_prompt_for_request(app, &settings);
+    if let Some(warning) = memory_warning.as_ref() {
+        conversation.context_state.warning = Some(warning.clone());
+    }
+    let tools_capable = agent_prepare::chat_tools_capable(
+        &provider,
+        &effective_chat_tools,
+        settings.chat_memory.enabled,
+    );
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider.supports_tools).await;
     agent_prepare::apply_assistant_tool_preset(
         &mut tools,
@@ -1058,6 +1079,7 @@ async fn complete_assistant_reply(
         active_skill_detail.as_ref(),
         conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
+        memory_prompt.as_deref(),
     );
 
     if provider_is_apple {
@@ -1142,6 +1164,7 @@ async fn complete_assistant_reply(
         active_skill_detail.as_ref(),
         conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
+        memory_prompt.as_deref(),
     );
 
     let host = ChatAgentHost {
@@ -2038,10 +2061,18 @@ async fn compute_context_state(
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
-    let tools_capable = provider_supports_tools
-        && !provider_is_apple
-        && (settings.chat_tools.enabled
-            || crate::settings::chat_native_tools_enabled(&settings.chat_tools));
+    let (memory_prompt, memory_warning) = chat_memory_prompt_for_request(app, &settings);
+    let tools_capable = provider
+        .as_ref()
+        .map(|provider| {
+            !provider_is_apple
+                && agent_prepare::chat_tools_capable(
+                    provider,
+                    &effective_chat_tools,
+                    settings.chat_memory.enabled,
+                )
+        })
+        .unwrap_or(false);
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider_supports_tools).await;
     agent_prepare::apply_assistant_tool_preset(
         &mut tools,
@@ -2092,6 +2123,7 @@ async fn compute_context_state(
         active_skill_detail.as_ref(),
         conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
+        memory_prompt.as_deref(),
     );
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let request_messages = build_chat_api_messages(
@@ -2147,7 +2179,7 @@ async fn compute_context_state(
         last_compressed_at,
         compressed_message_count,
         summary,
-        warning: conversation.context_state.warning.clone(),
+        warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
     })
 }
 
@@ -2418,7 +2450,8 @@ async fn list_tools_for_chat(
 ) -> Vec<ChatToolDefinition> {
     if !provider_supports_tools
         || !(settings.chat_tools.enabled
-            || crate::settings::chat_native_tools_enabled(&settings.chat_tools))
+            || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
+            || crate::settings::chat_memory_tools_enabled(settings))
     {
         return Vec::new();
     }

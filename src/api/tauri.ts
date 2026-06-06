@@ -241,6 +241,25 @@ export type ChatConfig = {
   systemPrompt?: string
 }
 
+export type ChatMemoryConfig = {
+  enabled: boolean
+  toolWriteConfirm: boolean
+}
+
+export type ChatMemoryLayerContent = {
+  layer: 'l1' | 'l2' | string
+  content: string
+  bytes: number
+  maxBytes?: number | null
+}
+
+export type ChatMemoryState = {
+  success: boolean
+  l1: ChatMemoryLayerContent
+  l2: ChatMemoryLayerContent
+  dir: string
+}
+
 export type ChatToolsConfig = {
   enabled: boolean
   servers: ChatMcpServer[]
@@ -372,6 +391,7 @@ export type Settings = {
   chatModel: string
   defaultModels: DefaultModelsConfig
   chat?: ChatConfig
+  chatMemory?: ChatMemoryConfig
   translatorPrompt?: string
   providers: ModelProvider[]
   chatTools: ChatToolsConfig
@@ -513,6 +533,14 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
   }
 }
 
+function normalizeChatMemory(config?: Partial<ChatMemoryConfig> | null): ChatMemoryConfig {
+  const current = config ?? {}
+  return {
+    enabled: current.enabled ?? false,
+    toolWriteConfirm: current.toolWriteConfirm ?? true,
+  }
+}
+
 function normalizeDefaultModelSelection(selection?: Partial<DefaultModelSelection> | null): DefaultModelSelection {
   return {
     providerId: selection?.providerId ?? '',
@@ -585,6 +613,7 @@ function normalizeSettings(settings: Settings): Settings {
       defaultLanguage: current.chat?.defaultLanguage ?? '',
       systemPrompt: current.chat?.systemPrompt ?? '',
     },
+    chatMemory: normalizeChatMemory(current.chatMemory),
     providers: Array.isArray(current.providers) ? current.providers.map(normalizeProvider) : [],
     chatTools: normalizeChatTools(current.chatTools),
     retryEnabled: current.retryEnabled ?? true,
@@ -799,6 +828,14 @@ export const api = {
   chatSkillsOpenFolder: () =>
     invoke<{ success: boolean; path?: string | null; error?: string | null }>(
       'chat_skills_open_folder',
+    ),
+  chatMemoryGet: () =>
+    invoke<ChatMemoryState>('chat_memory_get'),
+  chatMemorySave: (layer: 'l1' | 'l2', content: string) =>
+    invoke<ChatMemoryLayerContent>('chat_memory_save', { layer, content }),
+  chatMemoryOpenFolder: () =>
+    invoke<{ success: boolean; path?: string | null; error?: string | null }>(
+      'chat_memory_open_folder',
     ),
   chatCancelStream: (conversationId: string) =>
     invoke<void>('chat_cancel_stream', { conversationId }),

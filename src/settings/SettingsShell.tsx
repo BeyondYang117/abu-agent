@@ -3,7 +3,7 @@ import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Camera,
   Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
-  MessageSquare, Globe, SlidersHorizontal,
+  MessageSquare, Globe, SlidersHorizontal, Brain,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -18,6 +18,7 @@ import {
   type ChatMcpServer,
   type ChatToolsConfig,
   type ChatNativeToolsConfig,
+  type ChatMemoryConfig,
   type ChatToolDefinition,
   defaultNativeTools,
   normalizeProviderApiFormat,
@@ -40,9 +41,17 @@ import {
   SettingsGroup,
 } from './components'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'mixer' | 'mcp' | 'skill' | 'webSearch' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'mcp' | 'skill' | 'webSearch' | 'providers' | 'about'
 
 type SettingsData = SettingsType
+type MemoryLayerKey = 'l1' | 'l2'
+
+const MEMORY_L1_MAX_BYTES = 5_000
+const textEncoder = new TextEncoder()
+
+function utf8ByteLength(value: string): number {
+  return textEncoder.encode(value).length
+}
 
 export interface SettingsShellProps {
   variant: 'standalone' | 'embedded'
@@ -80,12 +89,105 @@ function FieldBlock({
   )
 }
 
+function MemoryEditor({
+  layer,
+  title,
+  description,
+  value,
+  savedValue,
+  maxBytes,
+  rows,
+  loading,
+  saving,
+  lang,
+  onChange,
+  onSave,
+  onReload,
+}: {
+  layer: MemoryLayerKey
+  title: string
+  description: string
+  value: string
+  savedValue: string
+  maxBytes?: number
+  rows: number
+  loading: boolean
+  saving: boolean
+  lang: string
+  onChange: (value: string) => void
+  onSave: () => void
+  onReload: () => void
+}) {
+  const bytes = utf8ByteLength(value)
+  const overLimit = maxBytes !== undefined && bytes > maxBytes
+  const dirty = value !== savedValue
+  return (
+    <div className="kv-panel">
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="kv-panel-title !mb-1">
+            {title}
+            <span className={`kv-tag ${overLimit ? 'danger' : dirty ? 'warn' : 'ok'}`}>
+              {maxBytes ? `${bytes} / ${maxBytes} bytes` : `${bytes} bytes`}
+            </span>
+          </div>
+          <div className="kv-panel-body">{description}</div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            className="kv-btn sm"
+            onClick={onReload}
+            disabled={loading || saving}
+            data-tauri-drag-region="false"
+          >
+            <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+            {lang === 'zh' ? '重载' : 'Reload'}
+          </button>
+          <button
+            type="button"
+            className="kv-btn primary sm"
+            onClick={onSave}
+            disabled={loading || saving || !dirty || overLimit}
+            data-tauri-drag-region="false"
+          >
+            {saving ? (lang === 'zh' ? '保存中' : 'Saving') : (lang === 'zh' ? '保存' : 'Save')}
+          </button>
+        </div>
+      </div>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        rows={rows}
+        className="kv-textarea mono custom-scrollbar min-h-[160px]"
+        spellCheck={false}
+        data-tauri-drag-region="false"
+        aria-label={title}
+      />
+      {overLimit && (
+        <p className="mt-1.5 text-[11px] leading-snug text-red-500 dark:text-red-400">
+          {lang === 'zh'
+            ? `${layer.toUpperCase()} 超出字节上限，保存前需要精简。`
+            : `${layer.toUpperCase()} is over its byte limit.`}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function defaultChatConfig(): NonNullable<SettingsData['chat']> {
   return {
     streamEnabled: true,
     thinkingEnabled: true,
     defaultLanguage: '',
     systemPrompt: '',
+  }
+}
+
+function defaultChatMemory(): ChatMemoryConfig {
+  return {
+    enabled: false,
+    toolWriteConfirm: true,
   }
 }
 
@@ -387,6 +489,13 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [expandedSkillIds, setExpandedSkillIds] = useState<string[]>([])
   const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillDetail | null>(null)
   const [skillError, setSkillError] = useState('')
+  const [memoryDrafts, setMemoryDrafts] = useState<Record<MemoryLayerKey, string>>({ l1: '', l2: '' })
+  const [memorySnapshots, setMemorySnapshots] = useState<Record<MemoryLayerKey, string>>({ l1: '', l2: '' })
+  const [memoryDir, setMemoryDir] = useState('')
+  const [memoryLoading, setMemoryLoading] = useState(false)
+  const [memorySavingLayer, setMemorySavingLayer] = useState<MemoryLayerKey | null>(null)
+  const [memoryError, setMemoryError] = useState('')
+  const [memorySuccess, setMemorySuccess] = useState('')
   // 更新检查状态：'idle' / 'checking' / 'up-to-date' / 'available'
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available'>('idle')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
@@ -1474,6 +1583,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
+  const updateChatMemory = useCallback((updates: Partial<ChatMemoryConfig>) => {
+    setSettings((prev) => {
+      if (!prev) return prev
+      const current = prev.chatMemory || defaultChatMemory()
+      return { ...prev, chatMemory: { ...current, ...updates } }
+    })
+  }, [])
+
   const updateLensWebSearch = useCallback((updates: Partial<NonNullable<SettingsData['lens']['webSearch']>>) => {
     setSettings((prev) => {
       if (!prev) return prev
@@ -1502,6 +1619,71 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
+  const refreshChatMemory = useCallback(async () => {
+    setMemoryLoading(true)
+    setMemoryError('')
+    try {
+      const result = await api.chatMemoryGet()
+      const next = {
+        l1: result.l1.content,
+        l2: result.l2.content,
+      }
+      setMemoryDrafts(next)
+      setMemorySnapshots(next)
+      setMemoryDir(result.dir)
+      setMemorySuccess('')
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMemoryLoading(false)
+    }
+  }, [])
+
+  const handleSaveMemoryLayer = useCallback(async (layer: MemoryLayerKey) => {
+    const content = memoryDrafts[layer]
+    if (layer === 'l1' && utf8ByteLength(content) > MEMORY_L1_MAX_BYTES) {
+      setMemoryError(lang === 'zh'
+        ? `L1 超过 ${MEMORY_L1_MAX_BYTES} 字节，请先精简或归档到 L2。`
+        : `L1 exceeds ${MEMORY_L1_MAX_BYTES} bytes. Shorten it or archive details into L2.`)
+      return
+    }
+    setMemorySavingLayer(layer)
+    setMemoryError('')
+    setMemorySuccess('')
+    try {
+      const saved = await api.chatMemorySave(layer, content)
+      setMemoryDrafts((prev) => ({ ...prev, [layer]: saved.content }))
+      setMemorySnapshots((prev) => ({ ...prev, [layer]: saved.content }))
+      setMemorySuccess(lang === 'zh'
+        ? `${layer.toUpperCase()} 已保存`
+        : `${layer.toUpperCase()} saved`)
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMemorySavingLayer(null)
+    }
+  }, [lang, memoryDrafts])
+
+  const handleOpenMemoryFolder = useCallback(async () => {
+    setMemoryError('')
+    try {
+      const result = await api.chatMemoryOpenFolder()
+      if (!result.success) {
+        setMemoryError(result.error || (lang === 'zh' ? '打开记忆文件夹失败' : 'Failed to open memory folder'))
+      } else if (result.path) {
+        setMemoryDir(result.path)
+      }
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : String(err))
+    }
+  }, [lang])
+
+  useEffect(() => {
+    if (activeTab === 'memory') {
+      void refreshChatMemory()
+    }
+  }, [activeTab, refreshChatMemory])
+
   /**
    * 切换快捷键录制状态
    */
@@ -1514,6 +1696,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const chatLangKey = settings?.chat?.defaultLanguage === 'en' ? 'en' : 'zh'
   const chatDefaults = defaultPrompts?.chatPrompts?.[chatLangKey]
   const chatConfig = settings?.chat || defaultChatConfig()
+  const chatMemory = settings?.chatMemory || defaultChatMemory()
   const chatSystemPromptValue = chatSystemPromptInteracted
     ? (chatConfig.systemPrompt || '')
     : (chatConfig.systemPrompt || chatDefaults || '')
@@ -1599,6 +1782,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'screenshot' as const, label: t.tabScreenshot, icon: Camera },
     { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
     { id: 'chat' as const, label: t.tabChatClient, icon: MessageSquare },
+    { id: 'memory' as const, label: t.tabMemory, icon: Brain },
     { id: 'mixer' as const, label: t.tabMixer, icon: SlidersHorizontal },
     { id: 'mcp' as const, label: 'MCP', icon: Wrench },
     { id: 'skill' as const, label: 'Skill', icon: Sparkles },
@@ -1627,6 +1811,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? '主对话模型、流式/思考行为、系统提示词；副任务模型见混音器。'
         : 'Main chat model, streaming/thinking, and system prompt; side-task models live under Mixer.',
+    },
+    memory: {
+      title: t.tabMemory,
+      subtitle: lang === 'zh'
+        ? 'L1 在线记忆常驻注入；L2 长期记忆只通过工具读取。'
+        : 'L1 is always injected when enabled; L2 is read only through tools.',
     },
     mixer: {
       title: t.tabMixer,
@@ -2257,6 +2447,15 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     <button
                       type="button"
                       className="kv-btn sm"
+                      onClick={() => setActiveTab('memory')}
+                      data-tauri-drag-region="false"
+                    >
+                      <Brain size={11} />
+                      {t.tabMemory}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
                       onClick={() => setActiveTab('providers')}
                       data-tauri-drag-region="false"
                     >
@@ -2295,6 +2494,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     </span>
                   </SettingRow>
                   <SettingRow
+                    label={t.tabMemory}
+                    description={lang === 'zh' ? 'L1 常驻注入，L2 通过 memory_read 按需读取' : 'L1 is injected; L2 is read on demand with memory_read'}
+                  >
+                    <span className={`kv-tag ${chatMemory.enabled ? 'ok' : ''}`}>
+                      {chatMemory.enabled
+                        ? (lang === 'zh' ? '已启用' : 'On')
+                        : (lang === 'zh' ? '未启用' : 'Off')}
+                    </span>
+                  </SettingRow>
+                  <SettingRow
                     label={lang === 'zh' ? '联网搜索' : 'Web search'}
                     description={lang === 'zh' ? 'Tavily/Exa 与 Lens、Chat 开关' : 'Tavily/Exa plus Lens and Chat toggles'}
                   >
@@ -2305,6 +2514,111 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     </span>
                   </SettingRow>
                   <p className="kv-row-desc">{t.chatRetryNote}</p>
+                </SettingsGroup>
+              </>
+            )}
+
+            {/* ===== 记忆标签页 ===== */}
+            {activeTab === 'memory' && (
+              <>
+                <SettingsGroup title={lang === 'zh' ? '记忆运行' : 'Memory runtime'}>
+                  <SettingRow
+                    label={lang === 'zh' ? '启用记忆' : 'Enable memory'}
+                    description={lang === 'zh'
+                      ? '开启后每次 Chat 请求自动注入 L1，并暴露 memory_read / memory_modify。'
+                      : 'When enabled, every Chat request injects L1 and exposes memory_read / memory_modify.'}
+                  >
+                    <Toggle
+                      checked={chatMemory.enabled}
+                      onChange={(enabled) => updateChatMemory({ enabled })}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? '写入确认' : 'Confirm writes'}
+                    description={lang === 'zh'
+                      ? 'memory_modify 修改 L1/L2 前走敏感工具确认。'
+                      : 'Require sensitive-tool approval before memory_modify writes L1/L2.'}
+                  >
+                    <Toggle
+                      checked={chatMemory.toolWriteConfirm !== false}
+                      onChange={(toolWriteConfirm) => updateChatMemory({ toolWriteConfirm })}
+                    />
+                  </SettingRow>
+                  <SettingRow label={lang === 'zh' ? '记忆文件夹' : 'Memory folder'} stack>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="kv-btn sm"
+                        onClick={() => void refreshChatMemory()}
+                        disabled={memoryLoading}
+                        data-tauri-drag-region="false"
+                      >
+                        <RefreshCw size={10} className={memoryLoading ? 'animate-spin' : ''} />
+                        {lang === 'zh' ? '刷新' : 'Refresh'}
+                      </button>
+                      <button
+                        type="button"
+                        className="kv-btn sm"
+                        onClick={() => void handleOpenMemoryFolder()}
+                        data-tauri-drag-region="false"
+                      >
+                        <FolderOpen size={11} />
+                        {lang === 'zh' ? '打开文件夹' : 'Open folder'}
+                      </button>
+                      {memoryDir && <span className="kv-row-desc min-w-0 break-all">{memoryDir}</span>}
+                    </div>
+                  </SettingRow>
+                  {memoryError && <div className="kv-inline-error">{memoryError}</div>}
+                  {memorySuccess && (
+                    <div className="kv-panel info">
+                      <div className="kv-panel-body">{memorySuccess}</div>
+                    </div>
+                  )}
+                </SettingsGroup>
+
+                <SettingsGroup title="L1">
+                  <MemoryEditor
+                    layer="l1"
+                    title={lang === 'zh' ? 'L1 在线记忆' : 'L1 Online Memory'}
+                    description={lang === 'zh'
+                      ? '短小、高频、会影响每次回答的偏好、约束和当前目标。'
+                      : 'Short active preferences, constraints, and current goals that should affect every reply.'}
+                    value={memoryDrafts.l1}
+                    savedValue={memorySnapshots.l1}
+                    maxBytes={MEMORY_L1_MAX_BYTES}
+                    rows={9}
+                    loading={memoryLoading}
+                    saving={memorySavingLayer === 'l1'}
+                    lang={lang}
+                    onChange={(value) => {
+                      setMemoryDrafts((prev) => ({ ...prev, l1: value }))
+                      setMemorySuccess('')
+                    }}
+                    onSave={() => void handleSaveMemoryLayer('l1')}
+                    onReload={() => void refreshChatMemory()}
+                  />
+                </SettingsGroup>
+
+                <SettingsGroup title="L2">
+                  <MemoryEditor
+                    layer="l2"
+                    title={lang === 'zh' ? 'L2 长期记忆' : 'L2 Long-Term Memory'}
+                    description={lang === 'zh'
+                      ? '长期流程、决策、排障记录和可复用知识；不会自动进入上下文。'
+                      : 'Long-term workflows, decisions, troubleshooting notes, and reusable knowledge; never auto-loaded.'}
+                    value={memoryDrafts.l2}
+                    savedValue={memorySnapshots.l2}
+                    rows={13}
+                    loading={memoryLoading}
+                    saving={memorySavingLayer === 'l2'}
+                    lang={lang}
+                    onChange={(value) => {
+                      setMemoryDrafts((prev) => ({ ...prev, l2: value }))
+                      setMemorySuccess('')
+                    }}
+                    onSave={() => void handleSaveMemoryLayer('l2')}
+                    onReload={() => void refreshChatMemory()}
+                  />
                 </SettingsGroup>
               </>
             )}

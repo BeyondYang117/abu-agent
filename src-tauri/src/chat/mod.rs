@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod commands;
 pub mod dsml_tools;
+pub mod memory;
 pub mod model;
 pub mod storage;
 pub mod types;

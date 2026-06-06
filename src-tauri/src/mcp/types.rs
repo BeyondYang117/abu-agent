@@ -322,6 +322,82 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn native_memory_read_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__memory_read".to_string(),
+        name: "memory_read".to_string(),
+        description: "Read Kivio Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "layer": {
+                    "type": "string",
+                    "enum": ["l1", "l2"],
+                    "description": "Memory layer to read"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Optional exact text/heading query. Especially useful for L2."
+                },
+                "maxBytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes returned to the model"
+                }
+            },
+            "required": ["layer"]
+        }),
+        sensitive: false,
+    }
+}
+
+pub fn native_memory_modify_tool(sensitive: bool) -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__memory_modify".to_string(),
+        name: "memory_modify".to_string(),
+        description: "Modify Kivio Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "layer": {
+                    "type": "string",
+                    "enum": ["l1", "l2"],
+                    "description": "Target memory layer"
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": ["append", "replace", "remove", "archive"],
+                    "description": "Modification operation"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "New Markdown content for append/replace, or optional archived content"
+                },
+                "oldText": {
+                    "type": "string",
+                    "description": "Exact unique snippet for replace/remove/archive"
+                },
+                "heading": {
+                    "type": "string",
+                    "description": "Optional L2 heading to append/archive under"
+                },
+                "archiveMode": {
+                    "type": "string",
+                    "enum": ["move", "copy"],
+                    "description": "archive only; default is move"
+                }
+            },
+            "required": ["layer", "operation"]
+        }),
+        sensitive,
+    }
+}
+
 pub fn native_web_fetch_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__web_fetch".to_string(),
@@ -345,6 +421,8 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
 pub fn list_native_builtin_tool_defs(
     native: &ChatNativeToolsConfig,
     web_search_configured: bool,
+    memory_enabled: bool,
+    memory_modify_sensitive: bool,
 ) -> Vec<ChatToolDefinition> {
     let mut tools = Vec::new();
     if native.web_search && web_search_configured {
@@ -367,6 +445,10 @@ pub fn list_native_builtin_tool_defs(
     }
     if native.run_python {
         tools.push(native_run_python_tool());
+    }
+    if memory_enabled {
+        tools.push(native_memory_read_tool());
+        tools.push(native_memory_modify_tool(memory_modify_sensitive));
     }
     tools
 }

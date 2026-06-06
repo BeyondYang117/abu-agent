@@ -224,6 +224,8 @@ pub async fn list_enabled_tool_defs(state: &AppState) -> Result<Vec<ChatToolDefi
     let mut tools = list_native_builtin_tool_defs(
         &settings.chat_tools.native_tools,
         web_search_configured(&settings),
+        crate::settings::chat_memory_tools_enabled(&settings),
+        settings.chat_memory.tool_write_confirm,
     );
 
     if settings.chat_tools.enabled {
@@ -409,6 +411,7 @@ fn normalize_imported_transport(server: &CursorMcpServer) -> String {
 fn enabled_tools_cache_key(settings: &crate::settings::Settings) -> String {
     serde_json::to_string(&serde_json::json!({
         "chatTools": settings.chat_tools,
+        "chatMemory": settings.chat_memory,
         "lensWebSearchProvider": settings.lens.web_search.provider,
         "lensWebSearchMaxResults": settings.lens.web_search.max_results,
         "lensWebSearchDepth": settings.lens.web_search.search_depth,
@@ -535,6 +538,18 @@ async fn call_native_tool(
             });
         }
         "web_fetch" => crate::native_tools::web_fetch(&state.http, &arguments).await?,
+        "memory_read" => {
+            if !settings.chat_memory.enabled {
+                return Err("Chat memory is disabled in Settings".to_string());
+            }
+            return crate::chat::memory::tool_read(app, &arguments);
+        }
+        "memory_modify" => {
+            if !settings.chat_memory.enabled {
+                return Err("Chat memory is disabled in Settings".to_string());
+            }
+            return crate::chat::memory::tool_modify(app, &arguments);
+        }
         "read_file" => crate::native_tools::read_file(&arguments)?,
         "write_file" => crate::native_tools::write_file(roots, &arguments)?,
         "edit_file" => crate::native_tools::edit_file(roots, &arguments)?,

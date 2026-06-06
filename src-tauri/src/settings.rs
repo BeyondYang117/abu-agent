@@ -482,6 +482,30 @@ impl Default for ChatConfig {
 }
 
 /**
+ * Chat 记忆系统配置。
+ *
+ * 记忆正文不存 settings.json；这里只保存运行开关。正文保存在 app data 的 chat-memory/L1.md
+ * 与 chat-memory/L2.md 中。
+ */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatMemoryConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub tool_write_confirm: bool,
+}
+
+impl Default for ChatMemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            tool_write_confirm: true,
+        }
+    }
+}
+
+/**
  * 可选模型选择：provider_id 为空表示未单独设置。
  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -768,6 +792,8 @@ pub struct Settings {
     #[serde(default)]
     pub chat: ChatConfig,
     #[serde(default)]
+    pub chat_memory: ChatMemoryConfig,
+    #[serde(default)]
     pub chat_tools: ChatToolsConfig,
     /// 一次性：将 Lens 的流式/思考开关复制到独立的 Chat 配置（旧版共用 Lens 行为）。
     #[serde(default)]
@@ -875,6 +901,7 @@ impl Default for Settings {
             screenshot_translation: ScreenshotTranslationConfig::default(),
             lens: LensConfig::default(),
             chat: ChatConfig::default(),
+            chat_memory: ChatMemoryConfig::default(),
             chat_tools: ChatToolsConfig::default(),
             chat_behavior_migrated_from_lens: false,
             settings_language: Some("zh".to_string()),
@@ -901,6 +928,10 @@ impl Default for Settings {
  */
 pub fn chat_native_tools_enabled(chat_tools: &ChatToolsConfig) -> bool {
     chat_tools.native_tools.any_enabled()
+}
+
+pub fn chat_memory_tools_enabled(settings: &Settings) -> bool {
+    settings.chat_memory.enabled
 }
 
 pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
