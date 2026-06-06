@@ -79,14 +79,14 @@ function Translator({
     return () => clearTimeout(timer)
   }, [input])
 
-  // Esc 键隐藏窗口
+  // Esc 键关闭输入翻译窗口，释放不常用的 main WebView。
   useEffect(() => {
     const handler = async (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         try {
           await api.closeWindow()
         } catch (err) {
-          console.error('[Translator] Failed to hide window:', err)
+          console.error('[Translator] Failed to close window:', err)
         }
       }
     }
@@ -369,8 +369,7 @@ function App() {
   }, [])
 
   // 监听后端触发的打开设置事件
-  // 仅 main webview（hash 为空 / translator / settings）响应；
-  // lens webview 即便误收广播也不切换视图，避免多设置界面。
+  // settings 独立 webview 响应；lens 即便误收广播也不切换视图，避免多设置界面。
   useEffect(() => {
     let cleanup: (() => void) | undefined
     api.onOpenSettings(() => {
@@ -406,31 +405,22 @@ function App() {
 
   // 打开设置页
   const openSettings = async () => {
-    settingsOpenPendingRef.current = true
-    settingsReadyRef.current = false
     try {
-      await api.hideWindow()
-      await api.setAlwaysOnTop(false)
-      await api.resizeWindow(640, 520)
-      await api.centerWindow()
+      await api.openSettingsWindow()
+      await api.closeTranslatorWindow()
     } catch (err) {
-      console.error('[App] Error preparing settings window:', err)
+      console.error('[App] Error opening settings window:', err)
     }
-    window.location.hash = '#settings'
-    setMode('settings')
   }
 
   // 关闭设置页，返回翻译器
   const closeSettings = async () => {
     settingsReadyRef.current = false
     try {
-      await api.hideWindow()
+      await api.closeWindow()
     } catch (err) {
-      console.error('[App] Error hiding window:', err)
+      console.error('[App] Error closing settings window:', err)
     }
-    window.location.hash = ''
-    setMode('')
-    await api.resizeWindow(392, 152)
   }
 
   // 根据模式渲染对应视图

@@ -594,8 +594,8 @@ pub(crate) fn get_mouse_position(app: &AppHandle) -> Option<tauri::PhysicalPosit
     app.cursor_position().ok()
 }
 
-/// 切换主窗口显示/隐藏
-/// 隐藏时直接隐藏；显示时窗口跟随鼠标位置偏移 (10,10) 弹出，翻译器保持置顶
+/// 切换输入翻译窗口。
+/// 可见时关闭销毁 main WebView；显示时跟随鼠标位置偏移 (10,10) 弹出，翻译器保持置顶。
 pub(crate) fn toggle_main_window(app: &AppHandle) {
     let window = match ensure_main_window(app) {
         Ok(window) => window,
@@ -607,13 +607,13 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
 
     let visible = window.is_visible().unwrap_or(false);
     if visible {
-        let _ = window.hide();
+        let _ = window.close();
         return;
     }
 
     let _ = window.set_always_on_top(true);
 
-    // 重置 hash 为翻译模式，防止之前打开过设置导致显示设置界面
+    // 重置 hash 为翻译模式；main 现在只承载输入翻译。
     let _ = window.eval(
         "window.location.hash = ''; window.dispatchEvent(new HashChangeEvent('hashchange'));",
     );
@@ -766,7 +766,7 @@ pub(crate) fn send_paste_shortcut() {
     }
 }
 
-/// 打开设置窗口
+/// 打开独立设置窗口。
 /// 调整窗口大小为 640x520 并切到设置页；实际 show/focus 等前端 Settings 加载完成后执行。
 pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     let window = ensure_settings_window(app)?;
@@ -774,13 +774,15 @@ pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     let _ = window.hide();
     let _ = window.set_always_on_top(false);
     let _ = window.set_size(tauri::LogicalSize::new(640.0, 520.0));
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
     let _ = window.eval(
     "window.location.hash = '#settings'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
   );
-    // 仅向 main webview 发送 open-settings 事件，避免广播到 screenshot/explain 等其他 webview
+    // 仅向 settings webview 发送 open-settings 事件，避免广播到 screenshot/explain 等其他 webview
     // 导致它们也被切到设置视图（出现多个设置界面的 bug）。
-    let _ = app.emit_to("main", "open-settings", ());
+    let _ = app.emit_to("settings", "open-settings", ());
 
     let window_for_task = window.clone();
     let _ = window.run_on_main_thread(move || {
@@ -790,9 +792,9 @@ pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 打开 AI 客户端主窗口。
+/// 打开独立 AI 客户端窗口。
 pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
-    let existing_window = app.get_webview_window("main");
+    let existing_window = app.get_webview_window("chat");
     let window = ensure_chat_window(app)?;
     apply_chat_window_chrome(&window);
     crate::windows::apply_chat_window_min_size(&window, false);
@@ -808,7 +810,7 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
                window.dispatchEvent(new HashChangeEvent('hashchange')); \
              }",
         );
-        let _ = app.emit_to("main", "chat-open-request", ());
+        let _ = app.emit_to("chat", "chat-open-request", ());
     } else {
         let window_for_task = window.clone();
         let _ = window.run_on_main_thread(move || {
@@ -859,8 +861,8 @@ fn focus_lens_window(app: &AppHandle) -> bool {
     true
 }
 
-/// 自动激活 app（单实例二次启动 / Windows 普通启动默认设置页）时使用。
-/// 如果用户正在拉起 Lens，就不要再抢 main 窗口到设置页。
+/// 自动激活 app（单实例二次启动 / Windows 普通启动默认页）时使用。
+/// 如果用户正在拉起 Lens，就不要再抢前台窗口。
 pub(crate) fn open_settings_window_for_activation(app: &AppHandle) -> Result<(), String> {
     if lens_is_active(app) {
         let _ = focus_lens_window(app);
@@ -946,10 +948,8 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 Err(err) => eprintln!("Failed to ensure main window: {}", err),
             },
             "settings" => {
-                if let Err(err) = open_chat_window(app) {
-                    eprintln!("Failed to open chat window for settings: {}", err);
-                } else {
-                    let _ = app.emit_to("main", "open-settings", ());
+                if let Err(err) = open_settings_window(app) {
+                    eprintln!("Failed to open settings window: {}", err);
                 }
             }
             "quit" => {

@@ -45,6 +45,14 @@ Questions to answer:
 - Do not lazy-load `ChatMarkdown` at the individual message boundary just to reduce the Chat chunk size. A plain-text fallback flash is worse for the Chat client than the bundle-size win.
 - Markdown parser optimizations should target memoization, normalized input stability, and avoiding unnecessary historical-message rerenders.
 
+### Tauri window lifecycle
+
+- Keep Tauri window labels scoped to one user-facing surface: `main` is the input translator, `chat` is the AI client, `settings` is the standalone settings page, and `lens` is the capture/vision overlay.
+- Do not reuse `main` as a generic route container for Chat or Settings. Heavy or infrequently used views should get their own `WebviewWindow` label so closing the view can destroy its WebView process.
+- Except for `lens`, close buttons and Esc handlers should close the current window instead of hiding it. Hiding keeps the WebView resident and can keep WebView2/WKWebView renderer memory alive in the background.
+- `lens` is the explicit exception because capture selection needs fast reuse and has special temporary-image cleanup behavior.
+- When adding a new top-level view, wire the route, Tauri command/event target, and window label together. Avoid broadcasting route-change events to unrelated windows.
+
 ### Pyodide image/chart execution
 
 - When `run_python` code imports `matplotlib`, force the `Agg` backend before running user code.

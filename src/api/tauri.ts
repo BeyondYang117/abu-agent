@@ -686,6 +686,8 @@ export const api = {
 
   // 应用信息
   getAppVersion: () => getVersion(),
+  openSettingsWindow: () => invoke<void>('open_settings_window'),
+  closeTranslatorWindow: () => invoke<void>('close_translator_window'),
 
   // 文本翻译
   translateText: (text: string) => invoke<string>('translate_text', { text }),
@@ -709,7 +711,7 @@ export const api = {
   },
   closeWindow: async () => {
     const win = getCurrentWindow()
-    await win.hide()
+    await win.close()
   },
   minimizeWindow: async () => {
     const win = getCurrentWindow()

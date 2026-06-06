@@ -21,7 +21,8 @@ use crate::settings::{
 #[cfg(target_os = "macos")]
 use crate::shortcuts::{check_accessibility, check_screen_recording_permission};
 use crate::shortcuts::{
-    register_hotkeys, restore_runtime_settings, send_paste_shortcut, setup_tray,
+    open_settings_window as open_settings_window_impl, register_hotkeys, restore_runtime_settings,
+    send_paste_shortcut, setup_tray,
 };
 use crate::state::AppState;
 use crate::utils::{language_name, resolve_target_lang};
@@ -105,6 +106,18 @@ pub(crate) fn save_settings(
     Ok(sanitized)
 }
 
+#[tauri::command]
+pub(crate) fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    open_settings_window_impl(&app)
+}
+
+#[tauri::command]
+pub(crate) fn close_translator_window(app: AppHandle) {
+    if let Some(window) = get_main_window(&app) {
+        let _ = window.close();
+    }
+}
+
 /// 翻译文本命令
 /// 根据设置中的翻译供应商和模型进行翻译；如果 API Key 为空则返回提示信息
 #[tauri::command]
@@ -165,9 +178,9 @@ pub(crate) async fn commit_translation(
     let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
     clipboard.set_text(text).map_err(|e| e.to_string())?;
 
-    // 先隐藏窗口，让焦点回到之前的应用
+    // 关闭 main WebView，避免输入翻译页在后台长期占用内存。
     if let Some(window) = get_main_window(&app) {
-        let _ = window.hide();
+        let _ = window.close();
     }
 
     #[cfg(target_os = "macos")]
