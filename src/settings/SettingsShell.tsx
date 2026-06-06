@@ -371,6 +371,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [confirmDeleteProviderId, setConfirmDeleteProviderId] = useState<string | null>(null)
   const [recordingTarget, setRecordingTarget] = useState<null | 'main' | 'screenshotTranslation' | 'screenshotTranslationText' | 'lens'>(null)
   const [defaultPrompts, setDefaultPrompts] = useState<DefaultPromptTemplates | null>(null)
+  const [chatSystemPromptInteracted, setChatSystemPromptInteracted] = useState(false)
   const [retryAttemptsInput, setRetryAttemptsInput] = useState('')
   const [permissionStatus, setPermissionStatus] = useState<PermissionStatus | null>(null)
   const [permissionsLoading, setPermissionsLoading] = useState(false)
@@ -486,6 +487,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         if (!active) return
         setSettings(data)
         setInitialSettingsSnapshot(stableStringify(data))
+        setChatSystemPromptInteracted(false)
         setLoading(false)
       })
       .catch((err) => {
@@ -1514,6 +1516,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const chatLangKey = settings?.chat?.defaultLanguage === 'en' ? 'en' : 'zh'
   const chatDefaults = defaultPrompts?.chatPrompts?.[chatLangKey]
   const chatConfig = settings?.chat || defaultChatConfig()
+  const chatSystemPromptValue = chatSystemPromptInteracted
+    ? (chatConfig.systemPrompt || '')
+    : (chatConfig.systemPrompt || chatDefaults || '')
 
   // 快捷键录制监听
   useEffect(() => {
@@ -2195,15 +2200,29 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
                 <SettingsGroup title={t.customPrompts}>
                   <FieldBlock label={t.chatSystemPrompt} description={t.chatSystemPromptHint}>
+                    <div className="mb-2 flex justify-end">
+                      <button
+                        type="button"
+                        className="kv-btn sm"
+                        onClick={() => {
+                          setChatSystemPromptInteracted(false)
+                          updateChat({ systemPrompt: '' })
+                        }}
+                        disabled={!chatDefaults || (!chatConfig.systemPrompt && !chatSystemPromptInteracted)}
+                        data-tauri-drag-region="false"
+                      >
+                        <RefreshCw size={10} />
+                        {t.restoreDefaultPrompt}
+                      </button>
+                    </div>
                     <TextArea
-                      value={chatConfig.systemPrompt || ''}
-                      onChange={(systemPrompt) => updateChat({ systemPrompt })}
-                      placeholder={t.lensPromptHint}
+                      value={chatSystemPromptValue}
+                      onChange={(systemPrompt) => {
+                        setChatSystemPromptInteracted(true)
+                        updateChat({ systemPrompt })
+                      }}
                       rows={4}
                     />
-                    {!chatConfig.systemPrompt?.trim() && chatDefaults && (
-                      <DefaultPrompt label={t.defaultTemplate} content={chatDefaults} />
-                    )}
                   </FieldBlock>
                 </SettingsGroup>
 
