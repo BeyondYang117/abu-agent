@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { api } from './api/tauri'
 import { i18n, type Lang } from './settings/i18n'
 import { useWindowInteractionFocus } from './utils/windowFocus'
-import { isWindows, usesNativeTitlebar } from './chat/platform'
+import { ChatWindowHost } from './chat/ChatWindowHost'
 import {
   getRememberedChatRoute,
   getRememberedChatSize,
@@ -433,10 +433,10 @@ function App() {
   }
   if (mode === 'chat') {
     return (
-      <div className={usesNativeTitlebar || isWindows ? 'h-full w-full' : 'window-container h-full w-full'}>
+      <ChatWindowHost>
         <Suspense
           fallback={
-            <div className="flex h-full w-full items-center justify-center bg-white dark:bg-[#212121]">
+            <div className="flex h-full w-full items-center justify-center bg-transparent">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
             </div>
           }
@@ -445,7 +445,7 @@ function App() {
             <Chat onSettingsChange={applyTheme} />
           </ChatErrorBoundary>
         </Suspense>
-      </div>
+      </ChatWindowHost>
     )
   }
   if (mode === 'settings') {

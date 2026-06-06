@@ -14,20 +14,26 @@ function isAttachableClipboardFile(file: File): boolean {
   return Boolean(file.name?.trim()) || file.size > 0
 }
 
-function insertTextAtCursor(
+function undoAccidentalFilenamePaste(
   textarea: HTMLTextAreaElement,
-  text: string,
-  currentValue: string,
+  valueBeforePaste: string,
+  clipText: string,
+  selectionStart: number,
+  selectionEnd: number,
   setValue: (value: string) => void,
 ) {
-  const start = textarea.selectionStart
-  const end = textarea.selectionEnd
-  const next = `${currentValue.slice(0, start)}${text}${currentValue.slice(end)}`
-  setValue(next)
-  const caret = start + text.length
+  if (!clipText.trim()) return
+
+  const currentValue = textarea.value
+  const expectedAfterPaste = `${valueBeforePaste.slice(0, selectionStart)}${clipText}${valueBeforePaste.slice(selectionEnd)}`
+  if (currentValue !== expectedAfterPaste) return
+
+  const cleaned = `${valueBeforePaste.slice(0, selectionStart)}${valueBeforePaste.slice(selectionEnd)}`
+  setValue(cleaned)
   requestAnimationFrame(() => {
-    textarea.selectionStart = caret
-    textarea.selectionEnd = caret
+    textarea.value = cleaned
+    textarea.selectionStart = selectionStart
+    textarea.selectionEnd = selectionStart
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
   })
@@ -198,10 +204,18 @@ export function InputBar({
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (disabled || !isTauriRuntime()) return
 
-    // 先阻止默认粘贴，避免复制文件时文件名作为纯文本落入输入框
-    e.preventDefault()
-
     const attachableClipboardFiles = Array.from(e.clipboardData.files).filter(isAttachableClipboardFile)
+    const textarea = textareaRef.current
+    const clipText = e.clipboardData.getData('text/plain')
+    const selectionStart = textarea?.selectionStart ?? input.length
+    const selectionEnd = textarea?.selectionEnd ?? input.length
+    const valueBeforePaste = textarea?.value ?? input
+
+    // 剪贴板里已有 File 对象时可同步拦截；系统文件路径只能异步读取，后面再精确撤销文件名文本。
+    if (attachableClipboardFiles.length > 0) {
+      e.preventDefault()
+    }
+
     const nativePaths: string[] = []
     try {
       const native = await api.chatReadClipboardFiles()
@@ -215,12 +229,21 @@ export function InputBar({
     const hasNativeFiles = nativePaths.length > 0
     const hasClipboardFiles = attachableClipboardFiles.length > 0
 
-    if (!hasNativeFiles && !hasClipboardFiles) {
-      const text = e.clipboardData.getData('text/plain')
-      if (text && textareaRef.current) {
-        insertTextAtCursor(textareaRef.current, text, input, setInput)
-      }
-      return
+    // 纯文字粘贴：不拦截，交给浏览器默认处理
+    if (!hasNativeFiles && !hasClipboardFiles) return
+
+    if (hasNativeFiles && textarea) {
+      // 等浏览器默认粘贴与 React onChange 完成后，只在内容完全等于“插入了文件名”时撤销。
+      window.setTimeout(() => {
+        undoAccidentalFilenamePaste(
+          textarea,
+          valueBeforePaste,
+          clipText,
+          selectionStart,
+          selectionEnd,
+          setInput,
+        )
+      }, 0)
     }
 
     setAttachmentError('')

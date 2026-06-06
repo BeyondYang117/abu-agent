@@ -117,6 +117,7 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
     {
         let _ = window.set_decorations(false);
         let _ = window.set_shadow(false);
+        let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
     }
 }
 
@@ -232,7 +233,12 @@ pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        builder = builder.decorations(false).transparent(false).shadow(false);
+        // 透明 WebView 背景允许前端 shell 裁出圆角；视觉边界仍贴合真实窗口边界。
+        builder = builder
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .background_color(Color(0, 0, 0, 0));
     }
 
     builder.build().map_err(|e| e.to_string())

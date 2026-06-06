@@ -1111,7 +1111,7 @@ export function AssistantCenter({
     <div className="h-full min-h-0 bg-white text-neutral-900 dark:bg-[#212121] dark:text-neutral-100">
       <main className="custom-scrollbar h-full min-h-0 overflow-y-auto px-6 py-6">
         <div className="mx-auto max-w-7xl space-y-6">
-          <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <header className="assistant-center-header flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <h1 className="text-[30px] font-semibold tracking-normal text-neutral-950 dark:text-neutral-50">
                 专家套件

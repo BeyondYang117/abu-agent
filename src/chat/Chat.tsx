@@ -14,7 +14,6 @@ import {
   chatTitlebarPillButtonClass,
   chatTitlebarPillIconClass,
   chatTitlebarRowClass,
-  isWindows,
   usesNativeTitlebar,
 } from './platform'
 import type {
@@ -1544,7 +1543,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   return (
     <div
-      className={`chat-window-shell${usesNativeTitlebar ? ' chat-window-shell--native-titlebar' : ''}${isWindows ? ' chat-window-shell--solid' : ''}`}
+      className={`chat-window-shell${usesNativeTitlebar ? ' chat-window-shell--native-titlebar' : ''}`}
     >
       {!usesNativeTitlebar && <WindowControls />}
       <div className="flex h-full min-h-0 w-full">
