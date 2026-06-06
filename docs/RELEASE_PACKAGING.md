@@ -44,8 +44,7 @@ GitHub release packaging:
    git push origin -f vX.Y.Z
    ```
 6. Build and upload the Apple Silicon macOS DMG locally from Apple Silicon hardware.
-7. `.github/workflows/release.yml` builds the remaining release matrix:
-   - `macos-intel` on `macos-26-intel` with `--bundles dmg`
+7. `.github/workflows/release.yml` builds the Windows release assets only:
    - `windows` on `windows-latest` with `--bundles msi,nsis`
 8. Watch the workflow and inspect the release assets:
    ```bash
