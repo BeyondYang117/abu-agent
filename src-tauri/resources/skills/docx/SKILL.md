@@ -13,12 +13,12 @@ Use this skill when the user attaches or references a Word document (`.doc` or `
 
 ## Inputs
 
-Kivio stores each uploaded document as a safe local copy and includes its absolute path in the user message under `Kivio 安全副本路径`. Use that safe copy path.
+Kivio stores each uploaded document as a safe local copy and includes its absolute path in the user message under `Kivio 安全副本路径`. Pass that safe copy path to `run_python` via `files`; Kivio mounts it inside the Pyodide filesystem for the run. Python code must use the mounted virtual paths in `KIVIO_INPUT_FILES`, not the host absolute path directly.
 
 ## Workflow
 
 1. Identify the safe copy path from the attachment note.
-2. For `.docx`, use `run_python` to inspect the zip package and extract text from `word/document.xml`.
+2. For `.docx`, use `run_python` with `files=["Kivio 安全副本路径"]` to inspect the mounted zip package and extract text from `word/document.xml`.
 3. Preserve paragraph order. If tables are needed, inspect `word/document.xml` table nodes or ask for a narrower extraction target.
 4. For legacy `.doc`, explain that binary Word extraction may not be available in the sandbox and ask the user to convert to `.docx` if needed.
 5. Do not invent content that was not extracted.
@@ -30,7 +30,7 @@ from pathlib import Path
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
-docx_path = Path("PASTE_SAFE_COPY_PATH_HERE")
+docx_path = Path(KIVIO_INPUT_FILES[0])
 with ZipFile(docx_path) as zf:
     xml = zf.read("word/document.xml")
 

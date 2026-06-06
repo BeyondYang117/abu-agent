@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use serde_json::Value;
 use tokio::process::Command;
 
-use super::{resolve_workspace_path, user_home_dir};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+use super::{resolve_read_path, user_home_dir};
 use crate::settings::{CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS};
 
 const COMMAND_DENYLIST: &[&str] = &[
@@ -24,6 +27,9 @@ const HOST_PYTHON_PACKAGE_INSTALL_PATTERNS: &[&str] = &[
     "python3 -m pip install",
     "uv pip install",
 ];
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn run_command(
     workspace_roots: &[String],
@@ -100,16 +106,27 @@ pub async fn run_command(
 
 fn resolve_command_cwd(arguments: &Value, workspace_roots: &[String]) -> Result<PathBuf, String> {
     if let Some(cwd_arg) = arguments.get("cwd").and_then(|v| v.as_str()) {
-        resolve_workspace_path(cwd_arg, workspace_roots)
+        resolve_unrestricted_existing_dir(cwd_arg)
     } else if let Some(root) = workspace_roots
         .iter()
         .map(|root| root.trim())
         .find(|root| !root.is_empty())
     {
-        resolve_workspace_path(root, workspace_roots)
+        resolve_unrestricted_existing_dir(root)
     } else {
         user_home_dir()
     }
+}
+
+fn resolve_unrestricted_existing_dir(raw_path: &str) -> Result<PathBuf, String> {
+    let path = resolve_read_path(raw_path)?;
+    if !path.is_dir() {
+        return Err(format!(
+            "Working directory is not a directory: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
 }
 
 #[derive(Debug)]
@@ -141,6 +158,10 @@ async fn run_shell_command(
     cmd.current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd.kill_on_drop(true);
     #[cfg(target_os = "macos")]
     unsafe {
@@ -220,11 +241,27 @@ mod tests {
     fn default_cwd_uses_first_workspace_root_when_configured() {
         let home = user_home_dir().expect("home should be available in tests");
         let root = home.join(".kivio-chat-test-root");
+        std::fs::create_dir_all(&root).expect("mkdir");
         let args = serde_json::json!({ "command": "pwd" });
         let cwd = resolve_command_cwd(&args, &[root.to_string_lossy().into_owned()])
             .expect("workspace root should resolve");
 
         assert_eq!(cwd, root);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn command_cwd_allows_temp_directory_outside_home() {
+        let dir = std::env::temp_dir().join(format!("kivio_cmd_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let args = serde_json::json!({ "command": "pwd", "cwd": dir.to_string_lossy() });
+        let cwd = resolve_command_cwd(&args, &[]).expect("temp cwd should resolve");
+
+        assert_eq!(
+            cwd,
+            std::fs::canonicalize(&dir).expect("canonical temp dir")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

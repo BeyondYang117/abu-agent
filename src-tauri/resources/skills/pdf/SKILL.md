@@ -13,24 +13,24 @@ Use this skill when the user attaches or references a PDF and asks to read, summ
 
 ## Inputs
 
-Kivio stores each uploaded file as a safe local copy and includes its absolute path in the user message under `Kivio 安全副本路径`. Work on that safe copy path, not on the original user file.
+Kivio stores each uploaded file as a safe local copy and includes its absolute path in the user message under `Kivio 安全副本路径`. Pass that safe copy path to `run_python` via `files`; Kivio mounts it inside the Pyodide filesystem for the run. Python code must use the mounted virtual paths in `KIVIO_INPUT_FILES`, not the host absolute path directly.
 
 ## Workflow
 
-1. Identify the PDF path from the attachment note.
-2. Use `run_python` to inspect or extract text from the PDF when possible.
+1. Identify the PDF safe copy path from the attachment note.
+2. Use `run_python` with `files=["Kivio 安全副本路径"]` to inspect or extract text from the PDF when possible.
 3. If extraction fails or returns little text, explain that the PDF may be scanned/image-only and ask for OCR or use the screenshot/Lens flow when appropriate.
 4. Ground answers in extracted content. Do not infer document contents from the filename alone.
 5. For long PDFs, extract page-level text first, then summarize by section/page before answering.
 
 ## Python Pattern
 
-Use Pyodide-friendly Python. Prefer lightweight standard-library inspection first. If a PDF parser is unavailable in the sandbox, report that limitation clearly and ask the user whether to use another route.
+Use Pyodide-friendly Python. Prefer lightweight standard-library inspection first. The `files` argument mounts attachment safe copies into Pyodide and exposes their virtual paths through `KIVIO_INPUT_FILES`. If a PDF parser is unavailable in the sandbox, report that limitation clearly and ask the user whether to use another route.
 
 ```python
 from pathlib import Path
 
-pdf_path = Path("PASTE_SAFE_COPY_PATH_HERE")
+pdf_path = Path(KIVIO_INPUT_FILES[0])
 print(pdf_path.name, pdf_path.stat().st_size)
 ```
 

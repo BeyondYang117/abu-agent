@@ -1,11 +1,13 @@
-use std::{collections::HashMap, fs, time::Duration};
+use std::{collections::HashMap, fs, path::Path, time::Duration};
 
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 
 use crate::{
+    chat::storage::conversations_dir,
     settings::{
         ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
         SKILL_SCRIPT_MIN_TIMEOUT_MS,
@@ -23,6 +25,117 @@ use super::{
 };
 
 const TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_PYTHON_INPUT_FILE_BYTES: u64 = 24 * 1024 * 1024;
+const MAX_PYTHON_INPUT_FILES: usize = 8;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PythonInputFilePayload {
+    name: String,
+    data_base64: String,
+    size_bytes: u64,
+}
+
+fn sanitize_python_input_name(path: &Path) -> String {
+    let raw = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("input");
+    let sanitized = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' ') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches(['.', ' ', '_']).trim();
+    if trimmed.is_empty() {
+        "input".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn path_is_chat_attachment(path: &Path, app: &AppHandle) -> bool {
+    let Ok(conversations) = conversations_dir(app).and_then(|dir| {
+        fs::canonicalize(dir).map_err(|err| format!("Resolve conversations dir failed: {err}"))
+    }) else {
+        return false;
+    };
+    if !path.starts_with(&conversations) {
+        return false;
+    }
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .map(|name| name.ends_with("_attachments"))
+        .unwrap_or(false)
+}
+
+fn path_is_temp_file(path: &Path) -> bool {
+    let Ok(temp) = fs::canonicalize(std::env::temp_dir()) else {
+        return false;
+    };
+    path.starts_with(temp)
+}
+
+fn collect_python_input_files(
+    app: &AppHandle,
+    arguments: &Value,
+) -> Result<Vec<PythonInputFilePayload>, String> {
+    let Some(files) = arguments.get("files") else {
+        return Ok(Vec::new());
+    };
+    let files = files
+        .as_array()
+        .ok_or_else(|| "run_python files must be an array of file paths".to_string())?;
+    if files.len() > MAX_PYTHON_INPUT_FILES {
+        return Err(format!(
+            "run_python supports at most {MAX_PYTHON_INPUT_FILES} input files"
+        ));
+    }
+
+    let mut payloads = Vec::new();
+    for file in files {
+        let raw_path = file
+            .as_str()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| "run_python files entries must be non-empty strings".to_string())?;
+        let path = fs::canonicalize(Path::new(raw_path))
+            .map_err(|err| format!("Resolve run_python input file failed: {err}"))?;
+        if !path.is_file() {
+            return Err(format!(
+                "run_python input is not a file: {}",
+                path.display()
+            ));
+        }
+        if !path_is_chat_attachment(&path, app) && !path_is_temp_file(&path) {
+            return Err(
+                "run_python input files must be Kivio chat attachment safe copies or temp files"
+                    .to_string(),
+            );
+        }
+        let metadata =
+            fs::metadata(&path).map_err(|err| format!("Read input metadata failed: {err}"))?;
+        if metadata.len() > MAX_PYTHON_INPUT_FILE_BYTES {
+            return Err(format!(
+                "run_python input file too large: {} bytes (max {MAX_PYTHON_INPUT_FILE_BYTES})",
+                metadata.len()
+            ));
+        }
+        let bytes = fs::read(&path).map_err(|err| format!("Read input file failed: {err}"))?;
+        payloads.push(PythonInputFilePayload {
+            name: sanitize_python_input_name(&path),
+            data_base64: general_purpose::STANDARD.encode(bytes),
+            size_bytes: metadata.len(),
+        });
+    }
+    Ok(payloads)
+}
 
 pub(crate) fn effective_skill_script_timeout_ms(
     default_timeout_ms: u64,
@@ -453,6 +566,12 @@ async fn run_python_via_pyodide(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "run_python requires code".to_string())?;
 
+    let timeout_ms = arguments
+        .get("timeout_ms")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(settings.chat_tools.tool_timeout_ms)
+        .clamp(1_000, 300_000);
+    let input_files = collect_python_input_files(app, arguments)?;
     let run_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
     {
@@ -462,18 +581,13 @@ async fn run_python_via_pyodide(
             .unwrap_or_else(|e| e.into_inner());
         pending.insert(run_id.clone(), tx);
     }
-
-    let timeout_ms = arguments
-        .get("timeout_ms")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(settings.chat_tools.tool_timeout_ms)
-        .clamp(1_000, 300_000);
     let emit_result = app.emit(
         "chat-run-python",
         serde_json::json!({
             "runId": run_id,
             "code": code,
             "timeoutMs": timeout_ms,
+            "files": input_files,
         }),
     );
     if let Err(err) = emit_result {

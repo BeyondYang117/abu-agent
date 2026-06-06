@@ -917,7 +917,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         void (async () => {
           try {
             const { runPythonInSandbox } = await import('./pyodideRunner')
-            const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs)
+            const outcome = await runPythonInSandbox(payload.code, payload.timeoutMs, payload.files)
             await api.chatPythonComplete(
               payload.runId,
               outcome.content,
@@ -930,7 +930,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
               : String(err)
             await api.chatPythonComplete(
               payload.runId,
-              `Python 沙盒调用失败：${message || 'Unknown error'}。不要重试 run_python，也不要使用 run_command/pip 安装或修改本机 Python 环境来绕过沙盒；请直接基于已有数据回答，除非用户明确要求修改本机环境。`,
+              `Python 沙盒调用失败：${message || 'Unknown error'}。不要使用 run_command/pip 安装或修改本机 Python 环境来绕过沙盒；请直接基于已有数据回答，除非用户明确要求修改本机环境。`,
               true,
               [],
             )

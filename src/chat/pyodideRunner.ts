@@ -21,13 +21,22 @@ const PYODIDE_PACKAGE_IMPORTS: Array<[RegExp, string]> = [
   [/(^|\n)\s*(import|from)\s+seaborn\b/, 'seaborn'],
   [/(^|\n)\s*(import|from)\s+micropip\b/, 'micropip'],
 ]
-const PYTHON_NETWORK_CLIENT_IMPORTS = /(^|\n)\s*(import|from)\s+(tavily|requests|httpx|urllib3|aiohttp)\b/
 const PYTHON_SANDBOX_FAILURE_GUIDANCE =
-  '不要重试 run_python，也不要使用 run_command/pip 安装或修改本机 Python 环境来绕过沙盒；请直接基于已有数据用文本/表格回答，除非用户明确要求修改本机环境。'
+  '不要使用 run_command/pip 安装或修改本机 Python 环境来绕过沙盒；请直接基于已有数据用文本/表格回答，除非用户明确要求修改本机环境。'
 const PYTHON_IMAGE_ARTIFACT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'])
 const PYTHON_ARTIFACT_SCAN_ROOTS = ['/home/pyodide', '/tmp']
 const MAX_PYTHON_IMAGE_ARTIFACT_BYTES = 12 * 1024 * 1024
 const MAX_PYTHON_IMAGE_ARTIFACTS = 12
+const MAX_PYTHON_INPUT_FILE_BYTES = 24 * 1024 * 1024
+const PYODIDE_IMPORT_PACKAGE_ALIASES: Record<string, string> = {
+  PIL: 'pillow',
+  bs4: 'beautifulsoup4',
+  cv2: 'opencv-python',
+  sklearn: 'scikit-learn',
+  skimage: 'scikit-image',
+  tavily: 'tavily-python',
+  yaml: 'pyyaml',
+}
 
 type PyodideFsStat = {
   mode: number
@@ -40,6 +49,9 @@ type PyodideFs = {
   isDir(mode: number): boolean
   isFile(mode: number): boolean
   readFile(path: string, options?: { encoding?: 'binary' }): Uint8Array | ArrayBuffer | number[] | string
+  writeFile(path: string, data: Uint8Array): void
+  unlink(path: string): void
+  mkdirTree?: (path: string) => void
   analyzePath?: (path: string) => { exists: boolean }
 }
 type PythonArtifactSnapshotEntry = {
@@ -49,6 +61,11 @@ type PythonArtifactSnapshotEntry = {
 type PythonOutputResult = {
   content: string
   artifacts: ChatToolArtifact[]
+}
+type PythonInputFile = {
+  name: string
+  dataBase64: string
+  sizeBytes: number
 }
 type PyodideSource = {
   label: string
@@ -171,6 +188,14 @@ async function installPackagesOnRuntime(
   if (pyodidePackages.length > 0) {
     await pyodide.loadPackage(pyodidePackages)
   }
+}
+
+async function installMicropipPackage(pyodide: PyodideInterface, packageName: string): Promise<void> {
+  await pyodide.loadPackage('micropip')
+  await pyodide.runPythonAsync(`
+import micropip as _kivio_micropip
+await _kivio_micropip.install(${pythonStringLiteral(packageName)})
+`.trim())
 }
 
 async function loadRuntimeWithPackages(packages: string[]): Promise<PyodideInterface> {
@@ -313,6 +338,34 @@ function detectPyodidePackages(code: string): string[] {
     .filter(([pattern]) => pattern.test(code))
     .map(([, packageName]) => packageName)
   return [...new Set(packages)]
+}
+
+function packageNameForImport(moduleName: string): string | null {
+  const rootName = moduleName.split('.')[0]?.trim()
+  if (!rootName) return null
+  return PYODIDE_IMPORT_PACKAGE_ALIASES[rootName] ?? rootName
+}
+
+function missingModulePackageName(message: string): string | null {
+  const patterns = [
+    /ModuleNotFoundError:\s*No module named ['"]([^'"]+)['"]/i,
+    /ImportError:\s*No module named ['"]([^'"]+)['"]/i,
+    /No known package with name ['"]([^'"]+)['"]/i,
+  ]
+  for (const pattern of patterns) {
+    const match = message.match(pattern)
+    const packageName = match?.[1] ? packageNameForImport(match[1]) : null
+    if (packageName) return packageName
+  }
+  return null
+}
+
+async function installSandboxPackage(pyodide: PyodideInterface, packageName: string): Promise<void> {
+  try {
+    await installPackagesOnRuntime(pyodide, [packageName], await loadPackageManifest())
+  } catch {
+    await installMicropipPackage(pyodide, packageName)
+  }
 }
 
 function codeUsesMatplotlib(code: string): boolean {
@@ -604,9 +657,9 @@ function bytesToBase64(bytes: Uint8Array): string {
   return window.btoa(binary)
 }
 
-function base64ToBytes(value: string): Uint8Array | null {
+function base64ToBytes(value: string, maxBytes = MAX_PYTHON_IMAGE_ARTIFACT_BYTES): Uint8Array | null {
   const compact = value.replace(/\s+/g, '')
-  if (!compact || compact.length > Math.ceil(MAX_PYTHON_IMAGE_ARTIFACT_BYTES * 4 / 3) + 8) {
+  if (!compact || compact.length > Math.ceil(maxBytes * 4 / 3) + 8) {
     return null
   }
   try {
@@ -619,6 +672,50 @@ function base64ToBytes(value: string): Uint8Array | null {
   } catch {
     return null
   }
+}
+
+async function mountPythonInputFiles(
+  pyodide: PyodideInterface,
+  files: PythonInputFile[] = [],
+): Promise<string[]> {
+  const fs = pyodide.FS as PyodideFs
+  const inputDir = '/home/pyodide/kivio_inputs'
+  try {
+    fs.mkdirTree?.(inputDir)
+  } catch {
+    // Directory may already exist.
+  }
+  try {
+    for (const entry of fs.readdir(inputDir)) {
+      if (entry === '.' || entry === '..') continue
+      const path = joinVirtualPath(inputDir, entry)
+      const stat = fs.stat(path)
+      if (fs.isFile(stat.mode)) {
+        fs.unlink(path)
+      }
+    }
+  } catch {
+    // If cleanup fails, writing fresh numbered inputs below will still reset KIVIO_INPUT_FILES.
+  }
+
+  const mountedPaths: string[] = []
+  files.forEach((file, index) => {
+    const bytes = base64ToBytes(file.dataBase64, MAX_PYTHON_INPUT_FILE_BYTES)
+    if (!bytes) {
+      throw new Error(`Invalid run_python input file payload: ${file.name}`)
+    }
+    const safeName = file.name.replace(/[^A-Za-z0-9._ -]/g, '_').replace(/^[. _-]+|[. _-]+$/g, '') || 'input'
+    const virtualPath = `${inputDir}/${index + 1}-${safeName}`
+    fs.writeFile(virtualPath, bytes)
+    mountedPaths.push(virtualPath)
+  })
+
+  await pyodide.runPythonAsync(`
+KIVIO_INPUT_FILES = ${pythonStringLiteral(JSON.stringify(mountedPaths))}
+import json as _kivio_json
+KIVIO_INPUT_FILES = _kivio_json.loads(KIVIO_INPUT_FILES)
+`.trim())
+  return mountedPaths
 }
 
 function toUint8Array(content: Uint8Array | ArrayBuffer | number[] | string): Uint8Array {
@@ -747,18 +844,16 @@ function collectNewImageArtifacts(
   return artifacts
 }
 
+function prefixMountedFiles(content: string, mountedFiles: string[]): string {
+  if (mountedFiles.length === 0) return content
+  return `mounted files:\n${mountedFiles.join('\n')}\n${content}`
+}
+
 export async function runPythonInSandbox(
   code: string,
   timeoutMs: number,
+  files: PythonInputFile[] = [],
 ): Promise<PythonRunOutcome> {
-  if (PYTHON_NETWORK_CLIENT_IMPORTS.test(code)) {
-    return {
-      content: 'Python 沙盒不支持联网/API 客户端库。实时搜索或网页抓取请使用 web_search / web_fetch，或使用对应 Skill 提供的脚本。',
-      isError: true,
-      artifacts: [],
-    }
-  }
-
   const packages = detectPyodidePackages(code)
   const preparedCode = preparePythonCode(code)
   let pyodide: PyodideInterface
@@ -774,11 +869,14 @@ export async function runPythonInSandbox(
     }
   }
 
+  let mountedFiles: string[] = []
   try {
+    mountedFiles = await mountPythonInputFiles(pyodide, files)
     if (codeUsesMatplotlib(code)) {
       await warmMatplotlib(pyodide)
     }
     const output = await executePython(pyodide, preparedCode, timeoutMs)
+    output.content = prefixMountedFiles(output.content, mountedFiles)
     return { content: output.content, isError: false, artifacts: output.artifacts }
   } catch (err) {
     const message = describePythonError(err)
@@ -787,7 +885,7 @@ export async function runPythonInSandbox(
         await warmMatplotlib(pyodide)
         const retryOutput = await executePython(pyodide, preparedCode, timeoutMs)
         return {
-          content: retryOutput.content,
+          content: prefixMountedFiles(retryOutput.content, mountedFiles),
           isError: false,
           artifacts: retryOutput.artifacts,
         }
@@ -803,6 +901,25 @@ export async function runPythonInSandbox(
     const lower = message.toLowerCase()
     if (lower.includes('timed out')) {
       return { content: `Python 执行超时：${message}`, isError: true, artifacts: [] }
+    }
+    const missingPackage = missingModulePackageName(message)
+    if (missingPackage) {
+      try {
+        await installSandboxPackage(pyodide, missingPackage)
+        const retryOutput = await executePython(pyodide, preparedCode, timeoutMs)
+        return {
+          content: prefixMountedFiles(retryOutput.content, mountedFiles),
+          isError: false,
+          artifacts: retryOutput.artifacts,
+        }
+      } catch (installOrRetryErr) {
+        const retryMessage = summarizePythonTraceback(describePythonError(installOrRetryErr))
+        return {
+          content: `Python 执行失败：已尝试在沙盒内安装 ${missingPackage}，但仍未成功：${retryMessage}`,
+          isError: true,
+          artifacts: [],
+        }
+      }
     }
     const summary = summarizePythonTraceback(message)
     if (message.includes('SyntaxError') || lower.includes('syntaxerror')) {

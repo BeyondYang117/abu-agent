@@ -278,7 +278,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "run_command".to_string(),
-        description: "Run a shell command (build, test, etc.) in a working directory under the user home. Requires user approval. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
+        description: "Run a shell command (build, test, etc.) in an existing working directory. Requires user approval. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -300,7 +300,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox (no host filesystem or network). Use for calculation, statistics, basic ML, and chart/data code. Do not use network/API client packages such as tavily, requests, httpx, urllib3, or aiohttp; use web_search/web_fetch or Skill scripts for live web/API access. Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported. stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, basic ML, chart/data code, document analysis, and sandbox-compatible package installs. Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported; missing compatible packages may be installed inside the sandbox with micropip. To analyze Kivio attachment safe copies, pass their paths in files; Kivio mounts them into the Pyodide filesystem for this run. stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -308,6 +308,12 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
             "type": "object",
             "properties": {
                 "code": { "type": "string", "description": "Python source code" },
+                "files": {
+                    "type": "array",
+                    "description": "Optional Kivio chat attachment safe-copy paths or temp file paths to mount into the Pyodide filesystem for this run",
+                    "items": { "type": "string" },
+                    "maxItems": 8
+                },
                 "timeout_ms": { "type": "integer", "description": "Timeout in ms (optional, max 300000)" }
             },
             "required": ["code"]

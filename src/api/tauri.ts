@@ -207,6 +207,11 @@ export type ChatRunPythonPayload = {
   runId: string
   code: string
   timeoutMs: number
+  files?: Array<{
+    name: string
+    dataBase64: string
+    sizeBytes: number
+  }>
 }
 
 export function defaultNativeTools(): ChatNativeToolsConfig {

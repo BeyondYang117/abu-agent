@@ -60,6 +60,16 @@ Questions to answer:
 - If the initial `matplotlib` execution still fails with a Pyodide/wasm/backend-style error, retry once inside the sandbox before surfacing a user-visible failure.
 - Save generated images to relative filenames inside the Pyodide filesystem and let Kivio capture them as artifacts; do not require the model to print base64.
 
+### Pyodide sandbox package boundary
+
+- Treat `run_python` as a Pyodide/browser sandbox, not as host Python.
+- The security boundary is host filesystem access: sandboxed Python must not read or write `/Users`, app resources, or other host paths.
+- Compatible packages may be downloaded inside the Pyodide sandbox with `micropip`; do not describe `run_python` as completely networkless.
+- Prefer bundled/local Pyodide packages first, then sandbox-local `micropip` fallback for missing imports.
+- Do not use `run_command`, host `pip`, or `python -m pip` to work around sandbox package failures unless the user explicitly asks to modify the host Python environment.
+- When `run_python` needs to analyze Kivio attachment safe copies, pass safe-copy paths through the tool's `files` argument. Rust validates and reads only approved chat-attachment/temp inputs, the frontend mounts them in Pyodide, and Python code must read the virtual paths from `KIVIO_INPUT_FILES`.
+- Keep Rust tool descriptions, system prompts, and frontend runner behavior consistent when changing this boundary.
+
 ### Release packaging for document Skills
 
 - Bundling `pdf`, `docx`, and `xlsx` Skills means bundling their execution runtime too; `SKILL.md` files alone are not a complete release.
