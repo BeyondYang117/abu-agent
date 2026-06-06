@@ -106,14 +106,12 @@ function defaultChatTools(): ChatToolsConfig {
   }
 }
 
-const BUILTIN_SKILL_IDS = new Set(['pdf', 'docx', 'xlsx'])
-
 function isBuiltinSkill(skill: SkillMeta): boolean {
-  return BUILTIN_SKILL_IDS.has(skill.id)
+  return skill.source === 'builtin'
 }
 
 function skillSourceLabel(skill: SkillMeta, lang: string): string {
-  if (isBuiltinSkill(skill)) {
+  if (skill.source === 'builtin') {
     return lang === 'zh' ? '内置' : 'Built-in'
   }
   if (skill.source === 'external') {
