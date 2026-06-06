@@ -38,6 +38,8 @@ use super::{
     ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
 };
 
+const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
+
 fn chat_memory_prompt_for_request(
     app: &AppHandle,
     settings: &Settings,
@@ -367,6 +369,7 @@ pub(crate) async fn chat_send_message(
         content: content.clone(),
         attachments: message_attachments,
         reasoning: None,
+        artifacts: Vec::new(),
         tool_calls: Vec::new(),
         api_messages: Vec::new(),
         model_messages: Vec::new(),
@@ -541,6 +544,7 @@ pub(crate) fn chat_python_complete(
 }
 
 const MAX_ATTACHMENT_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
+const MAX_PASTED_IMAGE_BYTES: usize = 12 * 1024 * 1024;
 const FALLBACK_CONTEXT_WINDOW_TOKENS: usize = 200_000;
 const AUTO_COMPRESS_RATIO: f32 = 0.85;
 const CONTEXT_BLOCK_RATIO: f32 = 1.0;
@@ -576,6 +580,57 @@ pub(crate) fn chat_open_attachment(
     app.shell().open(path_str, None).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub(crate) fn chat_save_pasted_image(
+    name: String,
+    mime_type: String,
+    data_base64: String,
+) -> Result<serde_json::Value, String> {
+    let mime = normalize_pasted_image_mime(&mime_type)?;
+    let ext = extension_for_image_mime(mime);
+    let mut safe_name = sanitize_attachment_name(&name);
+    if attachment_type_for_name(&safe_name) != "image" {
+        safe_name = format!("{safe_name}.{ext}");
+    }
+
+    let payload = data_base64.trim();
+    if payload.is_empty() {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "剪贴板图片为空",
+        }));
+    }
+
+    let bytes = match general_purpose::STANDARD.decode(payload) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "error": format!("解析剪贴板图片失败: {err}"),
+            }));
+        }
+    };
+    if bytes.len() > MAX_PASTED_IMAGE_BYTES {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "剪贴板图片过大，无法添加",
+        }));
+    }
+
+    let dir = std::env::temp_dir().join("kivio-chat-paste");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建临时附件目录失败: {e}"))?;
+    let file_name = format!("paste-{}-{}", Uuid::new_v4(), safe_name);
+    let path = dir.join(file_name);
+    fs::write(&path, bytes).map_err(|e| format!("保存剪贴板图片失败: {e}"))?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "path": path.to_string_lossy(),
+        "name": safe_name,
+        "mimeType": mime,
+    }))
+}
+
 fn resolve_attachment_file_path(
     app: &AppHandle,
     conversation_id: Option<&str>,
@@ -602,6 +657,33 @@ fn resolve_attachment_file_path(
         return Err(format!("文件不存在: {path}"));
     }
     Ok(full)
+}
+
+fn normalize_pasted_image_mime(mime_type: &str) -> Result<&'static str, String> {
+    match mime_type.trim().to_ascii_lowercase().as_str() {
+        "image/png" => Ok("image/png"),
+        "image/jpeg" | "image/jpg" => Ok("image/jpeg"),
+        "image/gif" => Ok("image/gif"),
+        "image/webp" => Ok("image/webp"),
+        "image/bmp" => Ok("image/bmp"),
+        "image/tiff" => Ok("image/tiff"),
+        "image/heic" => Ok("image/heic"),
+        "image/heif" => Ok("image/heif"),
+        _ => Err("仅支持粘贴图片".to_string()),
+    }
+}
+
+fn extension_for_image_mime(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        "image/heic" => "heic",
+        "image/heif" => "heif",
+        _ => "png",
+    }
 }
 
 fn mime_type_for_attachment(name: &str) -> &'static str {
@@ -918,6 +1000,24 @@ async fn complete_assistant_reply(
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
+    if model_can_generate_images_directly(&provider, &conversation.model) {
+        return complete_direct_image_generation_reply(
+            app,
+            state,
+            &settings,
+            &provider,
+            conversation,
+            title_from_first_user,
+            last_user_api_content,
+            last_user_image_paths,
+            active_skill_id,
+            &run_id,
+            assistant_message_id,
+            run_generation,
+            retry_attempts,
+        )
+        .await;
+    }
     let auxiliary_vision_model = auxiliary_vision_model_for_images(
         &settings,
         Some(&provider),
@@ -1051,6 +1151,7 @@ async fn complete_assistant_reply(
         &provider,
         &effective_chat_tools,
         settings.chat_memory.enabled,
+        crate::settings::chat_image_generation_enabled(&settings),
     );
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider.supports_tools).await;
     agent_prepare::apply_assistant_tool_preset(
@@ -1136,6 +1237,7 @@ async fn complete_assistant_reply(
             assistant_message_id,
             response,
             None,
+            Vec::new(),
             auxiliary_tool_records,
             Vec::new(),
             skill_id.as_deref(),
@@ -1220,6 +1322,7 @@ async fn complete_assistant_reply(
         assistant_message_id,
         result.content,
         result.reasoning,
+        Vec::new(),
         tool_records,
         result.api_messages,
         skill_id.as_deref(),
@@ -1227,6 +1330,151 @@ async fn complete_assistant_reply(
     )
     .await?;
     Ok(())
+}
+
+async fn complete_direct_image_generation_reply(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    settings: &Settings,
+    provider: &ModelProvider,
+    conversation: &mut Conversation,
+    title_from_first_user: Option<&str>,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+    active_skill_id: Option<&str>,
+    run_id: &str,
+    assistant_message_id: String,
+    run_generation: u64,
+    retry_attempts: usize,
+) -> Result<(), String> {
+    if !last_user_image_paths.is_empty() {
+        return Err(
+            "当前直接选择的生图模型只支持文字生图；图生图/图片编辑请先使用文字提示，或之后单独配置支持图片编辑的流程。"
+                .to_string(),
+        );
+    }
+
+    let prompt = direct_image_generation_prompt(conversation, last_user_api_content)?;
+    let arguments = serde_json::json!({
+        "prompt": prompt,
+        "size": "auto",
+        "quality": "auto",
+        "n": 1,
+    });
+    let started = Instant::now();
+    emit_chat_stream_delta(
+        app,
+        &conversation.id,
+        run_id,
+        &assistant_message_id,
+        DIRECT_IMAGE_GENERATION_PENDING,
+        None,
+    );
+
+    let model = conversation.model.clone();
+    let result = tokio::select! {
+        result = crate::chat::image_generation::generate_image_with_provider(
+            state.inner(),
+            provider,
+            &model,
+            &arguments,
+            retry_attempts,
+            "Chat image generation",
+        ) => result,
+        _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
+            emit_chat_stream_done(
+                app,
+                &conversation.id,
+                run_id,
+                &assistant_message_id,
+                "cancelled",
+                "",
+            );
+            return Err("cancelled".to_string());
+        }
+    };
+
+    match result {
+        Ok(output) if !output.is_error => {
+            let content = direct_image_generation_content(&output.artifacts);
+            emit_chat_stream_done(
+                app,
+                &conversation.id,
+                run_id,
+                &assistant_message_id,
+                "done",
+                &content,
+            );
+            let active_skill = active_skill_id
+                .map(str::to_string)
+                .or_else(|| conversation.active_skill_id.clone())
+                .or_else(|| {
+                    conversation
+                        .assistant_snapshot
+                        .as_ref()
+                        .and_then(|assistant| assistant.skill_id.clone())
+                });
+            push_assistant_message(
+                app,
+                state,
+                settings,
+                conversation,
+                assistant_message_id,
+                content,
+                None,
+                output.artifacts,
+                Vec::new(),
+                Vec::new(),
+                active_skill.as_deref(),
+                title_from_first_user,
+            )
+            .await?;
+            Ok(())
+        }
+        Ok(output) => {
+            let err = output.content;
+            eprintln!(
+                "Direct image generation failed after {}ms: {err}",
+                started.elapsed().as_millis()
+            );
+            Err(err)
+        }
+        Err(err) => {
+            eprintln!(
+                "Direct image generation failed after {}ms: {err}",
+                started.elapsed().as_millis()
+            );
+            Err(err)
+        }
+    }
+}
+
+fn direct_image_generation_content(artifacts: &[ChatToolArtifact]) -> String {
+    artifacts
+        .iter()
+        .map(|artifact| format!("![{}]({})", artifact.name, artifact.name))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn direct_image_generation_prompt(
+    conversation: &Conversation,
+    last_user_api_content: Option<&str>,
+) -> Result<String, String> {
+    let prompt = conversation
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.trim())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            last_user_api_content
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| "请输入要生成的图片描述。".to_string())?;
+    Ok(truncate_chars(prompt, 8000))
 }
 
 async fn push_assistant_message(
@@ -1237,6 +1485,7 @@ async fn push_assistant_message(
     message_id: String,
     content: String,
     reasoning: Option<String>,
+    artifacts: Vec<ChatToolArtifact>,
     tool_calls: Vec<ToolCallRecord>,
     api_messages: Vec<Value>,
     active_skill_id: Option<&str>,
@@ -1258,6 +1507,7 @@ async fn push_assistant_message(
         content: content.clone(),
         attachments: vec![],
         reasoning: reasoning.clone(),
+        artifacts,
         model_messages: assistant_model_messages_for_storage(
             &content,
             reasoning.as_deref(),
@@ -1385,6 +1635,9 @@ async fn generate_title_with_model(
     if !provider_is_apple && (provider.api_keys.is_empty() || model.trim().is_empty()) {
         return None;
     }
+    if model_can_generate_images_directly(&provider, &model) {
+        return None;
+    }
 
     let language = crate::settings::resolve_chat_language(settings);
     let prompt = build_title_summary_prompt(user_content, assistant_content, &language);
@@ -1509,6 +1762,11 @@ fn model_vision_from_model_info(info: Option<&ModelInfo>) -> Option<bool> {
         .and_then(|capabilities| capabilities.vision)
 }
 
+fn model_image_generation_from_model_info(info: Option<&ModelInfo>) -> Option<bool> {
+    info.and_then(|info| info.capabilities.as_ref())
+        .and_then(|capabilities| capabilities.image_generation)
+}
+
 fn model_database_entries() -> Option<&'static serde_json::Map<String, Value>> {
     static MODEL_DATABASE: OnceLock<Value> = OnceLock::new();
     MODEL_DATABASE
@@ -1529,14 +1787,27 @@ fn model_database_entry(model: &str) -> Option<&'static Value> {
     let name = model.to_ascii_lowercase();
     let stripped = name.rsplit('/').next().unwrap_or(&name);
 
+    if let Some(entry) = entries.get(name.as_str()) {
+        return Some(entry);
+    }
     if let Some(entry) = entries.get(stripped) {
         return Some(entry);
     }
 
+    let candidates = if name == stripped {
+        vec![stripped]
+    } else {
+        vec![name.as_str(), stripped]
+    };
+
     entries
         .iter()
         .filter_map(|(key, entry)| {
-            if key == "_meta" || !stripped.starts_with(key) || key.len() >= stripped.len() {
+            if key == "_meta"
+                || !candidates
+                    .iter()
+                    .any(|candidate| candidate.starts_with(key) && key.len() < candidate.len())
+            {
                 return None;
             }
             Some((key.len(), entry))
@@ -1547,7 +1818,11 @@ fn model_database_entry(model: &str) -> Option<&'static Value> {
             entries
                 .iter()
                 .filter_map(|(key, entry)| {
-                    if key == "_meta" || key == stripped || !stripped.contains(key) {
+                    if key == "_meta"
+                        || !candidates
+                            .iter()
+                            .any(|candidate| key != candidate && candidate.contains(key))
+                    {
                         return None;
                     }
                     Some((key.len(), entry))
@@ -1576,10 +1851,61 @@ fn model_database_vision(model: &str) -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
+fn model_database_image_generation(model: &str) -> Option<bool> {
+    model_database_entry(model)?
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("imageGeneration"))
+        .and_then(Value::as_bool)
+}
+
 fn model_supports_vision(provider: Option<&ModelProvider>, model: &str) -> Option<bool> {
     let provider = provider?;
     model_vision_from_model_info(provider.model_overrides.get(model))
         .or_else(|| model_database_vision(model))
+}
+
+fn model_supports_image_generation(provider: Option<&ModelProvider>, model: &str) -> Option<bool> {
+    let provider = provider?;
+    model_image_generation_from_model_info(provider.model_overrides.get(model))
+        .or_else(|| model_database_image_generation(model))
+        .or_else(|| image_generation_model_name_heuristic(provider, model))
+}
+
+fn model_can_generate_images_directly(provider: &ModelProvider, model: &str) -> bool {
+    model_supports_image_generation(Some(provider), model) == Some(true)
+        && crate::chat::image_generation::has_known_direct_image_generation_route(provider, model)
+}
+
+fn image_generation_model_name_heuristic(provider: &ModelProvider, model: &str) -> Option<bool> {
+    let descriptor = format!(
+        "{} {} {} {}",
+        provider.name, provider.base_url, provider.api_format, model
+    )
+    .to_ascii_lowercase();
+    let known_image_model = [
+        "gpt-image",
+        "dall-e",
+        "grok-imagine-image",
+        "gemini-3.1-flash-image",
+        "gemini-3-pro-image",
+        "gemini-2.5-flash-image",
+        "flux",
+        "recraft",
+        "riverflow",
+        "stable-diffusion",
+        "sdxl",
+        "ideogram",
+        "imagen",
+        "image-generation",
+        "image_generation",
+    ]
+    .iter()
+    .any(|needle| descriptor.contains(needle));
+    if known_image_model {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 fn context_window_for_model(provider: Option<&ModelProvider>, model: &str) -> (usize, bool) {
@@ -1900,7 +2226,7 @@ fn estimate_tool_segments(tools: &[ChatToolDefinition]) -> Vec<ContextUsageSegme
         let tool_value = tool.to_openai_tool();
         let id = match tool.source.as_str() {
             "mcp" => "mcp",
-            "native" => "native_tools",
+            "native" | "mixer" => "native_tools",
             "skill" => "skills",
             _ => "tool_definitions",
         };
@@ -2002,7 +2328,9 @@ fn auxiliary_vision_model_for_images(
             {
                 return None;
             }
-            if model_supports_vision(Some(provider), model) == Some(true) {
+            if model_supports_vision(Some(provider), model) == Some(true)
+                && model_supports_image_generation(Some(provider), model) != Some(true)
+            {
                 Some(AuxiliaryVisionModel {
                     provider_id: provider.id.clone(),
                     provider_name: provider.name.clone(),
@@ -2074,6 +2402,7 @@ async fn compute_context_state(
                     provider,
                     &effective_chat_tools,
                     settings.chat_memory.enabled,
+                    crate::settings::chat_image_generation_enabled(&settings),
                 )
         })
         .unwrap_or(false);
@@ -2459,7 +2788,8 @@ async fn list_tools_for_chat(
     if !provider_supports_tools
         || !(settings.chat_tools.enabled
             || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
-            || crate::settings::chat_memory_tools_enabled(settings))
+            || crate::settings::chat_memory_tools_enabled(settings)
+            || crate::settings::chat_image_generation_enabled(settings))
     {
         return Vec::new();
     }
@@ -2855,11 +3185,10 @@ impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
         _ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
         tool: &'a ChatToolDefinition,
         arguments: Value,
-        skill_cache: &'a mut skills::SkillRunCache,
+        skill_cache: Option<&'a mut skills::SkillRunCache>,
     ) -> crate::chat::agent::ToolExecutorFuture<'a> {
         Box::pin(async move {
-            mcp::registry::call_tool(&self.app, self.state, tool, arguments, Some(skill_cache))
-                .await
+            mcp::registry::call_tool(&self.app, self.state, tool, arguments, skill_cache).await
         })
     }
 }
@@ -3850,6 +4179,7 @@ mod tests {
             content: content.to_string(),
             attachments: Vec::new(),
             reasoning: None,
+            artifacts: Vec::new(),
             tool_calls: Vec::new(),
             api_messages: Vec::new(),
             model_messages: Vec::new(),
@@ -4008,6 +4338,7 @@ mod tests {
                     content: "use a skill".to_string(),
                     attachments: Vec::new(),
                     reasoning: None,
+                    artifacts: Vec::new(),
                     tool_calls: Vec::new(),
                     api_messages: Vec::new(),
                     model_messages: Vec::new(),
@@ -4020,6 +4351,7 @@ mod tests {
                     content: "visible answer".to_string(),
                     attachments: Vec::new(),
                     reasoning: Some("hidden thinking".to_string()),
+                    artifacts: Vec::new(),
                     tool_calls: Vec::new(),
                     api_messages: vec![
                         serde_json::json!({
@@ -4138,6 +4470,7 @@ mod tests {
                     content: "![img](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)".to_string(),
                     attachments: Vec::new(),
                     reasoning: None,
+                    artifacts: Vec::new(),
                     tool_calls: Vec::new(),
                     api_messages: vec![
                         serde_json::json!({

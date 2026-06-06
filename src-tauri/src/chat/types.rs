@@ -114,6 +114,8 @@ pub struct ChatMessage {
     #[serde(default)]
     pub reasoning: Option<String>,
     #[serde(default)]
+    pub artifacts: Vec<ChatToolArtifact>,
+    #[serde(default)]
     pub tool_calls: Vec<ToolCallRecord>,
     /// Hidden OpenAI-compatible transcript messages produced while answering this UI message.
     ///

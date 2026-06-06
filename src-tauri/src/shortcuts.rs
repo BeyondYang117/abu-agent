@@ -15,7 +15,7 @@ use crate::state::AppState;
 use crate::windows::apply_macos_traffic_light_position;
 use crate::windows::{
     apply_chat_window_chrome, apply_frameless_window_chrome, ensure_chat_window,
-    ensure_main_window, ensure_settings_window,
+    ensure_main_window, ensure_settings_window, normalize_chat_window_behavior,
 };
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
@@ -798,8 +798,7 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
     let window = ensure_chat_window(app)?;
     apply_chat_window_chrome(&window);
     crate::windows::apply_chat_window_min_size(&window, false);
-    let _ = window.set_always_on_top(false);
-    let _ = window.set_skip_taskbar(false);
+    normalize_chat_window_behavior(&window);
 
     if existing_window.is_some() {
         let _ = window.eval(

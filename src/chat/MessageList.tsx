@@ -167,6 +167,7 @@ export function MessageList({
               role: 'assistant',
               content: streamingContent,
               reasoning: streamingReasoning || undefined,
+              artifacts: [],
               tool_calls: streamingToolCalls,
               timestamp: Math.floor(Date.now() / 1000),
             }}

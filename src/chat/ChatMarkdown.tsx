@@ -12,6 +12,7 @@ import type { ChatToolArtifact } from './types'
 interface ChatMarkdownProps {
   content: string
   artifacts?: ChatToolArtifact[]
+  onImageClick?: (src: string, alt: string, name?: string) => void
 }
 
 const proseClass =
@@ -90,7 +91,7 @@ function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, string>
   return lookup
 }
 
-function ChatMarkdownComponent({ content, artifacts = [] }: ChatMarkdownProps) {
+function ChatMarkdownComponent({ content, artifacts = [], onImageClick }: ChatMarkdownProps) {
   const normalized = useMemo(() => normalizeMarkdownForRender(content), [content])
   const components = useMemo<Components>(() => {
     const artifactLookup = buildArtifactLookup(artifacts)
@@ -101,17 +102,27 @@ function ChatMarkdownComponent({ content, artifacts = [] }: ChatMarkdownProps) {
         const resolvedSrc = rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)
           ? artifactLookup.get(artifactKey(rawSrc)) ?? artifactLookup.get(artifactBasename(rawSrc)) ?? rawSrc
           : rawSrc
+        const altText = alt ?? ''
         return (
-          <img
-            src={resolvedSrc}
-            alt={alt ?? ''}
-            loading="lazy"
-            className="my-3 max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
-          />
+          <button
+            type="button"
+            className="my-3 block max-w-full cursor-zoom-in rounded-md p-0 text-left"
+            onClick={() => {
+              if (resolvedSrc) onImageClick?.(resolvedSrc, altText, rawSrc)
+            }}
+            aria-label="预览图片"
+          >
+            <img
+              src={resolvedSrc}
+              alt={altText}
+              loading="lazy"
+              className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
+            />
+          </button>
         )
       },
     }
-  }, [artifacts])
+  }, [artifacts, onImageClick])
 
   return (
     <div className={proseClass}>

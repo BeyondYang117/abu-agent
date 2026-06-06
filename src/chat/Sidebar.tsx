@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronLeft,
+  ChevronRight,
   FolderPlus,
   LayoutGrid,
   MoreHorizontal,
@@ -13,12 +14,23 @@ import { ConversationList } from './ConversationList'
 import { ChatSectionMenu } from './ChatSectionMenu'
 import { ProjectContextMenu } from './ProjectContextMenu'
 import { ProjectDialog } from './ProjectDialog'
+import { api } from '../api/tauri'
 import { chatApi } from './api'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { chatTitlebarMacInsetClass, chatTitlebarRowClass, isMac } from './platform'
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
+import { hasChatDisplayName, resolveChatUserProfile, type ChatUserProfile } from './userProfile'
+import { UserAvatar } from './UserAvatar'
 
 const modLabel = isMac ? '⌘' : 'Ctrl'
+
+export type ExtensionsNavItem = 'assistants' | 'skill' | 'mcp'
+
+const extensionSubItems: Array<{ id: ExtensionsNavItem; label: string }> = [
+  { id: 'assistants', label: '助手' },
+  { id: 'skill', label: '技能' },
+  { id: 'mcp', label: '连接器' },
+]
 
 interface SidebarProps {
   currentConversationId?: string
@@ -28,14 +40,60 @@ interface SidebarProps {
   onNewConversation: () => void
   onConversationDeleted?: (id: string) => void
   onOpenSettings: () => void
-  onOpenAssistantCenter: () => void
+  onOpenExtensionsItem: (item: ExtensionsNavItem) => void
   settingsActive?: boolean
-  assistantCenterActive?: boolean
+  extensionsActive?: ExtensionsNavItem | null
   collapsed: boolean
   onToggleCollapsed: () => void
   refreshKey: number
+  profileRefreshKey?: number
   searchOpen: boolean
   onSearchOpenChange: (open: boolean) => void
+}
+
+function SidebarUserFooter({
+  profile,
+  settingsActive,
+  onOpenSettings,
+}: {
+  profile: ChatUserProfile
+  settingsActive: boolean
+  onOpenSettings: () => void
+}) {
+  return (
+    <div
+      className="shrink-0 border-t border-neutral-200/60 px-2 pb-2.5 pt-2 dark:border-neutral-800/80"
+      data-tauri-drag-region="false"
+    >
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <UserAvatar profile={profile} size={28} />
+          {hasChatDisplayName(profile) && (
+            <span
+              className="min-w-0 truncate text-[13px] text-neutral-700 dark:text-neutral-300"
+              title={profile.displayName}
+            >
+              {profile.displayName}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className={`shrink-0 rounded-md p-1.5 transition-colors ${
+            settingsActive
+              ? 'bg-black/[0.06] text-neutral-800 dark:bg-white/[0.1] dark:text-neutral-100'
+              : 'text-neutral-400 hover:bg-black/[0.05] hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-white/[0.08] dark:hover:text-neutral-300'
+          }`}
+          title="设置"
+          aria-label="设置"
+          aria-pressed={settingsActive}
+        >
+          <SettingsIcon size={16} strokeWidth={1.75} />
+        </button>
+      </div>
+    </div>
+  )
 }
 
 interface NavRowProps {
@@ -76,6 +134,70 @@ function NavRow({ icon, label, shortcut, onClick, disabled, active, iconMotion }
   )
 }
 
+function ExtensionsNav({
+  activeItem,
+  onSelectItem,
+}: {
+  activeItem?: ExtensionsNavItem | null
+  onSelectItem: (item: ExtensionsNavItem) => void
+}) {
+  const [expanded, setExpanded] = useState(() => Boolean(activeItem))
+
+  useEffect(() => {
+    if (activeItem) setExpanded(true)
+  }, [activeItem])
+
+  const highlighted = expanded || !!activeItem
+
+  return (
+    <div className="py-0.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((open) => !open)}
+        className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors ${
+          highlighted
+            ? 'bg-black/[0.06] text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-50'
+            : 'text-neutral-800 hover:bg-black/[0.04] dark:text-neutral-200 dark:hover:bg-white/[0.06]'
+        }`}
+        aria-expanded={expanded}
+      >
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 transition duration-300 ease-out will-change-transform group-hover:text-neutral-800 group-active:scale-90 group-hover:rotate-3 group-hover:scale-110 dark:text-neutral-400 dark:group-hover:text-neutral-200">
+          <LayoutGrid size={17} strokeWidth={1.75} />
+        </span>
+        <span className="min-w-0 flex-1 truncate">拓展</span>
+        <ChevronRight
+          size={14}
+          strokeWidth={2}
+          className={`shrink-0 text-neutral-400 transition-transform duration-200 dark:text-neutral-500 ${
+            expanded ? 'rotate-90' : ''
+          }`}
+        />
+      </button>
+      {expanded && (
+        <div className="relative ml-[34px] mt-0.5 border-l border-neutral-200/90 pl-2 dark:border-neutral-700">
+          {extensionSubItems.map((item) => {
+            const active = activeItem === item.id
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectItem(item.id)}
+                className={`flex w-full rounded-md py-1.5 pl-3 pr-2 text-left text-[13px] transition-colors ${
+                  active
+                    ? 'font-medium text-neutral-900 dark:text-neutral-100'
+                    : 'text-neutral-700 hover:bg-black/[0.04] hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-white/[0.06] dark:hover:text-neutral-100'
+                }`}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const Sidebar = memo(function Sidebar({
   currentConversationId,
   selectedProject = null,
@@ -84,12 +206,13 @@ export const Sidebar = memo(function Sidebar({
   onNewConversation,
   onConversationDeleted,
   onOpenSettings,
-  onOpenAssistantCenter,
+  onOpenExtensionsItem,
   settingsActive = false,
-  assistantCenterActive = false,
+  extensionsActive = null,
   collapsed,
   onToggleCollapsed,
   refreshKey,
+  profileRefreshKey = 0,
   searchOpen,
   onSearchOpenChange,
 }: SidebarProps) {
@@ -107,10 +230,26 @@ export const Sidebar = memo(function Sidebar({
   const [projectError, setProjectError] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
   const sectionMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const sidebarLoadedRef = useRef(false)
+  const lastProjectIdRef = useRef(selectedProject?.id)
+  const [userProfile, setUserProfile] = useState(() => resolveChatUserProfile())
 
-  const loadSidebarData = useCallback(async (projectOverride?: ChatProject | null) => {
-    const projectForLoad = projectOverride === undefined ? selectedProject : projectOverride
-    setLoading(true)
+  useEffect(() => {
+    let cancelled = false
+    void api.getSettings().then((settings) => {
+      if (!cancelled) setUserProfile(resolveChatUserProfile(settings.chat))
+    }).catch((err) => {
+      console.error('Failed to load chat user profile:', err)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [profileRefreshKey])
+
+  const loadSidebarData = useCallback(async (options?: { silent?: boolean; projectOverride?: ChatProject | null }) => {
+    const projectForLoad = options?.projectOverride === undefined ? selectedProject : options.projectOverride
+    const silent = options?.silent ?? false
+    if (!silent) setLoading(true)
     try {
       const [projectData, conversationData] = await Promise.all([
         chatApi.getProjects(),
@@ -124,12 +263,20 @@ export const Sidebar = memo(function Sidebar({
     } catch (err) {
       console.error('Failed to load chat sidebar data:', err)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [onSelectProject, selectedProject])
 
   useEffect(() => {
-    void loadSidebarData()
+    const projectChanged = sidebarLoadedRef.current && lastProjectIdRef.current !== selectedProject?.id
+    lastProjectIdRef.current = selectedProject?.id
+    void loadSidebarData({ silent: sidebarLoadedRef.current && !projectChanged })
+    sidebarLoadedRef.current = true
+  }, [loadSidebarData, selectedProject?.id])
+
+  useEffect(() => {
+    if (refreshKey === 0) return
+    void loadSidebarData({ silent: true })
   }, [loadSidebarData, refreshKey])
 
   useEffect(() => {
@@ -158,7 +305,7 @@ export const Sidebar = memo(function Sidebar({
   const handleRenameConversation = async (id: string, title: string) => {
     try {
       await chatApi.updateConversation(id, { title })
-      await loadSidebarData()
+      await loadSidebarData({ silent: true })
     } catch (err) {
       console.error('Failed to rename conversation:', err)
     }
@@ -171,7 +318,7 @@ export const Sidebar = memo(function Sidebar({
       if (currentConversationId === id) {
         onConversationDeleted?.(id)
       }
-      await loadSidebarData()
+      await loadSidebarData({ silent: true })
     } catch (err) {
       console.error('Failed to delete conversation:', err)
     }
@@ -187,7 +334,7 @@ export const Sidebar = memo(function Sidebar({
       ) {
         onConversationDeleted?.(id)
       }
-      await loadSidebarData()
+      await loadSidebarData({ silent: true })
     } catch (err) {
       console.error('Failed to move conversation:', err)
     }
@@ -221,7 +368,7 @@ export const Sidebar = memo(function Sidebar({
         ? await chatApi.updateProject(dialogProject.id, { name })
         : await chatApi.createProject(name)
       onSelectProject(project)
-      await loadSidebarData(project)
+      await loadSidebarData({ silent: true, projectOverride: project })
       setDialogProject(undefined)
     } catch (err) {
       setProjectError(typeof err === 'string' ? err : (err as Error).message || '项目保存失败')
@@ -240,7 +387,7 @@ export const Sidebar = memo(function Sidebar({
         onSelectProject(null)
         if (currentConversationId) onConversationDeleted?.(currentConversationId)
       }
-      await loadSidebarData()
+      await loadSidebarData({ silent: true })
     } catch (err) {
       console.error('Failed to delete project:', err)
     }
@@ -255,7 +402,7 @@ export const Sidebar = memo(function Sidebar({
       if (currentConversationId) {
         onConversationDeleted?.(currentConversationId)
       }
-      await loadSidebarData()
+      await loadSidebarData({ silent: true })
     } catch (err) {
       console.error('Failed to clear conversations:', err)
     }
@@ -308,19 +455,9 @@ export const Sidebar = memo(function Sidebar({
           onClick={openCreateProjectDialog}
           iconMotion="group-hover:-translate-y-px group-hover:scale-110"
         />
-        <NavRow
-          icon={<LayoutGrid size={17} strokeWidth={1.75} />}
-          label="助手中心"
-          active={assistantCenterActive}
-          onClick={onOpenAssistantCenter}
-          iconMotion="group-hover:rotate-3 group-hover:scale-110"
-        />
-        <NavRow
-          icon={<SettingsIcon size={17} strokeWidth={1.75} />}
-          label="设置"
-          active={settingsActive}
-          onClick={onOpenSettings}
-          iconMotion="group-hover:rotate-90"
+        <ExtensionsNav
+          activeItem={extensionsActive}
+          onSelectItem={onOpenExtensionsItem}
         />
       </nav>
 
@@ -487,6 +624,12 @@ export const Sidebar = memo(function Sidebar({
           </div>
         </div>
       </div>
+
+      <SidebarUserFooter
+        profile={userProfile}
+        settingsActive={settingsActive}
+        onOpenSettings={onOpenSettings}
+      />
 
       {projectMenuState && menuProject && (
         <ProjectContextMenu

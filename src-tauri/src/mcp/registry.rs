@@ -19,8 +19,8 @@ use crate::{
 use super::{
     client::{StdioMcpClient, StreamableHttpMcpClient},
     types::{
-        list_native_builtin_tool_defs, native_skill_tools, tool_definition_from_mcp,
-        ChatToolDefinition, McpToolCallResult,
+        list_native_builtin_tool_defs, mixer_generate_image_tool, native_skill_tools,
+        tool_definition_from_mcp, ChatToolDefinition, McpToolCallResult,
     },
 };
 
@@ -227,6 +227,21 @@ pub async fn list_enabled_tool_defs(state: &AppState) -> Result<Vec<ChatToolDefi
         crate::settings::chat_memory_tools_enabled(&settings),
         settings.chat_memory.tool_write_confirm,
     );
+    if let Some((provider_id, model)) = settings.image_generation_model() {
+        let mut tool = mixer_generate_image_tool();
+        let provider_name = settings
+            .get_provider(&provider_id)
+            .map(|provider| {
+                if provider.name.trim().is_empty() {
+                    provider.id.clone()
+                } else {
+                    provider.name.clone()
+                }
+            })
+            .unwrap_or(provider_id);
+        tool.server_id = Some(format!("{provider_name} / {model}"));
+        tools.push(tool);
+    }
 
     if settings.chat_tools.enabled {
         for server in settings
@@ -332,6 +347,10 @@ pub async fn call_tool(
         return call_skill_tool(app, state, tool, arguments, skill_cache).await;
     }
 
+    if tool.source == "mixer" {
+        return call_mixer_tool(state, tool, arguments).await;
+    }
+
     let server_id = tool
         .server_id
         .as_deref()
@@ -412,6 +431,7 @@ fn enabled_tools_cache_key(settings: &crate::settings::Settings) -> String {
     serde_json::to_string(&serde_json::json!({
         "chatTools": settings.chat_tools,
         "chatMemory": settings.chat_memory,
+        "imageGeneration": settings.default_models.image_generation,
         "lensWebSearchProvider": settings.lens.web_search.provider,
         "lensWebSearchMaxResults": settings.lens.web_search.max_results,
         "lensWebSearchDepth": settings.lens.web_search.search_depth,
@@ -423,6 +443,19 @@ fn web_search_configured(settings: &crate::settings::Settings) -> bool {
     match settings.lens.web_search.provider {
         WebSearchProvider::Tavily => !settings.lens.web_search.tavily_api_key.trim().is_empty(),
         WebSearchProvider::Exa => !settings.lens.web_search.exa_api_key.trim().is_empty(),
+    }
+}
+
+async fn call_mixer_tool(
+    state: &AppState,
+    tool: &ChatToolDefinition,
+    arguments: Value,
+) -> Result<McpToolCallResult, String> {
+    match tool.name.as_str() {
+        "mixer_generate_image" => {
+            crate::chat::image_generation::tool_generate_image(state, &arguments).await
+        }
+        other => Err(format!("Unknown mixer tool: {other}")),
     }
 }
 

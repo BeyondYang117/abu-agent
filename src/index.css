@@ -580,6 +580,63 @@ body {
   transform: translateY(0);
 }
 
+.image-generation-pending {
+  width: min(360px, calc(100vw - 3rem));
+  max-width: 100%;
+}
+
+.image-generation-pending-frame {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #f3f4f5;
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.075),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 1px 2px rgba(0, 0, 0, 0.025);
+}
+
+.dark .image-generation-pending-frame {
+  background: #252527;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.075),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.image-generation-pending-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 46%, transparent 0 46%, rgba(243, 244, 245, 0.42) 76%),
+    linear-gradient(180deg, rgba(243, 244, 245, 0.24), transparent 42%, rgba(243, 244, 245, 0.34));
+}
+
+.dark .image-generation-pending-frame::after {
+  background:
+    radial-gradient(circle at 50% 46%, transparent 0 46%, rgba(37, 37, 39, 0.48) 76%),
+    linear-gradient(180deg, rgba(37, 37, 39, 0.28), transparent 42%, rgba(37, 37, 39, 0.38));
+}
+
+.image-generation-pending-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #a3a3a3;
+  box-shadow: 0 0 0 0 rgba(163, 163, 163, 0.3);
+  animation: image-generation-indicator-pulse 1.8s ease-in-out infinite;
+}
+
+.dark .image-generation-pending-indicator {
+  background: #8a8a8a;
+  box-shadow: 0 0 0 0 rgba(138, 138, 138, 0.24);
+}
+
 @keyframes chat-motion-fade-up {
   from {
     opacity: 0;
@@ -588,6 +645,19 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes image-generation-indicator-pulse {
+  0%, 100% {
+    opacity: 0.48;
+    transform: scale(0.9);
+    box-shadow: 0 0 0 0 rgba(163, 163, 163, 0);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 5px rgba(163, 163, 163, 0.12);
   }
 }
 
@@ -672,6 +742,10 @@ body {
 
   .chat-typewriter-cursor {
     display: none;
+    animation: none;
+  }
+
+  .image-generation-pending-indicator {
     animation: none;
   }
 }
@@ -975,6 +1049,7 @@ body {
   flex-direction: column;
   gap: 1px;
   margin-bottom: 4px;
+  position: relative;
 }
 
 .settings-embedded .kv-provider-list-presets {
@@ -1019,10 +1094,10 @@ body {
 }
 
 .settings-embedded .kv-provider-add {
-  margin-top: 6px;
+  margin-bottom: 6px;
   flex-shrink: 0;
-  border-top: 1px solid var(--divider);
-  padding-top: 10px;
+  border-bottom: 1px solid var(--divider);
+  padding-bottom: 10px;
 }
 
 .settings-embedded .kv-provider-detail .kv-group {
@@ -2071,6 +2146,7 @@ body {
   flex-direction: column;
   gap: 1px;
   margin-bottom: 4px;
+  position: relative;
 }
 .kv-provider-list-presets {
   flex-shrink: 0;
@@ -2108,16 +2184,16 @@ body {
   background: var(--bg-hover);
 }
 .kv-provider-add {
-  margin-top: 4px;
+  margin-bottom: 4px;
   flex-shrink: 0;
-  border-top: 1px solid var(--divider);
-  padding-top: 8px;
+  border-bottom: 1px solid var(--divider);
+  padding-bottom: 8px;
 }
 .kv-provider-item,
 .kv-provider-add {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
   padding: 5px 7px;
   border-radius: 5px;
   cursor: default;
@@ -2128,6 +2204,31 @@ body {
   font-size: 12px;
   color: var(--text);
   width: 100%;
+  position: relative;
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1), background 0.15s ease, box-shadow 0.15s ease;
+  will-change: transform;
+}
+.kv-provider-list-items.is-sorting .kv-provider-item:not(.is-dragging) {
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1);
+}
+.kv-provider-item-select {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: default;
+}
+.kv-provider-item-select:hover,
+.kv-provider-item:hover .kv-provider-item-select {
+  color: var(--text);
 }
 .kv-provider-item:hover,
 .kv-provider-add:hover {
@@ -2137,6 +2238,38 @@ body {
 .kv-provider-item.active {
   background: var(--bg-active);
   font-weight: 500;
+}
+.kv-provider-item.is-dragging {
+  transition: none;
+  z-index: 2;
+  background: var(--bg-active);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+.dark .kv-provider-item.is-dragging {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+.kv-provider-drag-handle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: -2px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.kv-provider-drag-handle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.kv-provider-drag-handle:active {
+  cursor: grabbing;
 }
 .kv-provider-dot {
   width: 6px;
@@ -2149,7 +2282,6 @@ body {
 .kv-provider-dot.warn { background: var(--warn); }
 .kv-provider-dot.off { background: var(--text-tertiary); opacity: 0.45; }
 .kv-provider-add {
-  margin-top: 2px;
   font-size: 11.5px;
   color: var(--text-muted);
   gap: 6px;

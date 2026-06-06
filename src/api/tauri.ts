@@ -214,6 +214,13 @@ export type ChatRunPythonPayload = {
   }>
 }
 
+export type ChatPastedImageResult = {
+  success: boolean
+  path?: string
+  name?: string
+  error?: string | null
+}
+
 export function defaultNativeTools(): ChatNativeToolsConfig {
   return {
     webSearch: false,
@@ -239,6 +246,8 @@ export type ChatConfig = {
   thinkingEnabled?: boolean
   defaultLanguage?: string
   systemPrompt?: string
+  userDisplayName?: string
+  userAvatar?: string
 }
 
 export type ChatMemoryConfig = {
@@ -334,6 +343,7 @@ export type ModelInfo = {
     reasoning?: boolean
     streaming?: boolean
     webSearch?: boolean
+    imageGeneration?: boolean
   }
   pricing?: {
     input?: number
@@ -375,6 +385,7 @@ export type DefaultModelsConfig = {
   vision: DefaultModelSelection
   titleSummary: DefaultModelSelection
   compression: DefaultModelSelection
+  imageGeneration: DefaultModelSelection
 }
 
 // 应用设置数据结构
@@ -557,6 +568,7 @@ function normalizeDefaultModels(
     vision: normalizeDefaultModelSelection(config?.vision),
     titleSummary: normalizeDefaultModelSelection(config?.titleSummary),
     compression: normalizeDefaultModelSelection(config?.compression),
+    imageGeneration: normalizeDefaultModelSelection(config?.imageGeneration),
   }
 }
 
@@ -837,6 +849,8 @@ export const api = {
     invoke<{ success: boolean; path?: string | null; error?: string | null }>(
       'chat_memory_open_folder',
     ),
+  chatSavePastedImage: (name: string, mimeType: string, dataBase64: string) =>
+    invoke<ChatPastedImageResult>('chat_save_pasted_image', { name, mimeType, dataBase64 }),
   chatCancelStream: (conversationId: string) =>
     invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>

@@ -20,7 +20,7 @@ impl ChatToolDefinition {
         match self.source.as_str() {
             // Native and Skill tools are model-facing APIs owned by Kivio. Keep their names
             // aligned with the system prompt so models can call exactly what we instruct.
-            "native" | "skill" => sanitize_openai_tool_name(&self.name),
+            "native" | "skill" | "mixer" => sanitize_openai_tool_name(&self.name),
             _ => sanitize_openai_tool_name(&self.id),
         }
     }
@@ -395,6 +395,44 @@ pub fn native_memory_modify_tool(sensitive: bool) -> ChatToolDefinition {
             "required": ["layer", "operation"]
         }),
         sensitive,
+    }
+}
+
+pub fn mixer_generate_image_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "mixer__generate_image".to_string(),
+        name: "mixer_generate_image".to_string(),
+        description: "Generate image artifacts from a text prompt using the Mixer image generation model configured in Settings.".to_string(),
+        source: "mixer".to_string(),
+        server_id: None,
+        server_name: Some("Mixer".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed image generation prompt"
+                },
+                "size": {
+                    "type": "string",
+                    "enum": ["auto", "1024x1024", "1024x1536", "1536x1024"],
+                    "description": "Optional output size. Use auto unless the user asked for a square, portrait, or landscape image."
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": ["auto", "low", "medium", "high"],
+                    "description": "Optional quality setting"
+                },
+                "n": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4,
+                    "description": "Number of images to generate"
+                }
+            },
+            "required": ["prompt"]
+        }),
+        sensitive: false,
     }
 }
 

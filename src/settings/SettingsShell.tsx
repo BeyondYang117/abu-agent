@@ -30,6 +30,7 @@ import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, stableS
 import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
 import { ModelPairSelect } from './ModelPairSelect'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
+import { ProviderSortableList } from './ProviderSortableList'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
 import { resolveModelInfo } from '../data/modelMatching'
@@ -181,6 +182,8 @@ function defaultChatConfig(): NonNullable<SettingsData['chat']> {
     thinkingEnabled: true,
     defaultLanguage: '',
     systemPrompt: '',
+    userDisplayName: '',
+    userAvatar: '',
   }
 }
 
@@ -361,6 +364,7 @@ function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData
     vision: { providerId: '', model: '' },
     titleSummary: { providerId: '', model: '' },
     compression: { providerId: '', model: '' },
+    imageGeneration: { providerId: '', model: '' },
   }
 }
 
@@ -379,6 +383,9 @@ function clearDefaultModelProvider(
     compression: defaultModels.compression.providerId === providerId
       ? { providerId: '', model: '' }
       : defaultModels.compression,
+    imageGeneration: defaultModels.imageGeneration.providerId === providerId
+      ? { providerId: '', model: '' }
+      : defaultModels.imageGeneration,
   }
 }
 
@@ -400,6 +407,9 @@ function resolveDefaultModelsAfterModelRemoval(
     compression: defaultModels.compression.providerId === providerId
       ? { ...defaultModels.compression, model: resolveAfterRemoval(defaultModels.compression.model) }
       : defaultModels.compression,
+    imageGeneration: defaultModels.imageGeneration.providerId === providerId
+      ? { ...defaultModels.imageGeneration, model: resolveAfterRemoval(defaultModels.imageGeneration.model) }
+      : defaultModels.imageGeneration,
   }
 }
 
@@ -1286,6 +1296,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
+  const reorderProviders = useCallback((fromId: string, toId: string) => {
+    if (fromId === toId) return
+    setSettings((prev) => {
+      if (!prev) return prev
+      const fromIndex = prev.providers.findIndex((p) => p.id === fromId)
+      const toIndex = prev.providers.findIndex((p) => p.id === toId)
+      if (fromIndex < 0 || toIndex < 0) return prev
+      const nextProviders = [...prev.providers]
+      const [moved] = nextProviders.splice(fromIndex, 1)
+      nextProviders.splice(toIndex, 0, moved)
+      return { ...prev, providers: nextProviders }
+    })
+  }, [])
+
   /**
    * 添加新提供商
    */
@@ -1821,8 +1845,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     mixer: {
       title: t.tabMixer,
       subtitle: lang === 'zh'
-        ? '按副任务路由模型：视觉、标题总结、上下文压缩。'
-        : 'Route models by side task: vision, title summaries, and context compression.',
+        ? '按副任务路由模型：视觉、标题总结、上下文压缩、生图。'
+        : 'Route models by side task: vision, title summaries, context compression, and image generation.',
     },
     mcp: {
       title: 'MCP',
@@ -2328,6 +2352,30 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== AI 客户端标签页 ===== */}
             {activeTab === 'chat' && (
               <>
+                <SettingsGroup title={lang === 'zh' ? '个人资料' : 'Profile'}>
+                  <SettingRow
+                    label={lang === 'zh' ? '用户名' : 'Display name'}
+                    description={lang === 'zh' ? '显示在 Chat 侧栏底部；留空则不显示。' : 'Shown at the bottom of the Chat sidebar; leave empty to hide.'}
+                  >
+                    <Input
+                      value={chatConfig.userDisplayName || ''}
+                      onChange={(userDisplayName) => updateChat({ userDisplayName })}
+                      placeholder={lang === 'zh' ? '选填' : 'Optional'}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? '头像' : 'Avatar'}
+                    description={lang === 'zh' ? '图片链接或 data URL；留空则使用应用图标。' : 'Image URL or data URL; leave empty to use the app icon.'}
+                    stack
+                  >
+                    <Input
+                      value={chatConfig.userAvatar || ''}
+                      onChange={(userAvatar) => updateChat({ userAvatar })}
+                      placeholder="https://..."
+                    />
+                  </SettingRow>
+                </SettingsGroup>
+
                 <SettingsGroup title={t.defaultModelsSection}>
                   <SettingRow
                     label={t.defaultChatModel}
@@ -2636,6 +2684,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         updateDefaultModel('vision', '', '')
                         updateDefaultModel('titleSummary', '', '')
                         updateDefaultModel('compression', '', '')
+                        updateDefaultModel('imageGeneration', '', '')
                       }}
                       data-tauri-drag-region="false"
                     >
@@ -2684,6 +2733,21 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       inheritLabel={t.mixerAutoModel}
                       onChange={(providerId, model) => {
                         updateDefaultModel('compression', providerId, model)
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={t.defaultImageGenerationModel}
+                    description={t.defaultImageGenerationModelHint}
+                  >
+                    <ModelPairSelect
+                      providerId={settings.defaultModels.imageGeneration.providerId || ''}
+                      model={settings.defaultModels.imageGeneration.model || ''}
+                      providers={settings.providers}
+                      platform={platform}
+                      inheritLabel={t.mixerNoImageGenerationModel}
+                      onChange={(providerId, model) => {
+                        updateDefaultModel('imageGeneration', providerId, model)
                       }}
                     />
                   </SettingRow>
@@ -3391,24 +3455,24 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {activeTab === 'providers' && (
               <div className="kv-providers">
                 <div className="kv-provider-list">
-                  <div className="kv-provider-list-items custom-scrollbar">
-                    {settings.providers.map((provider) => {
-                      const isOnDevice = provider.baseUrl === 'applefoundation://local'
-                      const configured = isOnDevice || provider.apiKeys.some((key) => key.trim())
-                      return (
-                        <button
-                          key={provider.id}
-                          type="button"
-                          onClick={() => setSelectedProviderId(provider.id)}
-                          className={`kv-provider-item ${selectedProvider?.id === provider.id ? 'active' : ''}`}
-                          data-tauri-drag-region="false"
-                        >
-                          <span className={`kv-provider-dot ${!isProviderEnabled(provider) ? 'off' : configured ? 'on' : 'warn'}`} />
-                          <span className="kv-provider-name">{provider.name || t.providerName}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={addProvider}
+                    className="kv-provider-add"
+                    data-tauri-drag-region="false"
+                  >
+                    <Plus />
+                    {t.addProvider}
+                  </button>
+
+                  <ProviderSortableList
+                    providers={settings.providers}
+                    selectedId={selectedProvider?.id}
+                    lang={lang}
+                    providerNameLabel={t.providerName}
+                    onSelect={setSelectedProviderId}
+                    onReorder={reorderProviders}
+                  />
 
                   <div className="kv-provider-list-presets">
                     <div className="kv-provider-list-section-label">
@@ -3434,16 +3498,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         ))}
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={addProvider}
-                    className="kv-provider-add"
-                    data-tauri-drag-region="false"
-                  >
-                    <Plus />
-                    {t.addProvider}
-                  </button>
                 </div>
 
                 <div className="kv-provider-detail">
@@ -3454,6 +3508,13 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       const configured = isOnDevice || provider.apiKeys.some((key) => key.trim())
                       return (
                         <div className="kv-provider-header">
+                          <div className="kv-provider-header-toolbar">
+                            <span className="kv-row-label">{lang === 'zh' ? '启用供应商' : 'Enable provider'}</span>
+                            <Toggle
+                              checked={isProviderEnabled(provider)}
+                              onChange={(enabled) => updateProvider(provider.id, { enabled })}
+                            />
+                          </div>
                           <div className="kv-provider-header-toolbar">
                             <span className="kv-row-label">{t.providerName}</span>
                             <div className="kv-provider-header-actions">
@@ -3493,16 +3554,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     const isOnDevice = provider.baseUrl === 'applefoundation://local'
                     return (
                         <SettingsGroup title={lang === 'zh' ? '配置' : 'Configuration'}>
-                          <SettingRow
-                            label={lang === 'zh' ? '启用供应商' : 'Enable provider'}
-                            description={lang === 'zh' ? '关闭后不会出现在各功能的模型选择中；已选中的功能在保存后会切换到其他已启用的供应商。' : 'When off, this provider is hidden from model selectors; features using it switch to another enabled provider on save.'}
-                          >
-                            <Toggle
-                              checked={isProviderEnabled(provider)}
-                              onChange={(enabled) => updateProvider(provider.id, { enabled })}
-                            />
-                          </SettingRow>
-
                           {!isOnDevice && (
                             <>
                               <FieldBlock label={t.baseUrl} description={lang === 'zh' ? 'OpenAI 兼容接口地址。' : 'OpenAI-compatible endpoint.'}>
@@ -3666,6 +3717,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                         {caps?.vision && <span className="kv-badge-mini">V</span>}
                                         {caps?.functionCalling && <span className="kv-badge-mini">T</span>}
                                         {caps?.reasoning && <span className="kv-badge-mini">R</span>}
+                                        {caps?.imageGeneration && <span className="kv-badge-mini">G</span>}
                                       </span>
                                       <button
                                         type="button"
@@ -3707,6 +3759,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                         {caps?.vision && <span className="kv-badge-mini">V</span>}
                                         {caps?.functionCalling && <span className="kv-badge-mini">T</span>}
                                         {caps?.reasoning && <span className="kv-badge-mini">R</span>}
+                                        {caps?.imageGeneration && <span className="kv-badge-mini">G</span>}
                                       </span>
                                       <button
                                         type="button"
@@ -4089,7 +4142,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         className={`settings-embedded kv flex min-h-0 min-w-0 flex-1 ${
           reserveTrafficLightSpace ? 'settings-embedded--traffic-safe' : ''
         }`}
-        {...focusHandlers}
       >
         <aside className="settings-embedded-nav">
           <h2 className="settings-embedded-nav-title">{t.settings}</h2>

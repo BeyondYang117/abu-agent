@@ -76,11 +76,12 @@ export function ModelDetailDrawer({
     contextWindow: lang === 'zh' ? '上下文长度' : 'Context Window',
     maxOutput: lang === 'zh' ? '最大输出' : 'Max Output',
     capabilities: lang === 'zh' ? '功能' : 'Capabilities',
-    vision: lang === 'zh' ? '视觉输入' : 'Vision',
+    vision: lang === 'zh' ? '图像输入' : 'Image Input',
     functionCalling: lang === 'zh' ? '工具调用' : 'Tool Calling',
     reasoning: lang === 'zh' ? '推理模式' : 'Reasoning',
     streaming: lang === 'zh' ? '流式输出' : 'Streaming',
     webSearch: lang === 'zh' ? '网络搜索' : 'Web Search',
+    imageGeneration: lang === 'zh' ? '生图' : 'Image Generation',
     pricing: lang === 'zh' ? '定价 (per 1M tokens, USD)' : 'Pricing (per 1M tokens, USD)',
     input: lang === 'zh' ? '输入' : 'Input',
     output: lang === 'zh' ? '输出' : 'Output',
@@ -155,6 +156,7 @@ export function ModelDetailDrawer({
               <CapabilityToggle label={t.reasoning} checked={form.capabilities?.reasoning ?? false} onChange={(v) => updateCapability('reasoning', v)} />
               <CapabilityToggle label={t.streaming} checked={form.capabilities?.streaming ?? false} onChange={(v) => updateCapability('streaming', v)} />
               <CapabilityToggle label={t.webSearch} checked={form.capabilities?.webSearch ?? false} onChange={(v) => updateCapability('webSearch', v)} />
+              <CapabilityToggle label={t.imageGeneration} checked={form.capabilities?.imageGeneration ?? false} onChange={(v) => updateCapability('imageGeneration', v)} />
             </div>
           </div>
 

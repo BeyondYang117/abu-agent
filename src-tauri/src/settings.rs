@@ -205,6 +205,7 @@ pub struct ModelCapabilities {
     pub reasoning: Option<bool>,
     pub streaming: Option<bool>,
     pub web_search: Option<bool>,
+    pub image_generation: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -468,6 +469,12 @@ pub struct ChatConfig {
     /// 自定义 system prompt；空则使用内置 Chat 模板。
     #[serde(default)]
     pub system_prompt: String,
+    /// Chat 侧栏显示的用户名；空则前端使用默认文案。
+    #[serde(default)]
+    pub user_display_name: String,
+    /// 头像图片 URL 或 data URL；空则显示首字母占位头像。
+    #[serde(default)]
+    pub user_avatar: String,
 }
 
 impl Default for ChatConfig {
@@ -477,6 +484,8 @@ impl Default for ChatConfig {
             thinking_enabled: true,
             default_language: String::new(),
             system_prompt: String::new(),
+            user_display_name: String::new(),
+            user_avatar: String::new(),
         }
     }
 }
@@ -539,6 +548,7 @@ impl DefaultModelSelection {
  * vision：图片附件分析副任务使用；为空时保持 Chat 主模型直接处理图片。
  * title_summary：标题总结副任务使用；为空时继承有效 Chat 默认模型。
  * compression：上下文/历史对话压缩副任务使用；为空时继承有效 Chat 默认模型。
+ * image_generation：生图副任务使用；为空时不暴露混音器生图工具。
  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -551,6 +561,8 @@ pub struct DefaultModelsConfig {
     pub title_summary: DefaultModelSelection,
     #[serde(default)]
     pub compression: DefaultModelSelection,
+    #[serde(default)]
+    pub image_generation: DefaultModelSelection,
 }
 
 impl Default for DefaultModelsConfig {
@@ -560,6 +572,7 @@ impl Default for DefaultModelsConfig {
             vision: DefaultModelSelection::default(),
             title_summary: DefaultModelSelection::default(),
             compression: DefaultModelSelection::default(),
+            image_generation: DefaultModelSelection::default(),
         }
     }
 }
@@ -880,6 +893,19 @@ impl Settings {
         }
         self.effective_chat_model()
     }
+
+    pub fn image_generation_model(&self) -> Option<(String, String)> {
+        if self.default_models.image_generation.is_configured()
+            && !self.default_models.image_generation.model.trim().is_empty()
+        {
+            Some((
+                self.default_models.image_generation.provider_id.clone(),
+                self.default_models.image_generation.model.clone(),
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for Settings {
@@ -932,6 +958,10 @@ pub fn chat_native_tools_enabled(chat_tools: &ChatToolsConfig) -> bool {
 
 pub fn chat_memory_tools_enabled(settings: &Settings) -> bool {
     settings.chat_memory.enabled
+}
+
+pub fn chat_image_generation_enabled(settings: &Settings) -> bool {
+    settings.image_generation_model().is_some()
 }
 
 pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
@@ -1129,6 +1159,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             &mut settings.default_models.compression,
             &settings.providers,
         );
+        sanitize_default_model_selection(
+            &mut settings.default_models.image_generation,
+            &settings.providers,
+        );
     }
 
     // 3. 确保当前使用的模型确实在该 provider 的 enabled_models 中。
@@ -1207,6 +1241,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             &mut settings.default_models.vision,
             &mut settings.default_models.title_summary,
             &mut settings.default_models.compression,
+            &mut settings.default_models.image_generation,
         ] {
             if apple_provider_ids.contains(&selection.provider_id) {
                 if let Some((id, model)) = fallback.as_ref() {
@@ -2218,9 +2253,11 @@ mod tests {
         assert_eq!(s.effective_vision_model(), s.effective_chat_model());
         assert_eq!(s.effective_title_summary_model(), s.effective_chat_model());
         assert_eq!(s.effective_compression_model(), s.effective_chat_model());
+        assert!(s.image_generation_model().is_none());
         assert!(s.default_models.vision.provider_id.is_empty());
         assert!(s.default_models.title_summary.provider_id.is_empty());
         assert!(s.default_models.compression.provider_id.is_empty());
+        assert!(s.default_models.image_generation.provider_id.is_empty());
     }
 
     #[test]
@@ -2304,6 +2341,19 @@ mod tests {
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
+        s.providers.push(ModelProvider {
+            id: "image".to_string(),
+            name: "Image".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://api.example.com/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["image-model".to_string()],
+            supports_tools: true,
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+        });
         s.translator_provider_id = "chat".to_string();
         s.translator_model = "chat-model".to_string();
         s.default_models.chat.provider_id = "chat".to_string();
@@ -2314,6 +2364,8 @@ mod tests {
         s.default_models.title_summary.model = "title-model".to_string();
         s.default_models.compression.provider_id = "compression".to_string();
         s.default_models.compression.model = "compression-model".to_string();
+        s.default_models.image_generation.provider_id = "image".to_string();
+        s.default_models.image_generation.model = "image-model".to_string();
 
         let s = sanitize_settings(s);
 
@@ -2333,6 +2385,10 @@ mod tests {
         assert_eq!(
             s.effective_compression_model(),
             ("compression".to_string(), "compression-model".to_string())
+        );
+        assert_eq!(
+            s.image_generation_model(),
+            Some(("image".to_string(), "image-model".to_string()))
         );
     }
 
@@ -2362,6 +2418,8 @@ mod tests {
         s.default_models.title_summary.model = "ghost".to_string();
         s.default_models.compression.provider_id = "chat".to_string();
         s.default_models.compression.model = String::new();
+        s.default_models.image_generation.provider_id = "chat".to_string();
+        s.default_models.image_generation.model = String::new();
 
         let s = sanitize_settings(s);
 
@@ -2373,6 +2431,8 @@ mod tests {
         assert!(s.default_models.title_summary.model.is_empty());
         assert_eq!(s.default_models.compression.provider_id, "chat");
         assert_eq!(s.default_models.compression.model, "m1");
+        assert_eq!(s.default_models.image_generation.provider_id, "chat");
+        assert_eq!(s.default_models.image_generation.model, "m1");
         assert_eq!(s.chat_provider_id, "chat");
         assert_eq!(s.chat_model, "m1");
     }
@@ -2430,6 +2490,8 @@ mod tests {
         s.default_models.vision.model = "vision-model".to_string();
         s.default_models.title_summary.provider_id = "title-provider".to_string();
         s.default_models.title_summary.model = "title-model".to_string();
+        s.default_models.image_generation.provider_id = "image-provider".to_string();
+        s.default_models.image_generation.model = "image-model".to_string();
         let value = serde_json::to_value(&s).expect("settings should serialize");
 
         assert_eq!(
@@ -2444,6 +2506,14 @@ mod tests {
         assert_eq!(
             value["defaultModels"]["titleSummary"]["model"],
             "title-model"
+        );
+        assert_eq!(
+            value["defaultModels"]["imageGeneration"]["providerId"],
+            "image-provider"
+        );
+        assert_eq!(
+            value["defaultModels"]["imageGeneration"]["model"],
+            "image-model"
         );
         assert!(value["defaultModels"]["chat"]["providerId"]
             .as_str()

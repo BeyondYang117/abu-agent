@@ -4,7 +4,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ArrowUp, Plus, SlidersHorizontal, Square } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
-import type { ChatToolDefinition } from '../api/tauri'
+import { api, type ChatToolDefinition } from '../api/tauri'
 import type { PendingAttachment } from './types'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
@@ -25,6 +25,40 @@ function shouldComposerAutoFocus(activeElement: Element | null): boolean {
 
 function isExternalMcpTool(tool: ChatToolDefinition): boolean {
   return tool.source !== 'skill' && tool.source !== 'native'
+}
+
+function imageExtensionForMime(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case 'image/jpeg':
+      return 'jpg'
+    case 'image/gif':
+      return 'gif'
+    case 'image/webp':
+      return 'webp'
+    case 'image/bmp':
+      return 'bmp'
+    case 'image/tiff':
+      return 'tiff'
+    case 'image/heic':
+      return 'heic'
+    case 'image/heif':
+      return 'heif'
+    case 'image/png':
+    default:
+      return 'png'
+  }
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      resolve(result.split(',')[1] ?? '')
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('读取剪贴板图片失败'))
+    reader.readAsDataURL(file)
+  })
 }
 
 interface InputBarProps {
@@ -142,6 +176,45 @@ export function InputBar({
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (disabled || !isTauriRuntime()) return
+    const imageFiles = Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file))
+
+    if (imageFiles.length === 0) return
+
+    e.preventDefault()
+    setAttachmentError('')
+
+    try {
+      const pastedAttachments = await Promise.all(
+        imageFiles.map(async (file, index) => {
+          const ext = imageExtensionForMime(file.type)
+          const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${ext}`
+          const dataBase64 = await readFileAsBase64(file)
+          const result = await api.chatSavePastedImage(name, file.type || `image/${ext}`, dataBase64)
+          if (!result.success || !result.path || !result.name) {
+            throw new Error(result.error || '粘贴图片失败')
+          }
+          return {
+            id: `pending-att-${crypto.randomUUID()}`,
+            type: 'image' as const,
+            name: result.name,
+            path: result.path,
+          }
+        }),
+      )
+      addAttachments(pastedAttachments, { imagesOnly: true })
+    } catch (err) {
+      console.error('Failed to paste chat image:', err)
+      setAttachmentError(
+        typeof err === 'string' ? err : err instanceof Error ? err.message : '粘贴图片失败',
+      )
+    }
   }
 
   const handleAddAttachment = async () => {
@@ -415,6 +488,7 @@ export function InputBar({
               ref={textareaRef}
               value={input}
               onChange={handleInput}
+              onPaste={(e) => void handlePaste(e)}
               onKeyDown={handleKeyDown}
               disabled={disabled}
               placeholder="Ask me anything..."

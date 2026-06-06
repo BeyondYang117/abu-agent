@@ -125,11 +125,13 @@ fn main() {
                         .set_activation_policy(tauri::ActivationPolicy::Accessory);
                 }
             }
-            tauri::WindowEvent::Focused(true) => {
+            tauri::WindowEvent::Focused(true) =>
+            {
                 #[cfg(target_os = "macos")]
-                if let Some(webview_window) = window.app_handle().get_webview_window(window.label())
-                {
-                    apply_macos_workspace_behavior(&webview_window);
+                if window.label() == "lens" {
+                    if let Some(webview_window) = window.app_handle().get_webview_window("lens") {
+                        apply_macos_workspace_behavior(&webview_window);
+                    }
                 }
             }
             _ => {}
@@ -287,6 +289,7 @@ fn main() {
             chat::commands::chat_python_complete,
             chat::commands::chat_read_attachment,
             chat::commands::chat_open_attachment,
+            chat::commands::chat_save_pasted_image,
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
             chat::commands::chat_update_message,

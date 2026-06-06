@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FileText, Loader2, X } from 'lucide-react'
 import { loadAttachmentDataUrl, openAttachment, type DisplayAttachment } from './attachmentPreview'
+import { openChatImageViewer } from './imageViewer'
 
 type ChatAttachmentsProps = {
   attachments: DisplayAttachment[]
@@ -13,10 +14,12 @@ function ImagePreview({
   attachment,
   conversationId,
   variant,
+  onPreview,
 }: {
   attachment: DisplayAttachment
   conversationId?: string | null
   variant: ChatAttachmentsProps['variant']
+  onPreview?: (src: string, alt: string) => void
 }) {
   const [src, setSrc] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -57,16 +60,28 @@ function ImagePreview({
         </div>
       )}
       {!loading && src && (
-        <img
-          src={src}
-          alt=""
+        <button
+          type="button"
           className={
             isComposer
-              ? 'h-full w-full rounded-xl object-contain'
-              : 'block max-h-72 max-w-[min(100%,420px)] rounded-xl object-contain'
+              ? 'block h-full w-full cursor-zoom-in rounded-xl p-0'
+              : 'block max-w-full cursor-zoom-in rounded-xl p-0 text-left'
           }
-          loading="lazy"
-        />
+          onClick={() => onPreview?.(src, attachment.name)}
+          title="预览图片"
+          aria-label="预览图片"
+        >
+          <img
+            src={src}
+            alt=""
+            className={
+              isComposer
+                ? 'h-full w-full rounded-xl object-contain'
+                : 'block max-h-72 max-w-[min(100%,420px)] rounded-xl object-contain'
+            }
+            loading="lazy"
+          />
+        </button>
       )}
       {!loading && failed && (
         <div className={`${loadingClass} px-4 text-center text-[12px] text-neutral-400`}>
@@ -140,6 +155,7 @@ export function ChatAttachments({
                 attachment={attachment}
                 conversationId={conversationId}
                 variant={variant}
+                onPreview={(src, alt) => openChatImageViewer({ src, alt, name: attachment.name })}
               />
               {onRemove ? (
                 <button

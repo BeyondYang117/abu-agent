@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026-06-04",
+    "version": "2026-06-06",
     "description": "AI model database for Kivio. Keyed by model ID patterns. Used for auto-filling model info when adding models.",
     "sources": [
       "https://openrouter.ai/api/v1/models",
@@ -10,7 +10,10 @@
       "https://api-docs.deepseek.com/quick_start/pricing",
       "https://platform.kimi.com/docs/models",
       "https://open.bigmodel.cn/pricing",
-      "https://platform.minimax.io/docs/guides/pricing-paygo"
+      "https://platform.minimax.io/docs/guides/pricing-paygo",
+      "https://platform.openai.com/docs/api-reference/images/create",
+      "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+      "https://docs.x.ai/developers/model-capabilities/images/generation"
     ]
   },
 
@@ -162,6 +165,70 @@
     "pricing": { "input": 15.00, "output": 60.00, "cachedInput": 7.50 }
   },
 
+  "gpt-image-1.5": {
+    "displayName": "GPT Image 1.5",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gpt-image-2": {
+    "displayName": "GPT Image 2",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gpt-image-1-mini": {
+    "displayName": "GPT Image 1 Mini",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gpt-image-1": {
+    "displayName": "GPT Image 1",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "dall-e-3": {
+    "displayName": "DALL-E 3",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": false, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "dall-e-2": {
+    "displayName": "DALL-E 2",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "openai/gpt-5.4-image-2": {
+    "displayName": "GPT-5.4 Image 2",
+    "contextWindow": 272000,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "openai/gpt-5-image-mini": {
+    "displayName": "GPT-5 Image Mini",
+    "contextWindow": 400000,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "openai/gpt-5-image": {
+    "displayName": "GPT-5 Image",
+    "contextWindow": 400000,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+
   "claude-opus-4.8": {
     "displayName": "Claude Opus 4.8",
     "contextWindow": 1000000,
@@ -267,6 +334,49 @@
     "maxOutput": 8192,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": false, "streaming": true, "webSearch": true },
     "pricing": { "input": 0.10, "output": 0.40 }
+  },
+
+  "gemini-3.1-flash-image-preview": {
+    "displayName": "Gemini 3.1 Flash Image Preview",
+    "contextWindow": 131072,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": true, "streaming": true, "webSearch": true, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gemini-3.1-flash-image": {
+    "displayName": "Gemini 3.1 Flash Image",
+    "contextWindow": 131072,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": true, "streaming": true, "webSearch": true, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gemini-3-pro-image": {
+    "displayName": "Gemini 3 Pro Image",
+    "contextWindow": 131072,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": true, "streaming": true, "webSearch": true, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "google/gemini-3-pro-image-preview": {
+    "displayName": "Gemini 3 Pro Image Preview",
+    "contextWindow": 65536,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": true, "streaming": true, "webSearch": true, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gemini-2.5-flash-image-preview": {
+    "displayName": "Gemini 2.5 Flash Image Preview",
+    "contextWindow": 32768,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "gemini-2.5-flash-image": {
+    "displayName": "Gemini 2.5 Flash Image",
+    "contextWindow": 32768,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
   },
 
   "deepseek-v4-flash": {
@@ -486,6 +596,28 @@
     "pricing": { "input": 0.30, "output": 0.50 }
   },
 
+  "grok-imagine-image-quality": {
+    "displayName": "Grok Imagine Image Quality",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "grok-imagine-image-pro": {
+    "displayName": "Grok Imagine Image Pro (deprecated)",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "x-ai/grok-imagine-image-quality": {
+    "displayName": "Grok Imagine Image Quality",
+    "contextWindow": 65536,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+
   "llama-4-scout": {
     "displayName": "Llama 4 Scout",
     "contextWindow": 10000000,
@@ -528,6 +660,126 @@
     "maxOutput": 128000,
     "capabilities": { "vision": false, "functionCalling": true, "reasoning": false, "streaming": true, "webSearch": false },
     "pricing": { "input": 0.20, "output": 2.00 }
+  },
+
+  "flux.2-pro": {
+    "displayName": "FLUX.2 Pro",
+    "contextWindow": 46864,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "flux.2-flex": {
+    "displayName": "FLUX.2 Flex",
+    "contextWindow": 67344,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "flux.2-max": {
+    "displayName": "FLUX.2 Max",
+    "contextWindow": 46864,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "flux.2-klein": {
+    "displayName": "FLUX.2 Klein",
+    "contextWindow": 40960,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "recraft-v4.1": {
+    "displayName": "Recraft V4.1",
+    "contextWindow": 65536,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "recraft-v4-pro": {
+    "displayName": "Recraft V4 Pro",
+    "contextWindow": 65536,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "recraft-v4-vector": {
+    "displayName": "Recraft V4 Vector",
+    "contextWindow": 65536,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "recraft-v4": {
+    "displayName": "Recraft V4",
+    "contextWindow": 65536,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "recraft-v3": {
+    "displayName": "Recraft V3",
+    "contextWindow": 65536,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "riverflow-v2.5": {
+    "displayName": "Riverflow V2.5",
+    "contextWindow": 8192,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "riverflow-v2-standard-preview": {
+    "displayName": "Riverflow V2 Standard Preview",
+    "contextWindow": 8192,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "riverflow-v2-fast": {
+    "displayName": "Riverflow V2 Fast",
+    "contextWindow": 8192,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "riverflow-v2-pro": {
+    "displayName": "Riverflow V2 Pro",
+    "contextWindow": 8192,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "riverflow-v2-max-preview": {
+    "displayName": "Riverflow V2 Max Preview",
+    "contextWindow": 8192,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "riverflow-v2-fast-preview": {
+    "displayName": "Riverflow V2 Fast Preview",
+    "contextWindow": 8192,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "mai-image-2.5": {
+    "displayName": "MAI Image 2.5",
+    "contextWindow": 4096,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
+  },
+  "seedream-4.5": {
+    "displayName": "Seedream 4.5",
+    "contextWindow": 4096,
+    "maxOutput": 0,
+    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
+    "pricing": { "input": 0.00, "output": 0.00 }
   },
 
   "step-3.7-flash": {

@@ -3,11 +3,15 @@ import { Check, ChevronDown, Copy, Trash2 } from 'lucide-react'
 import { copyToClipboard } from '../utils/clipboard'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
+import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { ChatMarkdown } from './ChatMarkdown'
+import { openChatImageViewer } from './imageViewer'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { ChatMessage, ChatToolArtifact } from './types'
+
+const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -56,7 +60,13 @@ function artifactIsReferenced(content: string, artifact: ChatToolArtifact): bool
   return false
 }
 
-function GeneratedImageArtifacts({ artifacts }: { artifacts: ChatToolArtifact[] }) {
+function GeneratedImageArtifacts({
+  artifacts,
+  onImageClick,
+}: {
+  artifacts: ChatToolArtifact[]
+  onImageClick?: (src: string, alt: string, name?: string) => void
+}) {
   const imageArtifacts = artifacts.filter((artifact) => {
     const dataUrl = artifactDataUrl(artifact)
     return dataUrl.startsWith('data:image/')
@@ -67,12 +77,19 @@ function GeneratedImageArtifacts({ artifacts }: { artifacts: ChatToolArtifact[] 
     <div className="mt-3 space-y-3">
       {imageArtifacts.map((artifact, index) => (
         <figure key={`${artifact.name}-${index}`} className="m-0">
-          <img
-            src={artifactDataUrl(artifact)}
-            alt={artifact.name || 'Generated image'}
-            loading="lazy"
-            className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
-          />
+          <button
+            type="button"
+            className="block max-w-full cursor-zoom-in rounded-md p-0 text-left"
+            onClick={() => onImageClick?.(artifactDataUrl(artifact), artifact.name || 'Generated image', artifact.name)}
+            aria-label="预览图片"
+          >
+            <img
+              src={artifactDataUrl(artifact)}
+              alt={artifact.name || 'Generated image'}
+              loading="lazy"
+              className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
+            />
+          </button>
           {artifact.name && (
             <figcaption className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
               {artifact.name}
@@ -81,6 +98,25 @@ function GeneratedImageArtifacts({ artifacts }: { artifacts: ChatToolArtifact[] 
         </figure>
       ))}
     </div>
+  )
+}
+
+function ImageGenerationPending() {
+  return (
+    <section aria-label="图片生成中" className="image-generation-pending">
+      <div className="mb-3">
+        <div className="flex items-center gap-2 text-[14px] font-medium leading-5 text-neutral-700 dark:text-neutral-300">
+          <span className="image-generation-pending-indicator" aria-hidden="true" />
+          <span>正在生成图片</span>
+        </div>
+        <div className="mt-1 pl-4 text-[12px] leading-5 text-neutral-400 dark:text-neutral-500">
+          正在细化画面细节，请稍候。
+        </div>
+      </div>
+      <div className="image-generation-pending-frame" aria-hidden="true">
+        <ChatDotGridBackground />
+      </div>
+    </section>
   )
 }
 
@@ -97,12 +133,16 @@ function MessageBubbleComponent({
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
   const attachments = message.attachments ?? []
   const toolCalls = message.tool_calls ?? message.toolCalls ?? []
+  const messageArtifacts = message.artifacts ?? []
   const toolArtifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? [])
-  const unreferencedToolArtifacts = toolArtifacts.filter(
+  const renderArtifacts = [...messageArtifacts, ...toolArtifacts]
+  const isDirectImageGenerationPending =
+    !isUser && message.content.trim() === DIRECT_IMAGE_GENERATION_PENDING
+  const unreferencedImageArtifacts = renderArtifacts.filter(
     (artifact) => !artifactIsReferenced(message.content, artifact),
   )
-  const hasAnswerContent = message.content.trim().length > 0
-  const hasGeneratedImages = unreferencedToolArtifacts.length > 0
+  const hasAnswerContent = !isDirectImageGenerationPending && message.content.trim().length > 0
+  const hasGeneratedImages = unreferencedImageArtifacts.length > 0
   const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
@@ -198,7 +238,7 @@ function MessageBubbleComponent({
 
   return (
     <div className="chat-motion-fade-up flex justify-start py-3">
-      <div className="max-w-[85%] min-w-0">
+      <div className={`${isDirectImageGenerationPending ? 'w-full' : 'max-w-[85%]'} min-w-0`}>
         {toolCalls.length > 0 && !isEditing && (
           <section
             aria-label="工具调用"
@@ -271,6 +311,8 @@ function MessageBubbleComponent({
               </button>
             </div>
           </div>
+        ) : isDirectImageGenerationPending ? (
+          <ImageGenerationPending />
         ) : (
           (hasAnswerContent || hasGeneratedImages) && (
             <section aria-label="回答">
@@ -280,16 +322,23 @@ function MessageBubbleComponent({
                 </div>
               )}
               {hasAnswerContent && (
-                <ChatMarkdown content={message.content} artifacts={toolArtifacts} />
+                <ChatMarkdown
+                  content={message.content}
+                  artifacts={renderArtifacts}
+                  onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
+                />
               )}
               {hasGeneratedImages && (
-                <GeneratedImageArtifacts artifacts={unreferencedToolArtifacts} />
+                <GeneratedImageArtifacts
+                  artifacts={unreferencedImageArtifacts}
+                  onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
+                />
               )}
             </section>
           )
         )}
 
-        {!isEditing && message.content.trim().length > 0 && (
+        {!isEditing && message.content.trim().length > 0 && !isDirectImageGenerationPending && (
           <AssistantMessageMeta
             content={message.content}
             reasoning={message.reasoning}

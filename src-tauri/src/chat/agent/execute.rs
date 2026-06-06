@@ -26,7 +26,7 @@ pub trait ToolExecutor: Send + Sync {
         ctx: &'a ToolExecutionContext<'a>,
         tool: &'a ChatToolDefinition,
         arguments: Value,
-        skill_cache: &'a mut skills::SkillRunCache,
+        skill_cache: Option<&'a mut skills::SkillRunCache>,
     ) -> ToolExecutorFuture<'a>;
 }
 
@@ -99,7 +99,7 @@ pub async fn execute_tool_call(
     ctx: &ToolExecutionContext<'_>,
     tool: &ChatToolDefinition,
     call: PendingToolCall,
-    skill_cache: &mut skills::SkillRunCache,
+    skill_cache: Option<&mut skills::SkillRunCache>,
 ) -> (ToolCallRecord, String) {
     let now = chrono::Local::now().timestamp();
     let mut record = ToolCallRecord {
@@ -120,15 +120,7 @@ pub async fn execute_tool_call(
     };
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
 
-    let requires_approval = if builtin_tool_bypasses_approval(tool) {
-        false
-    } else {
-        match settings.chat_tools.approval_policy.as_str() {
-            "auto" => false,
-            "always_confirm" => true,
-            _ => tool.sensitive,
-        }
-    };
+    let requires_approval = tool_requires_approval(settings, tool);
     if requires_approval {
         let approved = host.request_tool_approval(ctx, &record).await;
         if !approved {
@@ -199,12 +191,26 @@ pub fn disabled_tool_content(call: &PendingToolCall) -> Option<String> {
     disabled_builtin_tool_feedback(&call.function_name)
 }
 
+pub fn tool_requires_approval(settings: &Settings, tool: &ChatToolDefinition) -> bool {
+    if builtin_tool_bypasses_approval(tool) {
+        return false;
+    }
+    match settings.chat_tools.approval_policy.as_str() {
+        "auto" => false,
+        "always_confirm" => true,
+        _ => tool.sensitive,
+    }
+}
+
 fn effective_tool_timeout_ms(
     settings: &Settings,
     tool: &ChatToolDefinition,
     arguments: &Value,
 ) -> u64 {
     let default_timeout_ms = settings.chat_tools.tool_timeout_ms;
+    if tool.source == "mixer" && tool.name == "mixer_generate_image" {
+        return default_timeout_ms.max(crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS);
+    }
     if tool.source == "skill" && tool.name == "skill_run_script" {
         return crate::mcp::registry::effective_skill_script_timeout_ms(
             default_timeout_ms,
@@ -388,6 +394,19 @@ mod tests {
         assert_eq!(
             effective_tool_timeout_ms(&settings, &tool, &arguments),
             300_000
+        );
+    }
+
+    #[test]
+    fn mixer_image_generation_uses_extended_timeout() {
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = 60_000;
+        let tool = crate::mcp::types::mixer_generate_image_tool();
+        let arguments = serde_json::json!({ "prompt": "draw a quiet desktop assistant" });
+
+        assert_eq!(
+            effective_tool_timeout_ms(&settings, &tool, &arguments),
+            crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS
         );
     }
 }

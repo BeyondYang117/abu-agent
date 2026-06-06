@@ -151,6 +151,7 @@ function getToolName(toolCall: ToolCallRecord): string {
   if (raw === 'web_search') return '联网搜索'
   if (raw === 'web_fetch') return '网页抓取'
   if (raw === 'mixer_vision') return '混音器视觉分析'
+  if (raw === 'mixer_generate_image') return '混音器生图'
   return raw
 }
 
@@ -183,6 +184,13 @@ function getArgumentPreview(toolCall: ToolCallRecord): string {
       : `图片 ${imageCount} 张`
     const modelLabel = [provider, model].filter(Boolean).join(' / ')
     return modelLabel ? `${imageLabel} · ${modelLabel}` : imageLabel
+  }
+  if (rawName === 'mixer_generate_image') {
+    const prompt = typeof args?.prompt === 'string' ? compactText(args.prompt, 140) : ''
+    const size = typeof args?.size === 'string' && args.size ? args.size : ''
+    const quality = typeof args?.quality === 'string' && args.quality ? args.quality : ''
+    const count = typeof args?.n === 'number' && Number.isFinite(args.n) ? `${args.n} 张` : ''
+    return [prompt, size, quality, count].filter(Boolean).join(' · ')
   }
   return (
     toolCall.argument_preview ||
@@ -218,6 +226,9 @@ function getRunningPreview(toolCall: ToolCallRecord): string {
   }
   if (raw === 'mixer_vision') {
     return '正在分析图片并提取视觉信息…'
+  }
+  if (raw === 'mixer_generate_image') {
+    return '正在生成图片…'
   }
   return ''
 }

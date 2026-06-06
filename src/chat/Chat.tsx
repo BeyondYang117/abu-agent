@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Wrench, X } from 'lucide-react'
-import { Sidebar } from './Sidebar'
+import { Sidebar, type ExtensionsNavItem } from './Sidebar'
+import { ChatImageViewer } from './ChatImageViewer'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import type { AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
@@ -28,7 +29,6 @@ import type {
 } from './types'
 import { api, type ChatToolConfirmPayload, type ChatToolDefinition, type ChatToolProgressPayload } from '../api/tauri'
 import type { SettingsShellHandle, SettingsTab } from '../settings/SettingsShell'
-import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { estimateTokens } from '../utils/tokens'
 import {
   CHAT_MIN_SIZE_COLLAPSED,
@@ -40,6 +40,7 @@ import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { TypewriterText } from './TypewriterText'
 import { pickRandomChatEmptyGreeting } from './utils'
 import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/chatTools'
+import { onChatImageViewerOpen, type ChatImageViewerItem } from './imageViewer'
 
 const AssistantCenter = lazy(() => import('./AssistantCenter').then((module) => ({
   default: module.AssistantCenter,
@@ -260,11 +261,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [lastAssistantStreamStats, setLastAssistantStreamStats] =
     useState<AssistantStreamStats | null>(null)
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
+  const [sidebarProfileRefreshKey, setSidebarProfileRefreshKey] = useState(0)
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
   const [skills, setSkills] = useState<SkillMeta[]>([])
   const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('chat')
+  const [extensionsNavItem, setExtensionsNavItem] = useState<ExtensionsNavItem | null>(null)
   const [streamingToolCalls, setStreamingToolCalls] = useState<ToolCallRecord[]>([])
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [enabledToolCount, setEnabledToolCount] = useState<number | null>(null)
@@ -275,6 +278,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [contextLoading, setContextLoading] = useState(false)
   const [contextCompressing, setContextCompressing] = useState(false)
   const [contextError, setContextError] = useState('')
+  const [imageViewerItem, setImageViewerItem] = useState<ChatImageViewerItem | null>(null)
   const currentConversationIdRef = useRef<string | null>(null)
   const activeRunIdRef = useRef<string | null>(null)
   const locallyCancelledConversationIdRef = useRef<string | null>(null)
@@ -290,7 +294,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const reusableBlankConversationRef = useRef<Conversation | null>(null)
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
-  const requestWindowFocus = useWindowInteractionFocus()
+
+  useEffect(() => onChatImageViewerOpen(setImageViewerItem), [])
 
   const applyConversation = useCallback((conversation: Conversation | null) => {
     setCurrentConversation(conversation)
@@ -639,6 +644,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     syncAssistantCenterRoute()
   }, [syncAssistantCenterRoute])
 
+  const openExtensionsItem = useCallback((item: ExtensionsNavItem) => {
+    setExtensionsNavItem(item)
+    if (item === 'assistants') {
+      openAssistantCenter()
+      return
+    }
+    openEmbeddedSettings(item)
+  }, [openAssistantCenter, openEmbeddedSettings])
+
+  const extensionsActive = useMemo<ExtensionsNavItem | null>(() => {
+    if (chatView === 'assistants') return 'assistants'
+    if (chatView === 'settings' && extensionsNavItem === 'skill') return 'skill'
+    if (chatView === 'settings' && extensionsNavItem === 'mcp') return 'mcp'
+    return null
+  }, [chatView, extensionsNavItem])
+
   const handleSettingsClose = useCallback(() => {
     setChatView('conversation')
     syncConversationRoute(currentConversationIdRef.current)
@@ -674,6 +695,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     void loadDefaultModel()
     void loadSkills()
     void refreshToolIndicator()
+    setSidebarProfileRefreshKey((key) => key + 1)
   }, [loadDefaultModel, loadSkills, onSettingsChange, refreshToolIndicator])
 
   const reloadConversation = useCallback(async (conversationId: string, options?: { force?: boolean }) => {
@@ -1397,7 +1419,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         model,
       })
       applyConversation(updatedConv)
-      refreshSidebar()
     } catch (err) {
       console.error('Failed to change model:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '模型切换失败')
@@ -1500,8 +1521,18 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [applyConversation, refreshSidebar, syncConversationRoute])
 
   const handleSidebarOpenSettings = useCallback(() => {
+    const settingsPanelOpen = chatView === 'settings' && extensionsNavItem === null
+    if (settingsPanelOpen) {
+      if (settingsRef.current) {
+        settingsRef.current.requestClose()
+      } else {
+        handleSettingsClose()
+      }
+      return
+    }
+    setExtensionsNavItem(null)
     openEmbeddedSettings('chat')
-  }, [openEmbeddedSettings])
+  }, [chatView, extensionsNavItem, handleSettingsClose, openEmbeddedSettings])
 
   const handleSidebarSearchOpenChange = useCallback((open: boolean) => {
     if (open) {
@@ -1514,9 +1545,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   return (
     <div
       className={`chat-window-shell${usesNativeTitlebar ? ' chat-window-shell--native-titlebar' : ''}${isWindows ? ' chat-window-shell--solid' : ''}`}
-      onPointerEnter={requestWindowFocus}
-      onPointerMove={requestWindowFocus}
-      onPointerDownCapture={requestWindowFocus}
     >
       {!usesNativeTitlebar && <WindowControls />}
       <div className="flex h-full min-h-0 w-full">
@@ -1527,13 +1555,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           onSelectConversation={handleSidebarSelectConversation}
           onNewConversation={handleSidebarNewConversation}
           onConversationDeleted={handleSidebarConversationDeleted}
-          onOpenAssistantCenter={openAssistantCenter}
+          onOpenExtensionsItem={openExtensionsItem}
           onOpenSettings={handleSidebarOpenSettings}
-          settingsActive={chatView === 'settings'}
-          assistantCenterActive={chatView === 'assistants'}
+          settingsActive={chatView === 'settings' && extensionsNavItem === null}
+          extensionsActive={extensionsActive}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={handleCollapseSidebar}
           refreshKey={sidebarRefreshKey}
+          profileRefreshKey={sidebarProfileRefreshKey}
           searchOpen={searchOpen}
           onSearchOpenChange={handleSidebarSearchOpenChange}
         />
@@ -1565,7 +1594,14 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           </div>
         ) : (
           <div className="chat-main-pane relative flex min-w-0 flex-1 flex-col bg-white dark:bg-[#212121]">
-            <header
+            {imageViewerItem ? (
+              <ChatImageViewer
+                item={imageViewerItem}
+                onClose={() => setImageViewerItem(null)}
+              />
+            ) : (
+              <>
+                <header
               className={`chat-titlebar-row ${chatTitlebarRowClass} min-w-0 gap-2 ${
                 sidebarCollapsed && usesNativeTitlebar
                   ? `${chatTitlebarMacInsetClass} chat-titlebar-row--collapsed-mac`
@@ -1631,11 +1667,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 </div>
               </div>
               <div className="min-w-5 flex-1" data-tauri-drag-region />
-            </header>
+                </header>
 
-            <div className="flex min-h-0 flex-1 flex-col">
-              {showEmptyHero ? (
-                <div className="chat-empty-hero flex flex-1 flex-col items-center justify-center px-6 pb-16">
+                <div className="flex min-h-0 flex-1 flex-col">
+                  {showEmptyHero ? (
+                    <div className="chat-empty-hero flex flex-1 flex-col items-center justify-center px-6 pb-16">
                   <ChatDotGridBackground />
                   <div className="chat-empty-hero-stack chat-motion-fade-up relative z-10 w-full max-w-3xl space-y-8">
                     <h2
@@ -1702,8 +1738,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     />
                   </div>
                 </div>
-              ) : (
-                <>
+                  ) : (
+                    <>
                   <Suspense fallback={<MessageListLoading />}>
                     <MessageList
                       conversationId={currentConversation?.id}
@@ -1735,9 +1771,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                     autoFocus
                   />
-                </>
-              )}
-            </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

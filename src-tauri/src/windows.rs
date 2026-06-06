@@ -96,6 +96,14 @@ unsafe fn inset_traffic_lights(window: cocoa::base::id, x: f64, y: f64) {
     }
 }
 
+/// Chat 作为普通桌面窗口：不置顶、不跨全 Space（与 Lens overlay 区分）。
+pub fn normalize_chat_window_behavior(window: &WebviewWindow) {
+    let _ = window.set_always_on_top(false);
+    let _ = window.set_skip_taskbar(false);
+    #[cfg(target_os = "macos")]
+    let _ = window.set_visible_on_all_workspaces(false);
+}
+
 /// macOS Chat：系统 Overlay 标题栏 + 原生交通灯；其他平台保持无边框自绘控件。
 pub fn apply_chat_window_chrome(window: &WebviewWindow) {
     #[cfg(target_os = "macos")]

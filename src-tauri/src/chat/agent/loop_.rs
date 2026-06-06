@@ -2,15 +2,16 @@ use serde_json::Value;
 
 use crate::chat::model::{
     generate_request_from_openai_messages, AnthropicMessagesProvider, AppleLocalProvider,
-    GenerateOptions, GenerateOutput, LanguageModelProvider, OpenAiChatProvider,
+    GenerateOptions, GenerateOutput, LanguageModelProvider, OpenAiChatProvider, PendingToolCall,
 };
+use crate::chat::types::{ToolCallRecord, ToolCallStatus};
 use crate::mcp::ChatToolDefinition;
-use crate::settings::ProviderApiFormat;
+use crate::settings::{ProviderApiFormat, Settings};
 use crate::skills;
 
 use super::execute::{
     disabled_tool_content, execute_tool_call, invalid_tool_arguments_record, match_tool_call,
-    unknown_tool_record, ToolExecutionContext, ToolExecutor,
+    tool_requires_approval, unknown_tool_record, ToolExecutionContext, ToolExecutor,
 };
 use super::host::AgentHost;
 use super::prepare::{prepare_agent_step, PrepareStepInput};
@@ -28,6 +29,33 @@ use super::types::{
 struct ChatPlanningStep {
     message: Value,
     streamed: bool,
+}
+
+const MAX_PARALLEL_TOOL_CALLS_PER_ROUND: usize = 4;
+
+struct ToolRoundContext<'a> {
+    conversation_id: &'a str,
+    run_id: &'a str,
+    message_id: &'a str,
+    generation: u64,
+    round: u8,
+}
+
+struct ToolRoundResult {
+    response_messages: Vec<Value>,
+    tool_records: Vec<ToolCallRecord>,
+    cancelled: bool,
+}
+
+struct ToolExecutionResult {
+    response_message: Value,
+    record: Option<ToolCallRecord>,
+    cancelled: bool,
+}
+
+struct ExecutableToolCall<'a> {
+    call: PendingToolCall,
+    tool: &'a ChatToolDefinition,
 }
 
 pub async fn run_agent_loop(
@@ -201,92 +229,56 @@ pub async fn run_agent_loop(
             generated_api_messages.push(runtime_messages.last().cloned().unwrap_or(Value::Null));
             let mut step_response_messages =
                 vec![runtime_messages.last().cloned().unwrap_or(Value::Null)];
-            let mut step_tool_records = Vec::new();
-            for tool_call in tool_calls {
-                let Some(tool) = match_tool_call(&tools, &tool_call.function_name) else {
-                    let disabled = disabled_tool_content(&tool_call);
-                    if disabled.is_none() {
-                        let error = format!("Unknown tool requested: {}", tool_call.function_name);
-                        let record = unknown_tool_record(&tool_call, round + 1, error);
-                        host.emit_tool_record(
-                            &config.conversation_id,
-                            &config.run_id,
-                            &config.message_id,
-                            &record,
-                        );
-                        step_tool_records.push(record.clone());
-                        tool_records.push(record);
-                    }
-                    let content = disabled.unwrap_or_else(|| {
-                        format!("Unknown tool requested: {}", tool_call.function_name)
-                    });
-                    let tool_message = serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": content,
-                    });
-                    runtime_messages.push(tool_message.clone());
-                    generated_api_messages.push(tool_message.clone());
-                    step_response_messages.push(tool_message);
-                    continue;
-                };
-                let tool_call_id = tool_call.id.clone();
-                if let Some(error) = tool_call.arguments_parse_error.clone() {
-                    let record = invalid_tool_arguments_record(&tool_call, tool, round + 1, error);
-                    host.emit_tool_record(
-                        &config.conversation_id,
-                        &config.run_id,
-                        &config.message_id,
-                        &record,
-                    );
-                    let tool_message = serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": "Tool arguments JSON is invalid or incomplete. Retry this tool call with a compact, valid JSON object for arguments.",
-                    });
-                    runtime_messages.push(tool_message.clone());
-                    generated_api_messages.push(tool_message.clone());
-                    step_response_messages.push(tool_message);
-                    step_tool_records.push(record.clone());
-                    tool_records.push(record);
-                    continue;
-                }
-                let ctx = ToolExecutionContext {
+            let round_result = execute_tool_round(
+                host,
+                executor,
+                &config.settings,
+                ToolRoundContext {
                     conversation_id: &config.conversation_id,
                     run_id: &config.run_id,
                     message_id: &config.message_id,
                     generation: config.generation,
                     round: round + 1,
-                };
-                let (record, tool_content) = execute_tool_call(
-                    host,
-                    executor,
-                    &config.settings,
-                    &ctx,
-                    tool,
-                    tool_call,
-                    &mut skill_cache,
-                )
-                .await;
-                let tool_message = serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": tool_content,
-                });
-                runtime_messages.push(tool_message.clone());
-                generated_api_messages.push(tool_message.clone());
-                step_response_messages.push(tool_message);
-                step_tool_records.push(record.clone());
-                tool_records.push(record);
-            }
+                },
+                &tools,
+                tool_calls,
+                &mut skill_cache,
+            )
+            .await;
+            let round_cancelled = round_result.cancelled;
+            runtime_messages.extend(round_result.response_messages.iter().cloned());
+            generated_api_messages.extend(round_result.response_messages.iter().cloned());
+            step_response_messages.extend(round_result.response_messages);
+            let step_tool_records = round_result.tool_records;
+            tool_records.extend(step_tool_records.iter().cloned());
             steps.push(AgentStepResult {
                 step_number,
                 phase: AgentPhase::ToolLoop,
                 response_messages: step_response_messages,
                 tool_records: step_tool_records,
                 streamed: config.stream_enabled,
-                stop_reason: None,
+                stop_reason: if round_cancelled {
+                    Some(AgentStopReason::Cancelled)
+                } else {
+                    None
+                },
             });
+            if round_cancelled {
+                host.emit_stream_done(
+                    &config.conversation_id,
+                    &config.run_id,
+                    &config.message_id,
+                    "cancelled",
+                    "",
+                );
+                return Ok(cancelled_tool_round_run_result(
+                    &config.language,
+                    &planning_reasoning_parts,
+                    tool_records,
+                    generated_api_messages,
+                    steps,
+                ));
+            }
         }
         if !provider_tools_unsupported && !tool_planning_finished {
             runtime_messages.push(step_limit_system_message());
@@ -379,7 +371,7 @@ pub async fn run_agent_loop(
         if stream.cancelled {
             if !tool_records.is_empty() {
                 let stored_content = if stream.content.trim().is_empty() {
-                    "已停止生成。".to_string()
+                    stopped_generation_content(&config.language)
                 } else {
                     stream.content.clone()
                 };
@@ -559,6 +551,481 @@ pub async fn run_agent_loop(
     })
 }
 
+async fn execute_tool_round(
+    host: &dyn AgentHost,
+    executor: &dyn ToolExecutor,
+    settings: &Settings,
+    ctx: ToolRoundContext<'_>,
+    tools: &[ChatToolDefinition],
+    tool_calls: Vec<PendingToolCall>,
+    skill_cache: &mut skills::SkillRunCache,
+) -> ToolRoundResult {
+    let mut response_messages = Vec::new();
+    let mut tool_records = Vec::new();
+    let mut parallel_batch: Vec<ExecutableToolCall<'_>> = Vec::new();
+    let mut cancelled = false;
+
+    let mut tool_calls = tool_calls.into_iter();
+    while let Some(tool_call) = tool_calls.next() {
+        let Some(tool) = match_tool_call(tools, &tool_call.function_name) else {
+            if flush_parallel_batch(
+                &mut parallel_batch,
+                &mut response_messages,
+                &mut tool_records,
+                host,
+                executor,
+                settings,
+                &ctx,
+            )
+            .await
+            {
+                cancelled = true;
+                push_cancelled_tool_call(
+                    host,
+                    &ctx,
+                    tools,
+                    tool_call,
+                    &mut response_messages,
+                    &mut tool_records,
+                );
+                push_cancelled_tool_calls(
+                    host,
+                    &ctx,
+                    tools,
+                    tool_calls,
+                    &mut response_messages,
+                    &mut tool_records,
+                );
+                break;
+            }
+            let result = unknown_or_disabled_tool_result(host, &ctx, tool_call);
+            push_tool_execution_result(result, &mut response_messages, &mut tool_records);
+            continue;
+        };
+
+        if let Some(error) = tool_call.arguments_parse_error.clone() {
+            if flush_parallel_batch(
+                &mut parallel_batch,
+                &mut response_messages,
+                &mut tool_records,
+                host,
+                executor,
+                settings,
+                &ctx,
+            )
+            .await
+            {
+                cancelled = true;
+                push_cancelled_tool_call(
+                    host,
+                    &ctx,
+                    tools,
+                    tool_call,
+                    &mut response_messages,
+                    &mut tool_records,
+                );
+                push_cancelled_tool_calls(
+                    host,
+                    &ctx,
+                    tools,
+                    tool_calls,
+                    &mut response_messages,
+                    &mut tool_records,
+                );
+                break;
+            }
+            let result = invalid_tool_arguments_result(host, &ctx, &tool_call, tool, error);
+            push_tool_execution_result(result, &mut response_messages, &mut tool_records);
+            continue;
+        }
+
+        if tool_call_parallel_eligible(settings, tool) {
+            parallel_batch.push(ExecutableToolCall {
+                call: tool_call,
+                tool,
+            });
+            if parallel_batch.len() >= MAX_PARALLEL_TOOL_CALLS_PER_ROUND {
+                if flush_parallel_batch(
+                    &mut parallel_batch,
+                    &mut response_messages,
+                    &mut tool_records,
+                    host,
+                    executor,
+                    settings,
+                    &ctx,
+                )
+                .await
+                {
+                    cancelled = true;
+                    push_cancelled_tool_calls(
+                        host,
+                        &ctx,
+                        tools,
+                        tool_calls,
+                        &mut response_messages,
+                        &mut tool_records,
+                    );
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if flush_parallel_batch(
+            &mut parallel_batch,
+            &mut response_messages,
+            &mut tool_records,
+            host,
+            executor,
+            settings,
+            &ctx,
+        )
+        .await
+        {
+            cancelled = true;
+            push_cancelled_tool_call(
+                host,
+                &ctx,
+                tools,
+                tool_call,
+                &mut response_messages,
+                &mut tool_records,
+            );
+            push_cancelled_tool_calls(
+                host,
+                &ctx,
+                tools,
+                tool_calls,
+                &mut response_messages,
+                &mut tool_records,
+            );
+            break;
+        }
+        let result =
+            execute_serial_tool_call(host, executor, settings, &ctx, tool, tool_call, skill_cache)
+                .await;
+        if push_tool_execution_result(result, &mut response_messages, &mut tool_records) {
+            cancelled = true;
+            push_cancelled_tool_calls(
+                host,
+                &ctx,
+                tools,
+                tool_calls,
+                &mut response_messages,
+                &mut tool_records,
+            );
+            break;
+        }
+    }
+
+    if !cancelled {
+        cancelled = flush_parallel_batch(
+            &mut parallel_batch,
+            &mut response_messages,
+            &mut tool_records,
+            host,
+            executor,
+            settings,
+            &ctx,
+        )
+        .await;
+    }
+
+    ToolRoundResult {
+        response_messages,
+        tool_records,
+        cancelled,
+    }
+}
+
+fn push_tool_execution_result(
+    result: ToolExecutionResult,
+    response_messages: &mut Vec<Value>,
+    tool_records: &mut Vec<ToolCallRecord>,
+) -> bool {
+    let cancelled = result.cancelled;
+    if let Some(record) = result.record {
+        tool_records.push(record);
+    }
+    response_messages.push(result.response_message);
+    cancelled
+}
+
+async fn flush_parallel_batch(
+    batch: &mut Vec<ExecutableToolCall<'_>>,
+    response_messages: &mut Vec<Value>,
+    tool_records: &mut Vec<ToolCallRecord>,
+    host: &dyn AgentHost,
+    executor: &dyn ToolExecutor,
+    settings: &Settings,
+    ctx: &ToolRoundContext<'_>,
+) -> bool {
+    if batch.is_empty() {
+        return false;
+    }
+
+    let mut cancelled = false;
+    while !batch.is_empty() {
+        let limit = batch.len().min(MAX_PARALLEL_TOOL_CALLS_PER_ROUND);
+        let mut chunk = batch.drain(..limit).collect::<Vec<_>>();
+        let results = execute_parallel_chunk(host, executor, settings, ctx, &mut chunk).await;
+        for result in results {
+            cancelled |= push_tool_execution_result(result, response_messages, tool_records);
+        }
+        if cancelled {
+            for item in batch.drain(..) {
+                let result = cancelled_tool_result(host, ctx, &item.call, Some(item.tool));
+                push_tool_execution_result(result, response_messages, tool_records);
+            }
+            break;
+        }
+    }
+    cancelled
+}
+
+async fn execute_parallel_chunk(
+    host: &dyn AgentHost,
+    executor: &dyn ToolExecutor,
+    settings: &Settings,
+    ctx: &ToolRoundContext<'_>,
+    chunk: &mut [ExecutableToolCall<'_>],
+) -> Vec<ToolExecutionResult> {
+    match chunk.len() {
+        0 => Vec::new(),
+        1 => {
+            let item = &chunk[0];
+            vec![execute_parallel_tool_call(host, executor, settings, ctx, item).await]
+        }
+        2 => {
+            let (a, rest) = chunk.split_at(1);
+            let (b, _) = rest.split_at(1);
+            let (ra, rb) = tokio::join!(
+                execute_parallel_tool_call(host, executor, settings, ctx, &a[0]),
+                execute_parallel_tool_call(host, executor, settings, ctx, &b[0]),
+            );
+            vec![ra, rb]
+        }
+        3 => {
+            let (a, rest) = chunk.split_at(1);
+            let (b, rest) = rest.split_at(1);
+            let (c, _) = rest.split_at(1);
+            let (ra, rb, rc) = tokio::join!(
+                execute_parallel_tool_call(host, executor, settings, ctx, &a[0]),
+                execute_parallel_tool_call(host, executor, settings, ctx, &b[0]),
+                execute_parallel_tool_call(host, executor, settings, ctx, &c[0]),
+            );
+            vec![ra, rb, rc]
+        }
+        _ => {
+            let (a, rest) = chunk.split_at(1);
+            let (b, rest) = rest.split_at(1);
+            let (c, rest) = rest.split_at(1);
+            let (d, _) = rest.split_at(1);
+            let (ra, rb, rc, rd) = tokio::join!(
+                execute_parallel_tool_call(host, executor, settings, ctx, &a[0]),
+                execute_parallel_tool_call(host, executor, settings, ctx, &b[0]),
+                execute_parallel_tool_call(host, executor, settings, ctx, &c[0]),
+                execute_parallel_tool_call(host, executor, settings, ctx, &d[0]),
+            );
+            vec![ra, rb, rc, rd]
+        }
+    }
+}
+
+async fn execute_parallel_tool_call(
+    host: &dyn AgentHost,
+    executor: &dyn ToolExecutor,
+    settings: &Settings,
+    ctx: &ToolRoundContext<'_>,
+    item: &ExecutableToolCall<'_>,
+) -> ToolExecutionResult {
+    execute_tool_call_result(
+        host,
+        executor,
+        settings,
+        ctx,
+        item.tool,
+        item.call.clone(),
+        None,
+    )
+    .await
+}
+
+async fn execute_serial_tool_call(
+    host: &dyn AgentHost,
+    executor: &dyn ToolExecutor,
+    settings: &Settings,
+    ctx: &ToolRoundContext<'_>,
+    tool: &ChatToolDefinition,
+    tool_call: PendingToolCall,
+    skill_cache: &mut skills::SkillRunCache,
+) -> ToolExecutionResult {
+    execute_tool_call_result(
+        host,
+        executor,
+        settings,
+        ctx,
+        tool,
+        tool_call,
+        Some(skill_cache),
+    )
+    .await
+}
+
+async fn execute_tool_call_result(
+    host: &dyn AgentHost,
+    executor: &dyn ToolExecutor,
+    settings: &Settings,
+    round_ctx: &ToolRoundContext<'_>,
+    tool: &ChatToolDefinition,
+    tool_call: PendingToolCall,
+    skill_cache: Option<&mut skills::SkillRunCache>,
+) -> ToolExecutionResult {
+    let tool_call_id = tool_call.id.clone();
+    let execution_ctx = ToolExecutionContext {
+        conversation_id: round_ctx.conversation_id,
+        run_id: round_ctx.run_id,
+        message_id: round_ctx.message_id,
+        generation: round_ctx.generation,
+        round: round_ctx.round,
+    };
+    let (record, tool_content) = execute_tool_call(
+        host,
+        executor,
+        settings,
+        &execution_ctx,
+        tool,
+        tool_call,
+        skill_cache,
+    )
+    .await;
+    let cancelled = matches!(record.status, ToolCallStatus::Cancelled);
+    ToolExecutionResult {
+        response_message: tool_message(tool_call_id, tool_content),
+        record: Some(record),
+        cancelled,
+    }
+}
+
+fn push_cancelled_tool_calls(
+    host: &dyn AgentHost,
+    ctx: &ToolRoundContext<'_>,
+    tools: &[ChatToolDefinition],
+    tool_calls: impl IntoIterator<Item = PendingToolCall>,
+    response_messages: &mut Vec<Value>,
+    tool_records: &mut Vec<ToolCallRecord>,
+) {
+    for tool_call in tool_calls {
+        push_cancelled_tool_call(host, ctx, tools, tool_call, response_messages, tool_records);
+    }
+}
+
+fn push_cancelled_tool_call(
+    host: &dyn AgentHost,
+    ctx: &ToolRoundContext<'_>,
+    tools: &[ChatToolDefinition],
+    tool_call: PendingToolCall,
+    response_messages: &mut Vec<Value>,
+    tool_records: &mut Vec<ToolCallRecord>,
+) {
+    let tool = match_tool_call(tools, &tool_call.function_name);
+    let result = cancelled_tool_result(host, ctx, &tool_call, tool);
+    push_tool_execution_result(result, response_messages, tool_records);
+}
+
+fn cancelled_tool_result(
+    host: &dyn AgentHost,
+    ctx: &ToolRoundContext<'_>,
+    tool_call: &PendingToolCall,
+    tool: Option<&ChatToolDefinition>,
+) -> ToolExecutionResult {
+    let now = chrono::Local::now().timestamp();
+    let record = ToolCallRecord {
+        id: tool_call.id.clone(),
+        name: tool
+            .map(|tool| tool.name.clone())
+            .unwrap_or_else(|| tool_call.function_name.clone()),
+        source: tool
+            .map(|tool| tool.source.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        server_id: tool.and_then(|tool| tool.server_id.clone()),
+        arguments: tool_call.arguments_raw.clone(),
+        status: ToolCallStatus::Cancelled,
+        result_preview: None,
+        error: Some("Tool call cancelled".to_string()),
+        duration_ms: Some(0),
+        started_at: Some(now),
+        completed_at: Some(now),
+        round: ctx.round,
+        sensitive: tool.map(|tool| tool.sensitive).unwrap_or(false),
+        artifacts: Vec::new(),
+    };
+    host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+    ToolExecutionResult {
+        response_message: tool_message(tool_call.id.clone(), "Tool call cancelled"),
+        record: Some(record),
+        cancelled: true,
+    }
+}
+
+fn unknown_or_disabled_tool_result(
+    host: &dyn AgentHost,
+    ctx: &ToolRoundContext<'_>,
+    tool_call: PendingToolCall,
+) -> ToolExecutionResult {
+    let disabled = disabled_tool_content(&tool_call);
+    let record = if disabled.is_none() {
+        let error = format!("Unknown tool requested: {}", tool_call.function_name);
+        let record = unknown_tool_record(&tool_call, ctx.round, error);
+        host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+        Some(record)
+    } else {
+        None
+    };
+    let content =
+        disabled.unwrap_or_else(|| format!("Unknown tool requested: {}", tool_call.function_name));
+    ToolExecutionResult {
+        response_message: tool_message(tool_call.id, content),
+        record,
+        cancelled: false,
+    }
+}
+
+fn invalid_tool_arguments_result(
+    host: &dyn AgentHost,
+    ctx: &ToolRoundContext<'_>,
+    tool_call: &PendingToolCall,
+    tool: &ChatToolDefinition,
+    error: String,
+) -> ToolExecutionResult {
+    let record = invalid_tool_arguments_record(tool_call, tool, ctx.round, error);
+    host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+    ToolExecutionResult {
+        response_message: tool_message(
+            tool_call.id.clone(),
+            "Tool arguments JSON is invalid or incomplete. Retry this tool call with a compact, valid JSON object for arguments.",
+        ),
+        record: Some(record),
+        cancelled: false,
+    }
+}
+
+fn tool_message(tool_call_id: String, content: impl Into<String>) -> Value {
+    serde_json::json!({
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": content.into(),
+    })
+}
+
+fn tool_call_parallel_eligible(settings: &Settings, tool: &ChatToolDefinition) -> bool {
+    if tool_requires_approval(settings, tool) {
+        return false;
+    }
+    tool.source == "native"
+        && matches!(tool.name.as_str(), "web_search" | "web_fetch" | "read_file")
+}
+
 async fn call_chat_completion_message(
     state: &crate::state::AppState,
     provider: &crate::settings::ModelProvider,
@@ -673,6 +1140,34 @@ fn empty_synthesis_fallback_response(language: &str) -> String {
     }
 }
 
+fn stopped_generation_content(language: &str) -> String {
+    if language.starts_with("zh") {
+        "已停止生成。".to_string()
+    } else {
+        "Generation stopped.".to_string()
+    }
+}
+
+fn cancelled_tool_round_run_result(
+    language: &str,
+    planning_reasoning_parts: &[String],
+    tool_records: Vec<ToolCallRecord>,
+    mut generated_api_messages: Vec<Value>,
+    steps: Vec<AgentStepResult>,
+) -> AgentRunResult {
+    let stopped_content = stopped_generation_content(language);
+    if !generated_api_messages.is_empty() {
+        generated_api_messages.push(final_assistant_api_message(&stopped_content, None));
+    }
+    AgentRunResult {
+        content: stopped_content,
+        reasoning: merge_reasoning(planning_reasoning_parts, None),
+        tool_records,
+        api_messages: generated_api_messages,
+        steps,
+    }
+}
+
 fn log_empty_synthesis_output(
     config: &AgentRunConfig<'_>,
     phase: AgentPhase,
@@ -746,4 +1241,478 @@ async fn stream_with_chat_provider(
         }
     }
     .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+
+    use tokio::time::{sleep, Duration};
+
+    use super::*;
+    use crate::chat::types::ToolCallStatus;
+    use crate::mcp::types::{
+        native_read_file_tool, native_run_python_tool, native_web_fetch_tool, McpToolCallResult,
+    };
+
+    #[derive(Default)]
+    struct TestHost {
+        records: Mutex<Vec<ToolCallRecord>>,
+        cancel_after: Option<Duration>,
+    }
+
+    impl TestHost {
+        fn cancelling_after(delay: Duration) -> Self {
+            Self {
+                records: Mutex::new(Vec::new()),
+                cancel_after: Some(delay),
+            }
+        }
+    }
+
+    impl AgentHost for TestHost {
+        fn emit_stream_delta(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _delta: &str,
+            _reasoning_delta: Option<&str>,
+        ) {
+        }
+
+        fn emit_stream_done(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _reason: &str,
+            _full: &str,
+        ) {
+        }
+
+        fn emit_tool_record(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            record: &ToolCallRecord,
+        ) {
+            self.records
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(record.clone());
+        }
+
+        fn request_tool_approval<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+        ) -> super::super::host::AgentHostFuture<'a, bool> {
+            Box::pin(async { true })
+        }
+
+        fn is_generation_active(&self, _conversation_id: &str, _generation: u64) -> bool {
+            true
+        }
+
+        fn wait_for_generation_inactive<'a>(
+            &'a self,
+            _conversation_id: &'a str,
+            _generation: u64,
+        ) -> super::super::host::AgentHostFuture<'a, ()> {
+            let cancel_after = self.cancel_after;
+            Box::pin(async move {
+                if let Some(delay) = cancel_after {
+                    sleep(delay).await;
+                } else {
+                    std::future::pending::<()>().await
+                }
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingExecutor {
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingExecutor {
+        fn max_active(&self) -> usize {
+            self.max_active.load(Ordering::SeqCst)
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clone()
+        }
+    }
+
+    impl ToolExecutor for RecordingExecutor {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            tool: &'a ChatToolDefinition,
+            _arguments: Value,
+            _skill_cache: Option<&'a mut skills::SkillRunCache>,
+        ) -> super::super::execute::ToolExecutorFuture<'a> {
+            let name = tool.name.clone();
+            let events = self.events.clone();
+            Box::pin(async move {
+                let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_active.fetch_max(active, Ordering::SeqCst);
+                events
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(format!("start:{name}"));
+                sleep(Duration::from_millis(25)).await;
+                events
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(format!("finish:{name}"));
+                self.active.fetch_sub(1, Ordering::SeqCst);
+                Ok(McpToolCallResult {
+                    content: format!("result:{name}"),
+                    is_error: false,
+                    raw: Value::Null,
+                    artifacts: Vec::new(),
+                })
+            })
+        }
+    }
+
+    fn test_round_context() -> ToolRoundContext<'static> {
+        ToolRoundContext {
+            conversation_id: "conversation",
+            run_id: "run",
+            message_id: "message",
+            generation: 1,
+            round: 1,
+        }
+    }
+
+    fn pending_tool_call(id: &str, function_name: &str) -> PendingToolCall {
+        PendingToolCall {
+            id: id.to_string(),
+            function_name: function_name.to_string(),
+            arguments: serde_json::json!({}),
+            arguments_raw: "{}".to_string(),
+            arguments_parse_error: None,
+        }
+    }
+
+    fn tool_call_ids(messages: &[Value]) -> Vec<&str> {
+        messages
+            .iter()
+            .filter_map(|message| message.get("tool_call_id").and_then(Value::as_str))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn tool_round_runs_parallel_eligible_tools_concurrently_and_keeps_result_order() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![native_read_file_tool(), native_web_fetch_tool()];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_read", "read_file"),
+                pending_tool_call("call_fetch", "web_fetch"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 2);
+        let events = executor.events();
+        let first_finish = events
+            .iter()
+            .position(|event| event.starts_with("finish:"))
+            .expect("finish event");
+        assert_eq!(
+            first_finish, 2,
+            "both calls should start before either finishes"
+        );
+        assert_eq!(result.response_messages.len(), 2);
+        assert_eq!(
+            result.response_messages[0]
+                .get("tool_call_id")
+                .and_then(Value::as_str),
+            Some("call_read")
+        );
+        assert_eq!(
+            result.response_messages[1]
+                .get("tool_call_id")
+                .and_then(Value::as_str),
+            Some("call_fetch")
+        );
+        assert_eq!(result.tool_records.len(), 2);
+        assert!(result
+            .tool_records
+            .iter()
+            .all(|record| matches!(record.status, ToolCallStatus::Success)));
+    }
+
+    #[tokio::test]
+    async fn tool_round_preserves_unknown_and_invalid_call_order() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![native_read_file_tool(), native_web_fetch_tool()];
+        let mut skill_cache = skills::SkillRunCache::default();
+        let mut invalid_fetch = pending_tool_call("call_bad_args", "web_fetch");
+        invalid_fetch.arguments_parse_error = Some("expected compact object".to_string());
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_read", "read_file"),
+                pending_tool_call("call_fetch", "web_fetch"),
+                pending_tool_call("call_missing", "missing_tool"),
+                pending_tool_call("call_read_after_unknown", "read_file"),
+                invalid_fetch,
+                pending_tool_call("call_final", "read_file"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 2);
+        assert_eq!(
+            tool_call_ids(&result.response_messages),
+            vec![
+                "call_read",
+                "call_fetch",
+                "call_missing",
+                "call_read_after_unknown",
+                "call_bad_args",
+                "call_final"
+            ]
+        );
+        assert_eq!(
+            result
+                .tool_records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "call_read",
+                "call_fetch",
+                "call_missing",
+                "call_read_after_unknown",
+                "call_bad_args",
+                "call_final"
+            ]
+        );
+        assert_eq!(
+            result
+                .tool_records
+                .iter()
+                .filter(|record| matches!(record.status, ToolCallStatus::Error))
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call_missing", "call_bad_args"]
+        );
+        let start_events = executor
+            .events()
+            .into_iter()
+            .filter(|event| event.starts_with("start:"))
+            .collect::<Vec<_>>();
+        assert_eq!(start_events.len(), 4, "only executable tools should run");
+    }
+
+    #[tokio::test]
+    async fn tool_round_cancels_unstarted_calls_after_running_tool_is_cancelled() {
+        let host = TestHost::cancelling_after(Duration::from_millis(5));
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![native_read_file_tool(), native_run_python_tool()];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_read", "read_file"),
+                pending_tool_call("call_py", "run_python"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert!(result.cancelled);
+        assert_eq!(
+            tool_call_ids(&result.response_messages),
+            vec!["call_read", "call_py"]
+        );
+        assert_eq!(
+            result
+                .tool_records
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call_read", "call_py"]
+        );
+        assert!(result
+            .tool_records
+            .iter()
+            .all(|record| matches!(record.status, ToolCallStatus::Cancelled)));
+        let start_events = executor
+            .events()
+            .into_iter()
+            .filter(|event| event.starts_with("start:"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            start_events,
+            vec!["start:read_file"],
+            "remaining serial tools must not start after cancellation"
+        );
+    }
+
+    #[test]
+    fn cancelled_tool_round_result_preserves_replay_messages_for_storage() {
+        let tool_record = ToolCallRecord {
+            id: "call_read".to_string(),
+            name: "read_file".to_string(),
+            source: "native".to_string(),
+            server_id: None,
+            arguments: "{}".to_string(),
+            status: ToolCallStatus::Cancelled,
+            result_preview: None,
+            error: Some("Tool call cancelled".to_string()),
+            duration_ms: Some(5),
+            started_at: Some(10),
+            completed_at: Some(11),
+            round: 1,
+            sensitive: false,
+            artifacts: Vec::new(),
+        };
+        let assistant_message = serde_json::json!({
+            "role": "assistant",
+            "content": Value::Null,
+            "tool_calls": [{
+                "id": "call_read",
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "{}",
+                }
+            }],
+        });
+        let tool_response = tool_message("call_read".to_string(), "Tool call cancelled");
+        let result = cancelled_tool_round_run_result(
+            "zh-CN",
+            &["planning".to_string()],
+            vec![tool_record.clone()],
+            vec![assistant_message.clone(), tool_response.clone()],
+            vec![AgentStepResult {
+                step_number: 1,
+                phase: AgentPhase::ToolLoop,
+                response_messages: vec![assistant_message.clone(), tool_response.clone()],
+                tool_records: vec![tool_record],
+                streamed: true,
+                stop_reason: Some(AgentStopReason::Cancelled),
+            }],
+        );
+
+        assert_eq!(result.content, "已停止生成。");
+        assert_eq!(result.reasoning.as_deref(), Some("planning"));
+        assert_eq!(result.tool_records.len(), 1);
+        assert!(matches!(
+            result.tool_records[0].status,
+            ToolCallStatus::Cancelled
+        ));
+        assert_eq!(result.api_messages.len(), 3);
+        assert_eq!(
+            result.api_messages[0]
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            result.api_messages[1]
+                .get("tool_call_id")
+                .and_then(Value::as_str),
+            Some("call_read")
+        );
+        assert_eq!(
+            result.api_messages[2]
+                .get("content")
+                .and_then(Value::as_str),
+            Some("已停止生成。")
+        );
+        assert_eq!(
+            result.steps[0].stop_reason,
+            Some(AgentStopReason::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_round_keeps_serial_only_tools_non_overlapping() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![native_run_python_tool()];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_py_1", "run_python"),
+                pending_tool_call("call_py_2", "run_python"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 1);
+        assert_eq!(
+            executor.events(),
+            vec![
+                "start:run_python",
+                "finish:run_python",
+                "start:run_python",
+                "finish:run_python"
+            ]
+        );
+        assert_eq!(result.response_messages.len(), 2);
+        assert_eq!(
+            result.response_messages[0]
+                .get("tool_call_id")
+                .and_then(Value::as_str),
+            Some("call_py_1")
+        );
+        assert_eq!(
+            result.response_messages[1]
+                .get("tool_call_id")
+                .and_then(Value::as_str),
+            Some("call_py_2")
+        );
+    }
 }

@@ -99,6 +99,7 @@ export interface ChatMessage {
   content: string
   attachments?: Attachment[]
   reasoning?: string
+  artifacts?: ChatToolArtifact[]
   tool_calls?: ToolCallRecord[]
   toolCalls?: ToolCallRecord[]
   api_messages?: unknown[]
