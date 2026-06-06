@@ -84,6 +84,46 @@ pub fn apply_assistant_tool_preset(
     }
 }
 
+pub fn apply_assistant_data_connectors_tool_filter(
+    tools: &mut Vec<ChatToolDefinition>,
+    assistant_snapshot: Option<&ChatAssistantSnapshot>,
+) {
+    let Some(assistant) = assistant_snapshot else {
+        return;
+    };
+    let mut has_explicit_scope = false;
+    for connector in assistant
+        .data_connectors
+        .iter()
+        .filter(|connector| connector.enabled && connector.configured)
+    {
+        if connector
+            .server_id
+            .as_ref()
+            .is_some_and(|id| !id.trim().is_empty())
+            || connector
+                .tool_ids
+                .iter()
+                .any(|tool_id| !tool_id.trim().is_empty())
+        {
+            has_explicit_scope = true;
+            break;
+        }
+    }
+    if !has_explicit_scope {
+        return;
+    }
+
+    tools.retain(|tool| {
+        tool.source == "skill"
+            || assistant
+                .data_connectors
+                .iter()
+                .filter(|connector| connector.enabled && connector.configured)
+                .any(|connector| data_connector_allows_tool(connector, tool))
+    });
+}
+
 pub fn apply_skill_fallback_when_tools_unavailable(
     chat_tools: &mut ChatToolsConfig,
     active_skill_id: Option<&str>,
@@ -408,6 +448,19 @@ fn append_context_segment(
 
 fn assistant_prompt_segment(assistant: &ChatAssistantSnapshot) -> String {
     let mut parts = vec![format!("Active assistant: {}", assistant.name)];
+    let mut suite_meta = Vec::new();
+    if !assistant.source.trim().is_empty() {
+        suite_meta.push(format!("source {}", assistant.source.trim()));
+    }
+    if !assistant.version.trim().is_empty() {
+        suite_meta.push(format!("version {}", assistant.version.trim()));
+    }
+    if !suite_meta.is_empty() {
+        parts.push(format!(
+            "Assistant suite metadata: {}",
+            suite_meta.join(", ")
+        ));
+    }
     if !assistant.description.trim().is_empty() {
         parts.push(format!(
             "Assistant purpose: {}",
@@ -427,6 +480,118 @@ fn assistant_prompt_segment(assistant: &ChatAssistantSnapshot) -> String {
         parts.push(format!(
             "Representative starter prompts: {}",
             assistant.conversation_starters.join(" | ")
+        ));
+    }
+    let quick_commands = assistant
+        .quick_commands
+        .iter()
+        .filter(|command| command.enabled)
+        .filter(|command| !command.name.trim().is_empty() || !command.slash.trim().is_empty())
+        .map(|command| {
+            let slash = if command.slash.trim().is_empty() {
+                "(no slash)"
+            } else {
+                command.slash.trim()
+            };
+            let mut line = format!("- {slash} / {}", command.name.trim());
+            if !command.description.trim().is_empty() {
+                line.push_str(&format!(": {}", command.description.trim()));
+            }
+            if !command.prompt.trim().is_empty() {
+                line.push_str(&format!(
+                    " Prompt to apply when invoked: {}",
+                    command.prompt.trim()
+                ));
+            }
+            if !command.starter_text.trim().is_empty() {
+                line.push_str(&format!(" Starter text: {}", command.starter_text.trim()));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
+    if !quick_commands.is_empty() {
+        parts.push(format!(
+            "Assistant quick commands. When the user's message starts with one of these slash commands, follow its command prompt for that turn:\n{}",
+            quick_commands.join("\n")
+        ));
+    }
+
+    let data_connectors = assistant
+        .data_connectors
+        .iter()
+        .filter(|connector| connector.enabled)
+        .filter(|connector| !connector.name.trim().is_empty())
+        .map(|connector| {
+            let mut line = format!(
+                "- {} ({})",
+                connector.name.trim(),
+                if connector.kind.trim().is_empty() {
+                    "connector"
+                } else {
+                    connector.kind.trim()
+                }
+            );
+            if !connector.configured {
+                line.push_str(" [not configured]");
+            }
+            if connector.required {
+                line.push_str(" [required]");
+            }
+            if !connector.description.trim().is_empty() {
+                line.push_str(&format!(": {}", connector.description.trim()));
+            }
+            if !connector.tool_ids.is_empty() {
+                line.push_str(&format!(" Tools: {}", connector.tool_ids.join(", ")));
+            }
+            if let Some(server_id) = connector
+                .server_id
+                .as_ref()
+                .filter(|id| !id.trim().is_empty())
+            {
+                line.push_str(&format!(" Server: {}", server_id.trim()));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
+    if !data_connectors.is_empty() {
+        parts.push(format!(
+            "Assistant data connectors. Use only configured connectors and only claim connector access after a tool result is returned:\n{}",
+            data_connectors.join("\n")
+        ));
+    }
+
+    let knowledge_skills = assistant
+        .knowledge_skills
+        .iter()
+        .filter(|skill| skill.enabled)
+        .filter(|skill| !skill.name.trim().is_empty())
+        .map(|skill| {
+            let mut line = format!("- {}", skill.name.trim());
+            if !skill.description.trim().is_empty() {
+                line.push_str(&format!(": {}", skill.description.trim()));
+            }
+            if !skill.trigger_phrases.is_empty() {
+                line.push_str(&format!(" Triggers: {}", skill.trigger_phrases.join(", ")));
+            }
+            if let Some(skill_id) = skill.skill_id.as_ref().filter(|id| !id.trim().is_empty()) {
+                line.push_str(&format!(" Bound Skill: {skill_id}"));
+            }
+            if !skill.prompt.trim().is_empty() {
+                line.push_str(&format!(" Instructions: {}", skill.prompt.trim()));
+            }
+            if !skill.recommended_tools.is_empty() {
+                line.push_str(&format!(
+                    " Recommended tools: {}",
+                    skill.recommended_tools.join(", ")
+                ));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
+    if !knowledge_skills.is_empty() {
+        parts.push(format!(
+            "Assistant knowledge skills. When the user request matches a trigger, apply the matching skill guidance before answering:\n{}",
+            knowledge_skills.join("\n")
         ));
     }
     parts.join("\n\n")
@@ -492,6 +657,25 @@ fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommended: &str) -
             .unwrap_or(false)
 }
 
+fn data_connector_allows_tool(
+    connector: &crate::chat::types::AssistantDataConnector,
+    tool: &ChatToolDefinition,
+) -> bool {
+    if connector
+        .server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|server_id| !server_id.is_empty())
+        .is_some_and(|server_id| tool.server_id.as_deref() == Some(server_id))
+    {
+        return true;
+    }
+    connector
+        .tool_ids
+        .iter()
+        .any(|tool_id| tool_matches_recommended_name(tool, tool_id))
+}
+
 fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Option<String> {
     if available_builtin_tools.is_empty() {
         return None;
@@ -540,6 +724,8 @@ mod tests {
             id: "asst_test".to_string(),
             name: "Test Assistant".to_string(),
             description: String::new(),
+            source: "user".to_string(),
+            version: "1.0.0".to_string(),
             system_prompt: String::new(),
             provider_id: String::new(),
             model: String::new(),
@@ -547,6 +733,9 @@ mod tests {
             tool_preset: tool_preset.to_string(),
             conversation_starters: Vec::new(),
             greeting: String::new(),
+            quick_commands: Vec::new(),
+            data_connectors: Vec::new(),
+            knowledge_skills: Vec::new(),
         }
     }
 
@@ -645,6 +834,61 @@ mod tests {
 
             assert_eq!(tools.len(), 3, "preset {preset} should not filter tools");
         }
+    }
+
+    #[test]
+    fn assistant_data_connectors_filter_tools_when_explicitly_scoped() {
+        let mut assistant = test_assistant_snapshot("inherit", None);
+        assistant.data_connectors = vec![crate::chat::types::AssistantDataConnector {
+            id: "python".to_string(),
+            name: "Python".to_string(),
+            kind: "builtin_tool".to_string(),
+            description: String::new(),
+            tool_ids: vec!["run_python".to_string()],
+            server_id: None,
+            required: false,
+            enabled: true,
+            configured: true,
+        }];
+        let mut tools = vec![
+            crate::mcp::types::native_skill_activate_tool(),
+            crate::mcp::types::native_run_python_tool(),
+            crate::mcp::types::native_web_fetch_tool(),
+            test_mcp_tool(),
+        ];
+
+        apply_assistant_data_connectors_tool_filter(&mut tools, Some(&assistant));
+
+        assert_eq!(tools.len(), 2);
+        assert!(tools.iter().any(|tool| tool.name == "skill_activate"));
+        assert!(tools.iter().any(|tool| tool.name == "run_python"));
+        assert!(!tools.iter().any(|tool| tool.name == "web_fetch"));
+        assert!(!tools.iter().any(|tool| tool.name == "search"));
+    }
+
+    #[test]
+    fn assistant_data_connectors_without_explicit_scope_do_not_filter() {
+        let mut assistant = test_assistant_snapshot("inherit", None);
+        assistant.data_connectors = vec![crate::chat::types::AssistantDataConnector {
+            id: "image_attachment".to_string(),
+            name: "Image attachment".to_string(),
+            kind: "file".to_string(),
+            description: String::new(),
+            tool_ids: Vec::new(),
+            server_id: None,
+            required: false,
+            enabled: true,
+            configured: true,
+        }];
+        let mut tools = vec![
+            crate::mcp::types::native_skill_activate_tool(),
+            crate::mcp::types::native_web_fetch_tool(),
+            test_mcp_tool(),
+        ];
+
+        apply_assistant_data_connectors_tool_filter(&mut tools, Some(&assistant));
+
+        assert_eq!(tools.len(), 3);
     }
 
     #[test]

@@ -1057,6 +1057,10 @@ async fn complete_assistant_reply(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
     );
+    agent_prepare::apply_assistant_data_connectors_tool_filter(
+        &mut tools,
+        conversation.assistant_snapshot.as_ref(),
+    );
     if let Some(skill) = active_skill_record.as_ref() {
         agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
@@ -2075,6 +2079,10 @@ async fn compute_context_state(
         .unwrap_or(false);
     let mut tools = list_tools_for_chat(state.inner(), &settings, provider_supports_tools).await;
     agent_prepare::apply_assistant_tool_preset(
+        &mut tools,
+        conversation.assistant_snapshot.as_ref(),
+    );
+    agent_prepare::apply_assistant_data_connectors_tool_filter(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
     );

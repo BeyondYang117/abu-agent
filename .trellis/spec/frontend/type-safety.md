@@ -148,6 +148,79 @@ const conv = await singleInFlightCreateConversationRequest
 applyConversation(conv)
 ```
 
+## Scenario: Chat Assistant Suite Contract
+
+### 1. Scope / Trigger
+- Trigger: Assistant suite work spans `src/chat/types.ts`, `src/chat/api.ts`, `src/chat/AssistantCenter.tsx`, `src-tauri/src/chat/types.rs`, assistant storage, conversation snapshots, and agent prompt/tool preparation.
+- Apply this contract whenever changing assistant center UI, assistant storage fields, default assistants, assistant snapshots, or assistant-driven tool behavior.
+
+### 2. Signatures
+- `chat_get_assistants(includeArchived?: boolean) -> { success: true, assistants: ChatAssistant[] }`
+- `chat_create_assistant(assistant: ChatAssistant) -> { success: true, assistant: ChatAssistant }`
+- `chat_update_assistant(assistant: ChatAssistant) -> { success: true, assistant: ChatAssistant }`
+- `chat_create_conversation(..., assistantId?: string) -> Conversation.assistant_snapshot: ChatAssistantSnapshot`
+- `ChatAssistant.quick_commands: AssistantQuickCommand[]`
+- `ChatAssistant.data_connectors: AssistantDataConnector[]`
+- `ChatAssistant.knowledge_skills: AssistantKnowledgeSkill[]`
+
+### 3. Contracts
+- Stored Rust assistant fields remain snake_case. Frontend types may include camelCase aliases for legacy/browser compatibility, but new persisted fields must be written as snake_case.
+- The suite center must not add an independent internal sidebar. Chat's outer sidebar is the only navigation sidebar; assistant list/detail/edit are main-content page states.
+- Built-in assistants are upgradeable templates. When default built-ins gain new suite fields, backend storage and browser mock storage must hydrate missing empty fields for existing built-in records without overwriting non-empty user-edited fields.
+- `assistant_snapshot` must include suite runtime fields (`quick_commands`, `data_connectors`, `knowledge_skills`) so old conversations keep the suite behavior that existed when the conversation was created.
+- Suite quick commands and knowledge skills must be injected into the runtime system prompt, not displayed only in UI.
+- Suite data connectors that declare explicit `tool_ids` or `server_id` must narrow the tool list before active-skill filtering. Connectors without explicit tool scope are descriptive and must not accidentally disable tools.
+- Skill runtime tools (`skill_activate`, `skill_read_file`, `skill_run_script`) must remain available when connector filtering is active so bound skills can load themselves.
+- Non-ASCII slash commands and skill names need stable local IDs; do not normalize them all to the same ASCII fallback such as `cmd_0`.
+
+### 4. Validation & Error Matrix
+- Missing assistant name -> backend returns `助手名称不能为空`.
+- Existing built-in assistant missing new suite arrays -> storage read hydrates defaults and persists the upgraded index.
+- Existing built-in assistant with non-empty custom suite arrays -> hydration leaves those arrays unchanged.
+- Data connector disabled or unconfigured -> prompt may mention unavailable status, but runtime must not allow its tools through connector filtering.
+- Data connector has no `tool_ids` and no `server_id` -> no connector tool filtering occurs.
+- Assistant `tool_preset: none` -> clears all tools before connector filtering.
+
+### 5. Good/Base/Bad Cases
+- Good: `AssistantCenter` renders plaza tabs/cards in the main content area and detail sections for quick commands, data connectors, and knowledge skills.
+- Good: existing `asst_builtin_code_data` stored before suite fields are added is hydrated with Python/file connectors and code/data knowledge skills.
+- Good: a connector with `tool_ids: ["run_python"]` keeps `run_python` plus Skill runtime tools and removes unrelated native/MCP tools.
+- Base: old conversations missing suite fields deserialize with empty arrays and continue to render/send normally.
+- Bad: adding a new suite field only in TypeScript, leaving Rust snapshot/storage defaults behind.
+- Bad: using `enabled` to mean installed; installed state belongs to `installed`, while `enabled` controls whether the suite can be used.
+
+### 6. Tests Required
+- `npm run typecheck` must cover `ChatAssistant` / `ChatAssistantSnapshot` shape changes across UI and mock API.
+- `npm run lint` must pass after assistant center view edits.
+- `cargo test --manifest-path src-tauri/Cargo.toml` must include assistant snapshot struct initializers, connector tool filtering, non-ASCII ID normalization, and built-in hydration behavior when suite fields change.
+- `npm run build:ui` must pass after assistant center lazy route or layout changes.
+- Manual/browser smoke should cover `#chat/assistants` plaza, detail, edit, no inner sidebar, and old mock/storage data showing non-zero default suite stats after hydration.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+```rust
+// Every Chinese slash command becomes cmd_0, so React keys and snapshots collide.
+command.id = normalize_local_id(&command.slash, "cmd", 0);
+```
+
+#### Correct
+```rust
+// Non-ASCII labels get a stable hash fallback.
+command.id = normalize_local_id(&command.slash, "cmd", idx);
+```
+
+#### Wrong
+```tsx
+// "已安装" tab silently hides disabled but installed suites.
+if (tab === 'installed' && assistant.enabled === false) return false
+```
+
+#### Correct
+```tsx
+if (tab === 'installed' && assistant.installed === false) return false
+```
+
 ## Scenario: Chat Runtime Provider Contract
 
 ### 1. Scope / Trigger

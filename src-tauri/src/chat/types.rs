@@ -214,6 +214,65 @@ pub struct ChatProjectIndex {
 }
 
 /// 可复用 Chat 助手配置。存储字段保持 snake_case，与 Conversation JSON 一致。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AssistantQuickCommand {
+    pub id: String,
+    pub name: String,
+    pub slash: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub starter_text: String,
+    #[serde(default = "default_true")]
+    pub requires_suite_enabled: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AssistantDataConnector {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tool_ids: Vec<String>,
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AssistantKnowledgeSkill {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub trigger_phrases: Vec<String>,
+    #[serde(default)]
+    pub skill_id: Option<String>,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub recommended_tools: Vec<String>,
+    #[serde(default)]
+    pub requires_connectors: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatAssistant {
     pub id: String,
@@ -224,6 +283,16 @@ pub struct ChatAssistant {
     pub icon: String,
     #[serde(default)]
     pub color: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]
@@ -238,8 +307,16 @@ pub struct ChatAssistant {
     pub conversation_starters: Vec<String>,
     #[serde(default)]
     pub greeting: String,
+    #[serde(default)]
+    pub quick_commands: Vec<AssistantQuickCommand>,
+    #[serde(default)]
+    pub data_connectors: Vec<AssistantDataConnector>,
+    #[serde(default)]
+    pub knowledge_skills: Vec<AssistantKnowledgeSkill>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub installed: bool,
     #[serde(default)]
     pub archived: bool,
     #[serde(default)]
@@ -256,6 +333,10 @@ pub struct ChatAssistantSnapshot {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]
     pub provider_id: String,
@@ -269,6 +350,12 @@ pub struct ChatAssistantSnapshot {
     pub conversation_starters: Vec<String>,
     #[serde(default)]
     pub greeting: String,
+    #[serde(default)]
+    pub quick_commands: Vec<AssistantQuickCommand>,
+    #[serde(default)]
+    pub data_connectors: Vec<AssistantDataConnector>,
+    #[serde(default)]
+    pub knowledge_skills: Vec<AssistantKnowledgeSkill>,
 }
 
 impl From<&ChatAssistant> for ChatAssistantSnapshot {
@@ -277,6 +364,8 @@ impl From<&ChatAssistant> for ChatAssistantSnapshot {
             id: assistant.id.clone(),
             name: assistant.name.clone(),
             description: assistant.description.clone(),
+            source: assistant.source.clone(),
+            version: assistant.version.clone(),
             system_prompt: assistant.system_prompt.clone(),
             provider_id: assistant.provider_id.clone(),
             model: assistant.model.clone(),
@@ -284,6 +373,9 @@ impl From<&ChatAssistant> for ChatAssistantSnapshot {
             tool_preset: assistant.tool_preset.clone(),
             conversation_starters: assistant.conversation_starters.clone(),
             greeting: assistant.greeting.clone(),
+            quick_commands: assistant.quick_commands.clone(),
+            data_connectors: assistant.data_connectors.clone(),
+            knowledge_skills: assistant.knowledge_skills.clone(),
         }
     }
 }

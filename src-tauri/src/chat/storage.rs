@@ -6,8 +6,9 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use super::{
-    ChatAssistant, ChatAssistantIndex, ChatAssistantSnapshot, ChatProject, ChatProjectIndex,
-    Conversation, ConversationIndex, ConversationListItem,
+    AssistantDataConnector, AssistantKnowledgeSkill, AssistantQuickCommand, ChatAssistant,
+    ChatAssistantIndex, ChatAssistantSnapshot, ChatProject, ChatProjectIndex, Conversation,
+    ConversationIndex, ConversationListItem,
 };
 
 const WRITE_RETRY_ATTEMPTS: usize = 3;
@@ -237,7 +238,9 @@ pub fn load_assistant_index(app: &AppHandle) -> Result<ChatAssistantIndex, Strin
     let content = fs::read_to_string(&path).map_err(|e| format!("read assistants file: {e}"))?;
     let mut index: ChatAssistantIndex =
         serde_json::from_str(&content).map_err(|e| format!("parse assistants file: {e}"))?;
-    ensure_default_assistants(&mut index);
+    if ensure_default_assistants(&mut index) {
+        save_assistant_index(app, &index)?;
+    }
     Ok(index)
 }
 
@@ -649,6 +652,14 @@ fn normalize_assistant(assistant: &mut ChatAssistant) -> Result<(), String> {
     }
     assistant.icon = assistant.icon.trim().chars().take(8).collect();
     assistant.color = assistant.color.trim().chars().take(32).collect();
+    assistant.source = normalize_assistant_source(&assistant.source, assistant.built_in);
+    assistant.author = assistant.author.trim().chars().take(80).collect();
+    if assistant.author.is_empty() && assistant.built_in {
+        assistant.author = "Kivio".to_string();
+    }
+    assistant.version = normalize_assistant_version(&assistant.version);
+    assistant.category = assistant.category.trim().chars().take(40).collect();
+    assistant.tags = normalize_string_list(&assistant.tags, 8, 24);
     assistant.provider_id = assistant.provider_id.trim().to_string();
     assistant.model = assistant.model.trim().to_string();
     assistant.skill_id = assistant
@@ -667,7 +678,175 @@ fn normalize_assistant(assistant: &mut ChatAssistant) -> Result<(), String> {
         .map(str::to_string)
         .collect();
     assistant.greeting = assistant.greeting.trim().to_string();
+    assistant.quick_commands = assistant
+        .quick_commands
+        .clone()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, command)| normalize_quick_command(command, idx))
+        .take(12)
+        .collect();
+    assistant.data_connectors = assistant
+        .data_connectors
+        .clone()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, connector)| normalize_data_connector(connector, idx))
+        .take(12)
+        .collect();
+    assistant.knowledge_skills = assistant
+        .knowledge_skills
+        .clone()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, skill)| normalize_knowledge_skill(skill, idx))
+        .take(12)
+        .collect();
     Ok(())
+}
+
+fn normalize_assistant_source(source: &str, built_in: bool) -> String {
+    match source.trim() {
+        "builtin" | "user" | "imported" => source.trim().to_string(),
+        _ if built_in => "builtin".to_string(),
+        _ => "user".to_string(),
+    }
+}
+
+fn normalize_assistant_version(version: &str) -> String {
+    let trimmed = version.trim().trim_start_matches('v');
+    if trimmed.is_empty() {
+        "1.0.0".to_string()
+    } else {
+        trimmed.chars().take(24).collect()
+    }
+}
+
+fn normalize_string_list(values: &[String], limit: usize, max_chars: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in values {
+        let item: String = value.trim().chars().take(max_chars).collect();
+        if item.is_empty() || out.iter().any(|existing| existing == &item) {
+            continue;
+        }
+        out.push(item);
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
+fn normalize_quick_command(
+    mut command: AssistantQuickCommand,
+    idx: usize,
+) -> Option<AssistantQuickCommand> {
+    command.name = command.name.trim().chars().take(40).collect();
+    command.slash = normalize_slash_command(&command.slash, &command.name);
+    if command.name.is_empty() || command.slash.is_empty() {
+        return None;
+    }
+    command.id = normalize_local_id(&command.id, "cmd", idx);
+    command.description = command.description.trim().chars().take(160).collect();
+    command.placeholder = command.placeholder.trim().chars().take(160).collect();
+    command.prompt = command.prompt.trim().chars().take(4000).collect();
+    command.starter_text = command.starter_text.trim().chars().take(400).collect();
+    Some(command)
+}
+
+fn normalize_slash_command(value: &str, fallback_name: &str) -> String {
+    let source = if value.trim().is_empty() {
+        fallback_name.trim()
+    } else {
+        value.trim()
+    };
+    if source.is_empty() {
+        return String::new();
+    }
+    let compact: String = source
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .take(32)
+        .collect();
+    if compact.starts_with('/') {
+        compact
+    } else {
+        format!("/{compact}")
+    }
+}
+
+fn normalize_data_connector(
+    mut connector: AssistantDataConnector,
+    idx: usize,
+) -> Option<AssistantDataConnector> {
+    connector.name = connector.name.trim().chars().take(60).collect();
+    if connector.name.is_empty() {
+        return None;
+    }
+    connector.id = normalize_local_id(&connector.id, "conn", idx);
+    connector.kind = match connector.kind.trim() {
+        "builtin_tool" | "mcp" | "skill_tool" | "memory" | "file" | "web" => {
+            connector.kind.trim().to_string()
+        }
+        _ => "builtin_tool".to_string(),
+    };
+    connector.description = connector.description.trim().chars().take(180).collect();
+    connector.tool_ids = normalize_string_list(&connector.tool_ids, 12, 80);
+    connector.server_id = connector
+        .server_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(80).collect());
+    Some(connector)
+}
+
+fn normalize_knowledge_skill(
+    mut skill: AssistantKnowledgeSkill,
+    idx: usize,
+) -> Option<AssistantKnowledgeSkill> {
+    skill.name = skill.name.trim().chars().take(60).collect();
+    if skill.name.is_empty() {
+        return None;
+    }
+    skill.id = normalize_local_id(&skill.id, "ks", idx);
+    skill.description = skill.description.trim().chars().take(360).collect();
+    skill.trigger_phrases = normalize_string_list(&skill.trigger_phrases, 16, 40);
+    skill.skill_id = skill
+        .skill_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    skill.prompt = skill.prompt.trim().chars().take(5000).collect();
+    skill.recommended_tools = normalize_string_list(&skill.recommended_tools, 12, 80);
+    skill.requires_connectors = normalize_string_list(&skill.requires_connectors, 12, 80);
+    Some(skill)
+}
+
+fn normalize_local_id(id: &str, prefix: &str, idx: usize) -> String {
+    let trimmed = id.trim();
+    let compact: String = trimmed
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .take(80)
+        .collect();
+    if !compact.is_empty() {
+        compact
+    } else if trimmed.is_empty() {
+        format!("{prefix}_{idx}")
+    } else {
+        format!("{prefix}_{:016x}", stable_label_hash(trimmed))
+    }
+}
+
+fn stable_label_hash(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn normalize_tool_preset(value: &str) -> String {
@@ -700,14 +879,19 @@ fn unique_assistant_copy_name(app: &AppHandle, base_name: &str) -> Result<String
     Ok(format!("{base} {}", chrono::Local::now().timestamp()))
 }
 
-fn ensure_default_assistants(index: &mut ChatAssistantIndex) {
+fn ensure_default_assistants(index: &mut ChatAssistantIndex) -> bool {
     let mut changed = false;
     for assistant in default_assistants() {
-        if index.assistants.iter().any(|item| item.id == assistant.id) {
-            continue;
+        if let Some(existing) = index
+            .assistants
+            .iter_mut()
+            .find(|item| item.id == assistant.id)
+        {
+            changed |= hydrate_builtin_assistant(existing, &assistant);
+        } else {
+            index.assistants.push(assistant);
+            changed = true;
         }
-        index.assistants.push(assistant);
-        changed = true;
     }
     if changed {
         index.assistants.sort_by(|a, b| {
@@ -716,6 +900,55 @@ fn ensure_default_assistants(index: &mut ChatAssistantIndex) {
                 .then_with(|| a.name.cmp(&b.name))
         });
     }
+    changed
+}
+
+fn hydrate_builtin_assistant(existing: &mut ChatAssistant, default: &ChatAssistant) -> bool {
+    if !existing.built_in && existing.source != "builtin" {
+        return false;
+    }
+    let mut changed = false;
+    if existing.source.trim().is_empty() {
+        existing.source = default.source.clone();
+        changed = true;
+    }
+    if existing.author.trim().is_empty() {
+        existing.author = default.author.clone();
+        changed = true;
+    }
+    if existing.version.trim().is_empty() {
+        existing.version = default.version.clone();
+        changed = true;
+    }
+    if existing.category.trim().is_empty() {
+        existing.category = default.category.clone();
+        changed = true;
+    }
+    if existing.tags.is_empty() {
+        existing.tags = default.tags.clone();
+        changed = true;
+    }
+    if existing.icon.trim().is_empty() {
+        existing.icon = default.icon.clone();
+        changed = true;
+    }
+    if existing.color.trim().is_empty() {
+        existing.color = default.color.clone();
+        changed = true;
+    }
+    if existing.quick_commands.is_empty() {
+        existing.quick_commands = default.quick_commands.clone();
+        changed = true;
+    }
+    if existing.data_connectors.is_empty() {
+        existing.data_connectors = default.data_connectors.clone();
+        changed = true;
+    }
+    if existing.knowledge_skills.is_empty() {
+        existing.knowledge_skills = default.knowledge_skills.clone();
+        changed = true;
+    }
+    changed
 }
 
 fn default_assistants() -> Vec<ChatAssistant> {
@@ -727,6 +960,11 @@ fn default_assistants() -> Vec<ChatAssistant> {
             description: "适合日常问答、梳理想法和处理轻量任务。".to_string(),
             icon: "sparkles".to_string(),
             color: "#6A8FBD".to_string(),
+            source: "builtin".to_string(),
+            author: "Kivio".to_string(),
+            version: "1.0.0".to_string(),
+            category: "general".to_string(),
+            tags: vec!["通用".to_string(), "效率".to_string()],
             system_prompt: "你是 Kivio 的通用助手。回答要清晰、直接，并在信息不足时主动说明假设。".to_string(),
             provider_id: String::new(),
             model: String::new(),
@@ -738,7 +976,19 @@ fn default_assistants() -> Vec<ChatAssistant> {
                 "给我一个可执行的下一步计划".to_string(),
             ],
             greeting: "我可以帮你整理、分析、写作和处理日常 AI 任务。".to_string(),
+            quick_commands: vec![
+                quick_command("整理想法", "/整理", "把零散想法整理成结构化要点", "请把用户输入整理成背景、关键点、风险和下一步。"),
+                quick_command("改清楚", "/改清楚", "让表达更直接、更易读", "在保留原意的前提下改写用户内容，使其更清晰、自然、紧凑。"),
+                quick_command("下一步", "/下一步", "给出可执行计划", "把用户目标拆成具体下一步，优先给出今天就能执行的动作。"),
+            ],
+            data_connectors: vec![
+                data_connector("memory", "记忆", "memory", "读取和维护用户长期偏好与流程。", vec!["memory_read", "memory_modify"]),
+            ],
+            knowledge_skills: vec![
+                knowledge_skill("日常任务拆解", "把模糊问题拆成目标、约束、方案和行动。", vec!["整理", "计划", "下一步"], None, ""),
+            ],
             enabled: true,
+            installed: true,
             archived: false,
             built_in: true,
             created_at: now,
@@ -750,6 +1000,11 @@ fn default_assistants() -> Vec<ChatAssistant> {
             description: "面向翻译、改写、语气调整和双语表达。".to_string(),
             icon: "languages".to_string(),
             color: "#C56646".to_string(),
+            source: "builtin".to_string(),
+            author: "Kivio".to_string(),
+            version: "1.0.0".to_string(),
+            category: "language".to_string(),
+            tags: vec!["翻译".to_string(), "润色".to_string()],
             system_prompt: "你是翻译与润色助手。优先保留原意，输出自然、准确、适合目标语境的表达；必要时给出简短改动说明。".to_string(),
             provider_id: String::new(),
             model: String::new(),
@@ -761,7 +1016,18 @@ fn default_assistants() -> Vec<ChatAssistant> {
                 "给我三个不同语气的版本".to_string(),
             ],
             greeting: "贴文本给我，我会帮你翻译、润色或改成指定语气。".to_string(),
+            quick_commands: vec![
+                quick_command("翻译", "/翻译", "翻译为指定语言", "把用户内容翻译成目标语言；未指定目标语言时，中文默认译成英文，其他语言默认译成中文。"),
+                quick_command("润色", "/润色", "改善措辞和流畅度", "保留原意，提升表达自然度、专业度和可读性。"),
+                quick_command("语气调整", "/语气", "按指定语气改写", "按用户指定的正式、友好、简洁、礼貌等语气改写内容。"),
+            ],
+            data_connectors: Vec::new(),
+            knowledge_skills: vec![
+                knowledge_skill("双语表达", "保持含义准确，同时让目标语言读起来自然。", vec!["翻译", "双语", "英文"], None, ""),
+                knowledge_skill("表达润色", "针对邮件、产品文案、说明文字做语气和清晰度优化。", vec!["润色", "改写", "语气"], None, ""),
+            ],
             enabled: true,
+            installed: true,
             archived: false,
             built_in: true,
             created_at: now,
@@ -773,6 +1039,11 @@ fn default_assistants() -> Vec<ChatAssistant> {
             description: "适合分析截图、界面、报错和视觉信息。".to_string(),
             icon: "scan".to_string(),
             color: "#8A6FBD".to_string(),
+            source: "builtin".to_string(),
+            author: "Kivio".to_string(),
+            version: "1.0.0".to_string(),
+            category: "vision".to_string(),
+            tags: vec!["截图".to_string(), "视觉".to_string()],
             system_prompt: "你是截图分析助手。看到图片时先描述关键信息，再回答用户问题；如果是界面或报错，优先指出可能原因和下一步操作。".to_string(),
             provider_id: String::new(),
             model: String::new(),
@@ -784,7 +1055,19 @@ fn default_assistants() -> Vec<ChatAssistant> {
                 "这个界面可以怎么优化？".to_string(),
             ],
             greeting: "发截图或图片给我，我会帮你识别重点并分析问题。".to_string(),
+            quick_commands: vec![
+                quick_command("分析截图", "/截图分析", "解释截图里的关键信息", "结合截图回答用户问题，先识别画面中的关键对象、文本和状态。"),
+                quick_command("报错排查", "/报错", "定位错误原因和下一步", "读取截图或文本中的报错信息，给出可能原因、验证方法和修复步骤。"),
+                quick_command("界面建议", "/界面建议", "分析 UI 可用性", "从信息层级、交互效率、视觉一致性和可读性角度分析界面。"),
+            ],
+            data_connectors: vec![
+                data_connector("vision", "图片附件", "file", "读取当前对话中的截图和图片附件。", Vec::new()),
+            ],
+            knowledge_skills: vec![
+                knowledge_skill("截图信息提取", "从截图中提取文字、状态、按钮、报错和上下文线索。", vec!["截图", "界面", "报错"], None, ""),
+            ],
             enabled: true,
+            installed: true,
             archived: false,
             built_in: true,
             created_at: now,
@@ -796,6 +1079,11 @@ fn default_assistants() -> Vec<ChatAssistant> {
             description: "适合代码解释、调试、脚本和数据分析。".to_string(),
             icon: "code".to_string(),
             color: "#4F9D7A".to_string(),
+            source: "builtin".to_string(),
+            author: "Kivio".to_string(),
+            version: "1.0.0".to_string(),
+            category: "technical".to_string(),
+            tags: vec!["代码".to_string(), "数据".to_string()],
             system_prompt: "你是编程和数据助手。回答要具体，优先给出可运行的步骤、代码或排查路径；涉及不确定信息时说明验证方式。".to_string(),
             provider_id: String::new(),
             model: String::new(),
@@ -807,7 +1095,21 @@ fn default_assistants() -> Vec<ChatAssistant> {
                 "用数据分析这个问题".to_string(),
             ],
             greeting: "把代码、错误信息或数据问题发给我，我会帮你拆解和验证。".to_string(),
+            quick_commands: vec![
+                quick_command("解释代码", "/解释代码", "解释代码行为和结构", "解释用户提供代码的目的、关键路径、输入输出和潜在风险。"),
+                quick_command("调试", "/调试", "定位 bug 或报错", "根据代码、日志或报错，提出排查路径、可能原因和修复建议。"),
+                quick_command("数据分析", "/数据分析", "分析数据或生成图表", "优先使用可用的数据/代码工具验证结论，并给出可复现步骤。"),
+            ],
+            data_connectors: vec![
+                data_connector("python", "Python 沙盒", "builtin_tool", "运行 Python 做数据计算、图表和文件分析。", vec!["run_python"]),
+                data_connector("filesystem", "文件读取", "builtin_tool", "读取用户提供的本地文本文件。", vec!["read_file"]),
+            ],
+            knowledge_skills: vec![
+                knowledge_skill("代码调试", "把问题拆成复现、定位、验证、修复四步。", vec!["bug", "报错", "调试"], None, ""),
+                knowledge_skill("数据分析", "用数据处理和统计方法回答问题，并说明假设。", vec!["数据", "统计", "图表"], Some("xlsx"), ""),
+            ],
             enabled: true,
+            installed: true,
             archived: false,
             built_in: true,
             created_at: now,
@@ -819,6 +1121,11 @@ fn default_assistants() -> Vec<ChatAssistant> {
             description: "适合文章、文案、提纲、总结和表达优化。".to_string(),
             icon: "pen".to_string(),
             color: "#BD8A3E".to_string(),
+            source: "builtin".to_string(),
+            author: "Kivio".to_string(),
+            version: "1.0.0".to_string(),
+            category: "writing".to_string(),
+            tags: vec!["写作".to_string(), "总结".to_string()],
             system_prompt: "你是写作助手。先理解目标读者和用途，输出结构清晰、语言自然的内容；需要时给出多个可选版本。".to_string(),
             provider_id: String::new(),
             model: String::new(),
@@ -830,13 +1137,83 @@ fn default_assistants() -> Vec<ChatAssistant> {
                 "总结这段内容".to_string(),
             ],
             greeting: "告诉我写作目标和受众，我会帮你起草、改写或总结。".to_string(),
+            quick_commands: vec![
+                quick_command("写提纲", "/提纲", "生成文章或方案提纲", "根据用户主题生成层次清楚、可继续扩展的提纲。"),
+                quick_command("写文案", "/文案", "生成产品或传播文案", "围绕目标受众、场景和行动目标生成简洁有力的文案。"),
+                quick_command("总结", "/总结", "提炼重点", "把用户内容总结成重点、结论和可行动事项。"),
+            ],
+            data_connectors: Vec::new(),
+            knowledge_skills: vec![
+                knowledge_skill("结构化写作", "先确定读者、目的、结构，再生成正文。", vec!["提纲", "文章", "文案"], None, ""),
+                knowledge_skill("总结提炼", "压缩内容时保留结论、证据和行动项。", vec!["总结", "提炼", "摘要"], None, ""),
+            ],
             enabled: true,
+            installed: true,
             archived: false,
             built_in: true,
             created_at: now,
             updated_at: now + 1,
         },
     ]
+}
+
+fn quick_command(
+    name: &str,
+    slash: &str,
+    description: &str,
+    prompt: &str,
+) -> AssistantQuickCommand {
+    AssistantQuickCommand {
+        id: normalize_local_id(slash, "cmd", 0),
+        name: name.to_string(),
+        slash: slash.to_string(),
+        description: description.to_string(),
+        placeholder: String::new(),
+        prompt: prompt.to_string(),
+        starter_text: String::new(),
+        requires_suite_enabled: true,
+        enabled: true,
+    }
+}
+
+fn data_connector(
+    id: &str,
+    name: &str,
+    kind: &str,
+    description: &str,
+    tool_ids: Vec<&str>,
+) -> AssistantDataConnector {
+    AssistantDataConnector {
+        id: id.to_string(),
+        name: name.to_string(),
+        kind: kind.to_string(),
+        description: description.to_string(),
+        tool_ids: tool_ids.into_iter().map(str::to_string).collect(),
+        server_id: None,
+        required: false,
+        enabled: true,
+        configured: true,
+    }
+}
+
+fn knowledge_skill(
+    name: &str,
+    description: &str,
+    trigger_phrases: Vec<&str>,
+    skill_id: Option<&str>,
+    prompt: &str,
+) -> AssistantKnowledgeSkill {
+    AssistantKnowledgeSkill {
+        id: normalize_local_id(name, "ks", 0),
+        name: name.to_string(),
+        description: description.to_string(),
+        trigger_phrases: trigger_phrases.into_iter().map(str::to_string).collect(),
+        skill_id: skill_id.map(str::to_string),
+        prompt: prompt.to_string(),
+        recommended_tools: Vec::new(),
+        requires_connectors: Vec::new(),
+        enabled: true,
+    }
 }
 
 fn move_project_conversations(
@@ -861,4 +1238,50 @@ fn move_project_conversations(
         save_index(app, &index)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_local_id_hashes_non_ascii_labels() {
+        let first = normalize_local_id("/整理", "cmd", 0);
+        let second = normalize_local_id("/总结", "cmd", 0);
+
+        assert!(first.starts_with("cmd_"));
+        assert!(second.starts_with("cmd_"));
+        assert_ne!(first, "cmd_0");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn hydrate_builtin_assistant_fills_missing_suite_fields_without_overwriting_existing() {
+        let defaults = default_assistants();
+        let default = defaults
+            .iter()
+            .find(|assistant| assistant.id == "asst_builtin_code_data")
+            .expect("default code/data assistant exists");
+        let mut existing = default.clone();
+        existing.quick_commands = Vec::new();
+        existing.data_connectors = Vec::new();
+        existing.knowledge_skills = Vec::new();
+        existing.author.clear();
+        existing.color = "#123456".to_string();
+
+        let changed = hydrate_builtin_assistant(&mut existing, default);
+
+        assert!(changed);
+        assert_eq!(existing.quick_commands.len(), default.quick_commands.len());
+        assert_eq!(
+            existing.data_connectors.len(),
+            default.data_connectors.len()
+        );
+        assert_eq!(
+            existing.knowledge_skills.len(),
+            default.knowledge_skills.len()
+        );
+        assert_eq!(existing.author, "Kivio");
+        assert_eq!(existing.color, "#123456");
+    }
 }
