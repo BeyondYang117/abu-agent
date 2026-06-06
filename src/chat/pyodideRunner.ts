@@ -8,6 +8,7 @@ const PYODIDE_CDN_INDEX_URLS = [
   `https://cdn.jsdelivr.net/npm/pyodide@${PYODIDE_VERSION}/`,
   `https://unpkg.com/pyodide@${PYODIDE_VERSION}/`,
 ]
+const LOCAL_PYODIDE_SOURCE_LABEL = 'local app resources'
 const PYODIDE_PACKAGE_IMPORTS: Array<[RegExp, string]> = [
   [/(^|\n)\s*(import|from)\s+numpy\b/, 'numpy'],
   [/(^|\n)\s*(import|from)\s+matplotlib\b/, 'matplotlib'],
@@ -28,7 +29,6 @@ const PYTHON_ARTIFACT_SCAN_ROOTS = ['/home/pyodide', '/tmp']
 const MAX_PYTHON_IMAGE_ARTIFACT_BYTES = 12 * 1024 * 1024
 const MAX_PYTHON_IMAGE_ARTIFACTS = 12
 
-type PyodideRuntimeMode = 'local' | 'packages'
 type PyodideFsStat = {
   mode: number
   size?: number
@@ -50,13 +50,35 @@ type PythonOutputResult = {
   content: string
   artifacts: ChatToolArtifact[]
 }
+type PyodideSource = {
+  label: string
+  indexURL: string
+}
+type PyodidePackageManifest = {
+  pypiWheels?: Record<string, {
+    fileName?: string
+    pyodideDeps?: string[]
+  }>
+}
 
 let localPyodidePromise: Promise<PyodideInterface> | null = null
 let packagePyodidePromise: Promise<PyodideInterface> | null = null
-let packagePyodideSourceLabel = ''
+let packagePyodideLoadedPackages = new Set<string>()
+let packageManifestPromise: Promise<PyodidePackageManifest | null> | null = null
 
 function localPyodideIndexUrl(): string {
   return new URL(`${import.meta.env.BASE_URL}pyodide/`, window.location.href).toString()
+}
+
+function pyodideSources(): PyodideSource[] {
+  return [
+    { label: LOCAL_PYODIDE_SOURCE_LABEL, indexURL: localPyodideIndexUrl() },
+    ...PYODIDE_CDN_INDEX_URLS.map((indexURL) => ({ label: indexURL, indexURL })),
+  ]
+}
+
+function localPyodideAssetUrl(fileName: string): string {
+  return new URL(fileName, localPyodideIndexUrl()).toString()
 }
 
 function compactErrorMessage(message: string): string {
@@ -75,26 +97,20 @@ function compactErrorMessage(message: string): string {
   return `${normalized.slice(0, 700)}...`
 }
 
-async function loadPyodideRuntime(mode: PyodideRuntimeMode): Promise<PyodideInterface> {
+async function loadPyodideFromSource(source: PyodideSource): Promise<PyodideInterface> {
   const { loadPyodide } = await import('pyodide')
-  const sources = mode === 'packages'
-    ? PYODIDE_CDN_INDEX_URLS.map((indexURL) => ({ label: indexURL, indexURL }))
-    : [
-      { label: 'local app resources', indexURL: localPyodideIndexUrl() },
-      ...PYODIDE_CDN_INDEX_URLS.map((indexURL) => ({ label: indexURL, indexURL })),
-    ]
+  return loadPyodide({
+    indexURL: source.indexURL,
+    lockFileURL: `${source.indexURL}pyodide-lock.json`,
+    stdLibURL: `${source.indexURL}python_stdlib.zip`,
+  })
+}
+
+async function loadPyodideRuntime(): Promise<PyodideInterface> {
   const errors: string[] = []
-  for (const source of sources) {
+  for (const source of pyodideSources()) {
     try {
-      const pyodide = await loadPyodide({
-        indexURL: source.indexURL,
-        lockFileURL: `${source.indexURL}pyodide-lock.json`,
-        stdLibURL: `${source.indexURL}python_stdlib.zip`,
-      })
-      if (mode === 'packages') {
-        packagePyodideSourceLabel = source.label
-      }
-      return pyodide
+      return await loadPyodideFromSource(source)
     } catch (err) {
       errors.push(`${source.label}: ${compactErrorMessage(describePythonError(err))}`)
     }
@@ -102,18 +118,110 @@ async function loadPyodideRuntime(mode: PyodideRuntimeMode): Promise<PyodideInte
   throw new Error(`所有 Python 运行时来源加载失败。${errors.join('；')}`)
 }
 
-function getPyodide(mode: PyodideRuntimeMode): Promise<PyodideInterface> {
-  if (mode === 'packages') {
-    if (!packagePyodidePromise) {
-      packagePyodidePromise = loadPyodideRuntime(mode).catch((err) => {
+async function loadPackageManifest(): Promise<PyodidePackageManifest | null> {
+  if (!packageManifestPromise) {
+    packageManifestPromise = fetch(localPyodideAssetUrl('pyodide-package-manifest.json'))
+      .then(async (response) => {
+        if (!response.ok) return null
+        return await response.json() as PyodidePackageManifest
+      })
+      .catch(() => null)
+  }
+  return packageManifestPromise
+}
+
+async function installLocalWheelPackage(
+  pyodide: PyodideInterface,
+  packageName: string,
+  manifest: PyodidePackageManifest | null,
+): Promise<boolean> {
+  const wheel = manifest?.pypiWheels?.[packageName]
+  if (!wheel?.fileName) return false
+
+  const deps = wheel.pyodideDeps?.filter((dep) => dep !== packageName) ?? []
+  if (deps.length > 0) {
+    await pyodide.loadPackage(deps)
+  }
+  if (!deps.includes('micropip')) {
+    await pyodide.loadPackage('micropip')
+  }
+
+  const wheelUrl = localPyodideAssetUrl(wheel.fileName)
+  const installWheelCode = `
+import micropip as _kivio_micropip
+await _kivio_micropip.install(${pythonStringLiteral(wheelUrl)}, deps=False)
+`.trim()
+  await pyodide.runPythonAsync(installWheelCode)
+  return true
+}
+
+async function installPackagesOnRuntime(
+  pyodide: PyodideInterface,
+  packages: string[],
+  manifest: PyodidePackageManifest | null,
+): Promise<void> {
+  if (packages.length === 0) return
+  const pyodidePackages: string[] = []
+  for (const packageName of packages) {
+    if (await installLocalWheelPackage(pyodide, packageName, manifest)) {
+      continue
+    }
+    pyodidePackages.push(packageName)
+  }
+  if (pyodidePackages.length > 0) {
+    await pyodide.loadPackage(pyodidePackages)
+  }
+}
+
+async function loadRuntimeWithPackages(packages: string[]): Promise<PyodideInterface> {
+  const manifest = packages.length > 0 ? await loadPackageManifest() : null
+  const errors: string[] = []
+  for (const source of pyodideSources()) {
+    try {
+      const pyodide = await loadPyodideFromSource(source)
+      await installPackagesOnRuntime(pyodide, packages, manifest)
+      return pyodide
+    } catch (err) {
+      errors.push(`${source.label}: ${compactErrorMessage(describePythonError(err))}`)
+    }
+  }
+  throw new Error(`所有 Python 包来源加载失败。${errors.join('；')}`)
+}
+
+async function getPyodideWithPackages(packages: string[]): Promise<PyodideInterface> {
+  if (!packagePyodidePromise) {
+    packagePyodideLoadedPackages = new Set()
+    packagePyodidePromise = loadRuntimeWithPackages(packages)
+      .then((pyodide) => {
+        packages.forEach((packageName) => packagePyodideLoadedPackages.add(packageName))
+        return pyodide
+      })
+      .catch((err) => {
         packagePyodidePromise = null
+        packagePyodideLoadedPackages = new Set()
         throw err
       })
-    }
     return packagePyodidePromise
   }
+
+  const pyodide = await packagePyodidePromise
+  const missingPackages = packages.filter((packageName) => !packagePyodideLoadedPackages.has(packageName))
+  if (missingPackages.length === 0) return pyodide
+
+  try {
+    await installPackagesOnRuntime(pyodide, missingPackages, await loadPackageManifest())
+    missingPackages.forEach((packageName) => packagePyodideLoadedPackages.add(packageName))
+    return pyodide
+  } catch {
+    packagePyodidePromise = null
+    packagePyodideLoadedPackages = new Set()
+    return await getPyodideWithPackages(packages)
+  }
+}
+
+function getPyodide(): Promise<PyodideInterface> {
   if (!localPyodidePromise) {
-    localPyodidePromise = loadPyodideRuntime(mode).catch((err) => {
+    localPyodidePromise = loadPyodideRuntime().catch((err) => {
       localPyodidePromise = null
       throw err
     })
@@ -653,27 +761,16 @@ export async function runPythonInSandbox(
 
   const packages = detectPyodidePackages(code)
   const preparedCode = preparePythonCode(code)
-  const runtimeMode: PyodideRuntimeMode = packages.length > 0 ? 'packages' : 'local'
   let pyodide: PyodideInterface
   try {
-    pyodide = await getPyodide(runtimeMode)
+    pyodide = packages.length > 0
+      ? await getPyodideWithPackages(packages)
+      : await getPyodide()
   } catch (err) {
     return {
       content: `Python 沙盒当前不可用：${describePythonError(err)}。${PYTHON_SANDBOX_FAILURE_GUIDANCE}`,
       isError: true,
       artifacts: [],
-    }
-  }
-
-  if (packages.length > 0) {
-    try {
-      await pyodide.loadPackage(packages)
-    } catch (err) {
-      return {
-        content: `Python 包加载失败：${packages.join(', ')}。基础 Python 已从 ${packagePyodideSourceLabel || 'runtime'} 加载；第三方包仍需可访问的 Pyodide 包源。${describePythonError(err)}。${PYTHON_SANDBOX_FAILURE_GUIDANCE}`,
-        isError: true,
-        artifacts: [],
-      }
     }
   }
 

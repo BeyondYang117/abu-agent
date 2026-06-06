@@ -139,6 +139,14 @@ npm install
 npm run dev   # full Tauri app (Rust backend + Vite UI)
 ```
 
+### Release packaging requirements
+
+- Document Skills are not complete unless their runtime is packaged too. When `pdf`, `docx`, and `xlsx` are bundled, the installer must also include the Python sandbox runtime and common Pyodide packages needed by those Skills.
+- The packaged app must include Pyodide core files, `python_stdlib.zip`, and local wheels for common packages such as `numpy`, `pandas`, `matplotlib`, `scipy`, `sympy`, `scikit-learn`, `statsmodels`, `pillow`, `seaborn`, and `micropip`.
+- `run_python` package loading must prefer bundled local resources. CDN loading can only be a fallback, not the required path for normal document analysis.
+- Before publishing installers, mount or inspect the final DMG / MSI / NSIS output and verify the packaged resources include both `skills/pdf|docx|xlsx` and the Python/Pyodide runtime package files.
+- Follow [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md) for the exact release flow and mandatory packaging checklist.
+
 PRs welcome. See `CLAUDE.md` and `AGENTS.md` for architecture notes.
 
 ## License
@@ -283,6 +291,14 @@ Kivio 常驻菜单栏，只在你按下热键时出现。
 npm install
 npm run dev   # 启动完整 Tauri 应用（Rust 后端 + Vite UI）
 ```
+
+### 发布打包要求
+
+- 文档 Skill 不能只打 `SKILL.md`。只要安装包内置 `pdf`、`docx`、`xlsx`，就必须同时内置这些 Skill 依赖的 Python 沙箱运行时和常用 Pyodide 包。
+- 安装包必须包含 Pyodide 核心文件、`python_stdlib.zip`，以及 `numpy`、`pandas`、`matplotlib`、`scipy`、`sympy`、`scikit-learn`、`statsmodels`、`pillow`、`seaborn`、`micropip` 等常用包的本地 wheel。
+- `run_python` 加载包时必须优先使用随包资源。CDN 只能作为兜底，不能作为正常文档分析流程的必需路径。
+- 发布安装包前，必须挂载或检查最终 DMG / MSI / NSIS，确认资源里同时存在 `skills/pdf|docx|xlsx` 和 Python/Pyodide 运行时包文件。
+- 具体发版流程和强制检查项见 [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md)。
 
 欢迎 PR，架构说明见 `CLAUDE.md` 和 `AGENTS.md`。
 

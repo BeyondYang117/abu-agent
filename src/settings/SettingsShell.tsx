@@ -33,6 +33,7 @@ import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
 import { resolveModelInfo } from '../data/modelMatching'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
+import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/chatTools'
 import {
   Toggle, Select, Input, TextArea, Label,
   SettingRow, PermissionItem, HotkeyInput, DefaultPrompt,
@@ -416,6 +417,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const lang = settings?.settingsLanguage || 'zh'
   const t = i18n[lang]
   const chatTools = settings?.chatTools || defaultChatTools()
+  const nativeBuiltinToolsEnabled = hasEnabledNativeBuiltinTool(chatTools.nativeTools)
+  const skillRuntimeEnabled = hasEnabledSkillRuntime(chatTools.nativeTools)
   // 判断是否有未保存的更改
   const hasUnsavedChanges = settings ? stableStringify(settings) !== initialSettingsSnapshot : false
 
@@ -2258,8 +2261,18 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     label={lang === 'zh' ? 'Skill 运行时' : 'Skill runtime'}
                     description={lang === 'zh' ? '内置 skill_activate / read_file / run_script' : 'Built-in skill_activate / read_file / run_script'}
                   >
-                    <span className={`kv-tag ${chatTools.nativeTools?.skillRuntime !== false ? 'ok' : ''}`}>
-                      {chatTools.nativeTools?.skillRuntime !== false
+                    <span className={`kv-tag ${skillRuntimeEnabled ? 'ok' : ''}`}>
+                      {skillRuntimeEnabled
+                        ? (lang === 'zh' ? '已启用' : 'On')
+                        : (lang === 'zh' ? '未启用' : 'Off')}
+                    </span>
+                  </SettingRow>
+                  <SettingRow
+                    label={lang === 'zh' ? '内置工具' : 'Native tools'}
+                    description={lang === 'zh' ? '读写文件、命令、Python、网页抓取等 Chat 工具' : 'Chat tools such as files, commands, Python, and web fetch'}
+                  >
+                    <span className={`kv-tag ${nativeBuiltinToolsEnabled ? 'ok' : ''}`}>
+                      {nativeBuiltinToolsEnabled
                         ? (lang === 'zh' ? '已启用' : 'On')
                         : (lang === 'zh' ? '未启用' : 'Off')}
                     </span>

@@ -52,6 +52,14 @@ Questions to answer:
 - If the initial `matplotlib` execution still fails with a Pyodide/wasm/backend-style error, retry once inside the sandbox before surfacing a user-visible failure.
 - Save generated images to relative filenames inside the Pyodide filesystem and let Kivio capture them as artifacts; do not require the model to print base64.
 
+### Release packaging for document Skills
+
+- Bundling `pdf`, `docx`, and `xlsx` Skills means bundling their execution runtime too; `SKILL.md` files alone are not a complete release.
+- Production installers must include Pyodide core files, `python_stdlib.zip`, and local wheels for common packages used by document/data workflows: `numpy`, `pandas`, `matplotlib`, `scipy`, `sympy`, `scikit-learn`, `statsmodels`, `pillow`, `seaborn`, and `micropip`.
+- `run_python` package loading must prefer packaged local resources. CDN loading may exist as a fallback only, not as the normal required path for document analysis.
+- Release verification must inspect the final DMG / MSI / NSIS artifacts and confirm that both `skills/pdf|docx|xlsx` and the Python/Pyodide runtime package files are present in the installed app resources.
+- The canonical release checklist lives in `docs/RELEASE_PACKAGING.md`; update it whenever the packaging flow changes.
+
 ---
 
 ## Testing Requirements

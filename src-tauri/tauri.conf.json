@@ -40,7 +40,8 @@
       "binaries/kivio-ocr-helper"
     ],
     "resources": {
-      "resources/skills": "skills"
+      "resources/skills": "skills",
+      "../dist/pyodide": "pyodide"
     },
     "windows": {
       "wix": {

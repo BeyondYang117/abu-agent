@@ -208,6 +208,10 @@ Rust dependencies are managed by `cargo`; the Tauri CLI coordinates frontend and
   - `macos-14` -> DMG bundle
   - `windows-latest` -> MSI + NSIS bundles
 - Uses `tauri-apps/tauri-action@v0` to build and publish release assets
+- Release packaging must include the full runtime for bundled document Skills. If `pdf`, `docx`, and `xlsx` Skills are bundled, the installers must also include the Python/Pyodide sandbox runtime, `python_stdlib.zip`, and local wheels for common packages such as `numpy`, `pandas`, `matplotlib`, `scipy`, `sympy`, `scikit-learn`, `statsmodels`, `pillow`, `seaborn`, and `micropip`.
+- `run_python` must prefer packaged local Pyodide resources. CDN package loading may remain as a fallback only; normal document analysis must work from the packaged resources.
+- Before publishing a release, inspect the final DMG / MSI / NSIS artifacts and verify that both `skills/pdf|docx|xlsx` and the Python/Pyodide runtime package files are present inside the installed app resources.
+- Follow `docs/RELEASE_PACKAGING.md` for the exact release flow. Do not publish a release from memory.
 
 ## Security & Configuration Guidelines
 

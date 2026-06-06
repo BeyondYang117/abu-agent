@@ -145,6 +145,8 @@ Releases are built via GitHub Actions (`.github/workflows/release.yml`). Pushing
 
 Manual releases are also supported via `workflow_dispatch`.
 
+Bundled document Skills require their execution runtime in the installer. If `pdf`, `docx`, and `xlsx` Skills are packaged, the release must also package the Python/Pyodide sandbox runtime, `python_stdlib.zip`, and local wheels for common packages such as `numpy`, `pandas`, `matplotlib`, `scipy`, `sympy`, `scikit-learn`, `statsmodels`, `pillow`, `seaborn`, and `micropip`. `run_python` should prefer bundled local Pyodide resources; CDN package loading is only a fallback. Before publishing, inspect the final DMG / MSI / NSIS artifacts and verify that both `skills/pdf|docx|xlsx` and the Python/Pyodide runtime package files are inside the installed app resources. Follow `docs/RELEASE_PACKAGING.md` for the exact flow; do not publish releases from memory.
+
 ## Code Style
 
 - TypeScript + React, ESM (`"type": "module"`).
