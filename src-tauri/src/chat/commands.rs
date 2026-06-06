@@ -905,11 +905,19 @@ async fn complete_assistant_reply(
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
-    let use_auxiliary_vision =
-        should_route_images_through_auxiliary_vision(&settings, last_user_image_paths);
+    let auxiliary_vision_model = auxiliary_vision_model_for_images(
+        &settings,
+        Some(&provider),
+        &conversation.model,
+        last_user_image_paths,
+    );
     let mut auxiliary_tool_records = Vec::new();
-    let auxiliary_vision_result = if use_auxiliary_vision {
-        let mut record = auxiliary_vision_tool_record(&settings, last_user_image_paths.len());
+    let auxiliary_vision_result = if let Some(auxiliary_vision_model) = auxiliary_vision_model {
+        let mut record = auxiliary_vision_tool_record(
+            &settings,
+            &auxiliary_vision_model,
+            last_user_image_paths.len(),
+        );
         let started = Instant::now();
         emit_chat_tool_record(
             app,
@@ -922,6 +930,7 @@ async fn complete_assistant_reply(
             result = analyze_chat_images_with_auxiliary_model(
                 state,
                 &settings,
+                &auxiliary_vision_model,
                 last_user_api_content,
                 last_user_image_paths,
                 retry_attempts,
@@ -1468,6 +1477,11 @@ fn context_window_from_model_info(info: Option<&ModelInfo>) -> Option<usize> {
         .filter(|tokens| *tokens > 0)
 }
 
+fn model_vision_from_model_info(info: Option<&ModelInfo>) -> Option<bool> {
+    info.and_then(|info| info.capabilities.as_ref())
+        .and_then(|capabilities| capabilities.vision)
+}
+
 fn model_database_entries() -> Option<&'static serde_json::Map<String, Value>> {
     static MODEL_DATABASE: OnceLock<Value> = OnceLock::new();
     MODEL_DATABASE
@@ -1478,7 +1492,7 @@ fn model_database_entries() -> Option<&'static serde_json::Map<String, Value>> {
         .as_object()
 }
 
-fn model_database_context_window(model: &str) -> Option<usize> {
+fn model_database_entry(model: &str) -> Option<&'static Value> {
     let model = model.trim();
     if model.is_empty() {
         return None;
@@ -1488,8 +1502,8 @@ fn model_database_context_window(model: &str) -> Option<usize> {
     let name = model.to_ascii_lowercase();
     let stripped = name.rsplit('/').next().unwrap_or(&name);
 
-    if let Some(tokens) = context_window_from_database_entry(entries.get(stripped)) {
-        return Some(tokens);
+    if let Some(entry) = entries.get(stripped) {
+        return Some(entry);
     }
 
     entries
@@ -1498,10 +1512,10 @@ fn model_database_context_window(model: &str) -> Option<usize> {
             if key == "_meta" || !stripped.starts_with(key) || key.len() >= stripped.len() {
                 return None;
             }
-            context_window_from_database_entry(Some(entry)).map(|tokens| (key.len(), tokens))
+            Some((key.len(), entry))
         })
         .max_by_key(|(key_len, _)| *key_len)
-        .map(|(_, tokens)| tokens)
+        .map(|(_, entry)| entry)
         .or_else(|| {
             entries
                 .iter()
@@ -1509,12 +1523,15 @@ fn model_database_context_window(model: &str) -> Option<usize> {
                     if key == "_meta" || key == stripped || !stripped.contains(key) {
                         return None;
                     }
-                    context_window_from_database_entry(Some(entry))
-                        .map(|tokens| (key.len(), tokens))
+                    Some((key.len(), entry))
                 })
                 .max_by_key(|(key_len, _)| *key_len)
-                .map(|(_, tokens)| tokens)
+                .map(|(_, entry)| entry)
         })
+}
+
+fn model_database_context_window(model: &str) -> Option<usize> {
+    context_window_from_database_entry(model_database_entry(model))
 }
 
 fn context_window_from_database_entry(entry: Option<&Value>) -> Option<usize> {
@@ -1523,6 +1540,19 @@ fn context_window_from_database_entry(entry: Option<&Value>) -> Option<usize> {
         .and_then(Value::as_u64)
         .and_then(|tokens| usize::try_from(tokens).ok())
         .filter(|tokens| *tokens > 0)
+}
+
+fn model_database_vision(model: &str) -> Option<bool> {
+    model_database_entry(model)?
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("vision"))
+        .and_then(Value::as_bool)
+}
+
+fn model_supports_vision(provider: Option<&ModelProvider>, model: &str) -> Option<bool> {
+    let provider = provider?;
+    model_vision_from_model_info(provider.model_overrides.get(model))
+        .or_else(|| model_database_vision(model))
 }
 
 fn context_window_for_model(provider: Option<&ModelProvider>, model: &str) -> (usize, bool) {
@@ -1900,11 +1930,79 @@ fn estimate_messages_segments(
     agent_prepare::merge_context_segments(segments)
 }
 
-fn should_route_images_through_auxiliary_vision(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuxiliaryVisionModel {
+    provider_id: String,
+    provider_name: String,
+    model: String,
+}
+
+fn auxiliary_vision_model_for_images(
     settings: &Settings,
+    main_provider: Option<&ModelProvider>,
+    main_model: &str,
     image_paths: &[PathBuf],
-) -> bool {
-    !image_paths.is_empty() && settings.has_explicit_vision_model()
+) -> Option<AuxiliaryVisionModel> {
+    if image_paths.is_empty() {
+        return None;
+    }
+
+    if settings.has_explicit_vision_model() {
+        let (provider_id, model) = settings.effective_vision_model();
+        return auxiliary_vision_model_from_selection(settings, &provider_id, &model);
+    }
+
+    if model_supports_vision(main_provider, main_model) != Some(false) {
+        return None;
+    }
+
+    settings
+        .providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .flat_map(|provider| {
+            provider
+                .enabled_models
+                .iter()
+                .map(move |model| (provider, model))
+        })
+        .find_map(|(provider, model)| {
+            if provider.id
+                == main_provider
+                    .map(|provider| provider.id.as_str())
+                    .unwrap_or("")
+                && model == main_model
+            {
+                return None;
+            }
+            if model_supports_vision(Some(provider), model) == Some(true) {
+                Some(AuxiliaryVisionModel {
+                    provider_id: provider.id.clone(),
+                    provider_name: provider.name.clone(),
+                    model: model.clone(),
+                })
+            } else {
+                None
+            }
+        })
+}
+
+fn auxiliary_vision_model_from_selection(
+    settings: &Settings,
+    provider_id: &str,
+    model: &str,
+) -> Option<AuxiliaryVisionModel> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    settings
+        .get_provider(provider_id)
+        .map(|provider| AuxiliaryVisionModel {
+            provider_id: provider.id.clone(),
+            provider_name: provider.name.clone(),
+            model: model.to_string(),
+        })
 }
 
 async fn compute_context_state(
@@ -1963,8 +2061,13 @@ async fn compute_context_state(
         tools_available,
     );
 
-    let route_images_through_auxiliary_vision =
-        should_route_images_through_auxiliary_vision(&settings, last_user_image_paths);
+    let route_images_through_auxiliary_vision = auxiliary_vision_model_for_images(
+        &settings,
+        provider.as_ref(),
+        &conversation.model,
+        last_user_image_paths,
+    )
+    .is_some();
     let empty_image_paths: &[PathBuf] = &[];
     let main_image_paths = if route_images_through_auxiliary_vision {
         empty_image_paths
@@ -2398,23 +2501,27 @@ struct AuxiliaryVisionResult {
     content: String,
 }
 
-fn auxiliary_vision_tool_record(settings: &Settings, image_count: usize) -> ToolCallRecord {
-    let (provider_id, model) = settings.effective_vision_model();
-    let provider_name = settings
-        .get_provider(&provider_id)
-        .map(|provider| provider.name.clone())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| provider_id.clone());
+fn auxiliary_vision_tool_record(
+    settings: &Settings,
+    auxiliary_model: &AuxiliaryVisionModel,
+    image_count: usize,
+) -> ToolCallRecord {
+    let provider_name = if auxiliary_model.provider_name.trim().is_empty() {
+        auxiliary_model.provider_id.clone()
+    } else {
+        auxiliary_model.provider_name.clone()
+    };
     ToolCallRecord {
         id: format!("call_mixer_vision_{}", Uuid::new_v4()),
         name: "mixer_vision".to_string(),
         source: "mixer".to_string(),
-        server_id: Some(format!("{provider_name} / {model}")),
+        server_id: Some(format!("{provider_name} / {}", auxiliary_model.model)),
         arguments: serde_json::json!({
             "task": "vision",
             "provider": provider_name,
-            "model": model,
+            "model": auxiliary_model.model,
             "images": image_count,
+            "auto": !settings.has_explicit_vision_model(),
         })
         .to_string(),
         status: ToolCallStatus::Running,
@@ -2446,6 +2553,7 @@ fn finish_auxiliary_vision_tool_record(
 async fn analyze_chat_images_with_auxiliary_model(
     state: &State<'_, AppState>,
     settings: &Settings,
+    auxiliary_model: &AuxiliaryVisionModel,
     last_user_api_content: Option<&str>,
     image_paths: &[PathBuf],
     retry_attempts: usize,
@@ -2454,9 +2562,8 @@ async fn analyze_chat_images_with_auxiliary_model(
     if image_paths.is_empty() {
         return Err("No image attachments to analyze".to_string());
     }
-    let (provider_id, model) = settings.effective_vision_model();
     let provider = settings
-        .get_provider(&provider_id)
+        .get_provider(&auxiliary_model.provider_id)
         .ok_or_else(|| "Vision auxiliary provider not found".to_string())?
         .clone();
     if provider.api_format_kind() == ProviderApiFormat::AppleLocal {
@@ -2468,7 +2575,7 @@ async fn analyze_chat_images_with_auxiliary_model(
     if provider.api_keys.is_empty() {
         return Err(format_chat_missing_api_key_error(&provider.name));
     }
-    if model.trim().is_empty() {
+    if auxiliary_model.model.trim().is_empty() {
         return Err(chat_missing_model_error());
     }
 
@@ -2493,7 +2600,7 @@ async fn analyze_chat_images_with_auxiliary_model(
     let message = call_chat_completion_message(
         state,
         &provider,
-        &model,
+        &auxiliary_model.model,
         messages,
         None,
         retry_attempts,
@@ -2507,7 +2614,7 @@ async fn analyze_chat_images_with_auxiliary_model(
     }
     Ok(AuxiliaryVisionResult {
         provider_name: provider.name,
-        model,
+        model: auxiliary_model.model.clone(),
         content,
     })
 }
@@ -3385,6 +3492,22 @@ mod tests {
         }
     }
 
+    fn test_provider(id: &str, name: &str, enabled_models: Vec<&str>) -> ModelProvider {
+        ModelProvider {
+            id: id.to_string(),
+            name: name.to_string(),
+            api_keys: vec!["sk-test".to_string()],
+            api_key_legacy: None,
+            base_url: "https://api.example.com/v1".to_string(),
+            available_models: Vec::new(),
+            enabled_models: enabled_models.into_iter().map(str::to_string).collect(),
+            supports_tools: true,
+            enabled: true,
+            api_format: "openai_chat".to_string(),
+            model_overrides: HashMap::new(),
+        }
+    }
+
     #[test]
     fn attachment_type_detects_images_case_insensitively() {
         assert_eq!(attachment_type_for_name("screenshot.PNG"), "image");
@@ -3434,6 +3557,43 @@ mod tests {
         assert_eq!(
             context_window_for_model(None, "custom-deepseek-model"),
             (128_000, true)
+        );
+    }
+
+    #[test]
+    fn auto_auxiliary_vision_picks_enabled_vision_model_when_main_is_text_only() {
+        let mut settings = Settings::default();
+        let main_provider = test_provider("main", "Main", vec!["deepseek-v4-flash"]);
+        let vision_provider = test_provider("vision", "Vision", vec!["gpt-4o"]);
+        settings.providers = vec![main_provider.clone(), vision_provider];
+
+        let selected = auxiliary_vision_model_for_images(
+            &settings,
+            Some(&main_provider),
+            "deepseek-v4-flash",
+            &[PathBuf::from("image.png")],
+        )
+        .expect("auto should select a vision-capable model");
+
+        assert_eq!(selected.provider_id, "vision");
+        assert_eq!(selected.model, "gpt-4o");
+    }
+
+    #[test]
+    fn auto_auxiliary_vision_keeps_images_on_main_when_main_supports_vision() {
+        let mut settings = Settings::default();
+        let main_provider = test_provider("main", "Main", vec!["gpt-4o"]);
+        let vision_provider = test_provider("vision", "Vision", vec!["gemini-2.0-flash"]);
+        settings.providers = vec![main_provider.clone(), vision_provider];
+
+        assert_eq!(
+            auxiliary_vision_model_for_images(
+                &settings,
+                Some(&main_provider),
+                "gpt-4o",
+                &[PathBuf::from("image.png")],
+            ),
+            None
         );
     }
 
