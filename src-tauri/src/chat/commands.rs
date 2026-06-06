@@ -545,6 +545,7 @@ pub(crate) fn chat_python_complete(
 
 const MAX_ATTACHMENT_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_PASTED_IMAGE_BYTES: usize = 12 * 1024 * 1024;
+const MAX_PASTED_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 const FALLBACK_CONTEXT_WINDOW_TOKENS: usize = 200_000;
 const AUTO_COMPRESS_RATIO: f32 = 0.85;
 const CONTEXT_BLOCK_RATIO: f32 = 1.0;
@@ -617,18 +618,114 @@ pub(crate) fn chat_save_pasted_image(
         }));
     }
 
-    let dir = std::env::temp_dir().join("kivio-chat-paste");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建临时附件目录失败: {e}"))?;
-    let file_name = format!("paste-{}-{}", Uuid::new_v4(), safe_name);
-    let path = dir.join(file_name);
-    fs::write(&path, bytes).map_err(|e| format!("保存剪贴板图片失败: {e}"))?;
+    let (path, saved_name) =
+        write_pasted_attachment_bytes(&safe_name, &bytes).map_err(|e| format!("保存剪贴板图片失败: {e}"))?;
 
     Ok(serde_json::json!({
         "success": true,
         "path": path.to_string_lossy(),
-        "name": safe_name,
+        "name": saved_name,
         "mimeType": mime,
     }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_save_pasted_attachment(
+    name: String,
+    data_base64: String,
+) -> Result<serde_json::Value, String> {
+    let safe_name = sanitize_attachment_name(&name);
+    if !is_supported_attachment_extension(&safe_name) {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "不支持的附件类型",
+        }));
+    }
+
+    let payload = data_base64.trim();
+    if payload.is_empty() {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "剪贴板附件为空",
+        }));
+    }
+
+    let bytes = match general_purpose::STANDARD.decode(payload) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Ok(serde_json::json!({
+                "success": false,
+                "error": format!("解析剪贴板附件失败: {err}"),
+            }));
+        }
+    };
+    if bytes.len() > MAX_PASTED_ATTACHMENT_BYTES {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": "剪贴板附件过大，无法添加",
+        }));
+    }
+
+    let (path, saved_name) = write_pasted_attachment_bytes(&safe_name, &bytes)?;
+    Ok(serde_json::json!({
+        "success": true,
+        "path": path.to_string_lossy(),
+        "name": saved_name,
+    }))
+}
+
+/// 读取系统剪贴板中的文件路径（Finder / 资源管理器复制文件）。
+#[tauri::command]
+pub(crate) fn chat_read_clipboard_files() -> Result<serde_json::Value, String> {
+    use arboard::Clipboard;
+
+    let mut clipboard = Clipboard::new().map_err(|e| format!("读取剪贴板失败: {e}"))?;
+    let paths = match clipboard.get().file_list() {
+        Ok(paths) => paths,
+        Err(_) => {
+            return Ok(serde_json::json!({
+                "success": true,
+                "files": [],
+            }));
+        }
+    };
+
+    let files: Vec<Value> = paths
+        .into_iter()
+        .filter(|path| path.is_file())
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().to_string();
+            if !is_supported_attachment_extension(&name) {
+                return None;
+            }
+            Some(serde_json::json!({
+                "path": path.to_string_lossy(),
+                "name": name,
+            }))
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "success": true,
+        "files": files,
+    }))
+}
+
+fn write_pasted_attachment_bytes(name: &str, bytes: &[u8]) -> Result<(PathBuf, String), String> {
+    let dir = std::env::temp_dir().join("kivio-chat-paste");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建临时附件目录失败: {e}"))?;
+    let file_name = format!("paste-{}-{}", Uuid::new_v4(), name);
+    let path = dir.join(&file_name);
+    fs::write(&path, bytes).map_err(|e| format!("保存剪贴板附件失败: {e}"))?;
+    Ok((path, name.to_string()))
+}
+
+fn is_supported_attachment_extension(name: &str) -> bool {
+    matches!(
+        attachment_extension(name).as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "heif"
+            | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "xlsm" | "csv" | "tsv"
+    )
 }
 
 fn resolve_attachment_file_path(
@@ -3884,6 +3981,13 @@ mod tests {
         assert_eq!(attachment_type_for_name("scan.tif"), "image");
         assert_eq!(attachment_type_for_name("photo.heic"), "image");
         assert_eq!(attachment_type_for_name("notes.pdf"), "file");
+    }
+
+    #[test]
+    fn supported_attachment_extensions_include_documents() {
+        assert!(is_supported_attachment_extension("notes.pdf"));
+        assert!(is_supported_attachment_extension("sheet.xlsx"));
+        assert!(!is_supported_attachment_extension("archive.zip"));
     }
 
     #[test]

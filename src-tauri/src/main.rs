@@ -290,6 +290,8 @@ fn main() {
             chat::commands::chat_read_attachment,
             chat::commands::chat_open_attachment,
             chat::commands::chat_save_pasted_image,
+            chat::commands::chat_save_pasted_attachment,
+            chat::commands::chat_read_clipboard_files,
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
             chat::commands::chat_update_message,

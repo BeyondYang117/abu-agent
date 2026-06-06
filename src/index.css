@@ -2012,6 +2012,18 @@ body {
   width: 100%;
 }
 .kv-path-row .kv-input { flex: 1; }
+
+.kv-provider-endpoint-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+.kv-provider-endpoint-row .kv-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .kv-field {
   display: block;
   margin-bottom: 8px;

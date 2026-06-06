@@ -221,6 +221,12 @@ export type ChatPastedImageResult = {
   error?: string | null
 }
 
+export type ChatClipboardFilesResult = {
+  success: boolean
+  files?: Array<{ path: string; name: string }>
+  error?: string | null
+}
+
 export function defaultNativeTools(): ChatNativeToolsConfig {
   return {
     webSearch: false,
@@ -548,7 +554,7 @@ function normalizeChatMemory(config?: Partial<ChatMemoryConfig> | null): ChatMem
   const current = config ?? {}
   return {
     enabled: current.enabled ?? false,
-    toolWriteConfirm: current.toolWriteConfirm ?? true,
+    toolWriteConfirm: current.toolWriteConfirm ?? false,
   }
 }
 
@@ -851,6 +857,10 @@ export const api = {
     ),
   chatSavePastedImage: (name: string, mimeType: string, dataBase64: string) =>
     invoke<ChatPastedImageResult>('chat_save_pasted_image', { name, mimeType, dataBase64 }),
+  chatSavePastedAttachment: (name: string, dataBase64: string) =>
+    invoke<ChatPastedImageResult>('chat_save_pasted_attachment', { name, dataBase64 }),
+  chatReadClipboardFiles: () =>
+    invoke<ChatClipboardFilesResult>('chat_read_clipboard_files'),
   chatCancelStream: (conversationId: string) =>
     invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>

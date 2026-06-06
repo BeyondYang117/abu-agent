@@ -225,7 +225,6 @@ pub async fn list_enabled_tool_defs(state: &AppState) -> Result<Vec<ChatToolDefi
         &settings.chat_tools.native_tools,
         web_search_configured(&settings),
         crate::settings::chat_memory_tools_enabled(&settings),
-        settings.chat_memory.tool_write_confirm,
     );
     if let Some((provider_id, model)) = settings.image_generation_model() {
         let mut tool = mixer_generate_image_tool();

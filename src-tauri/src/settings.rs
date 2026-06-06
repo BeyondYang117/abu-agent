@@ -501,7 +501,8 @@ impl Default for ChatConfig {
 pub struct ChatMemoryConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
-    #[serde(default = "default_true")]
+    /// 已废弃：memory 工具现均无需用户确认；保留字段仅作旧配置兼容。
+    #[serde(default = "default_false")]
     pub tool_write_confirm: bool,
 }
 
@@ -509,7 +510,7 @@ impl Default for ChatMemoryConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            tool_write_confirm: true,
+            tool_write_confirm: false,
         }
     }
 }
@@ -1073,6 +1074,8 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     for provider in &mut settings.providers {
         if provider.base_url == APPLE_INTELLIGENCE_BASE_URL {
             provider.supports_tools = false;
+        } else {
+            provider.supports_tools = true;
         }
         provider.api_format = provider.api_format_kind().as_str().to_string();
         if let Some(legacy) = provider.api_key_legacy.take() {
@@ -2059,6 +2062,33 @@ mod tests {
                 .find(|provider| provider.id == "apple")
                 .map(|provider| provider.supports_tools),
             Some(false),
+        );
+    }
+
+    #[test]
+    fn sanitize_settings_forces_cloud_provider_tools_on() {
+        let mut s = Settings::default();
+        s.providers.push(ModelProvider {
+            id: "cloud".to_string(),
+            name: "Cloud".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://api.example.com/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["gpt-4o".to_string()],
+            supports_tools: false,
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+        });
+
+        let s = sanitize_settings(s);
+        assert_eq!(
+            s.providers
+                .iter()
+                .find(|provider| provider.id == "cloud")
+                .map(|provider| provider.supports_tools),
+            Some(true),
         );
     }
 

@@ -353,7 +353,7 @@ pub fn native_memory_read_tool() -> ChatToolDefinition {
     }
 }
 
-pub fn native_memory_modify_tool(sensitive: bool) -> ChatToolDefinition {
+pub fn native_memory_modify_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_modify".to_string(),
         name: "memory_modify".to_string(),
@@ -394,7 +394,7 @@ pub fn native_memory_modify_tool(sensitive: bool) -> ChatToolDefinition {
             },
             "required": ["layer", "operation"]
         }),
-        sensitive,
+        sensitive: false,
     }
 }
 
@@ -460,7 +460,6 @@ pub fn list_native_builtin_tool_defs(
     native: &ChatNativeToolsConfig,
     web_search_configured: bool,
     memory_enabled: bool,
-    memory_modify_sensitive: bool,
 ) -> Vec<ChatToolDefinition> {
     let mut tools = Vec::new();
     if native.web_search && web_search_configured {
@@ -486,7 +485,7 @@ pub fn list_native_builtin_tool_defs(
     }
     if memory_enabled {
         tools.push(native_memory_read_tool());
-        tools.push(native_memory_modify_tool(memory_modify_sensitive));
+        tools.push(native_memory_modify_tool());
     }
     tools
 }
@@ -560,6 +559,8 @@ mod tests {
         assert!(!native_read_file_tool().sensitive);
         assert!(!native_web_fetch_tool().sensitive);
         assert!(!native_run_python_tool().sensitive);
+        assert!(!native_memory_read_tool().sensitive);
+        assert!(!native_memory_modify_tool().sensitive);
         assert!(native_write_file_tool().sensitive);
         assert!(native_edit_file_tool().sensitive);
         assert!(native_run_command_tool().sensitive);

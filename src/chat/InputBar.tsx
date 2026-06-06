@@ -180,39 +180,87 @@ export function InputBar({
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (disabled || !isTauriRuntime()) return
-    const imageFiles = Array.from(e.clipboardData.items)
-      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => Boolean(file))
 
-    if (imageFiles.length === 0) return
+    const clipboardFiles = Array.from(e.clipboardData.files)
+    const nativePaths: string[] = []
+    try {
+      const native = await api.chatReadClipboardFiles()
+      if (native.success && native.files?.length) {
+        nativePaths.push(...native.files.map((file) => file.path))
+      }
+    } catch (err) {
+      console.error('Failed to read clipboard files:', err)
+    }
+
+    const hasNativeFiles = nativePaths.length > 0
+    const hasClipboardFiles = clipboardFiles.some((file) => {
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+      return SUPPORTED_ATTACHMENT_EXTENSIONS.includes(ext)
+    })
+
+    if (!hasNativeFiles && !hasClipboardFiles) return
 
     e.preventDefault()
     setAttachmentError('')
 
     try {
-      const pastedAttachments = await Promise.all(
-        imageFiles.map(async (file, index) => {
-          const ext = imageExtensionForMime(file.type)
-          const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${ext}`
+      const pastedAttachments: PendingAttachment[] = []
+
+      if (hasNativeFiles) {
+        pastedAttachments.push(...attachmentsFromPaths(nativePaths))
+      } else for (const [index, file] of clipboardFiles.entries()) {
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+        if (!SUPPORTED_ATTACHMENT_EXTENSIONS.includes(ext)) continue
+
+        if (file.type.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext)) {
+          const imageExt = file.type.startsWith('image/')
+            ? imageExtensionForMime(file.type)
+            : ext
+          const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${imageExt}`
           const dataBase64 = await readFileAsBase64(file)
-          const result = await api.chatSavePastedImage(name, file.type || `image/${ext}`, dataBase64)
+          const result = await api.chatSavePastedImage(
+            name,
+            file.type || `image/${imageExt}`,
+            dataBase64,
+          )
           if (!result.success || !result.path || !result.name) {
             throw new Error(result.error || '粘贴图片失败')
           }
-          return {
+          pastedAttachments.push({
             id: `pending-att-${crypto.randomUUID()}`,
-            type: 'image' as const,
+            type: 'image',
             name: result.name,
             path: result.path,
-          }
-        }),
-      )
-      addAttachments(pastedAttachments, { imagesOnly: true })
+          })
+          continue
+        }
+
+        if (file.size <= 0) continue
+
+        const name = file.name || `pasted-file-${Date.now()}-${index + 1}.${ext}`
+        const dataBase64 = await readFileAsBase64(file)
+        const result = await api.chatSavePastedAttachment(name, dataBase64)
+        if (!result.success || !result.path || !result.name) {
+          throw new Error(result.error || '粘贴附件失败')
+        }
+        pastedAttachments.push({
+          id: `pending-att-${crypto.randomUUID()}`,
+          type: 'file',
+          name: result.name,
+          path: result.path,
+        })
+      }
+
+      if (pastedAttachments.length === 0) {
+        setAttachmentError(`仅支持${SUPPORTED_ATTACHMENT_LABEL}`)
+        return
+      }
+
+      addAttachments(pastedAttachments)
     } catch (err) {
-      console.error('Failed to paste chat image:', err)
+      console.error('Failed to paste chat attachment:', err)
       setAttachmentError(
-        typeof err === 'string' ? err : err instanceof Error ? err.message : '粘贴图片失败',
+        typeof err === 'string' ? err : err instanceof Error ? err.message : '粘贴附件失败',
       )
     }
   }

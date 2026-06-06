@@ -190,7 +190,7 @@ function defaultChatConfig(): NonNullable<SettingsData['chat']> {
 function defaultChatMemory(): ChatMemoryConfig {
   return {
     enabled: false,
-    toolWriteConfirm: true,
+    toolWriteConfirm: false,
   }
 }
 
@@ -2581,17 +2581,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onChange={(enabled) => updateChatMemory({ enabled })}
                     />
                   </SettingRow>
-                  <SettingRow
-                    label={lang === 'zh' ? '写入确认' : 'Confirm writes'}
-                    description={lang === 'zh'
-                      ? 'memory_modify 修改 L1/L2 前走敏感工具确认。'
-                      : 'Require sensitive-tool approval before memory_modify writes L1/L2.'}
-                  >
-                    <Toggle
-                      checked={chatMemory.toolWriteConfirm !== false}
-                      onChange={(toolWriteConfirm) => updateChatMemory({ toolWriteConfirm })}
-                    />
-                  </SettingRow>
                   <SettingRow label={lang === 'zh' ? '记忆文件夹' : 'Memory folder'} stack>
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <button
@@ -3556,13 +3545,25 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         <SettingsGroup title={lang === 'zh' ? '配置' : 'Configuration'}>
                           {!isOnDevice && (
                             <>
-                              <FieldBlock label={t.baseUrl} description={lang === 'zh' ? 'OpenAI 兼容接口地址。' : 'OpenAI-compatible endpoint.'}>
-                                <Input
-                                  value={provider.baseUrl}
-                                  onChange={(v) => updateProvider(provider.id, { baseUrl: v })}
-                                  placeholder="https://api.openai.com/v1"
-                                  mono
-                                />
+                              <FieldBlock label={t.baseUrl}>
+                                <div className="kv-provider-endpoint-row">
+                                  <Input
+                                    className="min-w-0 flex-1"
+                                    value={provider.baseUrl}
+                                    onChange={(v) => updateProvider(provider.id, { baseUrl: v })}
+                                    placeholder="https://api.openai.com/v1"
+                                    mono
+                                  />
+                                  <Select
+                                    className="w-[11.5rem] shrink-0"
+                                    value={normalizeProviderApiFormat(provider.apiFormat)}
+                                    onChange={(apiFormat) => updateProvider(provider.id, { apiFormat })}
+                                    options={[
+                                      { value: 'openai_chat', label: 'OpenAI Chat' },
+                                      { value: 'anthropic_messages', label: 'Anthropic' },
+                                    ]}
+                                  />
+                                </div>
                               </FieldBlock>
 
                               <FieldBlock label={t.apiKey} description={t.apiKeysHint}>
@@ -3646,30 +3647,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                 </div>
                               </div>
 
-                              <SettingRow
-                                label={lang === 'zh' ? '支持工具调用' : 'Supports tools'}
-                                description={lang === 'zh' ? '关闭后，Chat 不会向该供应商发送 OpenAI tools；Skill 仍可正常使用。' : 'When off, Chat will not send OpenAI tools to this provider; Skills still work.'}
-                              >
-                                <Toggle
-                                  checked={provider.supportsTools !== false}
-                                  onChange={(supportsTools) => updateProvider(provider.id, { supportsTools })}
-                                />
-                              </SettingRow>
-
-                              <SettingRow
-                                label={lang === 'zh' ? 'API 格式' : 'API format'}
-                                description={lang === 'zh' ? '选择该供应商使用的 API 协议格式。代理/中转服务可能需要 Anthropic 格式。' : 'Select the API protocol format for this provider. Proxy services may require Anthropic format.'}
-                              >
-                                <Select
-                                  value={normalizeProviderApiFormat(provider.apiFormat)}
-                                  onChange={(apiFormat) => updateProvider(provider.id, { apiFormat })}
-                                  options={[
-                                    { value: 'openai_chat', label: 'OpenAI Chat API' },
-                                    { value: 'anthropic_messages', label: 'Anthropic Messages API' },
-                                    { value: 'apple_local', label: 'Apple Local' },
-                                  ]}
-                                />
-                              </SettingRow>
                             </>
                           )}
 
