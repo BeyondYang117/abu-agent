@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Folder,
+  ChevronLeft,
   FolderPlus,
   LayoutGrid,
   MoreHorizontal,
@@ -309,13 +309,6 @@ export const Sidebar = memo(function Sidebar({
           iconMotion="group-hover:-translate-y-px group-hover:scale-110"
         />
         <NavRow
-          icon={<Search size={17} strokeWidth={1.75} />}
-          label="搜索"
-          shortcut={`${modLabel}K`}
-          onClick={() => onSearchOpenChange(!searchOpen)}
-          iconMotion="group-hover:rotate-[10deg] group-hover:scale-110"
-        />
-        <NavRow
           icon={<LayoutGrid size={17} strokeWidth={1.75} />}
           label="助手中心"
           active={assistantCenterActive}
@@ -334,83 +327,95 @@ export const Sidebar = memo(function Sidebar({
       <div className="mx-3 border-t border-neutral-200/90 dark:border-neutral-800" />
 
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto" data-tauri-drag-region="false">
-        <div className="px-2 pt-2">
-          <div className="px-3 py-2 text-[13px] font-medium text-neutral-500 dark:text-neutral-400">
-            项目
-          </div>
-          <button
-            type="button"
-            onClick={() => onSelectProject(null)}
-            className={`chat-motion-row flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
-              !selectedProject
-                ? 'bg-black/[0.06] font-medium text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-100'
-                : 'text-neutral-700 hover:bg-black/[0.04] dark:text-neutral-300 dark:hover:bg-white/[0.06]'
-            }`}
-          >
-            <Folder size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
-            <span className="min-w-0 flex-1 truncate">全部聊天</span>
-          </button>
-
-          <div className="mt-1 space-y-0.5">
-            {projects.map((project, index) => {
-              const active = selectedProject?.id === project.id
-              return (
-                <div
-                  key={project.id}
-                  className={`chat-motion-row group flex min-w-0 items-center rounded-lg ${
-                    active
-                      ? 'bg-black/[0.06] dark:bg-white/[0.1]'
-                      : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
-                  }`}
-                  style={{
-                    ['--chat-motion-delay' as string]: `${Math.min(index + 1, 12) * 18}ms`,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onSelectProject(project)}
-                    className={`min-w-0 flex-1 truncate px-3 py-2 text-left text-[13px] ${
-                      active
-                        ? 'font-medium text-neutral-900 dark:text-neutral-100'
-                        : 'text-neutral-700 dark:text-neutral-300'
-                    }`}
-                    title={project.name}
-                  >
-                    {project.name}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      openProjectMenu(project.id, e.currentTarget)
-                    }}
-                    className={`mr-1 shrink-0 rounded-md p-1 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
-                      projectMenuState?.projectId === project.id
-                        ? 'opacity-100'
-                        : 'opacity-0 group-hover:opacity-100'
-                    }`}
-                    aria-label="项目操作"
-                  >
-                    <MoreHorizontal size={16} />
-                  </button>
-                </div>
-              )
-            })}
-            {projects.length === 0 && (
-              <div className="px-3 py-2 text-[13px] text-neutral-400 dark:text-neutral-500">
-                暂无项目
+        {projects.length > 0 && (
+          <>
+            <div className="px-2 pt-2 pb-1">
+              <div className="px-3 py-1 text-[12px] font-medium text-neutral-400 dark:text-neutral-500">
+                项目
               </div>
-            )}
-          </div>
-        </div>
+              <div className="space-y-0.5">
+                {projects.map((project, index) => {
+                  const active = selectedProject?.id === project.id
+                  return (
+                    <div
+                      key={project.id}
+                      className={`chat-motion-row group flex min-w-0 items-center rounded-lg ${
+                        active
+                          ? 'bg-black/[0.06] dark:bg-white/[0.1]'
+                          : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
+                      }`}
+                      style={{
+                        ['--chat-motion-delay' as string]: `${Math.min(index, 12) * 18}ms`,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSelectProject(project)}
+                        className={`min-w-0 flex-1 truncate px-3 py-1.5 text-left text-[13px] ${
+                          active
+                            ? 'font-medium text-neutral-900 dark:text-neutral-100'
+                            : 'text-neutral-700 dark:text-neutral-300'
+                        }`}
+                        title={project.name}
+                      >
+                        {project.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openProjectMenu(project.id, e.currentTarget)
+                        }}
+                        className={`mr-1 shrink-0 rounded-md p-1 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                          projectMenuState?.projectId === project.id
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                        aria-label="项目操作"
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="mx-3 mt-1 border-t border-neutral-200/90 dark:border-neutral-800" />
+          </>
+        )}
 
-        <div className="mx-3 mt-3 border-t border-neutral-200/90 dark:border-neutral-800" />
-
-        <div className="flex min-h-0 flex-col pt-2">
+        <div className={`flex min-h-0 flex-col ${projects.length > 0 ? 'pt-2' : 'pt-1'}`}>
           <div className="flex min-w-0 items-center rounded-lg px-2 pb-1">
-            <span className="min-w-0 flex-1 px-3 py-2 text-[13px] font-medium text-neutral-500 dark:text-neutral-400">
-              {selectedProject ? selectedProject.name : '聊天'}
-            </span>
+            <div className="flex min-w-0 flex-1 items-center gap-0.5 px-3 py-2">
+              {selectedProject && (
+                <button
+                  type="button"
+                  onClick={() => onSelectProject(null)}
+                  className="-ml-1 shrink-0 rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                  title="返回最近"
+                  aria-label="返回最近"
+                >
+                  <ChevronLeft size={15} strokeWidth={2} />
+                </button>
+              )}
+              <span className="min-w-0 truncate text-[13px] font-medium text-neutral-500 dark:text-neutral-400">
+                {selectedProject ? selectedProject.name : '最近'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSearchOpenChange(!searchOpen)}
+              className={`shrink-0 rounded-md p-1 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                searchOpen
+                  ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200'
+                  : ''
+              }`}
+              title={`搜索 (${modLabel}K)`}
+              aria-label="搜索对话"
+              aria-pressed={searchOpen}
+            >
+              <Search size={16} strokeWidth={1.75} />
+            </button>
             <button
               ref={sectionMenuButtonRef}
               type="button"
@@ -420,7 +425,7 @@ export const Sidebar = memo(function Sidebar({
                   ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200'
                   : ''
               }`}
-              aria-label="聊天列表操作"
+              aria-label="最近列表操作"
               aria-haspopup="menu"
               aria-expanded={sectionMenuAnchor !== null}
             >
