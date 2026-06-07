@@ -306,8 +306,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const streamStartedAtRef = useRef<number | null>(null)
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
-  const newConversationRequestRef = useRef<Promise<Conversation> | null>(null)
-  const reusableBlankConversationRef = useRef<Conversation | null>(null)
   const settingsRef = useRef<SettingsShellHandle>(null)
   const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
 
@@ -353,12 +351,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const applyConversation = useCallback((conversation: Conversation | null) => {
     setCurrentConversation(conversation)
     setContextState(conversation?.context_state ?? conversation?.contextState ?? null)
-    reusableBlankConversationRef.current =
-      conversation
-      && conversation.messages.length === 0
-      && !(conversation.assistant_id ?? conversation.assistantId)
-        ? conversation
-        : null
   }, [])
 
   const patchContextState = useCallback((nextState: ConversationContextState) => {
@@ -488,15 +480,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     [effectiveSkill],
   )
 
-  const canReuseCurrentBlankConversation = useCallback(() => {
-    const candidate = currentConversation ?? reusableBlankConversationRef.current
-    if (!candidate) return false
-    if (candidate.messages.length > 0) return false
-    if (candidate.assistant_id ?? candidate.assistantId) return false
-    if (!conversationUsesModel(candidate, activeProviderId, activeModel)) return false
-    if ((candidate.folder ?? '') !== (selectedProject?.name ?? '')) return false
-    return true
-  }, [activeModel, activeProviderId, currentConversation, selectedProject?.name])
   const currentAssistantSnapshot =
     currentConversation?.assistant_snapshot ?? currentConversation?.assistantSnapshot ?? null
   const currentAssistantId =
@@ -1182,53 +1165,24 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleNewConversation = useCallback(async () => {
     setLastAssistantStreamStats(null)
-    if (canReuseCurrentBlankConversation()) {
-      const conversation = currentConversation ?? reusableBlankConversationRef.current
-      if (!conversation) return
-      const conversationId = conversation.id
-      currentConversationIdRef.current = conversationId
-      applyConversation(conversation)
-      restoreStreamingPreview(conversationId)
-      syncConversationRoute(conversationId)
-      setStreamError('')
-      return
-    }
-
-    let request = newConversationRequestRef.current
-    try {
-      if (!request) {
-        request = chatApi.createConversation(
-          activeProviderId || undefined,
-          activeModel || undefined,
-          selectedProject?.name,
-        )
-        newConversationRequestRef.current = request
-      }
-
-      const conv = await request
-      currentConversationIdRef.current = conv.id
-      applyConversation(conv)
-      restoreStreamingPreview(conv.id)
-      syncConversationRoute(conv.id)
-      refreshSidebar()
-      setStreamError('')
-    } catch (err) {
-      console.error('Failed to create conversation:', err)
-      setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
-    } finally {
-      if (newConversationRequestRef.current === request) {
-        newConversationRequestRef.current = null
-      }
-    }
+    setDraftProviderId(activeProviderId)
+    setDraftModel(activeModel)
+    currentConversationIdRef.current = null
+    forgetRememberedChatRoute()
+    applyConversation(null)
+    restoreStreamingPreview(null)
+    syncConversationRoute(null)
+    setPendingUserMessage(null)
+    setPendingUserMessageConversationId(null)
+    setContextError('')
+    setContextLoading(false)
+    setContextCompressing(false)
+    setStreamError('')
   }, [
     activeModel,
     activeProviderId,
     applyConversation,
-    canReuseCurrentBlankConversation,
-    currentConversation,
-    refreshSidebar,
     restoreStreamingPreview,
-    selectedProject?.name,
     syncConversationRoute,
   ])
 
@@ -1477,6 +1431,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setPendingUserMessageConversationId(null)
         applyConversation(updatedConv)
         clearStreamSnapshot(conversationId)
+        refreshSidebar()
         if (!locallyCancelledConversationIdRef.current) {
           resetLocalCancellation()
         }
