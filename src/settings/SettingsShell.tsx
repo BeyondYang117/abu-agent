@@ -49,10 +49,19 @@ type MemoryLayerKey = 'l1' | 'l2'
 
 const MEMORY_L1_MAX_BYTES = 5_000
 const CHAT_MAX_OUTPUT_TOKEN_OPTIONS = [2048, 8192, 16384, 32768]
+const CHAT_TOOL_DEFAULT_ROUNDS = 20
+const CHAT_TOOL_MIN_ROUNDS = 1
+const CHAT_TOOL_MAX_ROUNDS = 100
 const textEncoder = new TextEncoder()
 
 function utf8ByteLength(value: string): number {
   return textEncoder.encode(value).length
+}
+
+function clampToolRounds(value: string | number | null | undefined): number {
+  const parsed = Number(value ?? CHAT_TOOL_DEFAULT_ROUNDS)
+  if (!Number.isFinite(parsed)) return CHAT_TOOL_DEFAULT_ROUNDS
+  return Math.min(CHAT_TOOL_MAX_ROUNDS, Math.max(CHAT_TOOL_MIN_ROUNDS, Math.round(parsed)))
 }
 
 export interface SettingsShellProps {
@@ -239,7 +248,7 @@ function defaultChatTools(): ChatToolsConfig {
     skillFallbackMode: 'progressive',
     skillScriptAllowlist: ['python3', 'bash', 'sh', 'node'],
     disabledSkillIds: [],
-    maxToolRounds: null,
+    maxToolRounds: CHAT_TOOL_DEFAULT_ROUNDS,
     toolTimeoutMs: 60_000,
     maxToolOutputChars: null,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
@@ -3064,9 +3073,40 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     />
                   </SettingRow>
                   <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-3">
-                    <FieldBlock label={lang === 'zh' ? '最大工具轮次' : 'Max tool rounds'}>
-                      <div className="kv-input flex h-10 items-center text-[13px] text-neutral-500 dark:text-neutral-400">
-                        {lang === 'zh' ? '无限制' : 'Unlimited'}
+                    <FieldBlock
+                      label={lang === 'zh' ? '最大工具轮次' : 'Max tool rounds'}
+                      description={lang === 'zh'
+                        ? '达到上限后会停止继续调用工具，并基于已有工具结果生成最终回复。'
+                        : 'After the limit, Chat stops calling tools and synthesizes a final answer from existing tool results.'}
+                    >
+                      <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
+                        <Select
+                          value={chatTools.maxToolRounds === null ? 'unlimited' : 'limited'}
+                          onChange={(value) => updateChatTools({
+                            maxToolRounds: value === 'unlimited'
+                              ? null
+                              : clampToolRounds(chatTools.maxToolRounds),
+                          })}
+                          options={[
+                            { value: 'limited', label: lang === 'zh' ? '限制' : 'Limited' },
+                            { value: 'unlimited', label: lang === 'zh' ? '无限制' : 'Unlimited' },
+                          ]}
+                        />
+                        {chatTools.maxToolRounds === null ? (
+                          <div className="kv-input flex h-[30px] items-center text-[13px] text-neutral-500 dark:text-neutral-400">
+                            {lang === 'zh' ? '无限' : '∞'}
+                          </div>
+                        ) : (
+                          <Input
+                            type="number"
+                            min={CHAT_TOOL_MIN_ROUNDS}
+                            max={CHAT_TOOL_MAX_ROUNDS}
+                            value={String(clampToolRounds(chatTools.maxToolRounds))}
+                            onChange={(value) => updateChatTools({
+                              maxToolRounds: clampToolRounds(value),
+                            })}
+                          />
+                        )}
                       </div>
                     </FieldBlock>
                     <FieldBlock label={lang === 'zh' ? '工具超时 ms' : 'Tool timeout ms'}>

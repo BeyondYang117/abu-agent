@@ -717,10 +717,17 @@ fn default_skill_script_allowlist() -> Vec<String> {
 
 pub const CHAT_TOOL_MIN_TIMEOUT_MS: u64 = 1_000;
 pub const CHAT_TOOL_MAX_TIMEOUT_MS: u64 = 300_000;
+pub const CHAT_TOOL_DEFAULT_ROUNDS: u32 = 20;
+pub const CHAT_TOOL_MIN_ROUNDS: u32 = 1;
+pub const CHAT_TOOL_MAX_ROUNDS: u32 = 100;
 pub const SKILL_SCRIPT_MIN_TIMEOUT_MS: u64 = 120_000;
 
 fn default_chat_tool_timeout_ms() -> u64 {
     60_000
+}
+
+fn default_chat_max_tool_rounds() -> Option<u32> {
+    Some(CHAT_TOOL_DEFAULT_ROUNDS)
 }
 
 fn default_chat_approval_policy() -> String {
@@ -745,7 +752,7 @@ pub struct ChatToolsConfig {
     /// Skill ids the user turned off in Settings. Omitted ids are enabled.
     #[serde(default)]
     pub disabled_skill_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default = "default_chat_max_tool_rounds")]
     pub max_tool_rounds: Option<u32>,
     #[serde(default = "default_chat_tool_timeout_ms")]
     pub tool_timeout_ms: u64,
@@ -766,7 +773,7 @@ impl Default for ChatToolsConfig {
             skill_fallback_mode: default_skill_fallback_mode(),
             skill_script_allowlist: default_skill_script_allowlist(),
             disabled_skill_ids: Vec::new(),
-            max_tool_rounds: None,
+            max_tool_rounds: default_chat_max_tool_rounds(),
             tool_timeout_ms: default_chat_tool_timeout_ms(),
             max_tool_output_chars: None,
             approval_policy: default_chat_approval_policy(),
@@ -1315,7 +1322,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     settings.chat.max_output_tokens = clamp_chat_max_output_tokens(settings.chat.max_output_tokens);
     settings.chat.system_prompt = settings.chat.system_prompt.trim().to_string();
 
-    settings.chat_tools.max_tool_rounds = None;
+    settings.chat_tools.max_tool_rounds = settings
+        .chat_tools
+        .max_tool_rounds
+        .map(|rounds| rounds.clamp(CHAT_TOOL_MIN_ROUNDS, CHAT_TOOL_MAX_ROUNDS));
     settings.chat_tools.tool_timeout_ms = settings
         .chat_tools
         .tool_timeout_ms
@@ -2180,26 +2190,36 @@ mod tests {
     }
 
     #[test]
-    fn chat_tools_default_limits_are_unlimited() {
-        assert_eq!(ChatToolsConfig::default().max_tool_rounds, None);
+    fn chat_tools_default_limits_keep_tool_round_cap() {
+        assert_eq!(
+            ChatToolsConfig::default().max_tool_rounds,
+            Some(CHAT_TOOL_DEFAULT_ROUNDS)
+        );
         assert_eq!(ChatToolsConfig::default().max_tool_output_chars, None);
 
         let cfg: ChatToolsConfig =
             serde_json::from_str("{}").expect("empty chat tools config should load");
-        assert_eq!(cfg.max_tool_rounds, None);
+        assert_eq!(cfg.max_tool_rounds, Some(CHAT_TOOL_DEFAULT_ROUNDS));
         assert_eq!(cfg.max_tool_output_chars, None);
     }
 
     #[test]
-    fn sanitize_settings_resets_legacy_chat_tool_limits_to_unlimited() {
+    fn sanitize_settings_clamps_chat_tool_round_limit_and_keeps_unlimited() {
         let mut settings = Settings::default();
-        settings.chat_tools.max_tool_rounds = Some(30);
+        settings.chat_tools.max_tool_rounds = Some(CHAT_TOOL_MAX_ROUNDS + 30);
         settings.chat_tools.max_tool_output_chars = Some(12_000);
 
         let settings = sanitize_settings(settings);
 
-        assert_eq!(settings.chat_tools.max_tool_rounds, None);
+        assert_eq!(settings.chat_tools.max_tool_rounds, Some(CHAT_TOOL_MAX_ROUNDS));
         assert_eq!(settings.chat_tools.max_tool_output_chars, None);
+
+        let mut settings = Settings::default();
+        settings.chat_tools.max_tool_rounds = None;
+
+        let settings = sanitize_settings(settings);
+
+        assert_eq!(settings.chat_tools.max_tool_rounds, None);
     }
 
     #[test]

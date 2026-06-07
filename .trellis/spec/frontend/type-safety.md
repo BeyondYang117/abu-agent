@@ -324,7 +324,7 @@ if !message.model_messages.is_empty() {
 - Agent code must call models only via `generate_with_chat_provider` / `stream_with_chat_provider` and `GenerateRequest`; no provider JSON in `agent/`.
 - Tool execution must go through `ToolExecutor` (default: registry adapter), not duplicate MCP/native/skill branches inside `loop_.rs`.
 - **Natural stop**: After `extract_tool_calls` and `pending_tool_calls_from_dsml` are both empty, finalize with that assistant output; do not run `synthesis` for the same user turn.
-- **Tool rounds**: Tool rounds are currently unlimited. Frontend normalization and backend `sanitize_settings` must coerce legacy `max_tool_rounds` values to `null` / `None`; do not reintroduce a finite-step hard error. If a future product decision brings back finite limits, exhausting the limit must synthesize a normal assistant reply from existing tool results instead of returning a direct error.
+- **Tool rounds**: `chatTools.maxToolRounds` defaults to `20`, clamps finite values to the backend-supported range, and uses `null` / `None` only for the explicit Unlimited mode. When the finite limit is reached, the agent must stop exposing tools and synthesize a normal assistant reply from existing tool results instead of returning a direct error.
 - **Plain**: When `active_tools` is empty, skip tool loop and run `synthesis` only (same as today when `tools.is_empty()`).
 - **Cancelled**: Respect `run_generation` / `wait_for_chat_cancel`; emit `chat-stream` done `cancelled` with stable `runId`.
 - Tauri event payloads unchanged; Agent converts `StreamPart` in stream adapter only.

@@ -20,7 +20,7 @@ use super::stop::{
     assistant_api_message_for_tool_calls, empty_assistant_response_error,
     extract_reasoning_content, extract_tool_calls, final_assistant_api_message,
     final_response_from_planning_message, is_tools_unsupported_error, merge_reasoning,
-    patch_system_message, sanitize_assistant_text_response,
+    patch_system_message, sanitize_assistant_text_response, step_limit_system_message,
 };
 use super::stream::{should_emit_done, validate_stream_output, AgentStreamSink, ChatStreamOutput};
 use super::types::{
@@ -303,6 +303,13 @@ pub async fn run_agent_loop(
                     steps,
                 ));
             }
+            if tool_round_limit_reached(config.effective_chat_tools.max_tool_rounds, round) {
+                runtime_messages.push(step_limit_system_message());
+                if let Some(last_step) = steps.last_mut() {
+                    last_step.stop_reason = Some(AgentStopReason::StepLimit);
+                }
+                break;
+            }
         }
     }
 
@@ -565,6 +572,10 @@ pub async fn run_agent_loop(
         api_messages: generated_api_messages,
         steps,
     })
+}
+
+fn tool_round_limit_reached(max_tool_rounds: Option<u32>, round: u32) -> bool {
+    max_tool_rounds.is_some_and(|limit| round >= limit)
 }
 
 async fn execute_tool_round(
@@ -1433,6 +1444,14 @@ mod tests {
             .iter()
             .filter_map(|message| message.get("tool_call_id").and_then(Value::as_str))
             .collect()
+    }
+
+    #[test]
+    fn tool_round_limit_reached_only_for_finite_limits_at_boundary() {
+        assert!(!tool_round_limit_reached(None, 10));
+        assert!(!tool_round_limit_reached(Some(3), 2));
+        assert!(tool_round_limit_reached(Some(3), 3));
+        assert!(tool_round_limit_reached(Some(3), 4));
     }
 
     #[tokio::test]

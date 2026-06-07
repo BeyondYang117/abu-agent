@@ -540,6 +540,17 @@ export function normalizeProviderApiFormat(apiFormat?: string): string {
   return 'openai_chat'
 }
 
+const CHAT_TOOL_DEFAULT_ROUNDS = 20
+const CHAT_TOOL_MIN_ROUNDS = 1
+const CHAT_TOOL_MAX_ROUNDS = 100
+
+function normalizeMaxToolRounds(value: unknown): number | null {
+  if (value === null) return null
+  const parsed = Number(value ?? CHAT_TOOL_DEFAULT_ROUNDS)
+  if (!Number.isFinite(parsed)) return CHAT_TOOL_DEFAULT_ROUNDS
+  return Math.min(CHAT_TOOL_MAX_ROUNDS, Math.max(CHAT_TOOL_MIN_ROUNDS, Math.round(parsed)))
+}
+
 function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatToolsConfig {
   const current = config ?? {}
   return {
@@ -552,7 +563,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
       ? current.skillScriptAllowlist
       : ['python3', 'bash', 'sh', 'node'],
     disabledSkillIds: Array.isArray(current.disabledSkillIds) ? current.disabledSkillIds : [],
-    maxToolRounds: null,
+    maxToolRounds: normalizeMaxToolRounds(current.maxToolRounds),
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
     maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
