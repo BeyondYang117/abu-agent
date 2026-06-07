@@ -272,6 +272,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [enabledToolCount, setEnabledToolCount] = useState<number | null>(null)
   const [toolsDisabledReason, setToolsDisabledReason] = useState('')
   const [toolsRequested, setToolsRequested] = useState(false)
+  const [approvalPolicy, setApprovalPolicy] = useState('readonly_auto_sensitive_confirm')
   const [pendingToolConfirm, setPendingToolConfirm] = useState<ChatToolConfirmPayload | null>(null)
   const [contextState, setContextState] = useState<ConversationContextState | null>(null)
   const [contextLoading, setContextLoading] = useState(false)
@@ -462,11 +463,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setEnabledToolCount(null)
       setToolsDisabledReason('')
       setToolsRequested(false)
+      setApprovalPolicy('readonly_auto_sensitive_confirm')
       return
     }
     try {
       const settings = await api.getSettings()
       const chatTools = settings.chatTools
+      setApprovalPolicy(chatTools?.approvalPolicy || 'readonly_auto_sensitive_confirm')
       const nextDisabledSkillIds = chatTools?.disabledSkillIds ?? []
       setDisabledSkillIds((prev) =>
         prev.length === nextDisabledSkillIds.length
@@ -479,6 +482,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setEnabledToolCount(null)
         setToolsDisabledReason('')
         setToolsRequested(false)
+        setApprovalPolicy('readonly_auto_sensitive_confirm')
         return
       }
       const provider = settings.providers.find((item) => item.id === activeProviderId)
@@ -514,9 +518,28 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setEnabledTools([])
       setToolsRequested(false)
       setEnabledToolCount(null)
+      setApprovalPolicy('readonly_auto_sensitive_confirm')
       setToolsDisabledReason(err instanceof Error ? err.message : String(err))
     }
   }, [activeProviderId, effectiveSkillId])
+
+  const handleApprovalPolicyChange = useCallback(async (nextApprovalPolicy: string) => {
+    setApprovalPolicy(nextApprovalPolicy)
+    try {
+      const settings = await api.getSettings()
+      await api.saveSettings({
+        ...settings,
+        chatTools: {
+          ...settings.chatTools,
+          approvalPolicy: nextApprovalPolicy,
+        },
+      })
+      onSettingsChange()
+    } catch (err) {
+      console.error('Failed to update approval policy:', err)
+      void refreshToolIndicator()
+    }
+  }, [onSettingsChange, refreshToolIndicator])
 
   const unavailableRecommendedTools = useMemo(
     () =>
@@ -1119,6 +1142,47 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     selectedProject?.name,
     syncConversationRoute,
   ])
+
+  const handleClearChat = useCallback(async () => {
+    if (streaming || sendInFlightRef.current) {
+      setStreamError('请先停止当前回复，再清空对话。')
+      return
+    }
+
+    const conversationId = currentConversationIdRef.current
+    if (!conversationId) {
+      setLastAssistantStreamStats(null)
+      setPendingUserMessage(null)
+      setPendingUserMessageConversationId(null)
+      setStreamError('')
+      return
+    }
+
+    if (!window.confirm('Clear this chat? This will delete the current conversation history.')) {
+      return
+    }
+
+    try {
+      await chatApi.deleteConversation(conversationId)
+      delete streamSnapshotsRef.current[conversationId]
+      delete pendingToolConfirmsRef.current[conversationId]
+      forgetRememberedChatRoute()
+      currentConversationIdRef.current = null
+      setLastAssistantStreamStats(null)
+      setPendingUserMessage(null)
+      setPendingUserMessageConversationId(null)
+      setContextState(null)
+      setContextError('')
+      applyConversation(null)
+      restoreStreamingPreview(null)
+      syncConversationRoute(null)
+      refreshSidebar()
+      setStreamError('')
+    } catch (err) {
+      console.error('Failed to clear chat:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '清空对话失败')
+    }
+  }, [applyConversation, refreshSidebar, restoreStreamingPreview, streaming, syncConversationRoute])
 
   const handleStartAssistantChat = useCallback(async (assistant: ChatAssistant) => {
     setLastAssistantStreamStats(null)
@@ -1737,10 +1801,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       cancelVisible={streaming || sendInFlightRef.current}
                       cancelling={cancellingStream}
                       onOpenSettings={() => openEmbeddedSettings('chat')}
+                      onOpenTools={() => openEmbeddedSettings('skill')}
+                      onNewChat={() => void handleNewConversation()}
+                      onCompactContext={() => void handleCompressContext()}
+                      onClearChat={() => void handleClearChat()}
                       enabledTools={enabledTools}
                       toolsDisabledReason={toolsDisabledReason}
                       toolStatusHint={toolStatusHint}
                       sendDisabledReason={sendDisabledReason}
+                      approvalPolicy={approvalPolicy}
+                      onApprovalPolicyChange={handleApprovalPolicyChange}
                       enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
                       onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                       autoFocus
@@ -1772,10 +1842,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     cancelVisible={streaming || sendInFlightRef.current}
                     cancelling={cancellingStream}
                     onOpenSettings={() => openEmbeddedSettings('chat')}
+                    onOpenTools={() => openEmbeddedSettings('skill')}
+                    onNewChat={() => void handleNewConversation()}
+                    onCompactContext={() => void handleCompressContext()}
+                    onClearChat={() => void handleClearChat()}
                     enabledTools={enabledTools}
                     toolsDisabledReason={toolsDisabledReason}
                     toolStatusHint={toolStatusHint}
                     sendDisabledReason={sendDisabledReason}
+                    approvalPolicy={approvalPolicy}
+                    onApprovalPolicyChange={handleApprovalPolicyChange}
                     enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
                     onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                     autoFocus

@@ -1,8 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { ArrowUp, Plus, SlidersHorizontal, Square } from 'lucide-react'
+import {
+  ArrowUp,
+  Archive,
+  CircleHelp,
+  Eraser,
+  MessageSquarePlus,
+  Paperclip,
+  Plus,
+  Settings,
+  ShieldAlert,
+  SlidersHorizontal,
+  Square,
+  Wrench,
+} from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
 import { api, type ChatToolDefinition } from '../api/tauri'
 import type { PendingAttachment } from './types'
@@ -53,6 +66,162 @@ function isExternalMcpTool(tool: ChatToolDefinition): boolean {
   return tool.source !== 'skill' && tool.source !== 'native'
 }
 
+const APPROVAL_POLICY_OPTIONS = [
+  {
+    value: 'always_confirm',
+    label: '每次确认',
+    title: '请求批准',
+    description: '所有工具调用都先问你',
+  },
+  {
+    value: 'readonly_auto_sensitive_confirm',
+    label: '敏感确认',
+    title: '替我审批',
+    description: '只对写文件、终端等风险操作确认',
+  },
+  {
+    value: 'auto',
+    label: '完全访问',
+    title: '完全访问权限',
+    description: '工具调用自动放行',
+  },
+]
+
+type SlashCommandId = 'help' | 'new' | 'compact' | 'clear' | 'settings' | 'tools' | 'attach'
+
+interface SlashCommandDefinition {
+  id: SlashCommandId
+  slash: `/${string}`
+  title: string
+  description: string
+  category: string
+  keywords: string[]
+}
+
+interface ActiveSlashToken {
+  start: number
+  end: number
+  query: string
+}
+
+const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
+  {
+    id: 'help',
+    slash: '/help',
+    title: '/help',
+    description: 'Show commands',
+    category: 'Local',
+    keywords: ['help', 'commands', '帮助', '命令'],
+  },
+  {
+    id: 'new',
+    slash: '/new',
+    title: '/new',
+    description: 'Start a new chat',
+    category: 'Local',
+    keywords: ['new', 'chat', 'conversation', '新建', '新对话'],
+  },
+  {
+    id: 'compact',
+    slash: '/compact',
+    title: '/compact',
+    description: 'Compress context',
+    category: 'Local',
+    keywords: ['compact', 'compress', 'context', '压缩', '上下文'],
+  },
+  {
+    id: 'clear',
+    slash: '/clear',
+    title: '/clear',
+    description: 'Clear current chat',
+    category: 'Local',
+    keywords: ['clear', 'delete', 'reset', '清空', '删除', '重置'],
+  },
+  {
+    id: 'settings',
+    slash: '/settings',
+    title: '/settings',
+    description: 'Open chat settings',
+    category: 'Local',
+    keywords: ['settings', 'config', '设置', '配置'],
+  },
+  {
+    id: 'tools',
+    slash: '/tools',
+    title: '/tools',
+    description: 'Show tool status',
+    category: 'Local',
+    keywords: ['tools', 'mcp', 'skill', '工具', '技能'],
+  },
+  {
+    id: 'attach',
+    slash: '/attach',
+    title: '/attach',
+    description: 'Add files or images',
+    category: 'Local',
+    keywords: ['attach', 'file', 'image', '附件', '文件', '图片'],
+  },
+]
+
+function slashCommandIcon(commandId: SlashCommandId) {
+  switch (commandId) {
+    case 'help':
+      return CircleHelp
+    case 'new':
+      return MessageSquarePlus
+    case 'compact':
+      return Archive
+    case 'clear':
+      return Eraser
+    case 'settings':
+      return Settings
+    case 'tools':
+      return Wrench
+    case 'attach':
+      return Paperclip
+  }
+}
+
+function findActiveSlashToken(value: string, cursor: number): ActiveSlashToken | null {
+  if (cursor < 0 || cursor > value.length) return null
+
+  let start = cursor
+  while (start > 0 && !/\s/.test(value[start - 1])) {
+    start -= 1
+  }
+
+  const token = value.slice(start, cursor)
+  if (!token.startsWith('/')) return null
+  if (start > 0 && !/\s/.test(value[start - 1])) return null
+  if (token.slice(1).includes('/')) return null
+
+  return {
+    start,
+    end: cursor,
+    query: token.slice(1),
+  }
+}
+
+function commandMatches(command: SlashCommandDefinition, query: string): boolean {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return true
+
+  const searchable = [
+    command.slash.slice(1),
+    command.title,
+    command.description,
+    command.category,
+    ...command.keywords,
+  ].map((item) => item.toLowerCase())
+
+  return searchable.some((item) => item.includes(normalized))
+}
+
+function approvalPolicyOption(policy?: string) {
+  return APPROVAL_POLICY_OPTIONS.find((option) => option.value === policy)
+    ?? APPROVAL_POLICY_OPTIONS[1]
+}
+
 function imageExtensionForMime(mimeType: string): string {
   switch (mimeType.toLowerCase()) {
     case 'image/jpeg':
@@ -94,10 +263,16 @@ interface InputBarProps {
   cancelVisible?: boolean
   cancelling?: boolean
   onOpenSettings?: () => void
+  onOpenTools?: () => void
+  onNewChat?: () => void | Promise<void>
+  onCompactContext?: () => void | Promise<void>
+  onClearChat?: () => void | Promise<void>
   enabledTools?: ChatToolDefinition[]
   toolsDisabledReason?: string
   toolStatusHint?: string
   sendDisabledReason?: string
+  approvalPolicy?: string
+  onApprovalPolicyChange?: (approvalPolicy: string) => void | Promise<void>
   enabledSkills?: { id: string; name: string }[]
   onOpenSkillSettings?: () => void
   autoFocus?: boolean
@@ -112,10 +287,16 @@ export function InputBar({
   cancelVisible,
   cancelling,
   onOpenSettings,
+  onOpenTools,
+  onNewChat,
+  onCompactContext,
+  onClearChat,
   enabledTools = [],
   toolsDisabledReason,
   toolStatusHint,
   sendDisabledReason,
+  approvalPolicy,
+  onApprovalPolicyChange,
   enabledSkills = [],
   onOpenSkillSettings,
   autoFocus,
@@ -126,6 +307,11 @@ export function InputBar({
   const [attachmentError, setAttachmentError] = useState('')
   const [dragActive, setDragActive] = useState(false)
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
+  const [slashPanelOpen, setSlashPanelOpen] = useState(false)
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const [activeSlashToken, setActiveSlashToken] = useState<ActiveSlashToken | null>(null)
+  const [slashPanelLeft, setSlashPanelLeft] = useState(0)
+  const innerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const attachmentsFromPaths = useCallback(
@@ -144,6 +330,80 @@ export function InputBar({
       }),
     [],
   )
+
+  const updateTextareaHeight = useCallback(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
+  }, [])
+
+  const syncSlashToken = useCallback((value: string, cursor: number) => {
+    const token = findActiveSlashToken(value, cursor)
+    setActiveSlashToken(token)
+    if (token) {
+      setSlashPanelOpen(true)
+      setToolPanelOpen(false)
+    } else {
+      setSlashPanelOpen(false)
+    }
+  }, [])
+
+  const filteredSlashCommands = useMemo(
+    () => LOCAL_SLASH_COMMANDS.filter((command) => (
+      commandMatches(command, activeSlashToken?.query ?? '')
+    )),
+    [activeSlashToken?.query],
+  )
+
+  const removeActiveSlashToken = useCallback(() => {
+    const token = activeSlashToken
+    if (!token) {
+      setInput('')
+      requestAnimationFrame(updateTextareaHeight)
+      return
+    }
+
+    setInput((prev) => {
+      const next = `${prev.slice(0, token.start)}${prev.slice(token.end)}`.replace(/^\s+/, '')
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.selectionStart = Math.min(token.start, next.length)
+        textarea.selectionEnd = Math.min(token.start, next.length)
+        updateTextareaHeight()
+      })
+      return next
+    })
+  }, [activeSlashToken, updateTextareaHeight])
+
+  const completeActiveSlashToken = useCallback((command: SlashCommandDefinition) => {
+    const token = activeSlashToken
+    if (!token) return
+
+    const cursor = token.start + command.slash.length
+    setInput((prev) => {
+      const next = `${prev.slice(0, token.start)}${command.slash}${prev.slice(token.end)}`
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.focus({ preventScroll: true })
+        textarea.selectionStart = cursor
+        textarea.selectionEnd = cursor
+        updateTextareaHeight()
+      })
+      return next
+    })
+    setActiveSlashToken({
+      start: token.start,
+      end: cursor,
+      query: command.slash.slice(1),
+    })
+    setSlashPanelOpen(true)
+  }, [activeSlashToken, updateTextareaHeight])
+
+  const selectedSlashCommand = filteredSlashCommands[slashSelectedIndex]
+    ?? filteredSlashCommands[0]
 
   const addAttachments = useCallback(
     (next: PendingAttachment[], options?: { imagesOnly?: boolean }) => {
@@ -174,6 +434,94 @@ export function InputBar({
     [],
   )
 
+  const openAttachmentPicker = useCallback(async () => {
+    if (disabled) return
+    setToolPanelOpen(false)
+    setSlashPanelOpen(false)
+    setAttachmentError('')
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+      })
+      const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
+      if (paths.length === 0) return
+
+      addAttachments(attachmentsFromPaths(paths))
+    } catch (err) {
+      console.error('Failed to add chat attachment:', err)
+      setAttachmentError(
+        typeof err === 'string' ? err : err instanceof Error ? err.message : '添加附件失败',
+      )
+    }
+  }, [addAttachments, attachmentsFromPaths, disabled])
+
+  const handleSlashCommandSelect = useCallback(async (command: SlashCommandDefinition) => {
+    if (disabled) return
+
+    if (command.id === 'help') {
+      setInput('/')
+      setActiveSlashToken({ start: 0, end: 1, query: '' })
+      setSlashPanelOpen(true)
+      setToolPanelOpen(false)
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.focus({ preventScroll: true })
+        textarea.selectionStart = 1
+        textarea.selectionEnd = 1
+        updateTextareaHeight()
+      })
+      return
+    }
+
+    removeActiveSlashToken()
+    setSlashPanelOpen(false)
+
+    switch (command.id) {
+      case 'new':
+        setInput('')
+        setAttachments([])
+        setAttachmentError('')
+        requestAnimationFrame(updateTextareaHeight)
+        await onNewChat?.()
+        return
+      case 'compact':
+        await onCompactContext?.()
+        return
+      case 'clear':
+        setInput('')
+        setAttachments([])
+        setAttachmentError('')
+        requestAnimationFrame(updateTextareaHeight)
+        await onClearChat?.()
+        return
+      case 'settings':
+        onOpenSettings?.()
+        return
+      case 'tools':
+        if (onOpenTools) {
+          onOpenTools()
+        } else {
+          setToolPanelOpen(true)
+        }
+        return
+      case 'attach':
+        await openAttachmentPicker()
+        return
+    }
+  }, [
+    disabled,
+    onClearChat,
+    onCompactContext,
+    onNewChat,
+    onOpenSettings,
+    onOpenTools,
+    openAttachmentPicker,
+    removeActiveSlashToken,
+    updateTextareaHeight,
+  ])
+
   const handleSend = () => {
     const trimmed = input.trim()
     if ((!trimmed && attachments.length === 0) || disabled || sendDisabledReason) return
@@ -182,24 +530,70 @@ export function InputBar({
     setAttachments([])
     setAttachmentError('')
     setToolPanelOpen(false)
+    setSlashPanelOpen(false)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return
-    // IME composition confirmation should not submit the chat composer.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
+
+    if (slashPanelOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (filteredSlashCommands.length > 0) {
+          setSlashSelectedIndex((index) => (index + 1) % filteredSlashCommands.length)
+        }
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (filteredSlashCommands.length > 0) {
+          setSlashSelectedIndex((index) => (
+            index - 1 + filteredSlashCommands.length
+          ) % filteredSlashCommands.length)
+        }
+        return
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        if (selectedSlashCommand) {
+          completeActiveSlashToken(selectedSlashCommand)
+        }
+        return
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        if (selectedSlashCommand) {
+          void handleSlashCommandSelect(selectedSlashCommand)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashPanelOpen(false)
+        return
+      }
+    }
+
+    if (e.key !== 'Enter' || e.shiftKey) return
     e.preventDefault()
     handleSend()
   }
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value)
+    const nextValue = e.target.value
+    setInput(nextValue)
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+    syncSlashToken(nextValue, el.selectionStart)
+  }
+
+  const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget
+    syncSlashToken(el.value, el.selectionStart)
   }
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -310,27 +704,6 @@ export function InputBar({
     }
   }
 
-  const handleAddAttachment = async () => {
-    if (disabled) return
-    setToolPanelOpen(false)
-    setAttachmentError('')
-    try {
-      const selected = await open({
-        multiple: true,
-        directory: false,
-      })
-      const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
-      if (paths.length === 0) return
-
-      addAttachments(attachmentsFromPaths(paths))
-    } catch (err) {
-      console.error('Failed to add chat attachment:', err)
-      setAttachmentError(
-        typeof err === 'string' ? err : err instanceof Error ? err.message : '添加附件失败',
-      )
-    }
-  }
-
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
     setAttachmentError('')
@@ -385,8 +758,62 @@ export function InputBar({
   }, [toolPanelOpen])
 
   useEffect(() => {
-    if (disabled) setToolPanelOpen(false)
+    if (!slashPanelOpen) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('[data-chat-slash-panel="true"]')) return
+      if (target.closest('[data-chat-composer="true"]')) return
+      setSlashPanelOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [slashPanelOpen])
+
+  useLayoutEffect(() => {
+    if (!slashPanelOpen) return
+
+    const updateSlashPanelLeft = () => {
+      const inner = innerRef.current
+      const textarea = textareaRef.current
+      if (!inner || !textarea) return
+
+      const innerRect = inner.getBoundingClientRect()
+      const textareaRect = textarea.getBoundingClientRect()
+      setSlashPanelLeft(Math.max(0, Math.round(textareaRect.left - innerRect.left)))
+    }
+
+    updateSlashPanelLeft()
+    window.addEventListener('resize', updateSlashPanelLeft)
+
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateSlashPanelLeft)
+    if (resizeObserver) {
+      if (innerRef.current) resizeObserver.observe(innerRef.current)
+      if (textareaRef.current) resizeObserver.observe(textareaRef.current)
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateSlashPanelLeft)
+      resizeObserver?.disconnect()
+    }
+  }, [slashPanelOpen])
+
+  useEffect(() => {
+    if (!disabled) return
+    setToolPanelOpen(false)
+    setSlashPanelOpen(false)
   }, [disabled])
+
+  useEffect(() => {
+    setSlashSelectedIndex(0)
+  }, [activeSlashToken?.query])
+
+  useEffect(() => {
+    if (slashSelectedIndex < filteredSlashCommands.length) return
+    setSlashSelectedIndex(Math.max(filteredSlashCommands.length - 1, 0))
+  }, [filteredSlashCommands.length, slashSelectedIndex])
 
   useEffect(() => {
     if (!isTauriRuntime()) return
@@ -428,7 +855,10 @@ export function InputBar({
     }
   }, [addAttachments, attachmentsFromPaths, disabled])
 
-  const canSend = (Boolean(input.trim()) || attachments.length > 0) && !disabled && !sendDisabledReason
+  const canSend = (Boolean(input.trim()) || attachments.length > 0)
+    && !slashPanelOpen
+    && !disabled
+    && !sendDisabledReason
 
   const wrapperClass =
     layout === 'inline'
@@ -436,20 +866,25 @@ export function InputBar({
       : 'chat-composer-footer shrink-0 px-6 pb-8 pt-2'
 
   const innerClass = layout === 'inline' ? 'w-full' : 'mx-auto w-full max-w-3xl'
+  const slashPanelPlacementClass = layout === 'inline'
+    ? 'top-full mt-1'
+    : 'bottom-full mb-1'
+  const slashPanelOrigin = layout === 'inline' ? 'top left' : 'bottom left'
   const externalMcpTools = enabledTools.filter(isExternalMcpTool)
   const hasToolProblem = Boolean(toolsDisabledReason || toolStatusHint || sendDisabledReason)
   const showMcpSection = externalMcpTools.length > 0 || Boolean(toolsDisabledReason)
   const mcpStatusLine = toolsDisabledReason
     || (externalMcpTools.length > 0 ? `MCP ${externalMcpTools.length}` : '')
+  const approvalOption = approvalPolicyOption(approvalPolicy)
 
   return (
     <div className={wrapperClass}>
-      <div className={`relative ${innerClass}`}>
+      <div ref={innerRef} className={`relative ${innerClass}`}>
         {toolPanelOpen && (
           <>
             <div className="fixed inset-0 z-30" onClick={() => setToolPanelOpen(false)} aria-hidden />
             <div
-              className="chat-motion-popover absolute bottom-full left-10 z-40 mb-2 w-[min(272px,calc(100vw-32px))] overflow-hidden rounded-xl border border-neutral-200/90 bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
+              className="chat-motion-popover absolute bottom-full left-10 z-40 mb-2 w-[min(320px,calc(100vw-32px))] overflow-hidden rounded-xl border border-neutral-200/90 bg-white shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
               style={{ ['--chat-popover-origin' as string]: 'bottom left' }}
               data-tauri-drag-region="false"
             >
@@ -483,6 +918,41 @@ export function InputBar({
                   )}
                 </div>
 
+                {onApprovalPolicyChange && (
+                  <div className="border-t border-neutral-200/80 pt-1.5 dark:border-neutral-800">
+                    <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+                      <span className="inline-flex items-center gap-1">
+                        <ShieldAlert size={13} strokeWidth={1.8} />
+                        审批
+                      </span>
+                      <span className={approvalOption.value === 'auto' ? 'font-semibold text-[#e9531f] dark:text-[#ff9a71]' : ''}>
+                        {approvalOption.label}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {APPROVAL_POLICY_OPTIONS.map((option) => {
+                        const selected = option.value === approvalOption.value
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => void onApprovalPolicyChange(option.value)}
+                            className={`rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors ${
+                              selected
+                                ? option.value === 'auto'
+                                  ? 'bg-[#fff1eb] text-[#e9531f] dark:bg-[#f26b2d]/15 dark:text-[#ff9a71]'
+                                  : 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
+                                : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {showMcpSection && mcpStatusLine && (
                   <div className="border-t border-neutral-200/80 pt-1.5 text-[11px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
                     {mcpStatusLine}
@@ -497,6 +967,59 @@ export function InputBar({
               </div>
             </div>
           </>
+        )}
+        {slashPanelOpen && (
+          <div
+            className={`chat-motion-popover absolute z-40 overflow-hidden rounded-lg border border-neutral-200/90 bg-white p-0.5 font-sans shadow-[0_6px_18px_-16px_rgba(0,0,0,0.2),0_1px_4px_rgba(0,0,0,0.05)] dark:border-neutral-700 dark:bg-neutral-900 ${slashPanelPlacementClass}`}
+            style={{
+              ['--chat-popover-origin' as string]: slashPanelOrigin,
+              ['--chat-popover-start-y' as string]: '0px',
+              left: slashPanelLeft,
+              width: `calc(100% - ${slashPanelLeft}px)`,
+            }}
+            data-chat-slash-panel="true"
+            data-tauri-drag-region="false"
+          >
+            <div className="max-h-[min(184px,34vh)] overflow-y-auto">
+              {filteredSlashCommands.length > 0 ? (
+                filteredSlashCommands.map((command, index) => {
+                  const Icon = slashCommandIcon(command.id)
+                  const selected = index === slashSelectedIndex
+                  return (
+                    <button
+                      key={command.id}
+                      type="button"
+                      aria-selected={selected}
+                      onMouseEnter={() => setSlashSelectedIndex(index)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => void handleSlashCommandSelect(command)}
+                      className={`flex h-[26px] w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition-colors ${
+                        selected
+                          ? 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-50'
+                          : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/70'
+                      }`}
+                    >
+                      <Icon
+                        size={13}
+                        strokeWidth={1.8}
+                        className="shrink-0 text-neutral-600 dark:text-neutral-300"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-[12px] leading-none">
+                        <span className="font-semibold">{command.title}</span>
+                        <span className="ml-1.5 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+                          {command.description}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })
+              ) : (
+                <div className="flex h-[26px] items-center px-2 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+                  No matching command
+                </div>
+              )}
+            </div>
+          </div>
         )}
         <div
           data-chat-composer="true"
@@ -533,7 +1056,7 @@ export function InputBar({
           <div className="flex items-end gap-2">
             <button
               type="button"
-              onClick={() => void handleAddAttachment()}
+              onClick={() => void openAttachmentPicker()}
               disabled={disabled}
               tabIndex={-1}
               className="mb-0.5 shrink-0 rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
@@ -547,12 +1070,13 @@ export function InputBar({
               <button
                 type="button"
                 onClick={() => {
+                  setSlashPanelOpen(false)
                   setToolPanelOpen((open) => !open)
                 }}
                 disabled={disabled}
                 tabIndex={-1}
                 className={`mb-0.5 shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
-                  toolPanelOpen || hasToolProblem || enabledSkills.length > 0 || externalMcpTools.length > 0
+                  toolPanelOpen || hasToolProblem
                     ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
                     : 'text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800'
                 }`}
@@ -569,6 +1093,7 @@ export function InputBar({
               onChange={handleInput}
               onPaste={(e) => void handlePaste(e)}
               onKeyDown={handleKeyDown}
+              onSelect={handleSelect}
               disabled={disabled}
               placeholder="Ask me anything..."
               rows={1}

@@ -672,7 +672,7 @@ body {
 @keyframes chat-motion-popover {
   from {
     opacity: 0;
-    transform: translateY(-3px) scale(0.985);
+    transform: translateY(var(--chat-popover-start-y, -3px)) scale(0.985);
   }
   to {
     opacity: 1;
