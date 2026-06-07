@@ -1,3 +1,4 @@
+use reqwest::header::ACCEPT_ENCODING;
 use serde_json::Value;
 
 use crate::api::send_with_failover;
@@ -65,6 +66,7 @@ impl OpenAiChatProvider<'_> {
                     .http
                     .post(self.chat_completions_url())
                     .bearer_auth(key)
+                    .header(ACCEPT_ENCODING, "identity")
                     .json(&body)
                     .send()
             },
@@ -104,6 +106,7 @@ impl OpenAiChatProvider<'_> {
                     .http
                     .post(self.chat_completions_url())
                     .bearer_auth(key)
+                    .header(ACCEPT_ENCODING, "identity")
                     .json(&body)
                     .send()
             },
@@ -121,7 +124,7 @@ impl OpenAiChatProvider<'_> {
             let chunk = response
                 .chunk()
                 .await
-                .map_err(|err| ModelError::new(err.to_string()))?;
+                .map_err(|err| ModelError::new(format!("{label} read stream body: {err}")))?;
             let Some(chunk) = chunk else {
                 break;
             };

@@ -1258,6 +1258,7 @@ async fn complete_assistant_reply(
     if let Some(skill) = active_skill_record.as_ref() {
         agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
+    apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
     let tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -2548,6 +2549,7 @@ async fn compute_context_state(
     {
         agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
+    apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
@@ -2923,6 +2925,70 @@ async fn list_tools_for_chat(
     mcp::registry::list_enabled_tool_defs(state)
         .await
         .unwrap_or_default()
+}
+
+fn apply_inline_code_request_tool_filter(
+    tools: &mut Vec<ChatToolDefinition>,
+    last_user_api_content: Option<&str>,
+) {
+    if !should_answer_inline_without_file_write(last_user_api_content) {
+        return;
+    }
+    tools.retain(|tool| !(tool.source == "native" && tool.name == "write_file"));
+}
+
+fn should_answer_inline_without_file_write(last_user_api_content: Option<&str>) -> bool {
+    let Some(content) = last_user_api_content else {
+        return false;
+    };
+    let user_text = content
+        .split("[已添加附件]")
+        .next()
+        .unwrap_or(content)
+        .trim();
+    if user_text.is_empty() {
+        return false;
+    }
+    let normalized = user_text.to_ascii_lowercase();
+    if has_explicit_file_write_intent(user_text, &normalized) {
+        return false;
+    }
+    has_inline_code_request_intent(user_text, &normalized)
+}
+
+fn has_explicit_file_write_intent(text: &str, normalized: &str) -> bool {
+    const ZH_MARKERS: &[&str] = &[
+        "保存",
+        "写入",
+        "写到",
+        "写进",
+        "输出到",
+        "导出",
+        "创建文件",
+        "生成文件",
+        "另存为",
+        "存成",
+        "落盘",
+    ];
+    const EN_MARKERS: &[&str] = &[
+        "save",
+        "create file",
+        "output file",
+        "output to",
+        "export",
+        "save as",
+        "write to",
+        "file named",
+    ];
+    ZH_MARKERS.iter().any(|marker| text.contains(marker))
+        || EN_MARKERS.iter().any(|marker| normalized.contains(marker))
+}
+
+fn has_inline_code_request_intent(text: &str, normalized: &str) -> bool {
+    const ZH_MARKERS: &[&str] = &["```", "代码块", "代码框", "围栏代码"];
+    const EN_MARKERS: &[&str] = &["```", "code block", "fenced code"];
+    ZH_MARKERS.iter().any(|marker| text.contains(marker))
+        || EN_MARKERS.iter().any(|marker| normalized.contains(marker))
 }
 
 fn build_chat_api_messages(
@@ -4173,6 +4239,81 @@ mod tests {
         assert!(content.contains("skill_activate(name=\"pdf\")"));
         assert!(content.contains("Kivio 安全副本路径"));
         assert!(content.contains("不要仅凭文件名臆测内容"));
+    }
+
+    #[test]
+    fn inline_code_request_filter_removes_only_write_file_for_fenced_code() {
+        let mut tools = vec![
+            crate::mcp::types::native_read_file_tool(),
+            crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_edit_file_tool(),
+        ];
+
+        apply_inline_code_request_tool_filter(
+            &mut tools,
+            Some("生成一个完整的 HTML demo，用 ```html 代码块包起来。"),
+        );
+
+        assert!(tools.iter().any(|tool| tool.name == "read_file"));
+        assert!(!tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(tools.iter().any(|tool| tool.name == "edit_file"));
+    }
+
+    #[test]
+    fn inline_code_request_filter_does_not_hide_write_file_for_generic_demo_words() {
+        let mut tools = vec![
+            crate::mcp::types::native_read_file_tool(),
+            crate::mcp::types::native_write_file_tool(),
+        ];
+
+        apply_inline_code_request_tool_filter(&mut tools, Some("生成一个完整的 HTML demo"));
+
+        assert!(tools.iter().any(|tool| tool.name == "write_file"));
+    }
+
+    #[test]
+    fn inline_code_request_filter_treats_put_into_code_block_as_inline() {
+        let mut tools = vec![
+            crate::mcp::types::native_read_file_tool(),
+            crate::mcp::types::native_write_file_tool(),
+        ];
+
+        apply_inline_code_request_tool_filter(&mut tools, Some("把完整 HTML 放到代码块里给我"));
+
+        assert!(!tools.iter().any(|tool| tool.name == "write_file"));
+    }
+
+    #[test]
+    fn inline_code_request_filter_keeps_write_tools_for_save_intent() {
+        let mut tools = vec![
+            crate::mcp::types::native_read_file_tool(),
+            crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_edit_file_tool(),
+        ];
+
+        apply_inline_code_request_tool_filter(
+            &mut tools,
+            Some("生成一个完整的 HTML demo，保存为 ~/news-demo.html。"),
+        );
+
+        assert!(tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(tools.iter().any(|tool| tool.name == "edit_file"));
+    }
+
+    #[test]
+    fn inline_code_request_ignores_attachment_safe_copy_paths() {
+        let content = compose_user_content_for_api(
+            "用 ```html 包起来给我",
+            &[Attachment {
+                id: "att_1".to_string(),
+                attachment_type: "file".to_string(),
+                name: "report.pdf".to_string(),
+                path: "att_1-report.pdf".to_string(),
+            }],
+            Some(Path::new("/Users/test/Library/Application Support/com.zmair.kivio/conversations/conv_1_attachments")),
+        );
+
+        assert!(should_answer_inline_without_file_write(Some(&content)));
     }
 
     #[test]

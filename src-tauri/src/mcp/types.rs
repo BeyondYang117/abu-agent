@@ -236,15 +236,15 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write_file".to_string(),
-        description: "Write or overwrite a text file under the user home directory.".to_string(),
+        description: "Write or overwrite a text file under the user home directory only when the user explicitly asks to save/write/create a local file or provides a target path. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. After success, summarize the path/result without repeating the full file content unless the user explicitly asked for both.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
-                "content": { "type": "string" }
+                "path": { "type": "string", "description": "Absolute or home-relative target path explicitly requested by the user" },
+                "content": { "type": "string", "description": "Full text content to save" }
             },
             "required": ["path", "content"]
         }),
@@ -564,6 +564,17 @@ mod tests {
         assert!(native_write_file_tool().sensitive);
         assert!(native_edit_file_tool().sensitive);
         assert!(native_run_command_tool().sensitive);
+    }
+
+    #[test]
+    fn write_file_tool_description_discourages_inline_code_requests() {
+        let tool = native_write_file_tool();
+
+        assert!(tool.description.contains("explicitly asks"));
+        assert!(tool.description.contains("code block"));
+        assert!(tool
+            .description
+            .contains("without repeating the full file content"));
     }
 
     #[test]

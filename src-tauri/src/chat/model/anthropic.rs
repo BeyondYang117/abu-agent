@@ -1,4 +1,4 @@
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT_ENCODING};
 use serde_json::Value;
 
 use crate::api::send_with_failover;
@@ -67,6 +67,7 @@ impl AnthropicMessagesProvider<'_> {
                     .http
                     .post(self.messages_url())
                     .headers(anthropic_headers(key).unwrap_or_default())
+                    .header(ACCEPT_ENCODING, "identity")
                     .json(&body)
                     .send()
             },
@@ -106,6 +107,7 @@ impl AnthropicMessagesProvider<'_> {
                     .http
                     .post(self.messages_url())
                     .headers(anthropic_headers(key).unwrap_or_default())
+                    .header(ACCEPT_ENCODING, "identity")
                     .json(&body)
                     .send()
             },
@@ -126,7 +128,7 @@ impl AnthropicMessagesProvider<'_> {
             let chunk = response
                 .chunk()
                 .await
-                .map_err(|err| ModelError::new(err.to_string()))?;
+                .map_err(|err| ModelError::new(format!("{label} read stream body: {err}")))?;
             let Some(chunk) = chunk else {
                 break;
             };
