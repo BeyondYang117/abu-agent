@@ -8,6 +8,7 @@ import type {
   Conversation,
   ConversationContextState,
   ConversationListItem,
+  AgentPlanMode,
   PendingAttachment,
 } from './types'
 
@@ -461,7 +462,9 @@ function estimateMockContext(conversation: Conversation): ConversationContextSta
     0,
   )
   const systemTokens = 900
-  const estimatedInputTokens = systemTokens + conversationTokens + attachmentTokens
+  const planText = (conversation.agent_plan_state?.plan ?? conversation.agentPlanState?.plan ?? '').trim()
+  const planTokens = planText ? estimateTokens(planText) + 80 : 0
+  const estimatedInputTokens = systemTokens + planTokens + conversationTokens + attachmentTokens
   const contextWindowTokens = 200_000
   const usageRatio = estimatedInputTokens / contextWindowTokens
   const summary = conversation.context_state?.summary ?? conversation.contextState?.summary ?? null
@@ -481,6 +484,7 @@ function estimateMockContext(conversation: Conversation): ConversationContextSta
             : 'normal',
     segments: [
       { id: 'system_prompt', label: 'System prompt', estimated_tokens: systemTokens, color: '#7A7A7A' },
+      { id: 'agent_plan', label: 'Agent plan', estimated_tokens: planTokens, color: '#8A724C' },
       { id: 'conversation', label: 'Conversation', estimated_tokens: conversationTokens, color: '#D07652' },
       { id: 'attachments', label: 'Attachments', estimated_tokens: attachmentTokens, color: '#6A8FBD' },
     ].filter((segment) => segment.estimated_tokens > 0),
@@ -497,6 +501,8 @@ function withMockContext(conversation: Conversation): Conversation {
     ...conversation,
     context_state: contextState,
     contextState,
+    agent_plan_state: conversation.agent_plan_state ?? conversation.agentPlanState ?? { mode: 'act', status: 'empty', plan: null, updated_at: 0 },
+    agentPlanState: conversation.agentPlanState ?? conversation.agent_plan_state ?? { mode: 'act', status: 'empty', plan: null, updated_at: 0 },
   }
 }
 
@@ -543,6 +549,8 @@ const mockChatApi = {
       folder,
       agent_todo_state: { items: [], updated_at: 0 },
       agentTodoState: { items: [], updated_at: 0 },
+      agent_plan_state: { mode: 'act', status: 'empty', plan: null, updated_at: 0 },
+      agentPlanState: { mode: 'act', status: 'empty', plan: null, updated_at: 0 },
     }
     const withContext = withMockContext(conversation)
     saveMockConversations([withContext, ...loadMockConversations()])
@@ -726,10 +734,77 @@ const mockChatApi = {
         timestamp: now,
       },
     ]
+    const currentPlanMode = conversation.agent_plan_state?.mode ?? conversation.agentPlanState?.mode ?? 'act'
+    if (currentPlanMode === 'plan') {
+      const reply = conversation.messages[conversation.messages.length - 1]?.content ?? ''
+      conversation.agent_plan_state = {
+        mode: 'plan',
+        status: 'draft',
+        plan: reply,
+        updated_at: now,
+      }
+      conversation.agentPlanState = conversation.agent_plan_state
+    }
     if (conversation.title === '新对话') {
       conversation.title = content.length > 30 ? `${content.slice(0, 30)}...` : content
     }
     conversation.updated_at = now
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return conversation
+  },
+
+  async setAgentPlanMode(conversationId: string, mode: AgentPlanMode): Promise<Conversation> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const now = nowSeconds()
+    const current = conversations[index].agent_plan_state ?? conversations[index].agentPlanState ?? {
+      mode: 'act',
+      status: 'empty',
+      plan: null,
+      updated_at: 0,
+    }
+    const conversation = {
+      ...conversations[index],
+      agent_plan_state: { ...current, mode, updated_at: now },
+      updated_at: now,
+    }
+    conversation.agentPlanState = conversation.agent_plan_state
+    const contextState = estimateMockContext(conversation)
+    conversation.context_state = contextState
+    conversation.contextState = contextState
+    conversations[index] = conversation
+    saveMockConversations(conversations)
+    return conversation
+  },
+
+  async executeAgentPlan(conversationId: string): Promise<Conversation> {
+    const conversations = loadMockConversations()
+    const index = conversations.findIndex((item) => item.id === conversationId)
+    if (index < 0) throw new Error('Conversation not found')
+    const now = nowSeconds()
+    const current = conversations[index].agent_plan_state ?? conversations[index].agentPlanState ?? {
+      mode: 'act',
+      status: 'empty',
+      plan: null,
+      updated_at: 0,
+    }
+    const hasPlan = Boolean(current.plan?.trim())
+    const conversation = {
+      ...conversations[index],
+      agent_plan_state: {
+        ...current,
+        mode: 'act' as AgentPlanMode,
+        status: hasPlan ? 'approved' as const : 'empty' as const,
+        updated_at: now,
+      },
+      updated_at: now,
+    }
+    conversation.agentPlanState = conversation.agent_plan_state
     const contextState = estimateMockContext(conversation)
     conversation.context_state = contextState
     conversation.contextState = contextState
@@ -1236,6 +1311,30 @@ export const chatApi = {
       throw new Error(result.error || 'Failed to compress context')
     }
     return { contextState: result.contextState, conversation: result.conversation }
+  },
+
+  async setAgentPlanMode(conversationId: string, mode: AgentPlanMode): Promise<Conversation> {
+    if (!isTauriRuntime()) return mockChatApi.setAgentPlanMode(conversationId, mode)
+    const result = await invoke<{ success: boolean; conversation?: Conversation; error?: string }>(
+      'chat_set_agent_plan_mode',
+      { conversationId, mode },
+    )
+    if (!result.success || !result.conversation) {
+      throw new Error(result.error || 'Failed to set plan mode')
+    }
+    return result.conversation
+  },
+
+  async executeAgentPlan(conversationId: string): Promise<Conversation> {
+    if (!isTauriRuntime()) return mockChatApi.executeAgentPlan(conversationId)
+    const result = await invoke<{ success: boolean; conversation?: Conversation; error?: string }>(
+      'chat_execute_agent_plan',
+      { conversationId },
+    )
+    if (!result.success || !result.conversation) {
+      throw new Error(result.error || 'Failed to execute plan')
+    }
+    return result.conversation
   },
 
   async cancelStream(conversationId: string): Promise<void> {

@@ -9,6 +9,7 @@ import {
   Eraser,
   MessageSquarePlus,
   Paperclip,
+  Play,
   Plus,
   Settings,
   ShieldAlert,
@@ -18,7 +19,7 @@ import {
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
 import { api, type ChatToolDefinition } from '../api/tauri'
-import type { PendingAttachment } from './types'
+import type { AgentPlanMode, AgentPlanState, PendingAttachment } from './types'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -273,6 +274,9 @@ interface InputBarProps {
   sendDisabledReason?: string
   approvalPolicy?: string
   onApprovalPolicyChange?: (approvalPolicy: string) => void | Promise<void>
+  agentPlanState?: AgentPlanState | null
+  onAgentPlanModeChange?: (mode: AgentPlanMode) => void | Promise<void>
+  onExecuteAgentPlan?: () => void | Promise<void>
   enabledSkills?: { id: string; name: string }[]
   onOpenSkillSettings?: () => void
   autoFocus?: boolean
@@ -297,6 +301,9 @@ export function InputBar({
   sendDisabledReason,
   approvalPolicy,
   onApprovalPolicyChange,
+  agentPlanState = null,
+  onAgentPlanModeChange,
+  onExecuteAgentPlan,
   enabledSkills = [],
   onOpenSkillSettings,
   autoFocus,
@@ -876,6 +883,8 @@ export function InputBar({
   const mcpStatusLine = toolsDisabledReason
     || (externalMcpTools.length > 0 ? `MCP ${externalMcpTools.length}` : '')
   const approvalOption = approvalPolicyOption(approvalPolicy)
+  const agentPlanMode = agentPlanState?.mode ?? 'act'
+  const agentPlanText = agentPlanState?.plan?.trim() ?? ''
 
   return (
     <div className={wrapperClass}>
@@ -1084,6 +1093,47 @@ export function InputBar({
                 aria-label="MCP / Skill"
               >
                 <SlidersHorizontal size={18} strokeWidth={1.75} />
+              </button>
+            )}
+
+            {onAgentPlanModeChange && (
+              <div className="mb-0.5 flex h-8 shrink-0 items-center rounded-full bg-neutral-100 p-0.5 dark:bg-neutral-800">
+                {(['act', 'plan'] as const).map((mode) => {
+                  const selected = agentPlanMode === mode
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => void onAgentPlanModeChange(mode)}
+                      disabled={disabled || selected}
+                      tabIndex={-1}
+                      className={`flex h-7 min-w-[44px] items-center justify-center rounded-full px-2 text-[12px] font-medium transition-colors disabled:cursor-default ${
+                        selected
+                          ? 'bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-neutral-50'
+                          : 'text-neutral-500 hover:text-neutral-800 disabled:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100 dark:disabled:text-neutral-50'
+                      }`}
+                      title={mode === 'plan' ? 'Plan mode' : 'Act mode'}
+                      aria-label={mode === 'plan' ? 'Plan mode' : 'Act mode'}
+                    >
+                      {mode === 'plan' ? 'Plan' : 'Act'}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {onExecuteAgentPlan && agentPlanText && (
+              <button
+                type="button"
+                onClick={() => void onExecuteAgentPlan()}
+                disabled={disabled}
+                tabIndex={-1}
+                className="mb-0.5 flex h-8 shrink-0 items-center gap-1 rounded-full bg-neutral-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
+                title="执行当前计划"
+                aria-label="执行当前计划"
+              >
+                <Play size={13} strokeWidth={2.1} fill="currentColor" />
+                执行
               </button>
             )}
 

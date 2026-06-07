@@ -179,3 +179,109 @@ push_assistant_message(app, state, settings, conversation, ..., result.tool_reco
 ```
 
 Tool-owned conversation state must be merged back before the final conversation save.
+
+## Scenario: Agent Plan Mode Runtime State
+
+### 1. Scope / Trigger
+
+- Trigger: changes that add or modify Plan/Act behavior, especially `agent_plan_state`, plan prompt injection, plan approval commands, Plan-mode tool filtering, or `chat-plan` events.
+- Plan mode is an agent runtime permission mode, not a user task manager. It lets the assistant investigate and draft an implementation plan before side-effecting actions are allowed.
+- The persisted plan is read-only from the user's perspective. Do not add user-editable plan fields without a product decision.
+
+### 2. Signatures
+
+- Persistent model: `Conversation.agent_plan_state: AgentPlanState` with `#[serde(default)]` for old conversation JSON.
+- State shape: `AgentPlanState { mode: AgentPlanMode, status: AgentPlanStatus, plan: Option<String>, updated_at: i64 }`.
+- Mode enum: `act | plan`.
+- Status enum: `empty | draft | approved`.
+- Tauri commands:
+  - `chat_set_agent_plan_mode(conversation_id: String, mode: String) -> { success, conversation, planState }`
+  - `chat_execute_agent_plan(conversation_id: String) -> { success, conversation, planState }`
+- Tauri event: `chat-plan` payload `{ conversationId, planState }`.
+- Prompt segment id: `agent_plan`.
+
+### 3. Contracts
+
+- New conversations start in `mode = act`, `status = empty`, `plan = None`.
+- `chat_set_agent_plan_mode` only accepts `act` or `plan`; it preserves the saved plan text and status while changing mode.
+- `chat_execute_agent_plan` switches to `act`; if a non-empty plan exists, status becomes `approved`, otherwise it remains `empty`.
+- In Plan mode, the final assistant reply is captured as a draft plan only when the original turn started in Plan mode and the latest saved state is still Plan mode.
+- Current plan state must be injected into the system/runtime prompt before `build_chat_api_messages`, and `compute_context_state` must include the same `agent_plan` segment for token estimates.
+- In Act mode, approved or draft plan text remains contextual; if the user asks to execute/continue, the model should use it unless the latest user message changes requirements.
+- Plan mode must filter side-effecting tools before model invocation. Allowed tools are:
+  - native read-only tools: `web_search`, `web_fetch`, `read_file`, `memory_read`
+  - MCP tools with explicit `readOnlyHint == true` and no destructive/open-world hints
+  - skill discovery/read tools: `skill_activate`, `skill_read_file`
+  - agent todo tools: `todo_write`, `todo_update`
+- Plan mode must not expose writes/edits, command execution, `run_python`, memory mutation, Mixer image generation, `skill_run_script`, or arbitrary/non-read-only MCP tools.
+- Tools removed by the Plan filter must be kept as blocked metadata for the current run. If the model still requests one through fallback markup or stale provider state, emit a visible `ToolCallRecord` with `status = skipped` and return model-facing feedback that the tool is blocked in Plan mode.
+- If plan state is updated while a reply is being completed, `complete_assistant_reply` must reload/merge the latest plan state before saving the assistant message, otherwise an older in-memory `Conversation` can overwrite the plan update.
+- The frontend treats plan state as read-only conversation data and updates it from `chat-plan`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Runtime behavior |
+|---|---|
+| Old conversation lacks `agent_plan_state` | Deserialize to default Act/Empty state. |
+| `chat_set_agent_plan_mode` receives an unknown mode | Return an error; do not save conversation state. |
+| Plan mode assistant reply is blank | Do not replace the current plan. |
+| User executes with no saved plan | Switch to Act and keep status `empty`. |
+| User executes with a saved plan | Switch to Act and mark status `approved`. |
+| Plan mode tool list includes write/command/Python/memory mutation/image/script tools | Remove them before provider invocation. |
+| Model requests a tool removed by Plan filtering | Emit a visible skipped tool record and return a tool message explaining it is blocked in Plan mode. |
+| Non-read-only MCP tool has `readOnlyHint == false`, missing read-only metadata, `destructiveHint == true`, or `openWorldHint == true` | Remove it in Plan mode. |
+| Provider does not support tools or is Apple local | Inject plan context as prompt text; do not expose unavailable tools. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: user switches to Plan, asks for implementation analysis, the agent reads files/searches web, returns a plan, and the draft is visible and persisted on the conversation.
+- Good: user clicks Execute Plan, runtime switches to Act, sends a continuation request, and the saved plan is injected into the next model turn.
+- Base: no plan exists; UI shows no plan panel, prompt says there is no saved plan, and Act behavior is unchanged.
+- Bad: Plan mode only changes the system prompt while leaving `write_file`, `run_command`, or `run_python` in the tool schema.
+- Bad: storing the plan only in assistant message text; next turn loses the accepted plan after reload, compaction, or route changes.
+- Bad: treating the plan as a calendar/reminder/task-management object or allowing manual user edits in the MVP.
+
+### 6. Tests Required
+
+- Serde compatibility: old conversation JSON without `agent_plan_state` loads as Act/Empty.
+- State helpers: draft capture trims non-empty assistant replies and approval marks saved plans as `approved`.
+- Prompt/context: `agent_plan` prompt segment appears in both request construction and context estimates.
+- Tool filter: Plan mode keeps read-only native/MCP, skill read tools, and todo tools while removing writes, commands, Python, memory mutation, image generation, script execution, and non-read-only MCP tools.
+- Blocked-tool trace: a model request for a Plan-filtered tool yields a `skipped` record rather than silently disappearing.
+- Command registration/API: new Tauri commands are registered and frontend types mirror the payload.
+- Frontend type/build: `npm run typecheck` verifies `chat-plan` event wiring, Plan/Act controls, Execute Plan flow, and read-only plan panel props.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let system_prompt = format!("{base}\nPlan mode: don't edit files");
+let tools = list_tools_for_chat(...).await;
+```
+
+This asks the model not to act while still exposing side-effecting tools.
+
+```rust
+let result = run_agent_loop(...).await?;
+capture_plan_from_reply(conversation, &result.content);
+push_assistant_message(..., conversation, ...).await?;
+```
+
+This can overwrite a concurrently saved plan/mode change with stale in-memory conversation state.
+
+#### Correct
+
+```rust
+apply_agent_plan_tool_filter(&mut tools, is_plan_mode);
+let agent_plan_prompt = plan::format_prompt(&conversation.agent_plan_state, &language);
+```
+
+```rust
+let result = run_agent_loop(...).await?;
+merge_latest_agent_plan_state(app, conversation);
+capture_agent_plan_draft_if_needed(app, conversation, is_plan_mode, &result.content);
+push_assistant_message(..., conversation, ...).await?;
+```
+
+Plan mode must be enforced by both prompt context and backend tool availability, and persisted state must be merged before the final save.

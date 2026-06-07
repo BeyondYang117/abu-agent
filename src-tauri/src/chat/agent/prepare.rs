@@ -215,6 +215,7 @@ pub fn build_chat_system_prompt(
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
     custom_system_prompt: &str,
     memory_prompt: Option<&str>,
+    agent_plan_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
 ) -> String {
     build_chat_system_prompt_with_segments(
@@ -230,6 +231,7 @@ pub fn build_chat_system_prompt(
         assistant_snapshot,
         custom_system_prompt,
         memory_prompt,
+        agent_plan_prompt,
         agent_todo_prompt,
     )
     .0
@@ -248,6 +250,7 @@ pub fn build_chat_system_prompt_with_segments(
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
     custom_system_prompt: &str,
     memory_prompt: Option<&str>,
+    agent_plan_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
 ) -> (String, Vec<ContextUsageSegment>) {
     let mut prompt = String::new();
@@ -295,6 +298,13 @@ pub fn build_chat_system_prompt_with_segments(
             "Memory / L1",
             memory,
         );
+    }
+
+    if let Some(plan) = agent_plan_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        append_context_segment(&mut prompt, &mut segments, "agent_plan", "Agent plan", plan);
     }
 
     if let Some(todo) = agent_todo_prompt
@@ -644,6 +654,7 @@ pub fn context_segment_color(id: &str) -> Option<&'static str> {
         "assistant" => Some("#8A6FBD"),
         "runtime_context" => Some("#3E8B60"),
         "memory_l1" => Some("#4F9A9A"),
+        "agent_plan" => Some("#8A724C"),
         "agent_todo" => Some("#5F7C5A"),
         "tool_definitions" => Some("#7553CF"),
         "skills" => Some("#BD8A3E"),
@@ -827,6 +838,7 @@ mod tests {
             "",
             None,
             None,
+            None,
         );
 
         assert!(prompt.contains("run_python"));
@@ -852,6 +864,7 @@ mod tests {
             None,
             None,
             "",
+            None,
             None,
             None,
         );
@@ -883,6 +896,7 @@ mod tests {
             None,
             Some(&assistant),
             "你",
+            None,
             None,
             None,
         );

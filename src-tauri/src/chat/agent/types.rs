@@ -45,6 +45,7 @@ pub struct AgentRunConfig<'a> {
     pub model: String,
     pub runtime_messages: Vec<Value>,
     pub tools: Vec<ChatToolDefinition>,
+    pub blocked_tool_calls: Vec<ChatToolDefinition>,
     pub settings: Settings,
     pub effective_chat_tools: ChatToolsConfig,
     pub language: String,

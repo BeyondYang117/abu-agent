@@ -91,6 +91,45 @@ pub struct AgentTodoState {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPlanMode {
+    Act,
+    Plan,
+}
+
+impl Default for AgentPlanMode {
+    fn default() -> Self {
+        Self::Act
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPlanStatus {
+    Empty,
+    Draft,
+    Approved,
+}
+
+impl Default for AgentPlanStatus {
+    fn default() -> Self {
+        Self::Empty
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AgentPlanState {
+    #[serde(default)]
+    pub mode: AgentPlanMode,
+    #[serde(default)]
+    pub status: AgentPlanStatus,
+    #[serde(default)]
+    pub plan: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
 /// 工具调用状态（保存在 assistant message metadata 中）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -205,6 +244,8 @@ pub struct Conversation {
     pub context_state: ConversationContextState,
     #[serde(default)]
     pub agent_todo_state: AgentTodoState,
+    #[serde(default)]
+    pub agent_plan_state: AgentPlanState,
 }
 
 /// 对话列表项（index.json 中的元数据）

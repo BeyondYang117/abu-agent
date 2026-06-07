@@ -34,8 +34,9 @@ use super::storage::{
     load_conversation, save_conversation, update_assistant, update_project,
 };
 use super::{
-    AgentTodoState, Attachment, ChatAssistant, ChatMessage, ContextUsageSegment, Conversation,
-    ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
+    AgentPlanState, AgentTodoState, Attachment, ChatAssistant, ChatMessage, ContextUsageSegment,
+    Conversation, ConversationContextState, ConversationContextSummary, ToolCallRecord,
+    ToolCallStatus,
 };
 
 const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
@@ -207,6 +208,7 @@ pub(crate) fn create_chat_conversation_internal(
                 folder,
                 context_state: ConversationContextState::default(),
                 agent_todo_state: AgentTodoState::default(),
+                agent_plan_state: AgentPlanState::default(),
             };
 
             save_conversation(&app, &conversation)?;
@@ -397,6 +399,45 @@ pub(crate) fn chat_take_external_sends(
     Ok(serde_json::json!({
         "success": true,
         "requests": requests,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_set_agent_plan_mode(
+    app: AppHandle,
+    conversation_id: String,
+    mode: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    let mode = crate::chat::plan::mode_from_str(&mode)?;
+    conversation.agent_plan_state =
+        crate::chat::plan::with_mode(&conversation.agent_plan_state, mode);
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+    emit_chat_plan_state(&app, &conversation.id, &conversation.agent_plan_state);
+
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+        "planState": conversation.agent_plan_state,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_execute_agent_plan(
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    conversation.agent_plan_state = crate::chat::plan::approve(&conversation.agent_plan_state);
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+    emit_chat_plan_state(&app, &conversation.id, &conversation.agent_plan_state);
+
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+        "planState": conversation.agent_plan_state,
     }))
 }
 
@@ -1162,7 +1203,8 @@ async fn complete_assistant_reply(
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
-    if model_can_generate_images_directly(&provider, &conversation.model) {
+    let plan_mode = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
+    if !plan_mode && model_can_generate_images_directly(&provider, &conversation.model) {
         return complete_direct_image_generation_reply(
             app,
             state,
@@ -1328,6 +1370,7 @@ async fn complete_assistant_reply(
         agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
     apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
+    let blocked_tool_calls = apply_agent_plan_tool_filter(&mut tools, plan_mode);
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -1342,6 +1385,8 @@ async fn complete_assistant_reply(
         &language,
         todo_tools_available,
     );
+    let agent_plan_prompt =
+        crate::chat::plan::format_prompt(&conversation.agent_plan_state, &language);
     let system_prompt = agent_prepare::build_chat_system_prompt(
         &language,
         !main_image_paths.is_empty(),
@@ -1355,6 +1400,7 @@ async fn complete_assistant_reply(
         conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
+        Some(&agent_plan_prompt),
         Some(&agent_todo_prompt),
     );
 
@@ -1400,13 +1446,15 @@ async fn complete_assistant_reply(
             "done",
             &response,
         );
+        merge_latest_agent_plan_state(app, conversation);
+        capture_agent_plan_draft_if_needed(app, conversation, plan_mode, &response);
         push_assistant_message(
             app,
             state,
             &settings,
             conversation,
             assistant_message_id,
-            response,
+            response.clone(),
             None,
             Vec::new(),
             auxiliary_tool_records,
@@ -1442,6 +1490,7 @@ async fn complete_assistant_reply(
         conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
+        Some(&agent_plan_prompt),
         Some(&crate::chat::todo::format_prompt(
             &conversation.agent_todo_state,
             &language,
@@ -1474,6 +1523,7 @@ async fn complete_assistant_reply(
             model: conversation.model.clone(),
             runtime_messages,
             tools,
+            blocked_tool_calls,
             settings: settings.clone(),
             effective_chat_tools,
             language,
@@ -1495,6 +1545,8 @@ async fn complete_assistant_reply(
     .await?;
 
     merge_latest_agent_todo_state(app, conversation);
+    merge_latest_agent_plan_state(app, conversation);
+    capture_agent_plan_draft_if_needed(app, conversation, plan_mode, &result.content);
     let mut tool_records = auxiliary_tool_records;
     tool_records.extend(result.tool_records);
     push_assistant_message(
@@ -1731,6 +1783,35 @@ fn merge_latest_agent_todo_state(app: &AppHandle, conversation: &mut Conversatio
             eprintln!("Failed to reload latest agent todo state before saving reply: {err}");
         }
     }
+}
+
+fn merge_latest_agent_plan_state(app: &AppHandle, conversation: &mut Conversation) {
+    match load_conversation(app, &conversation.id) {
+        Ok(latest) => {
+            conversation.agent_plan_state = latest.agent_plan_state;
+        }
+        Err(err) => {
+            eprintln!("Failed to reload latest agent plan state before saving reply: {err}");
+        }
+    }
+}
+
+fn capture_agent_plan_draft_if_needed(
+    app: &AppHandle,
+    conversation: &mut Conversation,
+    original_plan_mode: bool,
+    content: &str,
+) {
+    if !original_plan_mode || !crate::chat::plan::is_plan_mode(&conversation.agent_plan_state) {
+        return;
+    }
+    let next_state =
+        crate::chat::plan::capture_draft_from_reply(&conversation.agent_plan_state, content);
+    if next_state == conversation.agent_plan_state {
+        return;
+    }
+    conversation.agent_plan_state = next_state.clone();
+    emit_chat_plan_state(app, &conversation.id, &next_state);
 }
 
 fn assistant_model_messages_for_storage(
@@ -2644,6 +2725,8 @@ async fn compute_context_state(
         agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
     apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
+    let plan_mode = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
+    apply_agent_plan_tool_filter(&mut tools, plan_mode);
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -2686,6 +2769,10 @@ async fn compute_context_state(
         conversation.assistant_snapshot.as_ref(),
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
+        Some(&crate::chat::plan::format_prompt(
+            &conversation.agent_plan_state,
+            &language,
+        )),
         Some(&crate::chat::todo::format_prompt(
             &conversation.agent_todo_state,
             &language,
@@ -2998,6 +3085,16 @@ fn emit_chat_todo_state(app: &AppHandle, conversation_id: &str, todo_state: &Age
     );
 }
 
+fn emit_chat_plan_state(app: &AppHandle, conversation_id: &str, plan_state: &AgentPlanState) {
+    let _ = app.emit(
+        "chat-plan",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "planState": plan_state,
+        }),
+    );
+}
+
 fn context_status(
     usage_ratio: Option<f32>,
     summary: Option<&ConversationContextSummary>,
@@ -3047,6 +3144,37 @@ fn append_agent_todo_tools(
     }
     crate::chat::todo::append_tool_definitions(tools);
     true
+}
+
+fn apply_agent_plan_tool_filter(
+    tools: &mut Vec<ChatToolDefinition>,
+    plan_mode: bool,
+) -> Vec<ChatToolDefinition> {
+    if !plan_mode {
+        return Vec::new();
+    }
+    let mut blocked = Vec::new();
+    tools.retain(|tool| {
+        let allowed = agent_plan_allows_tool(tool);
+        if !allowed {
+            blocked.push(tool.clone());
+        }
+        allowed
+    });
+    blocked
+}
+
+fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
+    if tool.source == "native" && crate::chat::todo::is_agent_todo_tool_name(&tool.name) {
+        return true;
+    }
+    if tool.source == "native" {
+        return tool.is_read_only_tool();
+    }
+    if tool.source == "mcp" {
+        return tool.is_read_only_tool();
+    }
+    tool.source == "skill" && matches!(tool.name.as_str(), "skill_activate" | "skill_read_file")
 }
 
 fn apply_inline_code_request_tool_filter(
@@ -4436,6 +4564,98 @@ mod tests {
     }
 
     #[test]
+    fn agent_plan_tool_filter_keeps_only_read_only_and_agent_state_tools() {
+        let readonly_mcp_tool = ChatToolDefinition {
+            id: "mcp__docs__search".to_string(),
+            name: "search".to_string(),
+            description: "Search docs".to_string(),
+            source: "mcp".to_string(),
+            server_id: Some("docs".to_string()),
+            server_name: Some("Docs".to_string()),
+            input_schema: serde_json::json!({"type": "object"}),
+            sensitive: false,
+            annotations: Some(serde_json::json!({ "readOnlyHint": true })),
+            output_schema: None,
+        };
+        let write_mcp_tool = ChatToolDefinition {
+            id: "mcp__fs__write".to_string(),
+            name: "write".to_string(),
+            description: "Write file".to_string(),
+            source: "mcp".to_string(),
+            server_id: Some("fs".to_string()),
+            server_name: Some("FS".to_string()),
+            input_schema: serde_json::json!({"type": "object"}),
+            sensitive: true,
+            annotations: Some(serde_json::json!({ "readOnlyHint": false })),
+            output_schema: None,
+        };
+        let mut tools = vec![
+            crate::mcp::types::native_read_file_tool(),
+            crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_run_command_tool(),
+            crate::mcp::types::native_run_python_tool(),
+            crate::mcp::types::native_memory_read_tool(),
+            crate::mcp::types::native_memory_modify_tool(),
+            crate::mcp::types::mixer_generate_image_tool(),
+            crate::mcp::types::native_skill_activate_tool(),
+            crate::mcp::types::native_skill_read_file_tool(),
+            crate::mcp::types::native_skill_run_script_tool(),
+            crate::chat::todo::todo_write_tool(),
+            crate::chat::todo::todo_update_tool(),
+            readonly_mcp_tool,
+            write_mcp_tool,
+        ];
+
+        let blocked = apply_agent_plan_tool_filter(&mut tools, true);
+
+        let names = tools
+            .iter()
+            .map(|tool| tool.openai_tool_name())
+            .collect::<Vec<_>>();
+        let blocked_names = blocked
+            .iter()
+            .map(|tool| tool.openai_tool_name())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"memory_read".to_string()));
+        assert!(names.contains(&"skill_activate".to_string()));
+        assert!(names.contains(&"skill_read_file".to_string()));
+        assert!(names.contains(&"todo_write".to_string()));
+        assert!(names.contains(&"todo_update".to_string()));
+        assert!(names.contains(&"mcp__docs__search".to_string()));
+        assert!(!names.contains(&"write_file".to_string()));
+        assert!(!names.contains(&"run_command".to_string()));
+        assert!(!names.contains(&"run_python".to_string()));
+        assert!(!names.contains(&"memory_modify".to_string()));
+        assert!(!names.contains(&"mixer_generate_image".to_string()));
+        assert!(!names.contains(&"skill_run_script".to_string()));
+        assert!(!names.contains(&"mcp__fs__write".to_string()));
+        assert!(blocked_names.contains(&"write_file".to_string()));
+        assert!(blocked_names.contains(&"run_command".to_string()));
+        assert!(blocked_names.contains(&"run_python".to_string()));
+        assert!(blocked_names.contains(&"memory_modify".to_string()));
+        assert!(blocked_names.contains(&"mixer_generate_image".to_string()));
+        assert!(blocked_names.contains(&"skill_run_script".to_string()));
+        assert!(blocked_names.contains(&"mcp__fs__write".to_string()));
+    }
+
+    #[test]
+    fn agent_plan_tool_filter_is_noop_outside_plan_mode() {
+        let mut tools = vec![
+            crate::mcp::types::native_read_file_tool(),
+            crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_run_command_tool(),
+        ];
+
+        let blocked = apply_agent_plan_tool_filter(&mut tools, false);
+
+        assert!(tools.iter().any(|tool| tool.name == "read_file"));
+        assert!(tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(tools.iter().any(|tool| tool.name == "run_command"));
+        assert!(blocked.is_empty());
+    }
+
+    #[test]
     fn inline_code_request_ignores_attachment_safe_copy_paths() {
         let content = compose_user_content_for_api(
             "用 ```html 包起来给我",
@@ -4686,6 +4906,7 @@ mod tests {
                 ..ConversationContextState::default()
             },
             agent_todo_state: AgentTodoState::default(),
+            agent_plan_state: AgentPlanState::default(),
         }
     }
 
@@ -4734,6 +4955,7 @@ mod tests {
             folder: None,
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
+            agent_plan_state: AgentPlanState::default(),
         };
         let result = AuxiliaryVisionResult {
             provider_name: "Vision Provider".to_string(),
@@ -4849,6 +5071,7 @@ mod tests {
             folder: None,
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
+            agent_plan_state: AgentPlanState::default(),
         };
 
         let messages = build_chat_api_messages("system", &conversation, None, None, &[])
@@ -4957,6 +5180,7 @@ mod tests {
             folder: None,
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
+            agent_plan_state: AgentPlanState::default(),
         };
 
         let messages = build_chat_api_messages("system", &conversation, None, None, &[])

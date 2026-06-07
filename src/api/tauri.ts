@@ -146,6 +146,22 @@ export type ChatTodoPayload = {
   todoState: ChatTodoState
 }
 
+export type ChatPlanMode = 'act' | 'plan'
+export type ChatPlanStatus = 'empty' | 'draft' | 'approved'
+
+export type ChatPlanState = {
+  mode?: ChatPlanMode
+  status?: ChatPlanStatus
+  plan?: string | null
+  updated_at?: number
+  updatedAt?: number
+}
+
+export type ChatPlanPayload = {
+  conversationId: string
+  planState: ChatPlanState
+}
+
 export type ChatToolStatus =
   | 'pending'
   | 'running'
@@ -867,6 +883,10 @@ export const api = {
   onChatTodo: (listener: (payload: ChatTodoPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatTodoPayload>('chat-todo', (payload) => listener(payload))
+  },
+  onChatPlan: (listener: (payload: ChatPlanPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatPlanPayload>('chat-plan', (payload) => listener(payload))
   },
   onChatTool: (listener: (payload: ChatToolProgressPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})

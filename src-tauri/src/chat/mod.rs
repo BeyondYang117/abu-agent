@@ -5,6 +5,7 @@ pub mod dsml_tools;
 pub mod image_generation;
 pub mod memory;
 pub mod model;
+pub mod plan;
 pub mod storage;
 pub mod todo;
 pub mod types;

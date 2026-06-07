@@ -66,6 +66,7 @@ pub async fn run_agent_loop(
 ) -> Result<AgentRunResult, String> {
     let mut runtime_messages = std::mem::take(&mut config.runtime_messages);
     let mut tools = std::mem::take(&mut config.tools);
+    let blocked_tool_calls = std::mem::take(&mut config.blocked_tool_calls);
     let mut generated_api_messages = Vec::new();
     let mut tool_records = Vec::new();
     let mut planning_reasoning_parts: Vec<String> = Vec::new();
@@ -265,6 +266,7 @@ pub async fn run_agent_loop(
                     round,
                 },
                 &tools,
+                &blocked_tool_calls,
                 tool_calls,
                 &mut skill_cache,
             )
@@ -584,6 +586,7 @@ async fn execute_tool_round(
     settings: &Settings,
     ctx: ToolRoundContext<'_>,
     tools: &[ChatToolDefinition],
+    blocked_tool_calls: &[ChatToolDefinition],
     tool_calls: Vec<PendingToolCall>,
     skill_cache: &mut skills::SkillRunCache,
 ) -> ToolRoundResult {
@@ -625,7 +628,7 @@ async fn execute_tool_round(
                 );
                 break;
             }
-            let result = unknown_or_disabled_tool_result(host, &ctx, tool_call);
+            let result = unknown_or_disabled_tool_result(host, &ctx, blocked_tool_calls, tool_call);
             push_tool_execution_result(result, &mut response_messages, &mut tool_records);
             continue;
         };
@@ -1001,8 +1004,24 @@ fn cancelled_tool_result(
 fn unknown_or_disabled_tool_result(
     host: &dyn AgentHost,
     ctx: &ToolRoundContext<'_>,
+    blocked_tool_calls: &[ChatToolDefinition],
     tool_call: PendingToolCall,
 ) -> ToolExecutionResult {
+    if let Some(tool) = match_tool_call(blocked_tool_calls, &tool_call.function_name) {
+        let error = format!(
+            "Tool `{}` is blocked in Plan mode. Switch to Act / execute the plan before using side-effecting tools.",
+            tool.openai_tool_name()
+        );
+        let mut record = skipped_tool_record(ctx, &tool_call, tool, error.clone());
+        attach_tool_trace(ctx, &mut record);
+        host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+        return ToolExecutionResult {
+            response_message: tool_message(tool_call.id, error),
+            record: Some(record),
+            cancelled: false,
+        };
+    }
+
     let disabled = disabled_tool_content(&tool_call);
     let record = if disabled.is_none() {
         let error = format!("Unknown tool requested: {}", tool_call.function_name);
@@ -1019,6 +1038,34 @@ fn unknown_or_disabled_tool_result(
         response_message: tool_message(tool_call.id, content),
         record,
         cancelled: false,
+    }
+}
+
+fn skipped_tool_record(
+    ctx: &ToolRoundContext<'_>,
+    call: &PendingToolCall,
+    tool: &ChatToolDefinition,
+    error: String,
+) -> ToolCallRecord {
+    let now = chrono::Local::now().timestamp();
+    ToolCallRecord {
+        id: call.id.clone(),
+        name: tool.name.clone(),
+        source: tool.source.clone(),
+        server_id: tool.server_id.clone(),
+        arguments: call.arguments_raw.clone(),
+        status: ToolCallStatus::Skipped,
+        result_preview: None,
+        error: Some(error),
+        duration_ms: Some(0),
+        started_at: Some(now),
+        completed_at: Some(now),
+        round: ctx.round,
+        sensitive: tool.sensitive,
+        artifacts: Vec::new(),
+        trace_id: None,
+        span_id: None,
+        structured_content: None,
     }
 }
 
@@ -1510,6 +1557,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_read", "read_file"),
                 pending_tool_call("call_fetch", "web_fetch"),
@@ -1565,6 +1613,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_mcp_a", "search_a"),
                 pending_tool_call("call_mcp_b", "search_b"),
@@ -1602,6 +1651,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_mcp_write_1", "write_remote"),
                 pending_tool_call("call_mcp_write_2", "write_remote"),
@@ -1635,6 +1685,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_mcp_remote_1", "remote_search"),
                 pending_tool_call("call_mcp_remote_2", "remote_search"),
@@ -1666,6 +1717,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_read", "read_file"),
                 pending_tool_call("call_fetch", "web_fetch"),
@@ -1740,6 +1792,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_round_records_plan_blocked_tool_as_skipped() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![native_read_file_tool()];
+        let blocked = vec![native_run_python_tool()];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            &blocked,
+            vec![pending_tool_call("call_py", "run_python")],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 0);
+        assert_eq!(result.response_messages.len(), 1);
+        assert!(result.response_messages[0]
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("blocked in Plan mode"));
+        assert_eq!(result.tool_records.len(), 1);
+        let record = &result.tool_records[0];
+        assert_eq!(record.id, "call_py");
+        assert_eq!(record.name, "run_python");
+        assert!(matches!(record.status, ToolCallStatus::Skipped));
+        assert!(record
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("blocked in Plan mode"));
+        assert_eq!(record.trace_id.as_deref(), Some("run"));
+        assert_eq!(record.span_id.as_deref(), Some("tool_round_1_call_py"));
+    }
+
+    #[tokio::test]
     async fn tool_round_cancels_unstarted_calls_after_running_tool_is_cancelled() {
         let host = TestHost::cancelling_after(Duration::from_millis(5));
         let executor = RecordingExecutor::default();
@@ -1753,6 +1847,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_read", "read_file"),
                 pending_tool_call("call_py", "run_python"),
@@ -1886,6 +1981,7 @@ mod tests {
             &settings,
             test_round_context(),
             &tools,
+            &[],
             vec![
                 pending_tool_call("call_py_1", "run_python"),
                 pending_tool_call("call_py_2", "run_python"),

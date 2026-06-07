@@ -326,6 +326,17 @@ export interface AgentTodoState {
   updatedAt?: number
 }
 
+export type AgentPlanMode = 'act' | 'plan'
+export type AgentPlanStatus = 'empty' | 'draft' | 'approved'
+
+export interface AgentPlanState {
+  mode?: AgentPlanMode
+  status?: AgentPlanStatus
+  plan?: string | null
+  updated_at?: number
+  updatedAt?: number
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -346,6 +357,8 @@ export interface Conversation {
   contextState?: ConversationContextState
   agent_todo_state?: AgentTodoState
   agentTodoState?: AgentTodoState
+  agent_plan_state?: AgentPlanState
+  agentPlanState?: AgentPlanState
 }
 
 export interface ConversationListItem {

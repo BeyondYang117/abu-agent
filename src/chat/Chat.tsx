@@ -22,6 +22,8 @@ import type {
   ChatAssistant,
   Conversation,
   ConversationContextState,
+  AgentPlanMode,
+  AgentPlanState,
   AgentTodoState,
   PendingAttachment,
   SkillMeta,
@@ -246,6 +248,7 @@ function conversationUsesModel(
 
 type SendMessageOptions = {
   forceNewConversation?: boolean
+  conversationOverride?: Conversation | null
 }
 
 export default function Chat({ onSettingsChange }: ChatProps) {
@@ -367,6 +370,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const patchAgentTodoState = useCallback((nextState: AgentTodoState) => {
     setCurrentConversation((prev) => prev
       ? { ...prev, agent_todo_state: nextState, agentTodoState: nextState }
+      : prev)
+  }, [])
+
+  const patchAgentPlanState = useCallback((nextState: AgentPlanState) => {
+    setCurrentConversation((prev) => prev
+      ? { ...prev, agent_plan_state: nextState, agentPlanState: nextState }
       : prev)
   }, [])
 
@@ -987,6 +996,31 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     let unlisten: (() => void) | undefined
 
     const setupListener = async () => {
+      unlisten = await api.onChatPlan((payload) => {
+        if (cancelled) return
+        const currentConversationId = currentConversationIdRef.current
+        if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        patchAgentPlanState(payload.planState)
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [patchAgentPlanState])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
       unlisten = await api.onChatTool((payload) => {
         if (cancelled) return
         if (isLocallyCancelledPayload(
@@ -1309,6 +1343,33 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }, [applyConversation, currentConversation, refreshContextStats, refreshSidebar])
 
+  const ensureConversationForAgentPlan = useCallback(async () => {
+    if (currentConversation) return currentConversation
+    const conversation = await chatApi.createConversation(
+      activeProviderId || undefined,
+      activeModel || undefined,
+      selectedProject?.name,
+    )
+    currentConversationIdRef.current = conversation.id
+    applyConversation(conversation)
+    syncConversationRoute(conversation.id)
+    refreshSidebar()
+    return conversation
+  }, [activeModel, activeProviderId, applyConversation, currentConversation, refreshSidebar, selectedProject?.name, syncConversationRoute])
+
+  const handleAgentPlanModeChange = useCallback(async (mode: AgentPlanMode) => {
+    try {
+      const conversation = await ensureConversationForAgentPlan()
+      const updated = await chatApi.setAgentPlanMode(conversation.id, mode)
+      applyConversation(updated)
+      void refreshContextStats(updated.id)
+      refreshSidebar()
+    } catch (err) {
+      console.error('Failed to update agent plan mode:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Plan 模式切换失败')
+    }
+  }, [applyConversation, ensureConversationForAgentPlan, refreshContextStats, refreshSidebar])
+
   const handleSelectProject = useCallback((project: ChatProject | null) => {
     setSelectedProject(project)
     setLastAssistantStreamStats(null)
@@ -1375,9 +1436,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       return false
     }
 
-    let conversation = options.forceNewConversation ? null : currentConversation
+    let conversation = options.conversationOverride
+      ?? (options.forceNewConversation ? null : currentConversation)
     if (
       conversation
+      && !options.conversationOverride
       && isPlainBlankConversation(conversation)
       && !conversationUsesModel(conversation, activeProviderId, activeModel)
     ) {
@@ -1508,6 +1571,38 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setStreamErrorForConversation,
     syncConversationRoute,
     syncGeneratingConversationIds,
+  ])
+
+  const handleExecuteAgentPlan = useCallback(async () => {
+    const conversation = currentConversation
+    if (!conversation) return
+    const planText = (conversation.agent_plan_state?.plan ?? conversation.agentPlanState?.plan ?? '').trim()
+    if (!planText) return
+    if (isConversationInFlight(inFlightConversationsRef.current, conversation.id)) {
+      setStreamErrorForConversation(conversation.id, '该对话正在生成中，请稍后再试')
+      return
+    }
+
+    try {
+      const updated = await chatApi.executeAgentPlan(conversation.id)
+      applyConversation(updated)
+      refreshSidebar()
+      void refreshContextStats(updated.id)
+      void handleSendMessage('按刚才的计划开始执行。', [], { conversationOverride: updated })
+    } catch (err) {
+      console.error('Failed to execute agent plan:', err)
+      setStreamErrorForConversation(
+        conversation.id,
+        typeof err === 'string' ? err : (err as Error).message || '执行计划失败',
+      )
+    }
+  }, [
+    applyConversation,
+    currentConversation,
+    handleSendMessage,
+    refreshContextStats,
+    refreshSidebar,
+    setStreamErrorForConversation,
   ])
 
   const drainExternalSends = useCallback(async () => {
@@ -2054,6 +2149,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       sendDisabledReason={sendDisabledReason}
                       approvalPolicy={approvalPolicy}
                       onApprovalPolicyChange={handleApprovalPolicyChange}
+                      agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
+                      onAgentPlanModeChange={handleAgentPlanModeChange}
+                      onExecuteAgentPlan={handleExecuteAgentPlan}
                       enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
                       onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                       autoFocus
@@ -2066,6 +2164,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     <MessageList
                       conversationId={currentConversation?.id}
                       messages={displayMessages}
+                      agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
                       agentTodoState={currentConversation?.agent_todo_state ?? currentConversation?.agentTodoState ?? null}
                       streaming={streaming}
                       streamingContent={streamingContent}
@@ -2096,6 +2195,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     sendDisabledReason={sendDisabledReason}
                     approvalPolicy={approvalPolicy}
                     onApprovalPolicyChange={handleApprovalPolicyChange}
+                    agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
+                    onAgentPlanModeChange={handleAgentPlanModeChange}
+                    onExecuteAgentPlan={handleExecuteAgentPlan}
                     enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
                     onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                     autoFocus

@@ -288,6 +288,8 @@ fn main() {
             chat::commands::chat_get_context_stats,
             chat::commands::chat_compress_context,
             chat::commands::chat_take_external_sends,
+            chat::commands::chat_set_agent_plan_mode,
+            chat::commands::chat_execute_agent_plan,
             chat::commands::chat_send_message,
             chat::commands::chat_cancel_stream,
             chat::commands::chat_confirm_tool_call,

@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AgentTodoState, ChatMessage, ToolCallRecord } from './types'
+import type { AgentPlanState, AgentTodoState, ChatMessage, ToolCallRecord } from './types'
 import { MessageBubble } from './MessageBubble'
 
 const INITIAL_VISIBLE_MESSAGES = 60
@@ -18,6 +18,7 @@ interface MessageListProps {
   streamingReasoning?: string
   reasoningStreaming?: boolean
   streamingToolCalls?: ToolCallRecord[]
+  agentPlanState?: AgentPlanState | null
   agentTodoState?: AgentTodoState | null
   error?: string
   lastAssistantStreamStats?: AssistantStreamStats | null
@@ -34,6 +35,7 @@ export function MessageList({
   streamingReasoning = '',
   reasoningStreaming = false,
   streamingToolCalls = [],
+  agentPlanState = null,
   agentTodoState = null,
   error,
   lastAssistantStreamStats = null,
@@ -132,6 +134,7 @@ export function MessageList({
   return (
     <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="custom-scrollbar flex-1 overflow-y-auto">
       <div className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
+        <AgentPlanPanel planState={agentPlanState} />
         <AgentTodoPanel todoState={agentTodoState} />
 
         {hiddenMessageCount > 0 && (
@@ -194,6 +197,31 @@ export function MessageList({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function AgentPlanPanel({ planState }: { planState?: AgentPlanState | null }) {
+  const plan = planState?.plan?.trim() ?? ''
+  if (!plan) return null
+
+  const mode = planState?.mode ?? 'act'
+  const status = planState?.status ?? 'draft'
+  return (
+    <div className="chat-motion-fade-up pb-3 pt-1">
+      <section className="border-b border-neutral-200/70 bg-white/95 pb-3 backdrop-blur dark:border-neutral-800/80 dark:bg-[#212121]/95">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="text-[11px] font-medium uppercase tracking-normal text-neutral-500 dark:text-neutral-400">
+            Agent plan
+          </div>
+          <div className="text-[11px] text-neutral-400 dark:text-neutral-500">
+            {status} · {mode}
+          </div>
+        </div>
+        <p className="line-clamp-6 whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-700 dark:text-neutral-300">
+          {plan}
+        </p>
+      </section>
     </div>
   )
 }
