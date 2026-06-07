@@ -64,6 +64,9 @@ pub fn unknown_tool_record(call: &PendingToolCall, round: u32, error: String) ->
         round,
         sensitive: false,
         artifacts: Vec::new(),
+        trace_id: None,
+        span_id: None,
+        structured_content: None,
     }
 }
 
@@ -87,8 +90,11 @@ pub fn invalid_tool_arguments_record(
         started_at: Some(now),
         completed_at: Some(now),
         round,
-        sensitive: false,
+        sensitive: tool.sensitive,
         artifacts: Vec::new(),
+        trace_id: None,
+        span_id: None,
+        structured_content: None,
     }
 }
 
@@ -117,8 +123,23 @@ pub async fn execute_tool_call(
         round: ctx.round,
         sensitive: tool.sensitive,
         artifacts: Vec::new(),
+        trace_id: Some(ctx.run_id.to_string()),
+        span_id: Some(tool_span_id(ctx.round, &call.id)),
+        structured_content: None,
     };
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+
+    if let Err(err) = validate_tool_arguments(tool, &call.arguments) {
+        record.status = ToolCallStatus::Error;
+        record.duration_ms = Some(0);
+        record.completed_at = Some(chrono::Local::now().timestamp());
+        record.error = Some(err.clone());
+        host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+        return (
+            record,
+            format!("Tool arguments failed schema validation: {err}. Retry this tool call with arguments that match the declared JSON schema."),
+        );
+    }
 
     let requires_approval = tool_requires_approval(settings, tool);
     if requires_approval {
@@ -159,16 +180,24 @@ pub async fn execute_tool_call(
         Ok(Ok(output)) if !output.is_error => {
             record.status = ToolCallStatus::Success;
             record.artifacts = output.artifacts.clone();
+            record.structured_content = output.structured_content.clone();
             record.result_preview = Some(limit_tool_text_for_model(
-                &format_tool_result_preview(&output.content),
+                &format_tool_result_preview(&tool_content_with_structured_output(&output)),
                 max_tool_output_chars,
             ));
-            limit_tool_text_for_model(&output.content, max_tool_output_chars)
+            limit_tool_text_for_model(
+                &tool_content_with_structured_output(&output),
+                max_tool_output_chars,
+            )
         }
         Ok(Ok(output)) => {
             record.status = ToolCallStatus::Error;
+            record.structured_content = output.structured_content.clone();
             record.error = Some(truncate_chars(&output.content, 1000));
-            limit_tool_text_for_model(&output.content, max_tool_output_chars)
+            limit_tool_text_for_model(
+                &tool_content_with_structured_output(&output),
+                max_tool_output_chars,
+            )
         }
         Ok(Err(err)) => {
             record.status = ToolCallStatus::Error;
@@ -198,8 +227,179 @@ pub fn tool_requires_approval(settings: &Settings, tool: &ChatToolDefinition) ->
     match settings.chat_tools.approval_policy.as_str() {
         "auto" => false,
         "always_confirm" => true,
+        _ if tool.source == "mcp" => {
+            if tool.destructive_hint() == Some(true)
+                || tool.open_world_hint() == Some(true)
+                || tool.read_only_hint() == Some(false)
+            {
+                return true;
+            }
+            if tool.read_only_hint() == Some(true) {
+                return false;
+            }
+            tool.sensitive
+        }
         _ => tool.sensitive,
     }
+}
+
+fn tool_span_id(round: u32, tool_call_id: &str) -> String {
+    format!("tool_round_{round}_{tool_call_id}")
+}
+
+pub fn validate_tool_arguments(tool: &ChatToolDefinition, arguments: &Value) -> Result<(), String> {
+    validate_schema_value(&tool.input_schema, arguments, "arguments")
+}
+
+fn validate_schema_value(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    if schema.is_null() || schema.as_object().is_some_and(|object| object.is_empty()) {
+        return Ok(());
+    }
+    if let Some(options) = schema.get("anyOf").and_then(Value::as_array) {
+        if options
+            .iter()
+            .any(|option| validate_schema_value(option, value, path).is_ok())
+        {
+            return Ok(());
+        }
+        return Err(format!("{path} does not match any allowed schema"));
+    }
+    if let Some(options) = schema.get("oneOf").and_then(Value::as_array) {
+        let matches = options
+            .iter()
+            .filter(|option| validate_schema_value(option, value, path).is_ok())
+            .count();
+        if matches == 1 {
+            return Ok(());
+        }
+        return Err(format!("{path} must match exactly one allowed schema"));
+    }
+    if let Some(types) = schema.get("type") {
+        validate_schema_type(types, value, path)?;
+    }
+    if let Some(enum_values) = schema.get("enum").and_then(Value::as_array) {
+        if !enum_values.iter().any(|candidate| candidate == value) {
+            return Err(format!("{path} must be one of the declared enum values"));
+        }
+    }
+    if let Some(object) = value.as_object() {
+        validate_object_schema(schema, object, path)?;
+    }
+    if let Some(items) = schema.get("items") {
+        if let Some(array) = value.as_array() {
+            for (idx, item) in array.iter().enumerate() {
+                validate_schema_value(items, item, &format!("{path}[{idx}]"))?;
+            }
+        }
+    }
+    if let Some(max_items) = schema.get("maxItems").and_then(Value::as_u64) {
+        if value
+            .as_array()
+            .is_some_and(|array| array.len() as u64 > max_items)
+        {
+            return Err(format!("{path} must contain at most {max_items} items"));
+        }
+    }
+    validate_numeric_range(schema, value, path)?;
+    Ok(())
+}
+
+fn validate_schema_type(types: &Value, value: &Value, path: &str) -> Result<(), String> {
+    if let Some(type_name) = types.as_str() {
+        if value_matches_schema_type(type_name, value) {
+            return Ok(());
+        }
+        return Err(format!("{path} must be {type_name}"));
+    }
+    if let Some(type_names) = types.as_array() {
+        if type_names
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|type_name| value_matches_schema_type(type_name, value))
+        {
+            return Ok(());
+        }
+        return Err(format!("{path} has an invalid type"));
+    }
+    Ok(())
+}
+
+fn value_matches_schema_type(type_name: &str, value: &Value) -> bool {
+    match type_name {
+        "null" => value.is_null(),
+        "boolean" => value.is_boolean(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        _ => true,
+    }
+}
+
+fn validate_object_schema(
+    schema: &Value,
+    object: &serde_json::Map<String, Value>,
+    path: &str,
+) -> Result<(), String> {
+    let properties = schema.get("properties").and_then(Value::as_object);
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for key in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(key) {
+                return Err(format!("{path}.{key} is required"));
+            }
+        }
+    }
+    if let Some(properties) = properties {
+        for (key, child_schema) in properties {
+            if let Some(child_value) = object.get(key) {
+                validate_schema_value(child_schema, child_value, &format!("{path}.{key}"))?;
+            }
+        }
+    }
+    if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+        if let Some(extra_key) = object.keys().find(|key| match properties {
+            Some(properties) => !properties.contains_key(*key),
+            None => true,
+        }) {
+            return Err(format!("{path}.{extra_key} is not allowed"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_numeric_range(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    let Some(number) = value.as_f64() else {
+        return Ok(());
+    };
+    if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
+        if number < minimum {
+            return Err(format!("{path} must be at least {minimum}"));
+        }
+    }
+    if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+        if number > maximum {
+            return Err(format!("{path} must be at most {maximum}"));
+        }
+    }
+    Ok(())
+}
+
+fn tool_content_with_structured_output(output: &McpToolCallResult) -> String {
+    let Some(structured_content) = output.structured_content.as_ref() else {
+        return output.content.clone();
+    };
+    let structured_json = serde_json::to_string(structured_content).unwrap_or_default();
+    if structured_json.is_empty() || output.content.contains(&structured_json) {
+        return output.content.clone();
+    }
+    if output.content.trim().is_empty() {
+        return structured_json;
+    }
+    format!(
+        "{}\n\nstructuredContent: {}",
+        output.content, structured_json
+    )
 }
 
 fn effective_tool_timeout_ms(
@@ -316,8 +516,147 @@ fn format_tool_result_preview(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
+
+    use crate::chat::agent::host::AgentHostFuture;
     use crate::chat::types::ToolCallStatus;
     use crate::mcp::types::native_skill_activate_tool;
+
+    #[derive(Default)]
+    struct ExecuteTestHost {
+        approvals: AtomicUsize,
+        records: Mutex<Vec<ToolCallRecord>>,
+    }
+
+    impl AgentHost for ExecuteTestHost {
+        fn emit_stream_delta(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _delta: &str,
+            _reasoning_delta: Option<&str>,
+        ) {
+        }
+
+        fn emit_stream_done(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _reason: &str,
+            _full: &str,
+        ) {
+        }
+
+        fn emit_tool_record(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            record: &ToolCallRecord,
+        ) {
+            self.records
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(record.clone());
+        }
+
+        fn request_tool_approval<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+        ) -> AgentHostFuture<'a, bool> {
+            self.approvals.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { true })
+        }
+
+        fn is_generation_active(&self, _conversation_id: &str, _generation: u64) -> bool {
+            true
+        }
+
+        fn wait_for_generation_inactive<'a>(
+            &'a self,
+            _conversation_id: &'a str,
+            _generation: u64,
+        ) -> AgentHostFuture<'a, ()> {
+            Box::pin(async { std::future::pending::<()>().await })
+        }
+    }
+
+    #[derive(Default)]
+    struct ExecuteTestExecutor {
+        calls: AtomicUsize,
+        structured_content: Option<Value>,
+    }
+
+    impl ToolExecutor for ExecuteTestExecutor {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            tool: &'a ChatToolDefinition,
+            _arguments: Value,
+            _skill_cache: Option<&'a mut skills::SkillRunCache>,
+        ) -> ToolExecutorFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let content = format!("result:{}", tool.name);
+            let structured_content = self.structured_content.clone();
+            Box::pin(async move {
+                Ok(McpToolCallResult {
+                    content,
+                    is_error: false,
+                    raw: Value::Null,
+                    artifacts: Vec::new(),
+                    structured_content,
+                })
+            })
+        }
+    }
+
+    fn test_execution_context() -> ToolExecutionContext<'static> {
+        ToolExecutionContext {
+            conversation_id: "conversation",
+            run_id: "run",
+            message_id: "message",
+            generation: 1,
+            round: 2,
+        }
+    }
+
+    fn test_pending_call(id: &str, function_name: &str, arguments: Value) -> PendingToolCall {
+        PendingToolCall {
+            id: id.to_string(),
+            function_name: function_name.to_string(),
+            arguments_raw: serde_json::to_string(&arguments).expect("serialize test args"),
+            arguments,
+            arguments_parse_error: None,
+        }
+    }
+
+    fn sensitive_test_tool() -> ChatToolDefinition {
+        ChatToolDefinition {
+            id: "native__write_file".to_string(),
+            name: "write_file".to_string(),
+            description: "Write file".to_string(),
+            source: "native".to_string(),
+            server_id: None,
+            server_name: Some("Kivio".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "content": { "type": "string" }
+                },
+                "required": ["path", "content"]
+            }),
+            sensitive: true,
+            annotations: None,
+            output_schema: None,
+        }
+    }
 
     #[test]
     fn unknown_tool_record_is_error_metadata() {
@@ -334,6 +673,91 @@ mod tests {
         assert!(matches!(record.status, ToolCallStatus::Error));
         assert_eq!(record.round, 2);
         assert_eq!(record.source, "unknown");
+    }
+
+    #[tokio::test]
+    async fn schema_validation_fails_before_approval_or_execution() {
+        let host = ExecuteTestHost::default();
+        let executor = ExecuteTestExecutor::default();
+        let settings = Settings::default();
+        let tool = sensitive_test_tool();
+        let call = test_pending_call("call_invalid", "write_file", serde_json::json!({}));
+
+        let (record, content) = execute_tool_call(
+            &host,
+            &executor,
+            &settings,
+            &test_execution_context(),
+            &tool,
+            call,
+            None,
+        )
+        .await;
+
+        assert!(matches!(record.status, ToolCallStatus::Error));
+        assert!(record
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("arguments.path is required")));
+        assert!(content.contains("schema validation"));
+        assert_eq!(host.approvals.load(Ordering::SeqCst), 0);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        let records = host.records.lock().unwrap_or_else(|err| err.into_inner());
+        assert_eq!(records.len(), 2);
+        assert!(matches!(records[0].status, ToolCallStatus::Pending));
+        assert!(matches!(records[1].status, ToolCallStatus::Error));
+    }
+
+    #[test]
+    fn schema_validation_rejects_additional_properties_without_declared_properties() {
+        let mut tool = sensitive_test_tool();
+        tool.input_schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false
+        });
+
+        let err = validate_tool_arguments(&tool, &serde_json::json!({ "extra": true }))
+            .expect_err("extra properties should be rejected");
+
+        assert!(err.contains("arguments.extra is not allowed"));
+    }
+
+    #[tokio::test]
+    async fn successful_tool_records_trace_and_structured_content() {
+        let host = ExecuteTestHost::default();
+        let executor = ExecuteTestExecutor {
+            calls: AtomicUsize::new(0),
+            structured_content: Some(serde_json::json!({ "answer": 42 })),
+        };
+        let settings = Settings::default();
+        let mut tool = sensitive_test_tool();
+        tool.sensitive = false;
+        let call = test_pending_call(
+            "call_ok",
+            "write_file",
+            serde_json::json!({ "path": "/tmp/out.txt", "content": "hello" }),
+        );
+
+        let (record, content) = execute_tool_call(
+            &host,
+            &executor,
+            &settings,
+            &test_execution_context(),
+            &tool,
+            call,
+            None,
+        )
+        .await;
+
+        assert!(matches!(record.status, ToolCallStatus::Success));
+        assert_eq!(record.trace_id.as_deref(), Some("run"));
+        assert_eq!(record.span_id.as_deref(), Some("tool_round_2_call_ok"));
+        assert_eq!(
+            record.structured_content.as_ref(),
+            Some(&serde_json::json!({ "answer": 42 }))
+        );
+        assert!(content.contains("structuredContent"));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

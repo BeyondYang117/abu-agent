@@ -2211,7 +2211,10 @@ mod tests {
 
         let settings = sanitize_settings(settings);
 
-        assert_eq!(settings.chat_tools.max_tool_rounds, Some(CHAT_TOOL_MAX_ROUNDS));
+        assert_eq!(
+            settings.chat_tools.max_tool_rounds,
+            Some(CHAT_TOOL_MAX_ROUNDS)
+        );
         assert_eq!(settings.chat_tools.max_tool_output_chars, None);
 
         let mut settings = Settings::default();

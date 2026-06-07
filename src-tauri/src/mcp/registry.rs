@@ -484,6 +484,7 @@ async fn call_skill_tool(
         is_error: false,
         raw: Value::Null,
         artifacts: Vec::new(),
+        structured_content: None,
     })
 }
 
@@ -537,6 +538,7 @@ async fn call_native_tool(
                 is_error: false,
                 raw,
                 artifacts: Vec::new(),
+                structured_content: None,
             });
         }
         "web_fetch" => crate::native_tools::web_fetch(&state.http, &arguments).await?,
@@ -567,6 +569,7 @@ async fn call_native_tool(
         is_error: false,
         raw: Value::Null,
         artifacts: Vec::new(),
+        structured_content: None,
     })
 }
 
@@ -629,6 +632,7 @@ async fn run_python_via_pyodide(
                     is_error: false,
                     raw: Value::Null,
                     artifacts: result.artifacts,
+                    structured_content: None,
                 })
             }
         }

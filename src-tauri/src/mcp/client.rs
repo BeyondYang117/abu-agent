@@ -545,6 +545,7 @@ fn parse_tool_result(value: Value) -> McpToolCallResult {
         .get("isError")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
+    let structured_content = value.get("structuredContent").cloned();
     let content = value
         .get("content")
         .and_then(|content| content.as_array())
@@ -571,6 +572,7 @@ fn parse_tool_result(value: Value) -> McpToolCallResult {
         is_error,
         raw: value,
         artifacts: Vec::new(),
+        structured_content,
     }
 }
 
@@ -639,6 +641,24 @@ data: {"jsonrpc":"2.0","id":7,"result":{"ok":true}}
                 .and_then(|ok| ok.as_bool()),
             Some(true),
         );
+    }
+
+    #[test]
+    fn parse_tool_result_preserves_structured_content() {
+        let result = parse_tool_result(serde_json::json!({
+            "content": [{ "type": "text", "text": "summary" }],
+            "structuredContent": {
+                "items": [{ "title": "A" }]
+            },
+            "isError": false
+        }));
+
+        assert_eq!(result.content, "summary");
+        assert_eq!(
+            result.structured_content.as_ref(),
+            Some(&serde_json::json!({ "items": [{ "title": "A" }] }))
+        );
+        assert!(!result.is_error);
     }
 
     #[tokio::test]

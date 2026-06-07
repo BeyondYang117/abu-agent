@@ -101,6 +101,12 @@ pub struct ToolCallRecord {
     pub sensitive: bool,
     #[serde(default)]
     pub artifacts: Vec<ChatToolArtifact>,
+    #[serde(default)]
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub span_id: Option<String>,
+    #[serde(default)]
+    pub structured_content: Option<Value>,
 }
 
 /// 对话消息

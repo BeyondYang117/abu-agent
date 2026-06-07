@@ -13,6 +13,10 @@ pub struct ChatToolDefinition {
     pub server_name: Option<String>,
     pub input_schema: serde_json::Value,
     pub sensitive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 impl ChatToolDefinition {
@@ -35,6 +39,31 @@ impl ChatToolDefinition {
             }
         })
     }
+
+    pub fn read_only_hint(&self) -> Option<bool> {
+        annotation_bool(self.annotations.as_ref(), "readOnlyHint")
+    }
+
+    pub fn destructive_hint(&self) -> Option<bool> {
+        annotation_bool(self.annotations.as_ref(), "destructiveHint")
+    }
+
+    pub fn open_world_hint(&self) -> Option<bool> {
+        annotation_bool(self.annotations.as_ref(), "openWorldHint")
+    }
+
+    pub fn is_read_only_tool(&self) -> bool {
+        if self.source == "mcp" {
+            return self.read_only_hint() == Some(true)
+                && self.destructive_hint() != Some(true)
+                && self.open_world_hint() != Some(true);
+        }
+        self.source == "native"
+            && matches!(
+                self.name.as_str(),
+                "web_search" | "web_fetch" | "read_file" | "memory_read"
+            )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +74,8 @@ pub struct McpToolCallResult {
     pub raw: serde_json::Value,
     #[serde(default)]
     pub artifacts: Vec<ChatToolArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,10 +105,15 @@ pub struct McpTool {
     pub description: String,
     #[serde(default, rename = "inputSchema")]
     pub input_schema: serde_json::Value,
+    #[serde(default, rename = "outputSchema")]
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub annotations: Option<serde_json::Value>,
 }
 
 pub fn tool_definition_from_mcp(server: &ChatMcpServer, tool: McpTool) -> ChatToolDefinition {
     let id = format!("mcp__{}__{}", server.id, tool.name);
+    let sensitive = mcp_tool_requires_confirmation(&tool);
     ChatToolDefinition {
         id,
         name: tool.name.clone(),
@@ -94,8 +130,51 @@ pub fn tool_definition_from_mcp(server: &ChatMcpServer, tool: McpTool) -> ChatTo
         } else {
             tool.input_schema
         },
-        sensitive: looks_sensitive_tool(&tool.name),
+        sensitive,
+        annotations: tool.annotations,
+        output_schema: tool.output_schema,
     }
+}
+
+fn annotation_bool(annotations: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    let annotations = annotations?;
+    let snake_key = to_snake_case(key);
+    annotations
+        .get(key)
+        .or_else(|| annotations.get(&snake_key))
+        .and_then(|value| value.as_bool())
+}
+
+fn to_snake_case(value: &str) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if idx > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn mcp_tool_requires_confirmation(tool: &McpTool) -> bool {
+    let annotations = tool.annotations.as_ref();
+    if annotation_bool(annotations, "destructiveHint") == Some(true) {
+        return true;
+    }
+    if annotation_bool(annotations, "openWorldHint") == Some(true) {
+        return true;
+    }
+    if annotation_bool(annotations, "readOnlyHint") == Some(false) {
+        return true;
+    }
+    if annotation_bool(annotations, "readOnlyHint") == Some(true) {
+        return false;
+    }
+    looks_sensitive_tool(&tool.name)
 }
 
 pub fn native_web_search_tool() -> ChatToolDefinition {
@@ -117,6 +196,8 @@ pub fn native_web_search_tool() -> ChatToolDefinition {
             "required": ["query"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -139,6 +220,8 @@ pub fn native_skill_activate_tool() -> ChatToolDefinition {
             "required": ["name"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -165,6 +248,8 @@ pub fn native_skill_read_file_tool() -> ChatToolDefinition {
             "required": ["name", "relative_path"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -200,6 +285,8 @@ pub fn native_skill_run_script_tool() -> ChatToolDefinition {
             "required": ["name", "relative_path"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -229,6 +316,8 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
             "required": ["path"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -249,6 +338,8 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
             "required": ["path", "content"]
         }),
         sensitive: true,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -271,6 +362,8 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
             "required": ["path", "old_string", "new_string"]
         }),
         sensitive: true,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -293,6 +386,8 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
             "required": ["command"]
         }),
         sensitive: true,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -319,6 +414,8 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
             "required": ["code"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -350,6 +447,8 @@ pub fn native_memory_read_tool() -> ChatToolDefinition {
             "required": ["layer"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -395,6 +494,8 @@ pub fn native_memory_modify_tool() -> ChatToolDefinition {
             "required": ["layer", "operation"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -433,6 +534,8 @@ pub fn mixer_generate_image_tool() -> ChatToolDefinition {
             "required": ["prompt"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -453,6 +556,8 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
             "required": ["url"]
         }),
         sensitive: false,
+        annotations: None,
+        output_schema: None,
     }
 }
 
@@ -598,10 +703,120 @@ mod tests {
                 name: "search.web".to_string(),
                 description: String::new(),
                 input_schema: serde_json::json!({ "type": "object" }),
+                output_schema: None,
+                annotations: None,
             },
         );
 
         assert_eq!(tool.openai_tool_name(), "mcp__server_one__search_web");
         assert_ne!(tool.openai_tool_name(), tool.name);
+    }
+
+    #[test]
+    fn mcp_tool_definition_preserves_metadata_and_read_only_hint() {
+        let server = ChatMcpServer {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            enabled: true,
+            transport: "stdio".to_string(),
+            url: String::new(),
+            command: "demo".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            cwd: None,
+            enabled_tools: Vec::new(),
+        };
+        let annotations = serde_json::json!({ "readOnlyHint": true });
+        let output_schema = serde_json::json!({
+            "type": "object",
+            "properties": { "items": { "type": "array" } }
+        });
+
+        let tool = tool_definition_from_mcp(
+            &server,
+            McpTool {
+                name: "search".to_string(),
+                description: "Search".to_string(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                output_schema: Some(output_schema.clone()),
+                annotations: Some(annotations.clone()),
+            },
+        );
+
+        assert_eq!(tool.annotations.as_ref(), Some(&annotations));
+        assert_eq!(tool.output_schema.as_ref(), Some(&output_schema));
+        assert_eq!(tool.read_only_hint(), Some(true));
+        assert!(tool.is_read_only_tool());
+        assert!(!tool.sensitive);
+    }
+
+    #[test]
+    fn mcp_destructive_and_open_world_annotations_are_sensitive() {
+        let server = ChatMcpServer {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            enabled: true,
+            transport: "stdio".to_string(),
+            url: String::new(),
+            command: "demo".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            cwd: None,
+            enabled_tools: Vec::new(),
+        };
+
+        for annotations in [
+            serde_json::json!({ "destructiveHint": true }),
+            serde_json::json!({ "openWorldHint": true }),
+            serde_json::json!({ "readOnlyHint": false }),
+        ] {
+            let tool = tool_definition_from_mcp(
+                &server,
+                McpTool {
+                    name: "remote_action".to_string(),
+                    description: "Remote action".to_string(),
+                    input_schema: serde_json::json!({ "type": "object" }),
+                    output_schema: None,
+                    annotations: Some(annotations),
+                },
+            );
+            assert!(tool.sensitive);
+        }
+    }
+
+    #[test]
+    fn mcp_open_world_annotation_overrides_read_only_hint() {
+        let server = ChatMcpServer {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            enabled: true,
+            transport: "stdio".to_string(),
+            url: String::new(),
+            command: "demo".to_string(),
+            args: Vec::new(),
+            env: std::collections::HashMap::new(),
+            headers: std::collections::HashMap::new(),
+            cwd: None,
+            enabled_tools: Vec::new(),
+        };
+
+        let tool = tool_definition_from_mcp(
+            &server,
+            McpTool {
+                name: "remote_search".to_string(),
+                description: "Remote search".to_string(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                output_schema: None,
+                annotations: Some(serde_json::json!({
+                    "readOnlyHint": true,
+                    "openWorldHint": true
+                })),
+            },
+        );
+
+        assert!(tool.sensitive);
+        assert!(!tool.is_read_only_tool());
     }
 }

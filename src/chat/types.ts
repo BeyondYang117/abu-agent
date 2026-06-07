@@ -81,6 +81,12 @@ export interface ToolCallRecord {
   requires_confirmation?: boolean
   requiresConfirmation?: boolean
   artifacts?: ChatToolArtifact[]
+  trace_id?: string | null
+  traceId?: string | null
+  span_id?: string | null
+  spanId?: string | null
+  structured_content?: unknown
+  structuredContent?: unknown
 }
 
 export interface ChatToolArtifact {

@@ -3165,6 +3165,9 @@ fn auxiliary_vision_tool_record(
         round: 0,
         sensitive: false,
         artifacts: Vec::new(),
+        trace_id: None,
+        span_id: None,
+        structured_content: None,
     }
 }
 
@@ -3679,6 +3682,9 @@ fn emit_chat_tool_record(
             "round": record.round,
             "sensitive": record.sensitive,
             "artifacts": record.artifacts,
+            "traceId": record.trace_id,
+            "spanId": record.span_id,
+            "structuredContent": record.structured_content,
         }),
     );
 }
@@ -4450,6 +4456,9 @@ mod tests {
             round: 1,
             sensitive: true,
             artifacts: Vec::new(),
+            trace_id: None,
+            span_id: None,
+            structured_content: None,
         };
 
         let summary = format_tool_approval_summary(&record);
@@ -4475,6 +4484,9 @@ mod tests {
             round: 1,
             sensitive: true,
             artifacts: Vec::new(),
+            trace_id: None,
+            span_id: None,
+            structured_content: None,
         };
 
         let summary = format_tool_approval_summary(&record);
@@ -4522,6 +4534,9 @@ mod tests {
             round: 1,
             sensitive: false,
             artifacts: Vec::new(),
+            trace_id: None,
+            span_id: None,
+            structured_content: None,
         }];
 
         let model_messages = assistant_model_messages_for_storage(

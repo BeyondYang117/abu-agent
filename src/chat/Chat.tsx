@@ -142,6 +142,9 @@ function toolEventToRecord(payload: ChatToolProgressPayload): ToolCallRecord {
     round: payload.round,
     sensitive: payload.sensitive,
     artifacts: payload.artifacts ?? [],
+    traceId: payload.traceId ?? undefined,
+    spanId: payload.spanId ?? undefined,
+    structuredContent: payload.structuredContent,
   }
 }
 

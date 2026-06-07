@@ -774,6 +774,8 @@ mod tests {
             server_name: Some("Demo".to_string()),
             input_schema: serde_json::json!({ "type": "object", "properties": {} }),
             sensitive: false,
+            annotations: None,
+            output_schema: None,
         }
     }
 

@@ -986,6 +986,9 @@ fn cancelled_tool_result(
         round: ctx.round,
         sensitive: tool.map(|tool| tool.sensitive).unwrap_or(false),
         artifacts: Vec::new(),
+        trace_id: Some(ctx.run_id.to_string()),
+        span_id: Some(tool_span_id(ctx, &tool_call.id)),
+        structured_content: None,
     };
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
     ToolExecutionResult {
@@ -1003,7 +1006,8 @@ fn unknown_or_disabled_tool_result(
     let disabled = disabled_tool_content(&tool_call);
     let record = if disabled.is_none() {
         let error = format!("Unknown tool requested: {}", tool_call.function_name);
-        let record = unknown_tool_record(&tool_call, ctx.round, error);
+        let mut record = unknown_tool_record(&tool_call, ctx.round, error);
+        attach_tool_trace(ctx, &mut record);
         host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
         Some(record)
     } else {
@@ -1025,7 +1029,8 @@ fn invalid_tool_arguments_result(
     tool: &ChatToolDefinition,
     error: String,
 ) -> ToolExecutionResult {
-    let record = invalid_tool_arguments_record(tool_call, tool, ctx.round, error);
+    let mut record = invalid_tool_arguments_record(tool_call, tool, ctx.round, error);
+    attach_tool_trace(ctx, &mut record);
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
     ToolExecutionResult {
         response_message: tool_message(
@@ -1035,6 +1040,15 @@ fn invalid_tool_arguments_result(
         record: Some(record),
         cancelled: false,
     }
+}
+
+fn attach_tool_trace(ctx: &ToolRoundContext<'_>, record: &mut ToolCallRecord) {
+    record.trace_id = Some(ctx.run_id.to_string());
+    record.span_id = Some(tool_span_id(ctx, &record.id));
+}
+
+fn tool_span_id(ctx: &ToolRoundContext<'_>, tool_call_id: &str) -> String {
+    format!("tool_round_{}_{}", ctx.round, tool_call_id)
 }
 
 fn tool_message(tool_call_id: String, content: impl Into<String>) -> Value {
@@ -1049,8 +1063,10 @@ fn tool_call_parallel_eligible(settings: &Settings, tool: &ChatToolDefinition) -
     if tool_requires_approval(settings, tool) {
         return false;
     }
-    tool.source == "native"
-        && matches!(tool.name.as_str(), "web_search" | "web_fetch" | "read_file")
+    if tool.source == "native" {
+        return matches!(tool.name.as_str(), "web_search" | "web_fetch" | "read_file");
+    }
+    tool.source == "mcp" && tool.is_read_only_tool()
 }
 
 async fn call_chat_completion_message(
@@ -1414,6 +1430,7 @@ mod tests {
                     is_error: false,
                     raw: Value::Null,
                     artifacts: Vec::new(),
+                    structured_content: None,
                 })
             })
         }
@@ -1430,12 +1447,37 @@ mod tests {
     }
 
     fn pending_tool_call(id: &str, function_name: &str) -> PendingToolCall {
+        let arguments = test_tool_arguments(function_name);
         PendingToolCall {
             id: id.to_string(),
             function_name: function_name.to_string(),
-            arguments: serde_json::json!({}),
-            arguments_raw: "{}".to_string(),
+            arguments_raw: serde_json::to_string(&arguments).expect("serialize test arguments"),
+            arguments,
             arguments_parse_error: None,
+        }
+    }
+
+    fn test_tool_arguments(function_name: &str) -> Value {
+        match function_name {
+            "read_file" => serde_json::json!({ "path": "/tmp/kivio-test.txt" }),
+            "web_fetch" => serde_json::json!({ "url": "https://example.com" }),
+            "run_python" => serde_json::json!({ "code": "print(1)" }),
+            _ => serde_json::json!({}),
+        }
+    }
+
+    fn test_mcp_tool(name: &str, annotations: Value) -> ChatToolDefinition {
+        ChatToolDefinition {
+            id: format!("mcp__demo__{name}"),
+            name: name.to_string(),
+            description: "MCP test tool".to_string(),
+            source: "mcp".to_string(),
+            server_id: Some("demo".to_string()),
+            server_name: Some("Demo".to_string()),
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+            sensitive: false,
+            annotations: Some(annotations),
+            output_schema: None,
         }
     }
 
@@ -1507,6 +1549,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tool_round_runs_read_only_mcp_tools_concurrently() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![
+            test_mcp_tool("search_a", serde_json::json!({ "readOnlyHint": true })),
+            test_mcp_tool("search_b", serde_json::json!({ "readOnlyHint": true })),
+        ];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_mcp_a", "search_a"),
+                pending_tool_call("call_mcp_b", "search_b"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 2);
+        assert_eq!(
+            tool_call_ids(&result.response_messages),
+            vec!["call_mcp_a", "call_mcp_b"]
+        );
+        assert!(result
+            .tool_records
+            .iter()
+            .all(|record| matches!(record.status, ToolCallStatus::Success)));
+    }
+
+    #[tokio::test]
+    async fn tool_round_keeps_destructive_mcp_tools_serial() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let mut settings = Settings::default();
+        settings.chat_tools.approval_policy = "auto".to_string();
+        let tools = vec![test_mcp_tool(
+            "write_remote",
+            serde_json::json!({ "destructiveHint": true }),
+        )];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_mcp_write_1", "write_remote"),
+                pending_tool_call("call_mcp_write_2", "write_remote"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 1);
+        assert_eq!(
+            tool_call_ids(&result.response_messages),
+            vec!["call_mcp_write_1", "call_mcp_write_2"]
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_round_keeps_open_world_mcp_tools_serial_even_when_read_only() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let mut settings = Settings::default();
+        settings.chat_tools.approval_policy = "auto".to_string();
+        let tools = vec![test_mcp_tool(
+            "remote_search",
+            serde_json::json!({ "readOnlyHint": true, "openWorldHint": true }),
+        )];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            vec![
+                pending_tool_call("call_mcp_remote_1", "remote_search"),
+                pending_tool_call("call_mcp_remote_2", "remote_search"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 1);
+        assert_eq!(
+            tool_call_ids(&result.response_messages),
+            vec!["call_mcp_remote_1", "call_mcp_remote_2"]
+        );
+    }
+
+    #[tokio::test]
     async fn tool_round_preserves_unknown_and_invalid_call_order() {
         let host = TestHost::default();
         let executor = RecordingExecutor::default();
@@ -1533,6 +1677,12 @@ mod tests {
             &mut skill_cache,
         )
         .await;
+
+        let error_records = result
+            .tool_records
+            .iter()
+            .filter(|record| matches!(record.status, ToolCallStatus::Error))
+            .collect::<Vec<_>>();
 
         assert_eq!(executor.max_active(), 2);
         assert_eq!(
@@ -1562,13 +1712,24 @@ mod tests {
             ]
         );
         assert_eq!(
-            result
-                .tool_records
+            error_records
                 .iter()
-                .filter(|record| matches!(record.status, ToolCallStatus::Error))
                 .map(|record| record.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["call_missing", "call_bad_args"]
+        );
+        assert!(error_records
+            .iter()
+            .all(|record| record.trace_id.as_deref() == Some("run")));
+        assert_eq!(
+            error_records
+                .iter()
+                .map(|record| record.span_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("tool_round_1_call_missing"),
+                Some("tool_round_1_call_bad_args")
+            ]
         );
         let start_events = executor
             .events()
@@ -1646,6 +1807,9 @@ mod tests {
             round: 1,
             sensitive: false,
             artifacts: Vec::new(),
+            trace_id: Some("run".to_string()),
+            span_id: Some("tool_round_1_call_read".to_string()),
+            structured_content: None,
         };
         let assistant_message = serde_json::json!({
             "role": "assistant",

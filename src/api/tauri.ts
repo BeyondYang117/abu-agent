@@ -165,6 +165,9 @@ export type ChatToolProgressPayload = {
   round?: number
   sensitive?: boolean
   artifacts?: ChatToolArtifact[]
+  traceId?: string | null
+  spanId?: string | null
+  structuredContent?: unknown
 }
 
 export type ChatToolConfirmPayload = {
@@ -187,6 +190,8 @@ export type ChatToolDefinition = {
   serverId?: string | null
   serverName?: string | null
   inputSchema: unknown
+  annotations?: unknown
+  outputSchema?: unknown
   sensitive: boolean
 }
 

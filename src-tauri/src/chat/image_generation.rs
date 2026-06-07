@@ -117,6 +117,7 @@ pub async fn generate_image_with_provider(
                 .collect::<Vec<_>>(),
         }),
         artifacts,
+        structured_content: None,
     })
 }
 

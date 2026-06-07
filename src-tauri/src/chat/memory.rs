@@ -232,6 +232,7 @@ pub fn tool_read(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResult
         is_error: false,
         raw: serde_json::to_value(&memory).unwrap_or(Value::Null),
         artifacts: Vec::new(),
+        structured_content: None,
     })
 }
 
@@ -271,6 +272,7 @@ pub fn tool_modify(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResu
         is_error: false,
         raw: serde_json::to_value(&result).unwrap_or(Value::Null),
         artifacts: Vec::new(),
+        structured_content: None,
     })
 }
 
