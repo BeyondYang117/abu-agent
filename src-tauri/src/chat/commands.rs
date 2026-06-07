@@ -23,7 +23,7 @@ use crate::chat::model::{
 };
 use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{persist_settings, ModelInfo, ModelProvider, ProviderApiFormat, Settings};
+use crate::settings::{ModelInfo, ModelProvider, ProviderApiFormat, Settings};
 use crate::skills;
 use crate::state::AppState;
 
@@ -39,6 +39,27 @@ use super::{
 };
 
 const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
+const CHAT_REPLY_BUSY_ERROR: &str = "该对话正在生成中，请稍后再试";
+
+struct ChatReplyGuard<'a> {
+    state: &'a AppState,
+    conversation_id: String,
+}
+
+impl<'a> ChatReplyGuard<'a> {
+    fn new(state: &'a AppState, conversation_id: &str) -> Self {
+        Self {
+            state,
+            conversation_id: conversation_id.to_string(),
+        }
+    }
+}
+
+impl Drop for ChatReplyGuard<'_> {
+    fn drop(&mut self) {
+        self.state.end_chat_reply(&self.conversation_id);
+    }
+}
 
 fn chat_memory_prompt_for_request(
     app: &AppHandle,
@@ -388,6 +409,14 @@ pub(crate) async fn chat_send_message(
     attachments: Vec<String>,
     active_skill_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if !state.try_begin_chat_reply(&conversation_id) {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": CHAT_REPLY_BUSY_ERROR,
+        }));
+    }
+    let _reply_guard = ChatReplyGuard::new(state.inner(), &conversation_id);
+
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let message_attachments = save_message_attachments(&app, &conversation_id, attachments)?;
     let attachments_dir = if message_attachments.is_empty() {
@@ -3859,6 +3888,14 @@ pub(crate) async fn chat_regenerate_message(
     conversation_id: String,
     message_id: String,
 ) -> Result<serde_json::Value, String> {
+    if !state.try_begin_chat_reply(&conversation_id) {
+        return Ok(serde_json::json!({
+            "success": false,
+            "error": CHAT_REPLY_BUSY_ERROR,
+        }));
+    }
+    let _reply_guard = ChatReplyGuard::new(state.inner(), &conversation_id);
+
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let idx = find_message_index(&conversation, &message_id)?;
     if conversation.messages[idx].role != "assistant" {
@@ -3986,7 +4023,6 @@ pub(crate) fn chat_delete_conversation(
 #[tauri::command]
 pub(crate) fn chat_update_conversation(
     app: AppHandle,
-    state: State<AppState>,
     conversation_id: String,
     title: Option<String>,
     pinned: Option<bool>,
@@ -4012,7 +4048,6 @@ pub(crate) fn chat_update_conversation(
             Some(trimmed.to_string())
         };
     }
-    let provider_model_changed = provider_id.is_some() || model.is_some();
     if let Some(provider_id) = provider_id {
         conversation.provider_id = provider_id;
     }
@@ -4043,18 +4078,6 @@ pub(crate) fn chat_update_conversation(
 
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(&app, &conversation)?;
-
-    if provider_model_changed {
-        let updated_settings = {
-            let mut settings = state.settings_write();
-            settings.default_models.chat.provider_id = conversation.provider_id.clone();
-            settings.default_models.chat.model = conversation.model.clone();
-            settings.chat_provider_id = conversation.provider_id.clone();
-            settings.chat_model = conversation.model.clone();
-            settings.clone()
-        };
-        persist_settings(&app, &updated_settings)?;
-    }
 
     Ok(serde_json::json!({
         "success": true,

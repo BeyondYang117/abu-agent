@@ -50,6 +50,8 @@ pub struct AppState {
     pub explain_stream_generation: AtomicU64,
     /// Chat 流式取消代号，按 conversation_id 隔离，避免 Lens 与 Chat 互相取消。
     pub chat_stream_generations: Mutex<HashMap<String, u64>>,
+    /// 正在进行 assistant 回复生成的 conversation_id 集合，防止同对话并发写盘。
+    pub chat_active_replies: Mutex<HashSet<String>>,
     /// 等待用户确认的敏感 Chat tool 调用。
     pub pending_chat_tool_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     /// 等待前端 Pyodide 完成的 run_python 调用。
@@ -199,6 +201,27 @@ impl AppState {
             == generation
     }
 
+    /// 尝试占用某个对话的回复生成槽位；同对话已有进行中的回复时返回 false。
+    pub fn try_begin_chat_reply(&self, conversation_id: &str) -> bool {
+        let mut active = self
+            .chat_active_replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if active.contains(conversation_id) {
+            return false;
+        }
+        active.insert(conversation_id.to_string());
+        true
+    }
+
+    /// 释放某个对话的回复生成槽位。
+    pub fn end_chat_reply(&self, conversation_id: &str) {
+        self.chat_active_replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation_id);
+    }
+
     pub fn get_cached_chat_tools(
         &self,
         cache_key: &str,
@@ -261,6 +284,7 @@ mod tests {
             lens_busy: AtomicBool::new(false),
             explain_stream_generation: AtomicU64::new(0),
             chat_stream_generations: Mutex::new(HashMap::new()),
+            chat_active_replies: Mutex::new(HashSet::new()),
             pending_chat_tool_approvals: Mutex::new(HashMap::new()),
             pending_python_runs: Mutex::new(HashMap::new()),
             chat_create_conversation_lock: Mutex::new(()),

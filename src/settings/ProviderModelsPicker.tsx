@@ -15,6 +15,7 @@ export type ProviderModelsPickerLabels = {
   noModels: string
   noSearchResults: string
   enabled: string
+  addAllModels: string
   close: string
 }
 
@@ -26,6 +27,7 @@ type ProviderModelsPickerProps = {
   onClose: () => void
   onFetch: () => void
   onAdd: (model: string) => void
+  onAddAll: (models: string[]) => void
   onRemove: (model: string) => void
 }
 
@@ -41,6 +43,7 @@ export function ProviderModelsPicker({
   onClose,
   onFetch,
   onAdd,
+  onAddAll,
   onRemove,
 }: ProviderModelsPickerProps) {
   const [query, setQuery] = useState('')
@@ -70,6 +73,11 @@ export function ProviderModelsPicker({
     if (!q) return allModels
     return allModels.filter((model) => model.toLowerCase().includes(q))
   }, [allModels, query])
+
+  const addableModels = useMemo(
+    () => filteredModels.filter((model) => !enabledSet.has(modelKey(model))),
+    [enabledSet, filteredModels],
+  )
 
   const submitManual = () => {
     const value = manualValue.trim()
@@ -172,21 +180,35 @@ export function ProviderModelsPicker({
         )}
 
         <div className="kv-model-picker-body custom-scrollbar">
-          <button
-            type="button"
-            className="kv-model-picker-group-head"
-            onClick={() => setGroupOpen((open) => !open)}
-            data-tauri-drag-region="false"
-          >
-            <ChevronDown
-              size={14}
-              className={`kv-model-picker-chevron ${groupOpen ? 'open' : ''}`}
-            />
-            <span className="kv-model-picker-group-name truncate">
-              {provider.name || provider.id}
-            </span>
-            <span className="kv-tag">{filteredModels.length}</span>
-          </button>
+          <div className="kv-model-picker-group-head">
+            <button
+              type="button"
+              className="kv-model-picker-group-toggle"
+              onClick={() => setGroupOpen((open) => !open)}
+              data-tauri-drag-region="false"
+            >
+              <ChevronDown
+                size={14}
+                className={`kv-model-picker-chevron ${groupOpen ? 'open' : ''}`}
+              />
+              <span className="kv-model-picker-group-name truncate">
+                {provider.name || provider.id}
+              </span>
+              <span className="kv-tag">{filteredModels.length}</span>
+            </button>
+            {addableModels.length > 0 && (
+              <button
+                type="button"
+                className="kv-model-picker-row-btn add shrink-0"
+                onClick={() => onAddAll(addableModels)}
+                data-tauri-drag-region="false"
+                aria-label={labels.addAllModels}
+                title={labels.addAllModels}
+              >
+                <Plus size={14} strokeWidth={2.25} />
+              </button>
+            )}
+          </div>
 
           {groupOpen && (
             <ul className="kv-model-picker-list">

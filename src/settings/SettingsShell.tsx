@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
-  Settings as SettingsIcon, Languages, Camera,
+  Settings as SettingsIcon, Languages, Zap,
   Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
   MessageSquare, Globe, SlidersHorizontal, Brain,
 } from 'lucide-react'
@@ -202,13 +202,9 @@ function formatTokenCount(tokens?: number): string {
 }
 
 function resolveEffectiveChatModel(settings: SettingsData): { provider?: ModelProvider, model: string } {
-  const configuredChat = settings.defaultModels.chat.providerId
-    ? settings.defaultModels.chat
-    : settings.chatProviderId
-      ? { providerId: settings.chatProviderId, model: settings.chatModel }
-      : settings.lens?.providerId
-        ? { providerId: settings.lens.providerId, model: settings.lens.model || '' }
-        : { providerId: settings.translatorProviderId, model: settings.translatorModel }
+  const configuredChat = settings.lens?.providerId
+    ? { providerId: settings.lens.providerId, model: settings.lens.model || '' }
+    : { providerId: settings.translatorProviderId, model: settings.translatorModel }
 
   return {
     provider: settings.providers.find((provider) => provider.id === configuredChat.providerId),
@@ -394,9 +390,9 @@ function SkillListSection({
   )
 }
 
-function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData['defaultModels'] {
+function defaultDefaultModels(): SettingsData['defaultModels'] {
   return {
-    chat: { providerId: chatProviderId, model: chatModel },
+    chat: { providerId: '', model: '' },
     vision: { providerId: '', model: '' },
     titleSummary: { providerId: '', model: '' },
     compression: { providerId: '', model: '' },
@@ -1092,7 +1088,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   ) => {
     setSettings((prev) => {
       if (!prev) return prev
-      const current = prev.defaultModels || defaultDefaultModels(prev.chatProviderId, prev.chatModel)
+      const current = prev.defaultModels || defaultDefaultModels()
       const defaultModels = {
         ...current,
         [key]: { providerId, model },
@@ -1100,7 +1096,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       return {
         ...prev,
         defaultModels,
-        ...(key === 'chat' ? { chatProviderId: providerId, chatModel: model } : {}),
       }
     })
   }, [])
@@ -1427,14 +1422,13 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       ? resolveProvider(nextProviders, settings.lens?.providerId || '')
       : undefined
 
-    setSettings({
+    const defaultModels = clearDefaultModelProvider(settings.defaultModels, id)
+    const nextSettings: SettingsData = {
       ...settings,
       providers: nextProviders,
       translatorProviderId: translatorProvider ? translatorProvider.id : '',
       translatorModel: resolveModel(translatorProvider, settings.translatorModel),
-      chatProviderId: settings.defaultModels.chat.providerId === id ? '' : settings.chatProviderId,
-      chatModel: settings.defaultModels.chat.providerId === id ? '' : settings.chatModel,
-      defaultModels: clearDefaultModelProvider(settings.defaultModels, id),
+      defaultModels,
       screenshotTranslation: {
         ...settings.screenshotTranslation,
         providerId: screenshotProvider ? screenshotProvider.id : '',
@@ -1447,6 +1441,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
           model: resolveModel(lensProvider, settings.lens?.model || '')
         }
       } : {})
+    }
+    const effectiveChat = resolveEffectiveChatModel(nextSettings)
+    setSettings({
+      ...nextSettings,
+      chatProviderId: effectiveChat.provider?.id ?? '',
+      chatModel: effectiveChat.model,
     })
   }
 
@@ -1459,6 +1459,29 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     if (!provider || provider.enabledModels.includes(model)) return
     updateProvider(providerId, {
       enabledModels: [...provider.enabledModels, model.trim()]
+    })
+  }
+
+  const addAllEnabledModels = (providerId: string, models: string[]) => {
+    if (!settings || models.length === 0) return
+    const provider = settings.providers.find((p) => p.id === providerId)
+    if (!provider) return
+
+    const enabledKeys = new Set(provider.enabledModels.map((model) => model.toLowerCase()))
+    const nextModels: string[] = []
+    const seen = new Set<string>()
+    for (const model of models) {
+      const trimmed = model.trim()
+      if (!trimmed) continue
+      const key = trimmed.toLowerCase()
+      if (enabledKeys.has(key) || seen.has(key)) continue
+      seen.add(key)
+      nextModels.push(trimmed)
+    }
+    if (nextModels.length === 0) return
+
+    updateProvider(providerId, {
+      enabledModels: [...provider.enabledModels, ...nextModels],
     })
   }
 
@@ -1498,8 +1521,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         next.translatorModel = resolveAfterRemoval(prev.translatorModel)
       }
       next.defaultModels = defaultModels
-      next.chatProviderId = defaultModels.chat.providerId
-      next.chatModel = defaultModels.chat.model
+      const effectiveChat = resolveEffectiveChatModel({ ...next, defaultModels })
+      next.chatProviderId = effectiveChat.provider?.id ?? ''
+      next.chatModel = effectiveChat.model
 
       if (prev.screenshotTranslation.providerId === providerId) {
         next.screenshotTranslation = {
@@ -1854,7 +1878,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const navItems = [
     { id: 'general' as const, label: t.tabGeneral, icon: SettingsIcon },
     { id: 'translate' as const, label: t.tabTranslate, icon: Languages },
-    { id: 'screenshot' as const, label: t.tabScreenshot, icon: Camera },
+    { id: 'screenshot' as const, label: t.tabScreenshot, icon: Zap },
     { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
     { id: 'chat' as const, label: t.tabChatClient, icon: MessageSquare },
     { id: 'memory' as const, label: t.tabMemory, icon: Brain },
@@ -1884,8 +1908,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     chat: {
       title: t.tabChatClient,
       subtitle: lang === 'zh'
-        ? '主对话模型、流式/思考行为、系统提示词；副任务模型见混音器。'
-        : 'Main chat model, streaming/thinking, and system prompt; side-task models live under Mixer.',
+        ? '流式/思考行为、系统提示词；新建对话默认继承 Lens 或输入翻译模型，副任务模型见混音器。'
+        : 'Streaming/thinking and system prompt; new chats inherit Lens or input translation model; side-task models live under Mixer.',
     },
     memory: {
       title: t.tabMemory,
@@ -1923,9 +1947,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     },
   }
   const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
-  const chatProvider = settings.providers.find((provider) => provider.id === settings.chatProviderId)
-    ?? settings.providers.find((provider) => provider.id === settings.lens?.providerId)
-    ?? settings.providers.find((provider) => provider.id === settings.translatorProviderId)
+  const effectiveChatModel = resolveEffectiveChatModel(settings)
+  const chatProvider = effectiveChatModel.provider
   const chatProviderSupportsTools = chatProvider?.supportsTools !== false
   const disabledSkillIds = chatTools.disabledSkillIds ?? []
   const builtinSkills = skills.filter(isBuiltinSkill)
@@ -2431,36 +2454,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       placeholder="https://..."
                     />
                   </SettingRow>
-                </SettingsGroup>
-
-                <SettingsGroup title={t.defaultModelsSection}>
-                  <SettingRow
-                    label={t.defaultChatModel}
-                    description={t.defaultChatModelHint}
-                  >
-                    <ModelPairSelect
-                      providerId={settings.defaultModels.chat.providerId || ''}
-                      model={settings.defaultModels.chat.model || ''}
-                      providers={settings.providers}
-                      platform={platform}
-                      inheritLabel={t.defaultModelsUnset}
-                      onChange={(providerId, model) => {
-                        updateDefaultModel('chat', providerId, model)
-                      }}
-                    />
-                  </SettingRow>
-                  {!chatProvider && (
-                    <p className="kv-row-desc px-0 pb-2">
-                      {lang === 'zh' ? '请先在「模型」中添加并配置供应商。' : 'Add and configure a provider under Models first.'}
-                    </p>
-                  )}
-                  {chatProvider && chatProviderSupportsTools === false && (
-                    <p className="kv-row-desc px-0 pb-2 text-amber-700 dark:text-amber-400">
-                      {lang === 'zh'
-                        ? '当前默认供应商未启用工具调用；MCP / Skill 工具可能不可用。'
-                        : 'The default provider is marked as not supporting tools; MCP / Skill may be unavailable.'}
-                    </p>
-                  )}
                 </SettingsGroup>
 
                 <SettingsGroup title={lang === 'zh' ? '响应' : 'Response'}>
@@ -4074,12 +4067,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             noModels: lang === 'zh' ? '尚未获取模型，请点击上方按钮拉取。' : 'No models yet. Click the button above to fetch.',
             noSearchResults: lang === 'zh' ? '没有匹配的模型' : 'No matching models',
             enabled: lang === 'zh' ? '已启用' : 'On',
+            addAllModels: lang === 'zh' ? '添加当前列表中的全部模型' : 'Add all models in the current list',
             close: lang === 'zh' ? '关闭' : 'Close',
           }}
           fetching={fetchingProviderId === modelPickerProvider.id}
           onClose={() => setModelPickerProviderId(null)}
           onFetch={() => void fetchModels(modelPickerProvider.id)}
           onAdd={(model) => addEnabledModel(modelPickerProvider.id, model)}
+          onAddAll={(models) => addAllEnabledModels(modelPickerProvider.id, models)}
           onRemove={(model) => removeEnabledModel(modelPickerProvider.id, model)}
         />
       )}

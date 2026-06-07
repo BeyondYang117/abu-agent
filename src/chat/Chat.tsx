@@ -48,6 +48,13 @@ import { TypewriterText } from './TypewriterText'
 import { pickRandomChatEmptyGreeting } from './utils'
 import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/chatTools'
 import { onChatImageViewerOpen, type ChatImageViewerItem } from './imageViewer'
+import {
+  collectGeneratingConversationIds,
+  createEmptyStreamSnapshot,
+  isConversationBusy,
+  isConversationInFlight,
+  type ConversationStreamSnapshot,
+} from './conversationRuns'
 
 const AssistantCenter = lazy(() => import('./AssistantCenter').then((module) => ({
   default: module.AssistantCenter,
@@ -81,16 +88,6 @@ type ChatView = 'conversation' | 'settings' | 'assistants'
 
 interface ChatProps {
   onSettingsChange: () => void
-}
-
-interface ConversationStreamSnapshot {
-  runId: string | null
-  streaming: boolean
-  content: string
-  reasoning: string
-  reasoningStreaming: boolean
-  toolCalls: ToolCallRecord[]
-  startedAt: number | null
 }
 
 function hashPath(): string {
@@ -272,6 +269,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [lastAssistantStreamStats, setLastAssistantStreamStats] =
     useState<AssistantStreamStats | null>(null)
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
+  const [generatingConversationIds, setGeneratingConversationIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
   const [sidebarProfileRefreshKey, setSidebarProfileRefreshKey] = useState(0)
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
@@ -295,14 +295,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const activeRunIdRef = useRef<string | null>(null)
   const locallyCancelledConversationIdRef = useRef<string | null>(null)
   const locallyCancelledRunIdRef = useRef<string | null>(null)
-  const sendInFlightRef = useRef(false)
-  const streamingRef = useRef(false)
+  const inFlightConversationsRef = useRef<Set<string>>(new Set())
   const externalSendQueueRef = useRef<ChatExternalSendRequest[]>([])
   const externalSendDrainProcessingRef = useRef(false)
   const externalSendDrainRequestedRef = useRef(false)
-  const inFlightConversationIdRef = useRef<string | null>(null)
-  const pendingStreamDoneRef = useRef<(() => void) | null>(null)
+  const pendingStreamDoneRef = useRef<Record<string, () => void>>({})
   const streamSnapshotsRef = useRef<Record<string, ConversationStreamSnapshot>>({})
+  const streamErrorsRef = useRef<Record<string, string>>({})
   const pendingToolConfirmsRef = useRef<Record<string, ChatToolConfirmPayload>>({})
   const streamStartedAtRef = useRef<number | null>(null)
   const streamingContentRef = useRef('')
@@ -314,9 +313,42 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   useEffect(() => onChatImageViewerOpen(setImageViewerItem), [])
 
-  useEffect(() => {
-    streamingRef.current = streaming
-  }, [streaming])
+  const syncGeneratingConversationIds = useCallback(() => {
+    setGeneratingConversationIds(collectGeneratingConversationIds(
+      inFlightConversationsRef.current,
+      streamSnapshotsRef.current,
+      pendingToolConfirmsRef.current,
+    ))
+  }, [])
+
+  const markConversationInFlight = useCallback((conversationId: string) => {
+    inFlightConversationsRef.current.add(conversationId)
+    syncGeneratingConversationIds()
+  }, [syncGeneratingConversationIds])
+
+  const clearConversationInFlight = useCallback((conversationId: string) => {
+    inFlightConversationsRef.current.delete(conversationId)
+    syncGeneratingConversationIds()
+  }, [syncGeneratingConversationIds])
+
+  const setStreamErrorForConversation = useCallback((conversationId: string, error: string) => {
+    if (error) {
+      streamErrorsRef.current[conversationId] = error
+    } else {
+      delete streamErrorsRef.current[conversationId]
+    }
+    if (currentConversationIdRef.current === conversationId) {
+      setStreamError(error)
+    }
+  }, [])
+
+  const isCurrentConversationBusy = useCallback(() => (
+    isConversationBusy(
+      currentConversationIdRef.current,
+      inFlightConversationsRef.current,
+      streamSnapshotsRef.current,
+    )
+  ), [])
 
   const applyConversation = useCallback((conversation: Conversation | null) => {
     setCurrentConversation(conversation)
@@ -337,7 +369,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [])
 
   const clearStreamingPreview = useCallback(() => {
-    streamingRef.current = false
     setStreaming(false)
     setCancellingStream(false)
     setStreamingContent('')
@@ -353,30 +384,23 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const ensureStreamSnapshot = useCallback((conversationId: string) => {
     const existing = streamSnapshotsRef.current[conversationId]
     if (existing) return existing
-    const snapshot: ConversationStreamSnapshot = {
-      runId: null,
-      streaming: true,
-      content: '',
-      reasoning: '',
-      reasoningStreaming: false,
-      toolCalls: [],
-      startedAt: Date.now(),
-    }
+    const snapshot = createEmptyStreamSnapshot()
     streamSnapshotsRef.current[conversationId] = snapshot
+    syncGeneratingConversationIds()
     return snapshot
-  }, [])
+  }, [syncGeneratingConversationIds])
 
   const restoreStreamingPreview = useCallback((conversationId: string | null) => {
     if (!conversationId) {
       clearStreamingPreview()
       setPendingToolConfirm(null)
+      setStreamError('')
       return
     }
     const snapshot = streamSnapshotsRef.current[conversationId]
     if (!snapshot) {
       clearStreamingPreview()
     } else {
-      streamingRef.current = snapshot.streaming
       setStreaming(snapshot.streaming)
       setCancellingStream(false)
       setStreamingContent(snapshot.content)
@@ -388,6 +412,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       streamingContentRef.current = snapshot.content
       streamingReasoningRef.current = snapshot.reasoning
     }
+    setStreamError(streamErrorsRef.current[conversationId] ?? '')
     setPendingToolConfirm(pendingToolConfirmsRef.current[conversationId] ?? null)
   }, [clearStreamingPreview])
 
@@ -396,7 +421,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     snapshot: ConversationStreamSnapshot,
   ) => {
     if (currentConversationIdRef.current !== conversationId) return
-    streamingRef.current = snapshot.streaming
     setStreaming(snapshot.streaming)
     setCancellingStream(false)
     setStreamingContent(snapshot.content)
@@ -413,11 +437,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (!conversationId) return
     delete streamSnapshotsRef.current[conversationId]
     delete pendingToolConfirmsRef.current[conversationId]
+    syncGeneratingConversationIds()
     if (currentConversationIdRef.current === conversationId) {
       setPendingToolConfirm(null)
       clearStreamingPreview()
     }
-  }, [clearStreamingPreview])
+  }, [clearStreamingPreview, syncGeneratingConversationIds])
 
   const cancelCurrentRunLocally = useCallback(() => {
     locallyCancelledConversationIdRef.current = currentConversationIdRef.current
@@ -627,11 +652,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const loadDefaultModel = useCallback(async () => {
     try {
       const settings = await api.getSettings()
-      const chatDefault = settings.defaultModels.chat
-      if (chatDefault.providerId) {
-        setDraftProviderId(chatDefault.providerId)
-        setDraftModel(chatDefault.model)
-      } else if (settings.lens?.providerId) {
+      if (settings.lens?.providerId) {
         setDraftProviderId(settings.lens.providerId)
         setDraftModel(settings.lens.model || '')
       } else {
@@ -745,7 +766,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [loadDefaultModel, loadSkills, onSettingsChange, refreshToolIndicator])
 
   const reloadConversation = useCallback(async (conversationId: string, options?: { force?: boolean }) => {
-    if (sendInFlightRef.current && !options?.force) return
+    if (isConversationInFlight(inFlightConversationsRef.current, conversationId) && !options?.force) {
+      return
+    }
     try {
       const conv = await chatApi.getConversation(conversationId)
       currentConversationIdRef.current = conversationId
@@ -821,6 +844,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       const conversationId = payload.conversationId ?? currentConversationIdRef.current
       if (conversationId) {
         delete streamSnapshotsRef.current[conversationId]
+        syncGeneratingConversationIds()
       }
       if (conversationId && currentConversationIdRef.current === conversationId) {
         clearStreamingPreview()
@@ -828,8 +852,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       if (payload.reason !== 'cancelled') {
         resetLocalCancellation()
       }
-      if (payload.reason === 'error') {
-        setStreamError((prev) => prev || '回复生成失败，请稍后重试。')
+      if (payload.reason === 'error' && conversationId) {
+        setStreamErrorForConversation(
+          conversationId,
+          streamErrorsRef.current[conversationId] || '回复生成失败，请稍后重试。',
+        )
       }
       if (conversationId && payload.reason !== 'cancelled') {
         if (currentConversationIdRef.current === conversationId) {
@@ -838,13 +865,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         refreshSidebar()
       }
     },
-    [clearStreamingPreview, refreshSidebar, reloadConversation, resetLocalCancellation],
+    [clearStreamingPreview, refreshSidebar, reloadConversation, resetLocalCancellation, setStreamErrorForConversation, syncGeneratingConversationIds],
   )
 
-  const flushPendingStreamDone = useCallback(() => {
-    const pending = pendingStreamDoneRef.current
-    pendingStreamDoneRef.current = null
-    pending?.()
+  const flushPendingStreamDone = useCallback((conversationId?: string) => {
+    if (conversationId) {
+      const pending = pendingStreamDoneRef.current[conversationId]
+      delete pendingStreamDoneRef.current[conversationId]
+      pending?.()
+      return
+    }
+    const pendingByConversation = pendingStreamDoneRef.current
+    pendingStreamDoneRef.current = {}
+    for (const pending of Object.values(pendingByConversation)) {
+      pending()
+    }
   }, [])
 
   useEffect(() => {
@@ -876,11 +911,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           snapshot.reasoningStreaming = false
           snapshot.content += payload.delta
         }
+        syncGeneratingConversationIds()
         showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
         if (payload.done) {
           // invoke 未完成前不要 reload；延后到 flushPendingStreamDone，避免与 send 写盘竞态。
-          if (sendInFlightRef.current) {
-            pendingStreamDoneRef.current = () => finishStreamingRun(payload)
+          if (isConversationInFlight(inFlightConversationsRef.current, payload.conversationId)) {
+            pendingStreamDoneRef.current[payload.conversationId] = () => finishStreamingRun(payload)
             return
           }
           finishStreamingRun(payload)
@@ -896,7 +932,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [ensureStreamSnapshot, finishStreamingRun, showStreamSnapshotIfCurrent])
+  }, [ensureStreamSnapshot, finishStreamingRun, showStreamSnapshotIfCurrent, syncGeneratingConversationIds])
 
   useEffect(() => {
     let cancelled = false
@@ -939,7 +975,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           return
         }
         // 忽略 invoke 结束后的迟到 tool 事件，否则会重新 setStreaming(true) 卡死输入栏。
-        if (!sendInFlightRef.current) return
+        if (!isConversationInFlight(inFlightConversationsRef.current, payload.conversationId)) return
         const snapshot = ensureStreamSnapshot(payload.conversationId)
         if (payload.runId) {
           if (snapshot.runId && snapshot.runId !== payload.runId) return
@@ -952,6 +988,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         snapshot.toolCalls = index < 0
           ? [...snapshot.toolCalls, record]
           : snapshot.toolCalls.map((item, i) => (i === index ? { ...item, ...record } : item))
+        syncGeneratingConversationIds()
         showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
       })
       if (cancelled) {
@@ -964,7 +1001,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [ensureStreamSnapshot, showStreamSnapshotIfCurrent])
+  }, [ensureStreamSnapshot, showStreamSnapshotIfCurrent, syncGeneratingConversationIds])
 
   useEffect(() => {
     let cancelled = false
@@ -974,6 +1011,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       unlisten = await api.onChatToolConfirm((payload) => {
         if (cancelled) return
         pendingToolConfirmsRef.current[payload.conversationId] = payload
+        syncGeneratingConversationIds()
         if (currentConversationIdRef.current === payload.conversationId) {
           setPendingToolConfirm(payload)
         }
@@ -988,14 +1026,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelled = true
       unlisten?.()
     }
-  }, [])
+  }, [syncGeneratingConversationIds])
 
   const resolvePendingToolConfirm = useCallback((approved: boolean) => {
     if (!pendingToolConfirm) return
     delete pendingToolConfirmsRef.current[pendingToolConfirm.conversationId]
+    syncGeneratingConversationIds()
     void api.chatConfirmToolCall(pendingToolConfirm.toolCallId, approved)
     setPendingToolConfirm(null)
-  }, [pendingToolConfirm])
+  }, [pendingToolConfirm, syncGeneratingConversationIds])
 
   useEffect(() => {
     let cancelled = false
@@ -1190,12 +1229,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   ])
 
   const handleClearChat = useCallback(async () => {
-    if (streaming || sendInFlightRef.current) {
-      setStreamError('请先停止当前回复，再清空对话。')
+    const conversationId = currentConversationIdRef.current
+    if (conversationId && isConversationBusy(
+      conversationId,
+      inFlightConversationsRef.current,
+      streamSnapshotsRef.current,
+    )) {
+      setStreamErrorForConversation(conversationId, '请先停止当前回复，再清空对话。')
       return
     }
 
-    const conversationId = currentConversationIdRef.current
     if (!conversationId) {
       setLastAssistantStreamStats(null)
       setPendingUserMessage(null)
@@ -1210,8 +1253,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
     try {
       await chatApi.deleteConversation(conversationId)
+      if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) {
+        await chatApi.cancelStream(conversationId)
+      }
       delete streamSnapshotsRef.current[conversationId]
       delete pendingToolConfirmsRef.current[conversationId]
+      delete streamErrorsRef.current[conversationId]
+      clearConversationInFlight(conversationId)
       forgetRememberedChatRoute()
       currentConversationIdRef.current = null
       setLastAssistantStreamStats(null)
@@ -1228,7 +1276,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to clear chat:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '清空对话失败')
     }
-  }, [applyConversation, refreshSidebar, restoreStreamingPreview, streaming, syncConversationRoute])
+  }, [applyConversation, clearConversationInFlight, refreshSidebar, restoreStreamingPreview, setStreamErrorForConversation, syncConversationRoute])
 
   const handleStartAssistantChat = useCallback(async (assistant: ChatAssistant) => {
     setLastAssistantStreamStats(null)
@@ -1322,12 +1370,46 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     attachments: PendingAttachment[] = [],
     options: SendMessageOptions = {},
   ) => {
-    if (streamingRef.current || sendInFlightRef.current) return false
-
     const trimmed = content.trim()
     if (!trimmed && attachments.length === 0) return false
     if (!options.forceNewConversation && sendDisabledReason) {
-      setStreamError(sendDisabledReason)
+      const targetId = currentConversationIdRef.current
+      if (targetId) {
+        setStreamErrorForConversation(targetId, sendDisabledReason)
+      } else {
+        setStreamError(sendDisabledReason)
+      }
+      return false
+    }
+
+    let conversation = options.forceNewConversation ? null : currentConversation
+    if (
+      conversation
+      && isPlainBlankConversation(conversation)
+      && !conversationUsesModel(conversation, activeProviderId, activeModel)
+    ) {
+      conversation = null
+    }
+    if (!conversation) {
+      try {
+        conversation = await chatApi.createConversation(
+          activeProviderId || undefined,
+          activeModel || undefined,
+          selectedProject?.name,
+        )
+        currentConversationIdRef.current = conversation.id
+        applyConversation(conversation)
+        syncConversationRoute(conversation.id)
+      } catch (err) {
+        console.error('Failed to create conversation before send:', err)
+        setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
+        return false
+      }
+    }
+
+    const conversationId = conversation.id
+    if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) {
+      setStreamErrorForConversation(conversationId, '该对话正在生成中，请稍后再试')
       return false
     }
 
@@ -1346,88 +1428,70 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
 
     resetLocalCancellation()
-    streamingRef.current = true
-    setStreaming(true)
-    setCancellingStream(false)
-    setStreamingContent('')
-    setStreamingReasoning('')
-    setReasoningStreaming(false)
-    setStreamingToolCalls([])
-    setStreamError('')
-    activeRunIdRef.current = null
-    streamStartedAtRef.current = Date.now()
-    streamingContentRef.current = ''
-    streamingReasoningRef.current = ''
+    const startedAt = Date.now()
+    const snapshot = ensureStreamSnapshot(conversationId)
+    snapshot.streaming = true
+    snapshot.content = ''
+    snapshot.reasoning = ''
+    snapshot.reasoningStreaming = false
+    snapshot.toolCalls = []
+    snapshot.startedAt = startedAt
+    snapshot.runId = null
+    syncGeneratingConversationIds()
 
-    sendInFlightRef.current = true
-    let conversationIdForRun: string | null = null
-    try {
-      let conversation = options.forceNewConversation ? null : currentConversation
-      if (
-        conversation
-        && isPlainBlankConversation(conversation)
-        && !conversationUsesModel(conversation, activeProviderId, activeModel)
-      ) {
-        conversation = null
-      }
-      if (!conversation) {
-        conversation = await chatApi.createConversation(
-          activeProviderId || undefined,
-          activeModel || undefined,
-          selectedProject?.name,
-        )
-        currentConversationIdRef.current = conversation.id
-        applyConversation(conversation)
-        syncConversationRoute(conversation.id)
-      }
-
-      const conversationId = conversation!.id
-      const attachmentSkillId = options.forceNewConversation
-        ? inferSingleAttachmentSkillId(attachments, enabledSkills)
-        : effectiveSkillId ?? inferSingleAttachmentSkillId(attachments, enabledSkills)
-      conversationIdForRun = conversationId
-      inFlightConversationIdRef.current = conversationId
-      const snapshot = ensureStreamSnapshot(conversationId)
-      snapshot.streaming = true
-      snapshot.content = ''
-      snapshot.reasoning = ''
-      snapshot.reasoningStreaming = false
-      snapshot.toolCalls = []
-      snapshot.startedAt = streamStartedAtRef.current
-      snapshot.runId = null
+    if (currentConversationIdRef.current === conversationId) {
+      setStreaming(true)
+      setCancellingStream(false)
+      setStreamingContent('')
+      setStreamingReasoning('')
+      setReasoningStreaming(false)
+      setStreamingToolCalls([])
+      setStreamErrorForConversation(conversationId, '')
+      activeRunIdRef.current = null
+      streamStartedAtRef.current = startedAt
+      streamingContentRef.current = ''
+      streamingReasoningRef.current = ''
       setPendingUserMessage(optimisticUserMessage)
       setPendingUserMessageConversationId(conversationId)
+    }
+
+    markConversationInFlight(conversationId)
+    const attachmentSkillId = options.forceNewConversation
+      ? inferSingleAttachmentSkillId(attachments, enabledSkills)
+      : effectiveSkillId ?? inferSingleAttachmentSkillId(attachments, enabledSkills)
+
+    try {
       const updatedConv = await chatApi.sendMessage(
         conversationId,
         trimmed,
         attachments,
         attachmentSkillId,
       )
-      applyAssistantStreamStats(updatedConv)
-      setPendingUserMessage(null)
-      setPendingUserMessageConversationId(null)
       if (currentConversationIdRef.current === conversationId) {
+        applyAssistantStreamStats(updatedConv)
+        setPendingUserMessage(null)
+        setPendingUserMessageConversationId(null)
         applyConversation(updatedConv)
         clearStreamSnapshot(conversationId)
         if (!locallyCancelledConversationIdRef.current) {
           resetLocalCancellation()
         }
+      } else {
+        clearStreamSnapshot(conversationId)
         refreshSidebar()
       }
     } catch (err) {
       console.error('Failed to send message:', err)
-      setPendingUserMessage(null)
-      setPendingUserMessageConversationId(null)
-      if (conversationIdForRun) {
-        clearStreamSnapshot(conversationIdForRun)
-      } else {
-        clearStreamingPreview()
+      if (currentConversationIdRef.current === conversationId) {
+        setPendingUserMessage(null)
+        setPendingUserMessageConversationId(null)
       }
-      setStreamError(typeof err === 'string' ? err : (err as Error).message || '发送失败')
+      clearStreamSnapshot(conversationId)
+      const message = typeof err === 'string' ? err : (err as Error).message || '发送失败'
+      setStreamErrorForConversation(conversationId, message)
     } finally {
-      flushPendingStreamDone()
-      sendInFlightRef.current = false
-      inFlightConversationIdRef.current = null
+      clearConversationInFlight(conversationId)
+      flushPendingStreamDone(conversationId)
     }
     return true
   }, [
@@ -1435,18 +1499,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     activeProviderId,
     applyAssistantStreamStats,
     applyConversation,
+    clearConversationInFlight,
     clearStreamSnapshot,
-    clearStreamingPreview,
     currentConversation,
     effectiveSkillId,
     enabledSkills,
     ensureStreamSnapshot,
     flushPendingStreamDone,
+    markConversationInFlight,
     refreshSidebar,
     resetLocalCancellation,
     selectedProject?.name,
     sendDisabledReason,
+    setStreamErrorForConversation,
     syncConversationRoute,
+    syncGeneratingConversationIds,
   ])
 
   const drainExternalSends = useCallback(async () => {
@@ -1459,10 +1526,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     try {
       do {
         externalSendDrainRequestedRef.current = false
-        if (streamingRef.current || sendInFlightRef.current) {
-          externalSendDrainRequestedRef.current = true
-          break
-        }
 
         const result = await api.chatTakeExternalSends()
         if (!result.success) {
@@ -1504,11 +1567,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '外部消息发送失败')
     } finally {
       externalSendDrainProcessingRef.current = false
-      if (
-        externalSendDrainRequestedRef.current
-        && !streamingRef.current
-        && !sendInFlightRef.current
-      ) {
+      if (externalSendDrainRequestedRef.current) {
         window.setTimeout(() => {
           void drainExternalSends()
         }, 0)
@@ -1577,9 +1636,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleRegenerateMessage = useCallback(
     async (messageId: string) => {
-      if (!currentConversation || streaming || sendInFlightRef.current) return
+      if (!currentConversation) return
 
       const conversationId = currentConversation.id
+      if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) return
+
       const messageIndex = currentConversation.messages.findIndex(
         (message) => message.id === messageId,
       )
@@ -1591,48 +1652,62 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       })
       setLastAssistantStreamStats(null)
       resetLocalCancellation()
-      setStreaming(true)
-      setCancellingStream(false)
-      setStreamingContent('')
-      setStreamingReasoning('')
-      setReasoningStreaming(false)
-      setStreamingToolCalls([])
-      setStreamError('')
-      activeRunIdRef.current = null
-      streamStartedAtRef.current = Date.now()
-      streamingContentRef.current = ''
-      streamingReasoningRef.current = ''
+      const startedAt = Date.now()
       const snapshot = ensureStreamSnapshot(conversationId)
       snapshot.streaming = true
       snapshot.content = ''
       snapshot.reasoning = ''
       snapshot.reasoningStreaming = false
       snapshot.toolCalls = []
-      snapshot.startedAt = streamStartedAtRef.current
+      snapshot.startedAt = startedAt
       snapshot.runId = null
-      sendInFlightRef.current = true
+      syncGeneratingConversationIds()
 
+      if (currentConversationIdRef.current === conversationId) {
+        setStreaming(true)
+        setCancellingStream(false)
+        setStreamingContent('')
+        setStreamingReasoning('')
+        setReasoningStreaming(false)
+        setStreamingToolCalls([])
+        setStreamErrorForConversation(conversationId, '')
+        activeRunIdRef.current = null
+        streamStartedAtRef.current = startedAt
+        streamingContentRef.current = ''
+        streamingReasoningRef.current = ''
+      }
+
+      markConversationInFlight(conversationId)
       try {
         const updated = await chatApi.regenerateMessage(conversationId, messageId)
-        applyAssistantStreamStats(updated)
         if (currentConversationIdRef.current === conversationId) {
+          applyAssistantStreamStats(updated)
           applyConversation(updated)
+          clearStreamSnapshot(conversationId)
+          refreshSidebar()
+        } else {
+          clearStreamSnapshot(conversationId)
           refreshSidebar()
         }
       } catch (err) {
         console.error('Failed to regenerate message:', err)
-        setStreamError(typeof err === 'string' ? err : (err as Error).message || '重新生成失败')
+        setStreamErrorForConversation(
+          conversationId,
+          typeof err === 'string' ? err : (err as Error).message || '重新生成失败',
+        )
         clearStreamSnapshot(conversationId)
-        void reloadConversation(conversationId)
+        if (currentConversationIdRef.current === conversationId) {
+          void reloadConversation(conversationId)
+        }
       } finally {
-        flushPendingStreamDone()
+        clearConversationInFlight(conversationId)
+        flushPendingStreamDone(conversationId)
         if (currentConversationIdRef.current === conversationId) {
           clearStreamingPreview()
         }
-        sendInFlightRef.current = false
       }
     },
-    [applyAssistantStreamStats, applyConversation, clearStreamSnapshot, clearStreamingPreview, currentConversation, ensureStreamSnapshot, flushPendingStreamDone, refreshSidebar, reloadConversation, resetLocalCancellation, streaming],
+    [applyAssistantStreamStats, applyConversation, clearConversationInFlight, clearStreamSnapshot, clearStreamingPreview, currentConversation, ensureStreamSnapshot, flushPendingStreamDone, markConversationInFlight, refreshSidebar, reloadConversation, resetLocalCancellation, setStreamErrorForConversation, syncGeneratingConversationIds],
   )
 
   const handleModelChange = async (providerId: string, model: string) => {
@@ -1654,27 +1729,33 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }
 
   const handleCancelStream = useCallback(async () => {
-    const conversationId = inFlightConversationIdRef.current ?? currentConversationIdRef.current
-    if (!conversationId || cancellingStream || (!streaming && !sendInFlightRef.current)) return
+    const conversationId = currentConversationIdRef.current
+    if (
+      !conversationId
+      || cancellingStream
+      || !isConversationBusy(
+        conversationId,
+        inFlightConversationsRef.current,
+        streamSnapshotsRef.current,
+      )
+    ) {
+      return
+    }
 
     setCancellingStream(true)
-    if (currentConversationIdRef.current === conversationId) {
-      cancelCurrentRunLocally()
-    } else {
-      locallyCancelledConversationIdRef.current = conversationId
-      locallyCancelledRunIdRef.current = activeRunIdRef.current
-      clearStreamSnapshot(conversationId)
-      clearStreamingPreview()
-    }
+    cancelCurrentRunLocally()
     try {
       await chatApi.cancelStream(conversationId)
     } catch (err) {
       console.error('Failed to cancel chat stream:', err)
-      setStreamError(typeof err === 'string' ? err : (err as Error).message || '停止生成失败')
+      setStreamErrorForConversation(
+        conversationId,
+        typeof err === 'string' ? err : (err as Error).message || '停止生成失败',
+      )
     } finally {
       setCancellingStream(false)
     }
-  }, [cancelCurrentRunLocally, cancellingStream, clearStreamSnapshot, clearStreamingPreview, streaming])
+  }, [cancelCurrentRunLocally, cancellingStream, setStreamErrorForConversation])
 
   const displayMessages = useMemo(() => {
     const stored = currentConversation?.messages ?? []
@@ -1790,6 +1871,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       <div className="flex h-full min-h-0 w-full">
         <Sidebar
           currentConversationId={currentConversation?.id}
+          generatingConversationIds={generatingConversationIds}
           selectedProject={selectedProject}
           onSelectProject={handleSidebarSelectProject}
           onSelectConversation={handleSidebarSelectConversation}
@@ -1950,7 +2032,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                                 key={starter}
                                 type="button"
                                 onClick={() => void handleSendMessage(starter)}
-                                disabled={streaming || sendInFlightRef.current}
+                                disabled={isCurrentConversationBusy()}
                                 className="max-w-full truncate rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-[12px] text-neutral-700 shadow-sm transition hover:border-neutral-300 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
                               >
                                 {starter}
@@ -1963,9 +2045,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     <InputBar
                       layout="inline"
                       onSend={(content, attachments) => void handleSendMessage(content, attachments)}
-                      disabled={streaming || sendInFlightRef.current}
+                      disabled={isCurrentConversationBusy()}
                       onCancel={() => void handleCancelStream()}
-                      cancelVisible={streaming || sendInFlightRef.current}
+                      cancelVisible={isCurrentConversationBusy()}
                       cancelling={cancellingStream}
                       onOpenSettings={() => openEmbeddedSettings('chat')}
                       onOpenTools={() => openEmbeddedSettings('skill')}
@@ -2004,9 +2086,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   </Suspense>
                   <InputBar
                     onSend={(content, attachments) => void handleSendMessage(content, attachments)}
-                    disabled={streaming || sendInFlightRef.current}
+                    disabled={isCurrentConversationBusy()}
                     onCancel={() => void handleCancelStream()}
-                    cancelVisible={streaming || sendInFlightRef.current}
+                    cancelVisible={isCurrentConversationBusy()}
                     cancelling={cancellingStream}
                     onOpenSettings={() => openEmbeddedSettings('chat')}
                     onOpenTools={() => openEmbeddedSettings('skill')}

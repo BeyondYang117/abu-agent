@@ -34,6 +34,7 @@ const extensionSubItems: Array<{ id: ExtensionsNavItem; label: string }> = [
 
 interface SidebarProps {
   currentConversationId?: string
+  generatingConversationIds?: ReadonlySet<string>
   selectedProject?: ChatProject | null
   onSelectProject: (project: ChatProject | null) => void
   onSelectConversation: (id: string) => void
@@ -200,6 +201,7 @@ function ExtensionsNav({
 
 export const Sidebar = memo(function Sidebar({
   currentConversationId,
+  generatingConversationIds = new Set(),
   selectedProject = null,
   onSelectProject,
   onSelectConversation,
@@ -314,6 +316,9 @@ export const Sidebar = memo(function Sidebar({
   const handleDeleteConversation = async (id: string) => {
     if (!window.confirm('确定删除此对话？此操作无法撤销。')) return
     try {
+      if (generatingConversationIds.has(id)) {
+        await chatApi.cancelStream(id)
+      }
       await chatApi.deleteConversation(id)
       if (currentConversationId === id) {
         onConversationDeleted?.(id)
@@ -613,6 +618,7 @@ export const Sidebar = memo(function Sidebar({
               <ConversationList
                 conversations={filteredConversations}
                 currentConversationId={currentConversationId}
+                generatingConversationIds={generatingConversationIds}
                 projectFolders={projectFolders}
                 emptyLabel={selectedProject ? '项目里还没有对话' : '暂无对话'}
                 onSelectConversation={onSelectConversation}

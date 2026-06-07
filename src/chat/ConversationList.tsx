@@ -9,6 +9,7 @@ import {
 interface ConversationListProps {
   conversations: ConversationListItem[]
   currentConversationId?: string
+  generatingConversationIds?: ReadonlySet<string>
   projectFolders: string[]
   emptyLabel?: string
   onSelectConversation: (id: string) => void
@@ -20,6 +21,7 @@ interface ConversationListProps {
 export const ConversationList = memo(function ConversationList({
   conversations,
   currentConversationId,
+  generatingConversationIds = new Set(),
   projectFolders,
   emptyLabel = '暂无对话',
   onSelectConversation,
@@ -82,6 +84,7 @@ export const ConversationList = memo(function ConversationList({
       <div className="space-y-0.5 py-1">
         {conversations.map((conv) => {
           const active = currentConversationId === conv.id
+          const isGenerating = generatingConversationIds.has(conv.id)
           const isRenaming = renamingId === conv.id
 
           if (isRenaming) {
@@ -128,9 +131,17 @@ export const ConversationList = memo(function ConversationList({
                     ? 'font-medium text-neutral-900 dark:text-neutral-100'
                     : 'text-neutral-700 dark:text-neutral-300'
                 }`}
-                title={conv.title}
+                title={isGenerating ? `${conv.title}（正在生成…）` : conv.title}
               >
-                <span className="block truncate">{conv.title}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="block min-w-0 flex-1 truncate">{conv.title}</span>
+                  {isGenerating && (
+                    <span
+                      className="inline-flex h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-neutral-300 border-t-neutral-600 dark:border-neutral-600 dark:border-t-neutral-200"
+                      aria-label="正在生成"
+                    />
+                  )}
+                </span>
                 {(conv.assistant_name ?? conv.assistantName) && (
                   <span className="mt-0.5 block truncate text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
                     {(conv.assistant_name ?? conv.assistantName)}

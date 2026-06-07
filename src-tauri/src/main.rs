@@ -29,7 +29,7 @@ mod windows;
 mod windows_ocr;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU64},
         Mutex, RwLock,
@@ -160,6 +160,7 @@ fn main() {
                 lens_busy: AtomicBool::new(false),
                 explain_stream_generation: AtomicU64::new(0),
                 chat_stream_generations: Mutex::new(HashMap::new()),
+                chat_active_replies: Mutex::new(HashSet::new()),
                 pending_chat_tool_approvals: Mutex::new(HashMap::new()),
                 pending_python_runs: Mutex::new(HashMap::new()),
                 chat_create_conversation_lock: Mutex::new(()),

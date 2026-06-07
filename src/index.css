@@ -2547,13 +2547,23 @@ body {
   gap: 8px;
   width: 100%;
   padding: 8px 10px;
-  border: none;
   border-bottom: 1px solid var(--divider);
   background: var(--bg-hover);
+}
+
+.kv-model-picker-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
   font-family: inherit;
   font-size: 12px;
   color: var(--text);
-  cursor: default;
+  cursor: pointer;
   text-align: left;
 }
 

@@ -583,10 +583,9 @@ function normalizeDefaultModelSelection(selection?: Partial<DefaultModelSelectio
 
 function normalizeDefaultModels(
   config?: Partial<DefaultModelsConfig> | null,
-  legacyChat?: Partial<DefaultModelSelection> | null,
 ): DefaultModelsConfig {
   return {
-    chat: normalizeDefaultModelSelection(config?.chat ?? legacyChat),
+    chat: { providerId: '', model: '' },
     vision: normalizeDefaultModelSelection(config?.vision),
     titleSummary: normalizeDefaultModelSelection(config?.titleSummary),
     compression: normalizeDefaultModelSelection(config?.compression),
@@ -594,40 +593,36 @@ function normalizeDefaultModels(
   }
 }
 
-function isDefaultModelConfigured(selection: DefaultModelSelection): boolean {
-  return selection.providerId.trim() !== ''
+function resolveEffectiveChatModelSelection(current: Partial<Settings>): DefaultModelSelection {
+  if (current.lens?.providerId?.trim()) {
+    return {
+      providerId: current.lens.providerId,
+      model: current.lens.model ?? '',
+    }
+  }
+  return {
+    providerId: current.translatorProviderId ?? '',
+    model: current.translatorModel ?? '',
+  }
 }
 
 function prepareSettingsForSave(settings: Settings): Settings {
   const current = settings as Partial<Settings>
-  const defaultModels = normalizeDefaultModels(current.defaultModels, {
-    providerId: current.chatProviderId ?? '',
-    model: current.chatModel ?? '',
-  })
+  const defaultModels = normalizeDefaultModels(current.defaultModels)
+  const effectiveChatModel = resolveEffectiveChatModelSelection(current)
 
   return {
     ...settings,
     defaultModels,
-    chatProviderId: defaultModels.chat.providerId,
-    chatModel: defaultModels.chat.model,
+    chatProviderId: effectiveChatModel.providerId,
+    chatModel: effectiveChatModel.model,
   }
 }
 
 function normalizeSettings(settings: Settings): Settings {
   const current = settings as Partial<Settings>
-  const defaultModels = normalizeDefaultModels(current.defaultModels, {
-    providerId: current.chatProviderId ?? '',
-    model: current.chatModel ?? '',
-  })
-  const effectiveChatModel = isDefaultModelConfigured(defaultModels.chat)
-    ? defaultModels.chat
-    : normalizeDefaultModelSelection(
-      (current.chatProviderId?.trim()
-        ? { providerId: current.chatProviderId, model: current.chatModel ?? '' }
-        : current.lens?.providerId?.trim()
-          ? { providerId: current.lens.providerId, model: current.lens.model ?? '' }
-          : { providerId: current.translatorProviderId ?? '', model: current.translatorModel ?? '' }),
-    )
+  const defaultModels = normalizeDefaultModels(current.defaultModels)
+  const effectiveChatModel = resolveEffectiveChatModelSelection(current)
   return {
     ...settings,
     hotkey: current.hotkey ?? 'CommandOrControl+Alt+T',
