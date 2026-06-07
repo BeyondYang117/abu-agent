@@ -222,6 +222,18 @@ pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     app.shell().open(url, None).map_err(|e| e.to_string())
 }
 
+/// 将 Chat 里的 HTML 预览写成临时文件，并用系统默认浏览器打开。
+#[tauri::command]
+#[allow(deprecated)]
+pub(crate) fn open_html_preview(app: AppHandle, html: String) -> Result<(), String> {
+    let path = std::env::temp_dir().join(format!("kivio-html-preview-{}.html", uuid::Uuid::new_v4()));
+    std::fs::write(&path, html).map_err(|e| format!("Write HTML preview failed: {e}"))?;
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| "Invalid HTML preview path".to_string())?;
+    app.shell().open(path_str, None).map_err(|e| e.to_string())
+}
+
 /// 查询 Apple Intelligence 预设是否应在设置页中显示。
 /// 为避免打开设置页时就拉起 sidecar，这里只做轻量本地判断：
 /// - 非 macOS → false

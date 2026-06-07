@@ -749,6 +749,7 @@ export const api = {
 
   // 外部链接
   openExternal: (url: string) => invoke<void>('open_external', { url }),
+  openHtmlPreview: (html: string) => invoke<void>('open_html_preview', { html }),
 
   // 窗口控制
   resizeWindow: async (width: number, height: number) => {

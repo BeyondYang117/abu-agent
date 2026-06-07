@@ -240,6 +240,7 @@ fn main() {
             commands::translate_text,
             commands::commit_translation,
             commands::open_external,
+            commands::open_html_preview,
             lens_commands::explain_read_image,
             commands::fetch_models,
             commands::test_provider_connection,

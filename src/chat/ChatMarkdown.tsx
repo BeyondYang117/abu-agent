@@ -1,4 +1,5 @@
-import { memo, useMemo } from 'react'
+import { isValidElement, memo, useMemo, useState } from 'react'
+import { Code2, ExternalLink, Eye } from 'lucide-react'
 import type { Components, UrlTransform } from 'react-markdown'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -8,6 +9,7 @@ import 'katex/dist/katex.min.css'
 import { normalizeMarkdownForRender } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
 import type { ChatToolArtifact } from './types'
+import { api } from '../api/tauri'
 
 interface ChatMarkdownProps {
   content: string
@@ -18,7 +20,70 @@ interface ChatMarkdownProps {
 const proseClass =
   'prose prose-sm dark:prose-invert max-w-none break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100 prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-li:my-0.5 prose-table:my-3 prose-table:shadow-none'
 
+function codeChildrenToString(children: unknown): string {
+  if (Array.isArray(children)) return children.map((child) => String(child ?? '')).join('')
+  return typeof children === 'string' ? children : String(children ?? '')
+}
+
+function HtmlCodePreview({ html }: { html: string }) {
+  const [view, setView] = useState<'preview' | 'source'>('preview')
+
+  const openInBrowser = () => {
+    void api.openHtmlPreview(html).catch((err) => {
+      console.error('Failed to open HTML preview:', err)
+    })
+  }
+
+  return (
+    <>
+      <div className="my-3 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-950">
+        {view === 'preview' ? (
+          <iframe
+            title="HTML 预览"
+            srcDoc={html}
+            className="h-[520px] w-full border-0 bg-white"
+          />
+        ) : (
+          <pre className="m-0 max-h-[520px] overflow-auto bg-neutral-950 p-4 text-[12px] leading-relaxed text-neutral-100">
+            <code>{html}</code>
+          </pre>
+        )}
+      </div>
+      <div className="-mt-1 mb-2 flex justify-end gap-0.5">
+        <button
+          type="button"
+          onClick={() => setView((current) => (current === 'preview' ? 'source' : 'preview'))}
+          className="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+          title={view === 'preview' ? '查看源码' : '查看预览'}
+          aria-label={view === 'preview' ? '查看源码' : '查看预览'}
+        >
+          {view === 'preview' ? <Code2 size={14} strokeWidth={2} /> : <Eye size={14} strokeWidth={2} />}
+        </button>
+        <button
+          type="button"
+          onClick={openInBrowser}
+          className="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+          title="在浏览器打开"
+          aria-label="在浏览器打开"
+        >
+          <ExternalLink size={14} strokeWidth={2} />
+        </button>
+      </div>
+    </>
+  )
+}
+
 const markdownComponents: Components = {
+  pre: ({ children }) => {
+    const child = Array.isArray(children) ? children[0] : children
+    if (isValidElement<{ className?: string; children?: unknown }>(child)) {
+      const languageMatch = /language-([\w-]+)/.exec(child.props.className ?? '')
+      if (languageMatch?.[1]?.toLowerCase() === 'html') {
+        return <HtmlCodePreview html={codeChildrenToString(child.props.children)} />
+      }
+    }
+    return <pre>{children}</pre>
+  },
   table: ({ children }) => (
     <div className="my-3 max-w-full overflow-x-auto">
       <table className="w-full min-w-[240px] border-collapse text-[13px] leading-snug">
