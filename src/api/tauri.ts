@@ -630,6 +630,8 @@ function normalizeSettings(settings: Settings): Settings {
       thinkingEnabled: current.chat?.thinkingEnabled ?? current.lens?.thinkingEnabled ?? true,
       defaultLanguage: current.chat?.defaultLanguage ?? '',
       systemPrompt: current.chat?.systemPrompt ?? '',
+      userDisplayName: current.chat?.userDisplayName ?? '',
+      userAvatar: current.chat?.userAvatar ?? '',
     },
     chatMemory: normalizeChatMemory(current.chatMemory),
     providers: Array.isArray(current.providers) ? current.providers.map(normalizeProvider) : [],

@@ -188,10 +188,11 @@ export function InputBar({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
+    if (e.key !== 'Enter' || e.shiftKey) return
+    // IME composition confirmation should not submit the chat composer.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    e.preventDefault()
+    handleSend()
   }
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

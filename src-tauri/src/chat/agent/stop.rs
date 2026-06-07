@@ -16,7 +16,7 @@ pub fn evaluate_stop_after_model_step(message: &Value) -> AgentStopReason {
 pub fn step_limit_system_message() -> Value {
     serde_json::json!({
         "role": "system",
-        "content": "已达到本轮工具调用轮次上限。请根据对话中已有的工具返回结果直接回答用户，不要再调用任何工具。"
+        "content": "已达到本轮工具调用轮次上限。你现在必须根据对话中已有的工具返回结果直接给用户一个普通文本回答。不要再调用任何工具，不要输出 tool_calls、function_call、DSML、XML 或 JSON 工具调用标记。"
     })
 }
 

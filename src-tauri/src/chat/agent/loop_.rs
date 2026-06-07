@@ -71,6 +71,7 @@ pub async fn run_agent_loop(
     let max_rounds = config.settings.chat_tools.max_tool_rounds.max(1);
     let mut provider_tools_unsupported = false;
     let mut tool_planning_finished = false;
+    let mut tool_round_limit_reached = false;
     let mut planning_final_message: Option<Value> = None;
     let mut planning_final_already_streamed = false;
     let mut steps = Vec::new();
@@ -281,6 +282,7 @@ pub async fn run_agent_loop(
             }
         }
         if !provider_tools_unsupported && !tool_planning_finished {
+            tool_round_limit_reached = true;
             runtime_messages.push(step_limit_system_message());
             steps.push(AgentStepResult {
                 step_number: step_number.saturating_add(1),
@@ -350,7 +352,8 @@ pub async fn run_agent_loop(
         AgentStreamPolicy::SynthesisDeferEmpty
     };
 
-    let (response, reasoning) = if config.stream_enabled {
+    let stream_synthesis = config.stream_enabled && !tool_round_limit_reached;
+    let (response, reasoning) = if stream_synthesis {
         let stream = stream_scoped_chat_completion_inner(
             config.state,
             host,
@@ -466,7 +469,53 @@ pub async fn run_agent_loop(
             &planning_reasoning_parts,
             extract_reasoning_content(&message),
         );
-        if response.trim().is_empty() && !tool_records.is_empty() {
+        if tool_round_limit_reached && !extract_tool_calls(&message).is_empty() {
+            let fallback = tool_round_limit_fallback_response(&config.language);
+            host.emit_stream_delta(
+                &config.conversation_id,
+                &config.run_id,
+                &config.message_id,
+                &fallback,
+                None,
+            );
+            host.emit_stream_done(
+                &config.conversation_id,
+                &config.run_id,
+                &config.message_id,
+                "done",
+                &fallback,
+            );
+            if !generated_api_messages.is_empty() {
+                generated_api_messages.push(final_assistant_api_message(
+                    &fallback,
+                    extract_reasoning_content(&message).as_deref(),
+                ));
+            }
+            (fallback, reasoning)
+        } else if response.trim().is_empty() && tool_round_limit_reached {
+            let fallback = tool_round_limit_fallback_response(&config.language);
+            host.emit_stream_delta(
+                &config.conversation_id,
+                &config.run_id,
+                &config.message_id,
+                &fallback,
+                None,
+            );
+            host.emit_stream_done(
+                &config.conversation_id,
+                &config.run_id,
+                &config.message_id,
+                "done",
+                &fallback,
+            );
+            if !generated_api_messages.is_empty() {
+                generated_api_messages.push(final_assistant_api_message(
+                    &fallback,
+                    extract_reasoning_content(&message).as_deref(),
+                ));
+            }
+            (fallback, reasoning)
+        } else if response.trim().is_empty() && !tool_records.is_empty() {
             eprintln!(
                 "Chat agent empty synthesis fallback: conversation_id={} run_id={} provider_id={} model={} phase={:?} stream=false tool_records={} finish_reason={}",
                 config.conversation_id,
@@ -1137,6 +1186,14 @@ fn empty_synthesis_fallback_response(language: &str) -> String {
         "工具调用已经完成，但模型没有返回最终总结。上方工具结果已保存在本轮回复中，你可以继续追问，或让我重新生成总结。".to_string()
     } else {
         "The tool calls completed, but the model did not return a final summary. The tool results above were saved with this reply; you can continue from them or regenerate the summary.".to_string()
+    }
+}
+
+fn tool_round_limit_fallback_response(language: &str) -> String {
+    if language.starts_with("zh") {
+        "已达到本轮最大工具调用次数，模型仍尝试继续调用工具。已停止继续调用工具；请基于上方已有工具结果继续追问，或提高工具轮次上限后重新生成。".to_string()
+    } else {
+        "The maximum tool-call rounds were reached and the model still tried to call more tools. Tool execution has stopped; continue from the saved tool results above, or raise the tool-round limit and regenerate.".to_string()
     }
 }
 

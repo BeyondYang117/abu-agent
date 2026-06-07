@@ -78,6 +78,7 @@ Questions to answer:
 - Model providers expose `enabledModels` and `availableModels`; do not read a `models` array in Chat UI.
 - Chat context usage uses model metadata for `context_window_tokens`: provider `modelOverrides[model].contextWindow` wins, then the shared built-in `src/data/modelDatabase.json` match, then backend name heuristics. Explicit metadata must set `context_window_estimated=false`; heuristic fallbacks may remain estimated.
 - Streaming payload fields: `{ imageId, kind: 'answer', delta, reasoningDelta?, done?, reason?, full? }`.
+- `src/api/tauri.ts` `normalizeSettings` rebuilds nested settings objects. When adding any `Settings.chat` field, preserve it in `normalizeSettings`; otherwise save/load can silently drop the value even if Rust serialization and the Settings UI are correct.
 
 ### 4. Validation & Error Matrix
 - Invalid conversation ID -> backend returns `Err("Invalid conversation id: ...")`; do not construct file paths directly in frontend.
@@ -99,6 +100,7 @@ Questions to answer:
 - Good: `deepseek-v4-flash` without a manual override resolves its context window from the built-in model database, so Settings and Chat context usage agree on 1,048,576 tokens.
 - Bad: listening for `{ kind: 'chunk', text }` on `chat-stream`; backend emits `delta` and `done`, not `text`.
 - Bad: creating a new blank conversation on every click just because the current route is `#chat`; this floods storage and sidebar with empty "新对话" rows.
+- Bad: adding `chat.userDisplayName` to Settings UI and Rust `ChatConfig` but forgetting `normalizeSettings`, causing the field to disappear immediately after save.
 
 ### 6. Tests Required
 - `npm run typecheck` must catch mismatches between bridge types and Chat UI props.

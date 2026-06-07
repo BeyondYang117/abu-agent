@@ -66,6 +66,24 @@ return <div ref={rootRef} tabIndex={-1} />
 
 **Rule**: When adding a new Lens stage or mode, update the focus helper's allowed stage list. Chat mode should keep focusing its text input; non-input modes should focus the root surface.
 
+### Convention: IME-safe Enter submission
+
+**What**: Text inputs or textareas that submit on Enter must ignore Enter while IME composition is active. Check both `event.nativeEvent.isComposing` and `event.keyCode === 229` before calling `preventDefault()` or the submit handler.
+
+**Why**: Chinese, Japanese, and Korean input methods often use Enter to confirm a candidate. Treating that keydown as submit sends incomplete content and makes the Chat composer feel unreliable.
+
+**Example**:
+```tsx
+const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  if (event.key !== 'Enter' || event.shiftKey) return
+  if (event.nativeEvent.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  handleSubmit()
+}
+```
+
+**Rule**: Apply this guard to every composer-style input that sends, confirms, saves, or commits content on Enter. Keep Shift+Enter newline behavior intact when the control supports multiline input.
+
 ---
 
 ## Common Mistakes
@@ -73,3 +91,4 @@ return <div ref={rootRef} tabIndex={-1} />
 <!-- Component-related mistakes your team has made -->
 
 - Adding keyboard shortcuts only to `window` listeners without ensuring the Tauri webview is focused. Window listeners do not fire when the OS focus remains on the previously active app.
+- Handling Enter submit in a composer without IME guards. This breaks candidate confirmation for CJK input methods and can send half-composed messages.

@@ -283,6 +283,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const locallyCancelledConversationIdRef = useRef<string | null>(null)
   const locallyCancelledRunIdRef = useRef<string | null>(null)
   const sendInFlightRef = useRef(false)
+  const inFlightConversationIdRef = useRef<string | null>(null)
   const pendingStreamDoneRef = useRef<(() => void) | null>(null)
   const streamSnapshotsRef = useRef<Record<string, ConversationStreamSnapshot>>({})
   const pendingToolConfirmsRef = useRef<Record<string, ChatToolConfirmPayload>>({})
@@ -1269,6 +1270,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       const attachmentSkillId = effectiveSkillId
         ?? inferSingleAttachmentSkillId(attachments, enabledSkills)
       conversationIdForRun = conversationId
+      inFlightConversationIdRef.current = conversationId
       const snapshot = ensureStreamSnapshot(conversationId)
       snapshot.streaming = true
       snapshot.content = ''
@@ -1309,6 +1311,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     } finally {
       flushPendingStreamDone()
       sendInFlightRef.current = false
+      inFlightConversationIdRef.current = null
     }
   }
 
@@ -1425,11 +1428,18 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }
 
   const handleCancelStream = useCallback(async () => {
-    const conversationId = currentConversationIdRef.current
+    const conversationId = inFlightConversationIdRef.current ?? currentConversationIdRef.current
     if (!conversationId || cancellingStream || (!streaming && !sendInFlightRef.current)) return
 
     setCancellingStream(true)
-    cancelCurrentRunLocally()
+    if (currentConversationIdRef.current === conversationId) {
+      cancelCurrentRunLocally()
+    } else {
+      locallyCancelledConversationIdRef.current = conversationId
+      locallyCancelledRunIdRef.current = activeRunIdRef.current
+      clearStreamSnapshot(conversationId)
+      clearStreamingPreview()
+    }
     try {
       await chatApi.cancelStream(conversationId)
     } catch (err) {
@@ -1438,7 +1448,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     } finally {
       setCancellingStream(false)
     }
-  }, [cancelCurrentRunLocally, cancellingStream, streaming])
+  }, [cancelCurrentRunLocally, cancellingStream, clearStreamSnapshot, clearStreamingPreview, streaming])
 
   const displayMessages = useMemo(() => {
     const stored = currentConversation?.messages ?? []
