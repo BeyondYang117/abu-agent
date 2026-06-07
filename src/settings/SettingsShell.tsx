@@ -202,9 +202,13 @@ function formatTokenCount(tokens?: number): string {
 }
 
 function resolveEffectiveChatModel(settings: SettingsData): { provider?: ModelProvider, model: string } {
-  const configuredChat = settings.lens?.providerId
-    ? { providerId: settings.lens.providerId, model: settings.lens.model || '' }
-    : { providerId: settings.translatorProviderId, model: settings.translatorModel }
+  const configuredChat = settings.defaultModels.chat.providerId
+    ? settings.defaultModels.chat
+    : settings.chatProviderId
+      ? { providerId: settings.chatProviderId, model: settings.chatModel }
+      : settings.lens?.providerId
+        ? { providerId: settings.lens.providerId, model: settings.lens.model || '' }
+        : { providerId: settings.translatorProviderId, model: settings.translatorModel }
 
   return {
     provider: settings.providers.find((provider) => provider.id === configuredChat.providerId),
@@ -390,9 +394,9 @@ function SkillListSection({
   )
 }
 
-function defaultDefaultModels(): SettingsData['defaultModels'] {
+function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData['defaultModels'] {
   return {
-    chat: { providerId: '', model: '' },
+    chat: { providerId: chatProviderId, model: chatModel },
     vision: { providerId: '', model: '' },
     titleSummary: { providerId: '', model: '' },
     compression: { providerId: '', model: '' },
@@ -1088,7 +1092,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   ) => {
     setSettings((prev) => {
       if (!prev) return prev
-      const current = prev.defaultModels || defaultDefaultModels()
+      const current = prev.defaultModels || defaultDefaultModels(prev.chatProviderId, prev.chatModel)
       const defaultModels = {
         ...current,
         [key]: { providerId, model },
@@ -1096,6 +1100,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       return {
         ...prev,
         defaultModels,
+        ...(key === 'chat' ? { chatProviderId: providerId, chatModel: model } : {}),
       }
     })
   }, [])
@@ -1421,6 +1426,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     const lensProvider = lensHadOwnProvider
       ? resolveProvider(nextProviders, settings.lens?.providerId || '')
       : undefined
+    const deletedProviderWasChatModel =
+      settings.defaultModels.chat.providerId === id || settings.chatProviderId === id
 
     const defaultModels = clearDefaultModelProvider(settings.defaultModels, id)
     const nextSettings: SettingsData = {
@@ -1442,11 +1449,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         }
       } : {})
     }
-    const effectiveChat = resolveEffectiveChatModel(nextSettings)
     setSettings({
       ...nextSettings,
-      chatProviderId: effectiveChat.provider?.id ?? '',
-      chatModel: effectiveChat.model,
+      chatProviderId: deletedProviderWasChatModel ? '' : settings.chatProviderId,
+      chatModel: deletedProviderWasChatModel ? '' : settings.chatModel,
     })
   }
 
@@ -1521,9 +1527,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         next.translatorModel = resolveAfterRemoval(prev.translatorModel)
       }
       next.defaultModels = defaultModels
-      const effectiveChat = resolveEffectiveChatModel({ ...next, defaultModels })
-      next.chatProviderId = effectiveChat.provider?.id ?? ''
-      next.chatModel = effectiveChat.model
+      next.chatProviderId = defaultModels.chat.providerId
+      next.chatModel = defaultModels.chat.model
 
       if (prev.screenshotTranslation.providerId === providerId) {
         next.screenshotTranslation = {
@@ -1908,8 +1913,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     chat: {
       title: t.tabChatClient,
       subtitle: lang === 'zh'
-        ? '流式/思考行为、系统提示词；新建对话默认继承 Lens 或输入翻译模型，副任务模型见混音器。'
-        : 'Streaming/thinking and system prompt; new chats inherit Lens or input translation model; side-task models live under Mixer.',
+        ? '主对话模型、流式/思考行为、系统提示词；副任务模型见混音器。'
+        : 'Main chat model, streaming/thinking, and system prompt; side-task models live under Mixer.',
     },
     memory: {
       title: t.tabMemory,
@@ -1947,8 +1952,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     },
   }
   const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
-  const effectiveChatModel = resolveEffectiveChatModel(settings)
-  const chatProvider = effectiveChatModel.provider
+  const chatProvider = settings.providers.find((provider) => provider.id === settings.chatProviderId)
+    ?? settings.providers.find((provider) => provider.id === settings.lens?.providerId)
+    ?? settings.providers.find((provider) => provider.id === settings.translatorProviderId)
   const chatProviderSupportsTools = chatProvider?.supportsTools !== false
   const disabledSkillIds = chatTools.disabledSkillIds ?? []
   const builtinSkills = skills.filter(isBuiltinSkill)
@@ -2454,6 +2460,36 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       placeholder="https://..."
                     />
                   </SettingRow>
+                </SettingsGroup>
+
+                <SettingsGroup title={t.defaultModelsSection}>
+                  <SettingRow
+                    label={t.defaultChatModel}
+                    description={t.defaultChatModelHint}
+                  >
+                    <ModelPairSelect
+                      providerId={settings.defaultModels.chat.providerId || ''}
+                      model={settings.defaultModels.chat.model || ''}
+                      providers={settings.providers}
+                      platform={platform}
+                      inheritLabel={t.defaultModelsUnset}
+                      onChange={(providerId, model) => {
+                        updateDefaultModel('chat', providerId, model)
+                      }}
+                    />
+                  </SettingRow>
+                  {!chatProvider && (
+                    <p className="kv-row-desc px-0 pb-2">
+                      {lang === 'zh' ? '请先在「模型」中添加并配置供应商。' : 'Add and configure a provider under Models first.'}
+                    </p>
+                  )}
+                  {chatProvider && chatProviderSupportsTools === false && (
+                    <p className="kv-row-desc px-0 pb-2 text-amber-700 dark:text-amber-400">
+                      {lang === 'zh'
+                        ? '当前默认供应商未启用工具调用；MCP / Skill 工具可能不可用。'
+                        : 'The default provider is marked as not supporting tools; MCP / Skill may be unavailable.'}
+                    </p>
+                  )}
                 </SettingsGroup>
 
                 <SettingsGroup title={lang === 'zh' ? '响应' : 'Response'}>

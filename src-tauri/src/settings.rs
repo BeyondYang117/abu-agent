@@ -561,10 +561,10 @@ impl DefaultModelSelection {
 /**
  * 默认模型配置。
  *
- * chat：已废弃，加载时清空；新建 Chat 对话沿用 Lens → 输入翻译的兜底链路。
+ * chat：新建 Chat 对话的全局默认模型；为空时沿用 Lens → 输入翻译的兜底链路。
  * vision：图片附件分析副任务使用；为空时保持 Chat 主模型直接处理图片。
- * title_summary：标题总结副任务使用；为空时继承有效 Chat 模型（Lens → 输入翻译）。
- * compression：上下文/历史对话压缩副任务使用；为空时继承有效 Chat 模型（Lens → 输入翻译）。
+ * title_summary：标题总结副任务使用；为空时继承有效 Chat 默认模型。
+ * compression：上下文/历史对话压缩副任务使用；为空时继承有效 Chat 默认模型。
  * image_generation：生图副任务使用；为空时不暴露混音器生图工具。
  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -854,6 +854,12 @@ impl Settings {
     }
 
     pub fn effective_chat_model(&self) -> (String, String) {
+        if self.default_models.chat.is_configured() {
+            return (
+                self.default_models.chat.provider_id.clone(),
+                self.default_models.chat.model.clone(),
+            );
+        }
         if !self.lens.provider_id.trim().is_empty() {
             return (self.lens.provider_id.clone(), self.lens.model.clone());
         }
@@ -1010,10 +1016,13 @@ fn sync_legacy_chat_model_fields(settings: &mut Settings) {
 }
 
 fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
-    settings.default_models.chat.provider_id.clear();
-    settings.default_models.chat.model.clear();
-    settings.chat_provider_id.clear();
-    settings.chat_model.clear();
+    if settings.default_models.chat.is_configured() {
+        settings.chat_provider_id = settings.default_models.chat.provider_id.clone();
+        settings.chat_model = settings.default_models.chat.model.clone();
+    } else {
+        settings.chat_provider_id.clear();
+        settings.chat_model.clear();
+    }
 }
 
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
@@ -1106,8 +1115,12 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             settings.screenshot_translation.provider_id = first.id.clone();
         }
     }
-    settings.default_models.chat.provider_id.clear();
-    settings.default_models.chat.model.clear();
+    if !settings.chat_provider_id.trim().is_empty()
+        && settings.default_models.chat.provider_id.trim().is_empty()
+    {
+        settings.default_models.chat.provider_id = settings.chat_provider_id.clone();
+        settings.default_models.chat.model = settings.chat_model.clone();
+    }
 
     if settings.providers.is_empty() {
         settings.translator_provider_id.clear();
@@ -1147,6 +1160,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             settings.lens.model.clear();
         }
 
+        sanitize_default_model_selection(&mut settings.default_models.chat, &settings.providers);
         sanitize_default_model_selection(&mut settings.default_models.vision, &settings.providers);
         sanitize_default_model_selection(
             &mut settings.default_models.title_summary,
@@ -1234,6 +1248,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             settings.lens.model.clear();
         }
         for selection in [
+            &mut settings.default_models.chat,
             &mut settings.default_models.vision,
             &mut settings.default_models.title_summary,
             &mut settings.default_models.compression,
@@ -2309,7 +2324,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_settings_clears_legacy_chat_default_slot() {
+    fn sanitize_settings_keeps_valid_chat_model() {
         let mut s = Settings::default();
         s.providers.push(ModelProvider {
             id: "chat".to_string(),
@@ -2324,19 +2339,14 @@ mod tests {
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
         });
-        s.translator_provider_id = "chat".to_string();
-        s.translator_model = "m1".to_string();
         s.chat_provider_id = "chat".to_string();
         s.chat_model = "m2".to_string();
-        s.default_models.chat.provider_id = "chat".to_string();
-        s.default_models.chat.model = "m2".to_string();
 
         let s = sanitize_settings(s);
         assert_eq!(s.chat_provider_id, "chat");
-        assert_eq!(s.chat_model, "m1");
-        assert!(s.default_models.chat.provider_id.is_empty());
-        assert!(s.default_models.chat.model.is_empty());
-        assert_eq!(s.effective_chat_model(), ("chat".to_string(), "m1".to_string()));
+        assert_eq!(s.chat_model, "m2");
+        assert_eq!(s.default_models.chat.provider_id, "chat");
+        assert_eq!(s.default_models.chat.model, "m2");
     }
 
     #[test]
@@ -2409,8 +2419,8 @@ mod tests {
         });
         s.translator_provider_id = "chat".to_string();
         s.translator_model = "chat-model".to_string();
-        s.lens.provider_id = "chat".to_string();
-        s.lens.model = "chat-model".to_string();
+        s.default_models.chat.provider_id = "chat".to_string();
+        s.default_models.chat.model = "chat-model".to_string();
         s.default_models.vision.provider_id = "vision".to_string();
         s.default_models.vision.model = "vision-model".to_string();
         s.default_models.title_summary.provider_id = "title".to_string();
@@ -2463,6 +2473,8 @@ mod tests {
         });
         s.translator_provider_id = "chat".to_string();
         s.translator_model = "m1".to_string();
+        s.default_models.chat.provider_id = "chat".to_string();
+        s.default_models.chat.model = "removed".to_string();
         s.default_models.vision.provider_id = "chat".to_string();
         s.default_models.vision.model = String::new();
         s.default_models.title_summary.provider_id = "deleted-provider".to_string();
@@ -2474,8 +2486,8 @@ mod tests {
 
         let s = sanitize_settings(s);
 
-        assert!(s.default_models.chat.provider_id.is_empty());
-        assert!(s.default_models.chat.model.is_empty());
+        assert_eq!(s.default_models.chat.provider_id, "chat");
+        assert_eq!(s.default_models.chat.model, "m1");
         assert_eq!(s.default_models.vision.provider_id, "chat");
         assert_eq!(s.default_models.vision.model, "m1");
         assert!(s.default_models.title_summary.provider_id.is_empty());

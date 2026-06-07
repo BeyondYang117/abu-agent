@@ -652,7 +652,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const loadDefaultModel = useCallback(async () => {
     try {
       const settings = await api.getSettings()
-      if (settings.lens?.providerId) {
+      const chatDefault = settings.defaultModels.chat
+      if (chatDefault.providerId) {
+        setDraftProviderId(chatDefault.providerId)
+        setDraftModel(chatDefault.model)
+      } else if (settings.lens?.providerId) {
         setDraftProviderId(settings.lens.providerId)
         setDraftModel(settings.lens.model || '')
       } else {
