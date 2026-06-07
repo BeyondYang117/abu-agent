@@ -250,6 +250,7 @@ export type SkillFileEntry = {
 export type ChatConfig = {
   streamEnabled?: boolean
   thinkingEnabled?: boolean
+  maxOutputTokens?: number
   defaultLanguage?: string
   systemPrompt?: string
   userDisplayName?: string
@@ -628,6 +629,7 @@ function normalizeSettings(settings: Settings): Settings {
     chat: {
       streamEnabled: current.chat?.streamEnabled ?? current.lens?.streamEnabled ?? true,
       thinkingEnabled: current.chat?.thinkingEnabled ?? current.lens?.thinkingEnabled ?? true,
+      maxOutputTokens: current.chat?.maxOutputTokens ?? 8192,
       defaultLanguage: current.chat?.defaultLanguage ?? '',
       systemPrompt: current.chat?.systemPrompt ?? '',
       userDisplayName: current.chat?.userDisplayName ?? '',

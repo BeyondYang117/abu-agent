@@ -48,6 +48,7 @@ type SettingsData = SettingsType
 type MemoryLayerKey = 'l1' | 'l2'
 
 const MEMORY_L1_MAX_BYTES = 5_000
+const CHAT_MAX_OUTPUT_TOKEN_OPTIONS = [2048, 8192, 16384, 32768]
 const textEncoder = new TextEncoder()
 
 function utf8ByteLength(value: string): number {
@@ -180,6 +181,7 @@ function defaultChatConfig(): NonNullable<SettingsData['chat']> {
   return {
     streamEnabled: true,
     thinkingEnabled: true,
+    maxOutputTokens: 8192,
     defaultLanguage: '',
     systemPrompt: '',
     userDisplayName: '',
@@ -192,6 +194,40 @@ function defaultChatMemory(): ChatMemoryConfig {
     enabled: false,
     toolWriteConfirm: false,
   }
+}
+
+function formatTokenCount(tokens?: number): string {
+  if (!tokens || !Number.isFinite(tokens)) return ''
+  return `${tokens.toLocaleString()} tokens`
+}
+
+function resolveEffectiveChatModel(settings: SettingsData): { provider?: ModelProvider, model: string } {
+  const configuredChat = settings.defaultModels.chat.providerId
+    ? settings.defaultModels.chat
+    : settings.chatProviderId
+      ? { providerId: settings.chatProviderId, model: settings.chatModel }
+      : settings.lens?.providerId
+        ? { providerId: settings.lens.providerId, model: settings.lens.model || '' }
+        : { providerId: settings.translatorProviderId, model: settings.translatorModel }
+
+  return {
+    provider: settings.providers.find((provider) => provider.id === configuredChat.providerId),
+    model: configuredChat.model || '',
+  }
+}
+
+function resolveEffectiveChatMaxOutput(settings: SettingsData, fallbackTokens: number) {
+  const { provider, model } = resolveEffectiveChatModel(settings)
+  const override = model ? provider?.modelOverrides?.[model]?.maxOutput : undefined
+  const modelInfo = model ? resolveModelInfo(model, provider?.modelOverrides) : {}
+  const maxOutput = override || modelInfo.maxOutput || fallbackTokens
+  const source: 'override' | 'database' | 'fallback' = override
+    ? 'override'
+    : modelInfo.maxOutput
+      ? 'database'
+      : 'fallback'
+
+  return { maxOutput, source, model, provider }
 }
 
 function defaultChatTools(): ChatToolsConfig {
@@ -1724,6 +1760,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const chatSystemPromptValue = chatSystemPromptInteracted
     ? (chatConfig.systemPrompt || '')
     : (chatConfig.systemPrompt || chatDefaults || '')
+  const chatFallbackMaxOutputTokens = chatConfig.maxOutputTokens ?? 8192
+  const effectiveChatMaxOutput = settings
+    ? resolveEffectiveChatMaxOutput(settings, chatFallbackMaxOutputTokens)
+    : { maxOutput: chatFallbackMaxOutputTokens, source: 'fallback' as const, model: '', provider: undefined }
+  const chatMaxOutputSourceLabel = effectiveChatMaxOutput.source === 'override'
+    ? (lang === 'zh' ? '模型参数' : 'Model override')
+    : effectiveChatMaxOutput.source === 'database'
+      ? (lang === 'zh' ? '内置模型库' : 'Model database')
+      : (lang === 'zh' ? '兜底设置' : 'Fallback setting')
+  const chatMaxOutputModelLabel = effectiveChatMaxOutput.model
+    ? (effectiveChatMaxOutput.provider?.name
+      ? `${effectiveChatMaxOutput.provider.name} / ${effectiveChatMaxOutput.model}`
+      : effectiveChatMaxOutput.model)
+    : (lang === 'zh' ? '未配置聊天模型' : 'No chat model configured')
 
   // 快捷键录制监听
   useEffect(() => {
@@ -2418,6 +2468,38 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       checked={chatConfig.thinkingEnabled !== false}
                       onChange={(thinkingEnabled) => updateChat({ thinkingEnabled })}
                     />
+                  </SettingRow>
+                  <SettingRow label={t.chatMaxOutputTokens} description={t.chatMaxOutputTokensHint} stack>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[15px] font-medium text-neutral-900 dark:text-neutral-50">
+                            {formatTokenCount(effectiveChatMaxOutput.maxOutput)}
+                          </span>
+                          <span className={`kv-tag ${effectiveChatMaxOutput.source === 'fallback' ? 'warn' : 'ok'}`}>
+                            {chatMaxOutputSourceLabel}
+                          </span>
+                        </div>
+                        <p className="kv-row-desc mt-1 min-w-0 break-all">
+                          {lang === 'zh' ? '当前聊天模型：' : 'Current chat model: '}
+                          {chatMaxOutputModelLabel}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="kv-row-desc whitespace-nowrap">
+                          {lang === 'zh' ? '兜底' : 'Fallback'}
+                        </span>
+                        <Select
+                          className="w-44"
+                          value={String(chatFallbackMaxOutputTokens)}
+                          onChange={(maxOutputTokens) => updateChat({ maxOutputTokens: Number(maxOutputTokens) })}
+                          options={CHAT_MAX_OUTPUT_TOKEN_OPTIONS.map((tokens) => ({
+                            value: String(tokens),
+                            label: formatTokenCount(tokens),
+                          }))}
+                        />
+                      </div>
+                    </div>
                   </SettingRow>
                   <SettingRow label={t.chatDefaultLanguage} description={t.chatDefaultLanguageHint}>
                     <Select

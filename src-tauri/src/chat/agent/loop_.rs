@@ -110,6 +110,7 @@ pub async fn run_agent_loop(
                     Some(&prepared.active_tools),
                     config.retry_attempts,
                     config.thinking_enabled,
+                    config.max_output_tokens,
                     &config.conversation_id,
                     &config.run_id,
                     &config.message_id,
@@ -140,6 +141,7 @@ pub async fn run_agent_loop(
                         Some(&prepared.active_tools),
                         config.retry_attempts,
                         config.thinking_enabled,
+                        config.max_output_tokens,
                         "Chat tools planning",
                     ) => result.map(|message| ChatPlanningStep {
                         message,
@@ -363,6 +365,7 @@ pub async fn run_agent_loop(
             None,
             config.retry_attempts,
             config.thinking_enabled,
+            config.max_output_tokens,
             &config.conversation_id,
             &config.run_id,
             &config.message_id,
@@ -446,6 +449,7 @@ pub async fn run_agent_loop(
                 None,
                 config.retry_attempts,
                 config.thinking_enabled,
+                config.max_output_tokens,
                 "Chat API",
             ) => result?,
             _ = host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
@@ -1083,6 +1087,7 @@ async fn call_chat_completion_message(
     tools: Option<&[ChatToolDefinition]>,
     retry_attempts: usize,
     thinking_enabled: bool,
+    max_output_tokens: u32,
     label: &str,
 ) -> Result<Value, String> {
     let request = generate_request_from_openai_messages(
@@ -1091,6 +1096,7 @@ async fn call_chat_completion_message(
         tools,
         GenerateOptions {
             thinking_enabled,
+            max_tokens: max_output_tokens,
             ..GenerateOptions::default()
         },
         label,
@@ -1109,6 +1115,7 @@ async fn stream_scoped_chat_completion_inner(
     tools: Option<&[ChatToolDefinition]>,
     retry_attempts: usize,
     thinking_enabled: bool,
+    max_output_tokens: u32,
     conversation_id: &str,
     run_id: &str,
     message_id: &str,
@@ -1123,6 +1130,7 @@ async fn stream_scoped_chat_completion_inner(
         GenerateOptions {
             stream: true,
             thinking_enabled,
+            max_tokens: max_output_tokens,
             ..GenerateOptions::default()
         },
         label,

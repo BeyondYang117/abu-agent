@@ -1374,6 +1374,11 @@ async fn complete_assistant_reply(
         app: app.clone(),
         state: state.inner(),
     };
+    let max_output_tokens = chat_max_output_tokens_for_model(
+        Some(&provider),
+        &conversation.model,
+        settings.chat.max_output_tokens,
+    );
     let result = crate::chat::agent::run_agent_loop(
         crate::chat::agent::AgentRunConfig {
             entry,
@@ -1392,6 +1397,7 @@ async fn complete_assistant_reply(
             has_image: !main_image_paths.is_empty(),
             thinking_enabled,
             stream_enabled,
+            max_output_tokens,
             retry_attempts,
             skill_registry,
             active_skill_id: skill_id.clone(),
@@ -1850,6 +1856,12 @@ fn context_window_from_model_info(info: Option<&ModelInfo>) -> Option<usize> {
         .filter(|tokens| *tokens > 0)
 }
 
+fn max_output_from_model_info(info: Option<&ModelInfo>) -> Option<u32> {
+    info.and_then(|info| info.max_output)
+        .and_then(|tokens| u32::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
+}
+
 fn model_vision_from_model_info(info: Option<&ModelInfo>) -> Option<bool> {
     info.and_then(|info| info.capabilities.as_ref())
         .and_then(|capabilities| capabilities.vision)
@@ -1929,11 +1941,23 @@ fn model_database_context_window(model: &str) -> Option<usize> {
     context_window_from_database_entry(model_database_entry(model))
 }
 
+fn model_database_max_output(model: &str) -> Option<u32> {
+    max_output_from_database_entry(model_database_entry(model))
+}
+
 fn context_window_from_database_entry(entry: Option<&Value>) -> Option<usize> {
     entry?
         .get("contextWindow")
         .and_then(Value::as_u64)
         .and_then(|tokens| usize::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
+}
+
+fn max_output_from_database_entry(entry: Option<&Value>) -> Option<u32> {
+    entry?
+        .get("maxOutput")
+        .and_then(Value::as_u64)
+        .and_then(|tokens| u32::try_from(tokens).ok())
         .filter(|tokens| *tokens > 0)
 }
 
@@ -2040,6 +2064,16 @@ fn context_window_for_model(provider: Option<&ModelProvider>, model: &str) -> (u
         return (128_000, true);
     }
     (FALLBACK_CONTEXT_WINDOW_TOKENS, true)
+}
+
+fn chat_max_output_tokens_for_model(
+    provider: Option<&ModelProvider>,
+    model: &str,
+    fallback: u32,
+) -> u32 {
+    max_output_from_model_info(provider.and_then(|provider| provider.model_overrides.get(model)))
+        .or_else(|| model_database_max_output(model))
+        .unwrap_or(fallback)
 }
 
 fn active_summary(conversation: &Conversation) -> Option<&ConversationContextSummary> {
@@ -4017,6 +4051,40 @@ mod tests {
         assert_eq!(
             context_window_for_model(None, "deepseek-v4-flash"),
             (1_048_576, false)
+        );
+    }
+
+    #[test]
+    fn chat_max_output_uses_builtin_model_database_defaults() {
+        assert_eq!(
+            chat_max_output_tokens_for_model(None, "deepseek-v4-flash", 32_768),
+            131_072
+        );
+    }
+
+    #[test]
+    fn chat_max_output_uses_model_override_before_database() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "deepseek-v4-flash".to_string(),
+            ModelInfo {
+                max_output: Some(65_536),
+                ..ModelInfo::default()
+            },
+        );
+        let provider = test_provider_with_overrides(overrides);
+
+        assert_eq!(
+            chat_max_output_tokens_for_model(Some(&provider), "deepseek-v4-flash", 32_768),
+            65_536
+        );
+    }
+
+    #[test]
+    fn chat_max_output_falls_back_to_setting_when_metadata_missing() {
+        assert_eq!(
+            chat_max_output_tokens_for_model(None, "custom-model", 32_768),
+            32_768
         );
     }
 

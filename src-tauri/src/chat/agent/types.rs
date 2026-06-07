@@ -51,6 +51,7 @@ pub struct AgentRunConfig<'a> {
     pub has_image: bool,
     pub thinking_enabled: bool,
     pub stream_enabled: bool,
+    pub max_output_tokens: u32,
     pub retry_attempts: usize,
     pub skill_registry: skills::SkillRegistry,
     pub active_skill_id: Option<String>,

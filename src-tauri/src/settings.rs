@@ -433,6 +433,14 @@ fn default_message_order() -> String {
     "asc".to_string()
 }
 
+pub fn default_chat_max_output_tokens() -> u32 {
+    8192
+}
+
+fn clamp_chat_max_output_tokens(value: u32) -> u32 {
+    value.clamp(512, 65_536)
+}
+
 impl Default for LensConfig {
     fn default() -> Self {
         Self {
@@ -463,6 +471,9 @@ pub struct ChatConfig {
     pub stream_enabled: bool,
     #[serde(default = "default_true")]
     pub thinking_enabled: bool,
+    /// Chat 模型最终回答最大输出 tokens。
+    #[serde(default = "default_chat_max_output_tokens")]
+    pub max_output_tokens: u32,
     /// 响应语言（"zh"/"en" 等）。空字符串表示跟随 Lens 默认语言，再跟随 target_lang。
     #[serde(default)]
     pub default_language: String,
@@ -482,6 +493,7 @@ impl Default for ChatConfig {
         Self {
             stream_enabled: true,
             thinking_enabled: true,
+            max_output_tokens: default_chat_max_output_tokens(),
             default_language: String::new(),
             system_prompt: String::new(),
             user_display_name: String::new(),
@@ -1304,6 +1316,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     ) {
         settings.chat.default_language.clear();
     }
+    settings.chat.max_output_tokens = clamp_chat_max_output_tokens(settings.chat.max_output_tokens);
     settings.chat.system_prompt = settings.chat.system_prompt.trim().to_string();
 
     settings.chat_tools.max_tool_rounds = settings.chat_tools.max_tool_rounds.clamp(1, 30);
@@ -1877,6 +1890,19 @@ mod tests {
         s.retry_attempts = 99;
         let s = sanitize_settings(s);
         assert!((1..=5).contains(&s.retry_attempts));
+    }
+
+    #[test]
+    fn sanitize_settings_clamps_chat_max_output_tokens() {
+        let mut s = Settings::default();
+        s.chat.max_output_tokens = 0;
+        let s = sanitize_settings(s);
+        assert_eq!(s.chat.max_output_tokens, 512);
+
+        let mut s = Settings::default();
+        s.chat.max_output_tokens = 100_000;
+        let s = sanitize_settings(s);
+        assert_eq!(s.chat.max_output_tokens, 65_536);
     }
 
     #[test]
