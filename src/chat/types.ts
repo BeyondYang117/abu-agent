@@ -89,6 +89,45 @@ export interface ToolCallRecord {
   structuredContent?: unknown
 }
 
+export type AskUserPhase = 'awaiting' | 'answered' | 'skipped' | 'timeout' | 'cancelled'
+
+export interface AskUserOption {
+  id: string
+  label: string
+  description?: string | null
+}
+
+export interface AskUserQuestion {
+  id: string
+  prompt: string
+  options: AskUserOption[]
+  allow_multiple?: boolean
+  allowMultiple?: boolean
+  allow_custom?: boolean
+  allowCustom?: boolean
+}
+
+export interface AskUserPromptPayload {
+  title?: string | null
+  questions: AskUserQuestion[]
+}
+
+export interface AskUserAnswer {
+  selected_option_ids?: string[]
+  selectedOptionIds?: string[]
+  custom_text?: string | null
+  customText?: string | null
+}
+
+export interface AskUserStructuredContent {
+  askUser?: {
+    phase?: AskUserPhase | string
+    title?: string | null
+    questions?: AskUserQuestion[]
+    answers?: Record<string, AskUserAnswer>
+  }
+}
+
 export interface ChatToolArtifact {
   name: string
   mime_type?: string

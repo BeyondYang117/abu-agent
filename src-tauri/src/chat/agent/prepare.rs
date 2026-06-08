@@ -167,6 +167,7 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
         "memory_read",
         "memory_modify",
         "mixer_generate_image",
+        "ask_user",
         "todo_write",
         "todo_update",
     ];
@@ -199,6 +200,9 @@ pub fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
     if tool.source == "native" && crate::chat::todo::is_agent_todo_tool_name(&tool.name) {
         return true;
     }
+    if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
+        return true;
+    }
     tool.source == "native" && matches!(tool.name.as_str(), "memory_read" | "memory_modify")
 }
 
@@ -216,6 +220,7 @@ pub fn build_chat_system_prompt(
     custom_system_prompt: &str,
     memory_prompt: Option<&str>,
     agent_plan_prompt: Option<&str>,
+    agent_ask_user_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
 ) -> String {
     build_chat_system_prompt_with_segments(
@@ -232,6 +237,7 @@ pub fn build_chat_system_prompt(
         custom_system_prompt,
         memory_prompt,
         agent_plan_prompt,
+        agent_ask_user_prompt,
         agent_todo_prompt,
     )
     .0
@@ -251,6 +257,7 @@ pub fn build_chat_system_prompt_with_segments(
     custom_system_prompt: &str,
     memory_prompt: Option<&str>,
     agent_plan_prompt: Option<&str>,
+    agent_ask_user_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
 ) -> (String, Vec<ContextUsageSegment>) {
     let mut prompt = String::new();
@@ -307,6 +314,19 @@ pub fn build_chat_system_prompt_with_segments(
         append_context_segment(&mut prompt, &mut segments, "agent_plan", "Agent plan", plan);
     }
 
+    if let Some(ask_user) = agent_ask_user_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "agent_ask_user",
+            "Agent ask_user",
+            ask_user,
+        );
+    }
+
     if let Some(todo) = agent_todo_prompt
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -315,12 +335,39 @@ pub fn build_chat_system_prompt_with_segments(
     }
 
     if tools_available {
-        let mut action_examples = vec!["activating a skill", "reading a file", "running a script"];
+        let mut action_examples = Vec::new();
+        if available_builtin_tools
+            .iter()
+            .any(|tool| tool.as_str() == crate::chat::ask_user::ASK_USER_TOOL_NAME)
+        {
+            action_examples.push("asking the user a blocking clarification");
+        }
+        if available_builtin_tools
+            .iter()
+            .any(|tool| tool.as_str() == "read_file")
+        {
+            action_examples.push("reading a file");
+        }
+        if available_builtin_tools
+            .iter()
+            .any(|tool| matches!(tool.as_str(), "run_command" | "run_python"))
+        {
+            action_examples.push("running code or a command");
+        }
         if available_builtin_tools
             .iter()
             .any(|tool| matches!(tool.as_str(), "web_search" | "web_fetch"))
         {
             action_examples.push("using the web");
+        }
+        if available_builtin_tools
+            .iter()
+            .any(|tool| tool.as_str() == "mixer_generate_image")
+        {
+            action_examples.push("generating an image");
+        }
+        if action_examples.is_empty() {
+            action_examples.push("using an enabled tool");
         }
         let mut runtime = format!(
             "You have access to tools (functions). When the user's request requires action—such as {}—YOU MUST call the appropriate enabled tool instead of describing what to do. Never say \"I cannot run commands\" or \"you can do it yourself\" when an enabled tool is available for that action. Do not call tools that are not listed as enabled.",
@@ -715,17 +762,22 @@ fn data_connector_allows_tool(
 }
 
 fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Option<String> {
-    if available_builtin_tools.is_empty() {
+    let native_tool_names = available_builtin_tools
+        .iter()
+        .filter(|tool| tool.as_str() != crate::chat::ask_user::ASK_USER_TOOL_NAME)
+        .cloned()
+        .collect::<Vec<_>>();
+    if native_tool_names.is_empty() {
         return None;
     }
-    let list = available_builtin_tools.join(", ");
-    let has_web_search = available_builtin_tools
+    let list = native_tool_names.join(", ");
+    let has_web_search = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "web_search");
-    let has_web_fetch = available_builtin_tools
+    let has_web_fetch = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "web_fetch");
-    let has_image_generation = available_builtin_tools
+    let has_image_generation = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "mixer_generate_image");
     let zh_live_access_hint = match (has_web_search, has_web_fetch) {
@@ -839,6 +891,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert!(prompt.contains("run_python"));
@@ -864,6 +917,7 @@ mod tests {
             None,
             None,
             "",
+            None,
             None,
             None,
             None,
@@ -896,6 +950,7 @@ mod tests {
             None,
             Some(&assistant),
             "你",
+            None,
             None,
             None,
             None,

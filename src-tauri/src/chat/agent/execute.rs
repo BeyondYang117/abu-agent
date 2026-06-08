@@ -7,6 +7,7 @@ use std::{
 use serde_json::Value;
 use tokio::time::timeout;
 
+use crate::chat::ask_user;
 use crate::chat::model::PendingToolCall;
 use crate::chat::types::{ToolCallRecord, ToolCallStatus};
 use crate::mcp::types::McpToolCallResult;
@@ -141,6 +142,10 @@ pub async fn execute_tool_call(
         );
     }
 
+    if tool.source == "native" && ask_user::is_ask_user_tool_name(&tool.name) {
+        return execute_ask_user_call(host, settings, ctx, record, call.arguments.clone()).await;
+    }
+
     let requires_approval = tool_requires_approval(settings, tool);
     if requires_approval {
         let approved = host.request_tool_approval(ctx, &record).await;
@@ -214,6 +219,80 @@ pub async fn execute_tool_call(
     };
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
     (record, tool_content)
+}
+
+async fn execute_ask_user_call(
+    host: &dyn AgentHost,
+    settings: &Settings,
+    ctx: &ToolExecutionContext<'_>,
+    mut record: ToolCallRecord,
+    arguments: Value,
+) -> (ToolCallRecord, String) {
+    let prompt = match ask_user::normalize_prompt(arguments) {
+        Ok(prompt) => prompt,
+        Err(err) => {
+            record.status = ToolCallStatus::Error;
+            record.duration_ms = Some(0);
+            record.completed_at = Some(chrono::Local::now().timestamp());
+            record.error = Some(err.clone());
+            host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+            return (
+                record,
+                format!("Invalid ask_user prompt: {err}. Retry with a valid questions payload."),
+            );
+        }
+    };
+
+    record.status = ToolCallStatus::Running;
+    record.structured_content = Some(ask_user::structured_content(
+        &prompt,
+        ask_user::ASK_USER_PHASE_AWAITING,
+        &Default::default(),
+    ));
+    host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+
+    let started = Instant::now();
+    let response = host
+        .request_user_response(ctx, &record, prompt.clone())
+        .await;
+    record.duration_ms = Some(started.elapsed().as_millis() as u64);
+    record.completed_at = Some(chrono::Local::now().timestamp());
+    record.structured_content = Some(ask_user::structured_content(
+        &prompt,
+        &response.phase,
+        &response.answers,
+    ));
+    let content = ask_user::tool_result_content(&response);
+    match response.phase.as_str() {
+        ask_user::ASK_USER_PHASE_ANSWERED => {
+            record.status = ToolCallStatus::Success;
+            record.result_preview = Some("User answered clarification questions".to_string());
+        }
+        ask_user::ASK_USER_PHASE_SKIPPED => {
+            record.status = ToolCallStatus::Skipped;
+            record.result_preview = Some("User skipped clarification".to_string());
+        }
+        ask_user::ASK_USER_PHASE_TIMEOUT => {
+            record.status = ToolCallStatus::Skipped;
+            record.result_preview = Some("Clarification timed out".to_string());
+        }
+        ask_user::ASK_USER_PHASE_CANCELLED => {
+            record.status = ToolCallStatus::Cancelled;
+            record.error = Some("Clarification cancelled".to_string());
+        }
+        _ => {
+            record.status = ToolCallStatus::Error;
+            record.error = Some(format!(
+                "Invalid ask_user response phase: {}",
+                response.phase
+            ));
+        }
+    }
+    host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+    (
+        record,
+        limit_tool_text_for_model(&content, settings.chat_tools.max_tool_output_chars),
+    )
 }
 
 pub fn disabled_tool_content(call: &PendingToolCall) -> Option<String> {
@@ -573,6 +652,15 @@ mod tests {
         ) -> AgentHostFuture<'a, bool> {
             self.approvals.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { true })
+        }
+
+        fn request_user_response<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+            _prompt: crate::chat::ask_user::AskUserPromptPayload,
+        ) -> AgentHostFuture<'a, crate::chat::ask_user::AskUserResponseResult> {
+            Box::pin(async { crate::chat::ask_user::skipped_response() })
         }
 
         fn is_generation_active(&self, _conversation_id: &str, _generation: u64) -> bool {

@@ -36,6 +36,9 @@
 - Preserve MCP metadata across all backend/frontend boundaries: `annotations`, `outputSchema`, and tool result `structuredContent` must not be dropped. When a MCP result includes `structuredContent`, persist it on `ToolCallRecord` and include it in the model-facing tool content unless the text result already contains the same JSON.
 - Tool records emitted from the agent loop should include `trace_id = run_id` and a deterministic `span_id` such as `tool_round_<round>_<tool_call_id>` so future tracing/export can correlate events without changing storage shape.
 - Serial by default: writes/edits, command execution, `run_python`, Skill runtime tools, Mixer image generation, memory mutation, arbitrary MCP tools, unknown calls, and invalid arguments.
+- `ask_user` is a native blocking clarification tool. It is allowed in Plan mode, bypasses sensitive tool approval, must stay serial, and must flush any pending parallel batch before waiting for the user's answer.
+- `ask_user` must persist `ToolCallRecord.structured_content.askUser` with `phase`, original `questions`, and final `answers`; emit `chat-user-prompt` while awaiting; resolve through `chat_submit_user_choice`; and append a stable matching `role: tool` result using the original `tool_call_id`.
+- Cancelling or timing out an awaiting `ask_user` must remove the pending prompt entry and produce a deterministic `cancelled` or `timeout` tool result so provider replay remains valid.
 - Keep `SkillRunCache` on the serial path unless it is redesigned as a shared concurrency-safe cache with tests.
 - Keep timeout and cancellation inside `execute_tool_call`; schedulers should call this helper rather than duplicating lifecycle logic.
 - If generation is cancelled during a tool round, stop launching any unstarted calls in that round. Append ordered `cancelled` tool result messages and records for every unstarted call so provider replay remains valid.
@@ -53,6 +56,7 @@
 | MCP `destructiveHint == true`, `openWorldHint == true`, or `readOnlyHint == false` | Treat as sensitive under confirm policies; keep serial even if approval is skipped by `"auto"`. |
 | Tool requires approval | Execute serially after approval; skipped result if denied. |
 | MCP result includes `structuredContent` | Preserve it on the tool record, emit it through `chat-tool`, and include it in replay content without duplicating identical text JSON. |
+| `ask_user` awaiting answer | Emit inline prompt state, block the same run until answer/skip/cancel/timeout, then append the answer JSON as the tool result. |
 | Generation cancelled while a tool is running | Mark active and unstarted tool records cancelled where possible, append matching tool result messages in original order, and stop launching remaining calls. |
 | Tool timeout | Mark the tool record error and return the timeout message as tool content. |
 
@@ -60,8 +64,10 @@
 
 - Good: a model emits `read_file` and `web_fetch` in one round; both enter running state before either finishes, but replay messages preserve model order.
 - Good: a trusted MCP server exposes two tools with `readOnlyHint: true`; both may overlap, and their `structuredContent` remains visible in records/events/model replay.
+- Good: a model emits `read_file`, `ask_user`, then `web_fetch`; the read finishes first, `ask_user` waits inline for the user's answer, and `web_fetch` starts only after the answer tool result is ready.
 - Base: a model emits only `run_python`; calls execute one at a time and keep old lifecycle behavior.
 - Bad: a scheduler parallelizes `skill_activate` or an arbitrary MCP stdio tool without explicit read-only annotations and races shared state or external side effects.
+- Bad: a scheduler includes `ask_user` in a parallel batch, allowing later tools to run before the user's answer has entered the transcript.
 - Bad: schema validation happens inside one executor implementation only; other executors can still receive invalid arguments or approval prompts can show invalid payloads.
 
 ### 6. Tests Required
@@ -72,6 +78,7 @@
 - Prove schema-invalid arguments produce error records and never call the executor or approval hook.
 - Prove MCP `annotations`, `outputSchema`, and result `structuredContent` survive parse/registry/command/TypeScript boundaries.
 - Prove serial-only tools never overlap.
+- Prove `ask_user` remains allowed in Plan mode and remains serial between parallel-safe tools.
 - Prove unknown and invalid calls flush pending parallel batches and preserve result ordering.
 - Run `cargo test --manifest-path src-tauri/Cargo.toml chat::agent:: -- --nocapture` for targeted changes.
 - Run `cargo test --manifest-path src-tauri/Cargo.toml` before completion when practical.

@@ -1,5 +1,6 @@
 use std::{future::Future, pin::Pin};
 
+use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
 use crate::chat::types::{ChatMessageSegment, ToolCallRecord};
 
 use super::execute::ToolExecutionContext;
@@ -39,6 +40,13 @@ pub trait AgentHost: Send + Sync {
         ctx: &'a ToolExecutionContext<'a>,
         record: &'a ToolCallRecord,
     ) -> AgentHostFuture<'a, bool>;
+
+    fn request_user_response<'a>(
+        &'a self,
+        ctx: &'a ToolExecutionContext<'a>,
+        record: &'a ToolCallRecord,
+        prompt: AskUserPromptPayload,
+    ) -> AgentHostFuture<'a, AskUserResponseResult>;
 
     fn is_generation_active(&self, conversation_id: &str, generation: u64) -> bool;
 

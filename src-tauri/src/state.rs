@@ -53,6 +53,9 @@ pub struct AppState {
     pub chat_active_replies: Mutex<HashSet<String>>,
     /// 等待用户确认的敏感 Chat tool 调用。
     pub pending_chat_tool_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    /// 等待用户回答的 Chat ask_user 澄清卡片。
+    pub pending_chat_user_prompts:
+        Mutex<HashMap<String, crate::chat::ask_user::PendingAskUserPrompt>>,
     /// 等待前端 Pyodide 完成的 run_python 调用。
     pub pending_python_runs: Mutex<HashMap<String, oneshot::Sender<PythonRunResult>>>,
     /// 保护 Chat 空白会话复用的短临界区，避免快速多次新建时并发创建多个空白对话。
@@ -282,6 +285,7 @@ mod tests {
             chat_stream_generations: Mutex::new(HashMap::new()),
             chat_active_replies: Mutex::new(HashSet::new()),
             pending_chat_tool_approvals: Mutex::new(HashMap::new()),
+            pending_chat_user_prompts: Mutex::new(HashMap::new()),
             pending_python_runs: Mutex::new(HashMap::new()),
             chat_create_conversation_lock: Mutex::new(()),
             chat_tool_list_cache: Mutex::new(HashMap::new()),

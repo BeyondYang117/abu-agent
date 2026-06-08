@@ -230,6 +230,48 @@ export type ChatToolProgressPayload = {
   structuredContent?: unknown
 }
 
+export type AskUserPhase = 'awaiting' | 'answered' | 'skipped' | 'timeout' | 'cancelled'
+
+export type AskUserOption = {
+  id: string
+  label: string
+  description?: string | null
+}
+
+export type AskUserQuestion = {
+  id: string
+  prompt: string
+  options: AskUserOption[]
+  allow_multiple?: boolean
+  allowMultiple?: boolean
+  allow_custom?: boolean
+  allowCustom?: boolean
+}
+
+export type AskUserPromptPayload = {
+  title?: string | null
+  questions: AskUserQuestion[]
+}
+
+export type AskUserAnswer = {
+  selected_option_ids?: string[]
+  selectedOptionIds?: string[]
+  custom_text?: string | null
+  customText?: string | null
+}
+
+export type ChatUserPromptPayload = {
+  conversationId: string
+  runId: string
+  messageId?: string
+  toolCallId: string
+  id?: string
+  name: string
+  source: string
+  prompt: AskUserPromptPayload
+  structuredContent?: unknown
+}
+
 export type ChatToolConfirmPayload = {
   conversationId: string
   runId: string
@@ -915,6 +957,10 @@ export const api = {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatToolProgressPayload>('chat-tool', (payload) => listener(payload))
   },
+  onChatUserPrompt: (listener: (payload: ChatUserPromptPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatUserPromptPayload>('chat-user-prompt', (payload) => listener(payload))
+  },
   onChatToolConfirm: (listener: (payload: ChatToolConfirmPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatToolConfirmPayload>('chat-tool-confirm', (payload) => listener(payload))
@@ -982,6 +1028,12 @@ export const api = {
     invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>
     invoke<void>('chat_confirm_tool_call', { toolCallId, approved }),
+  chatSubmitUserChoice: (
+    toolCallId: string,
+    answers: Record<string, AskUserAnswer>,
+    skipped = false,
+  ) =>
+    invoke<void>('chat_submit_user_choice', { toolCallId, answers, skipped }),
   chatPythonComplete: (
     runId: string,
     content: string,

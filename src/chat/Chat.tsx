@@ -37,6 +37,7 @@ import {
   type ChatToolConfirmPayload,
   type ChatToolDefinition,
   type ChatToolProgressPayload,
+  type ChatUserPromptPayload,
 } from '../api/tauri'
 import type { SettingsShellHandle, SettingsTab } from '../settings/SettingsShell'
 import { estimateTokens } from '../utils/tokens'
@@ -151,6 +152,32 @@ function toolEventToRecord(payload: ChatToolProgressPayload): ToolCallRecord {
     traceId: payload.traceId ?? undefined,
     spanId: payload.spanId ?? undefined,
     structuredContent: payload.structuredContent,
+  }
+}
+
+function userPromptEventToRecord(payload: ChatUserPromptPayload): ToolCallRecord {
+  return {
+    id: payload.id || payload.toolCallId,
+    toolCallId: payload.toolCallId,
+    conversationId: payload.conversationId,
+    runId: payload.runId,
+    messageId: payload.messageId,
+    name: payload.name || 'ask_user',
+    source: payload.source || 'native',
+    status: 'running',
+    arguments: payload.prompt,
+    args: payload.prompt,
+    input: payload.prompt,
+    sensitive: false,
+    artifacts: [],
+    structuredContent: payload.structuredContent ?? {
+      askUser: {
+        phase: 'awaiting',
+        title: payload.prompt.title,
+        questions: payload.prompt.questions,
+        answers: {},
+      },
+    },
   }
 }
 
@@ -872,8 +899,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     try {
       const result = await chatApi.getContextStats(targetConversationId)
       if (currentConversationIdRef.current === targetConversationId) {
-        applyConversation(result.conversation)
-        setContextState(result.contextState)
+        patchContextState(result.contextState)
       }
     } catch (err) {
       if (currentConversationIdRef.current === targetConversationId) {
@@ -884,7 +910,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setContextLoading(false)
       }
     }
-  }, [applyConversation])
+  }, [patchContextState])
 
   const handleRefreshContext = useCallback(() => {
     const conversationId = currentConversationIdRef.current
@@ -1145,6 +1171,48 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           snapshot.runId = payload.runId
         }
         const record = toolEventToRecord(payload)
+        snapshot.streaming = true
+        snapshot.reasoningStreaming = false
+        const index = snapshot.toolCalls.findIndex((item) => item.id === record.id)
+        snapshot.toolCalls = index < 0
+          ? [...snapshot.toolCalls, record]
+          : snapshot.toolCalls.map((item, i) => (i === index ? { ...item, ...record } : item))
+        syncGeneratingConversationIds()
+        showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [ensureStreamSnapshot, showStreamSnapshotIfCurrent, syncGeneratingConversationIds])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
+      unlisten = await api.onChatUserPrompt((payload) => {
+        if (cancelled) return
+        if (isLocallyCancelledPayload(
+          payload,
+          locallyCancelledConversationIdRef.current,
+          locallyCancelledRunIdRef.current,
+        )) {
+          return
+        }
+        if (!isConversationInFlight(inFlightConversationsRef.current, payload.conversationId)) return
+        const snapshot = ensureStreamSnapshot(payload.conversationId)
+        if (payload.runId) {
+          if (snapshot.runId && snapshot.runId !== payload.runId) return
+          snapshot.runId = payload.runId
+        }
+        const record = userPromptEventToRecord(payload)
         snapshot.streaming = true
         snapshot.reasoningStreaming = false
         const index = snapshot.toolCalls.findIndex((item) => item.id === record.id)

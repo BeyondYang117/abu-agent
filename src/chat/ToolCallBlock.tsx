@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import type { ToolCallRecord, ToolCallStatus } from './types'
 import { formatToolResultPreview } from './toolResultPreview'
+import { AskUserBlock } from './AskUserBlock'
 
 export interface ToolCallBlockLabels {
   pending: string
@@ -315,11 +316,7 @@ function StatusIcon({ status }: { status: ToolCallStatus }) {
   return <Wrench className="shrink-0" size={12} strokeWidth={1.85} />
 }
 
-export function ToolCallBlock({
-  toolCall,
-  defaultOpen = false,
-  labels,
-}: ToolCallBlockProps) {
+function DefaultToolCallBlock({ toolCall, defaultOpen = false, labels }: ToolCallBlockProps) {
   const mergedLabels = { ...defaultLabels, ...labels }
   const status = normalizeStatus(toolCall.status)
   const [open, setOpen] = useState(defaultOpen)
@@ -415,4 +412,12 @@ export function ToolCallBlock({
       )}
     </div>
   )
+}
+
+export function ToolCallBlock(props: ToolCallBlockProps) {
+  const rawName = props.toolCall.tool_name || props.toolCall.toolName || props.toolCall.name || ''
+  if (rawName === 'ask_user') {
+    return <AskUserBlock toolCall={props.toolCall} />
+  }
+  return <DefaultToolCallBlock {...props} />
 }

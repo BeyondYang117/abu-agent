@@ -1678,6 +1678,16 @@ mod tests {
             Box::pin(async { true })
         }
 
+        fn request_user_response<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+            _prompt: crate::chat::ask_user::AskUserPromptPayload,
+        ) -> super::super::host::AgentHostFuture<'a, crate::chat::ask_user::AskUserResponseResult>
+        {
+            Box::pin(async { crate::chat::ask_user::skipped_response() })
+        }
+
         fn is_generation_active(&self, _conversation_id: &str, _generation: u64) -> bool {
             true
         }
@@ -1778,6 +1788,18 @@ mod tests {
             "read_file" => serde_json::json!({ "path": "/tmp/kivio-test.txt" }),
             "web_fetch" => serde_json::json!({ "url": "https://example.com" }),
             "run_python" => serde_json::json!({ "code": "print(1)" }),
+            "ask_user" => serde_json::json!({
+                "questions": [
+                    {
+                        "id": "scope",
+                        "prompt": "Which scope should I use?",
+                        "options": [
+                            { "id": "mvp", "label": "MVP" },
+                            { "id": "full", "label": "Full" }
+                        ]
+                    }
+                ]
+            }),
             _ => serde_json::json!({}),
         }
     }
@@ -1943,6 +1965,62 @@ mod tests {
             .tool_records
             .iter()
             .all(|record| matches!(record.status, ToolCallStatus::Success)));
+    }
+
+    #[tokio::test]
+    async fn tool_round_keeps_ask_user_serial_between_parallel_safe_tools() {
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let mut tools = vec![native_read_file_tool(), native_web_fetch_tool()];
+        crate::chat::ask_user::append_tool_definitions(&mut tools);
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            &[],
+            vec![
+                pending_tool_call("call_read", "read_file"),
+                pending_tool_call("call_ask", "ask_user"),
+                pending_tool_call("call_fetch", "web_fetch"),
+            ],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert_eq!(executor.max_active(), 1);
+        assert_eq!(
+            executor.events(),
+            vec![
+                "start:read_file",
+                "finish:read_file",
+                "start:web_fetch",
+                "finish:web_fetch"
+            ]
+        );
+        assert_eq!(
+            tool_call_ids(&result.response_messages),
+            vec!["call_read", "call_ask", "call_fetch"]
+        );
+        let ask_user_record = result
+            .tool_records
+            .iter()
+            .find(|record| record.id == "call_ask")
+            .expect("ask_user record");
+        assert!(matches!(ask_user_record.status, ToolCallStatus::Skipped));
+        assert_eq!(
+            ask_user_record.name,
+            crate::chat::ask_user::ASK_USER_TOOL_NAME
+        );
+        assert_eq!(ask_user_record.trace_id.as_deref(), Some("run"));
+        assert_eq!(
+            ask_user_record.span_id.as_deref(),
+            Some("tool_round_1_call_ask")
+        );
     }
 
     #[tokio::test]

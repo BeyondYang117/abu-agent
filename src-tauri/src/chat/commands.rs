@@ -638,6 +638,46 @@ pub(crate) fn chat_confirm_tool_call(
     Ok(())
 }
 
+/// 回答 ask_user 澄清卡片。
+#[tauri::command]
+pub(crate) fn chat_submit_user_choice(
+    state: State<AppState>,
+    tool_call_id: String,
+    answers: HashMap<String, crate::chat::ask_user::AskUserAnswer>,
+    skipped: bool,
+) -> Result<(), String> {
+    let response = {
+        let pending = state
+            .pending_chat_user_prompts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(pending) = pending.get(&tool_call_id) else {
+            return Err("Clarification is no longer awaiting a response".to_string());
+        };
+        if skipped {
+            crate::chat::ask_user::skipped_response()
+        } else {
+            crate::chat::ask_user::validate_response(
+                &pending.prompt,
+                crate::chat::ask_user::AskUserResponseResult {
+                    phase: crate::chat::ask_user::ASK_USER_PHASE_ANSWERED.to_string(),
+                    answers,
+                },
+            )?
+        }
+    };
+    let pending = state
+        .pending_chat_user_prompts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&tool_call_id);
+    let Some(pending) = pending else {
+        return Err("Clarification is no longer awaiting a response".to_string());
+    };
+    let _ = pending.sender.send(response);
+    Ok(())
+}
+
 /// 前端 Pyodide 执行完成后回传结果。
 #[tauri::command]
 pub(crate) fn chat_python_complete(
@@ -992,13 +1032,17 @@ async fn complete_assistant_reply(
         skill_id.as_deref(),
         user_tools_available,
     );
+    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools, provider.supports_tools);
     let todo_tools_available = append_agent_todo_tools(&mut tools, provider.supports_tools);
+    let runtime_tools_available = provider.supports_tools && !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let agent_todo_prompt = crate::chat::todo::format_prompt(
         &conversation.agent_todo_state,
         &language,
         todo_tools_available,
     );
+    let agent_ask_user_prompt =
+        crate::chat::ask_user::format_prompt(&language, ask_user_tools_available);
     let agent_plan_prompt =
         crate::chat::plan::format_prompt(&conversation.agent_plan_state, &language);
     let system_prompt = agent_prepare::build_chat_system_prompt(
@@ -1007,7 +1051,7 @@ async fn complete_assistant_reply(
         thinking_enabled,
         &skill_registry,
         &effective_chat_tools,
-        user_tools_available,
+        runtime_tools_available,
         &available_builtin_tools,
         skill_id.as_deref(),
         active_skill_detail.as_ref(),
@@ -1015,6 +1059,7 @@ async fn complete_assistant_reply(
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
         Some(&agent_plan_prompt),
+        Some(&agent_ask_user_prompt),
         Some(&agent_todo_prompt),
     );
 
@@ -1043,6 +1088,7 @@ async fn complete_assistant_reply(
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
         Some(&agent_plan_prompt),
+        Some(&crate::chat::ask_user::format_prompt(&language, false)),
         Some(&crate::chat::todo::format_prompt(
             &conversation.agent_todo_state,
             &language,
@@ -2350,7 +2396,9 @@ async fn compute_context_state(
         active_skill_id.as_deref(),
         user_tools_available,
     );
+    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools, provider_supports_tools);
     let todo_tools_available = append_agent_todo_tools(&mut tools, provider_supports_tools);
+    let runtime_tools_available = provider_supports_tools && !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
 
     let route_images_through_auxiliary_vision = auxiliary_vision_model_for_images(
@@ -2378,7 +2426,7 @@ async fn compute_context_state(
         thinking_enabled,
         &skill_registry,
         &effective_chat_tools,
-        user_tools_available,
+        runtime_tools_available,
         &available_builtin_tools,
         active_skill_id.as_deref(),
         active_skill_detail.as_ref(),
@@ -2388,6 +2436,10 @@ async fn compute_context_state(
         Some(&crate::chat::plan::format_prompt(
             &conversation.agent_plan_state,
             &language,
+        )),
+        Some(&crate::chat::ask_user::format_prompt(
+            &language,
+            ask_user_tools_available,
         )),
         Some(&crate::chat::todo::format_prompt(
             &conversation.agent_todo_state,
@@ -2757,6 +2809,17 @@ fn append_agent_todo_tools(
     true
 }
 
+fn append_agent_ask_user_tools(
+    tools: &mut Vec<ChatToolDefinition>,
+    provider_supports_tools: bool,
+) -> bool {
+    if !provider_supports_tools {
+        return false;
+    }
+    crate::chat::ask_user::append_tool_definitions(tools);
+    true
+}
+
 fn apply_agent_plan_tool_filter(
     tools: &mut Vec<ChatToolDefinition>,
     plan_mode: bool,
@@ -2776,6 +2839,9 @@ fn apply_agent_plan_tool_filter(
 }
 
 fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
+    if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
+        return true;
+    }
     if tool.source == "native" && crate::chat::todo::is_agent_todo_tool_name(&tool.name) {
         return true;
     }
@@ -3168,6 +3234,27 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         })
     }
 
+    fn request_user_response<'a>(
+        &'a self,
+        ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
+        record: &'a ToolCallRecord,
+        prompt: crate::chat::ask_user::AskUserPromptPayload,
+    ) -> crate::chat::agent::AgentHostFuture<'a, crate::chat::ask_user::AskUserResponseResult> {
+        Box::pin(async move {
+            request_user_response(
+                &self.app,
+                self.state,
+                ctx.conversation_id,
+                ctx.run_id,
+                ctx.message_id,
+                ctx.generation,
+                record,
+                prompt,
+            )
+            .await
+        })
+    }
+
     fn is_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
         self.state
             .is_chat_generation_active(conversation_id, generation)
@@ -3398,6 +3485,84 @@ async fn request_tool_approval(
                 .unwrap_or_else(|e| e.into_inner());
             pending.remove(&record.id);
             false
+        }
+    }
+}
+
+async fn request_user_response(
+    app: &AppHandle,
+    state: &AppState,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+    record: &ToolCallRecord,
+    prompt: crate::chat::ask_user::AskUserPromptPayload,
+) -> crate::chat::ask_user::AskUserResponseResult {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut pending = state
+            .pending_chat_user_prompts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pending.insert(
+            record.id.clone(),
+            crate::chat::ask_user::PendingAskUserPrompt {
+                prompt: prompt.clone(),
+                sender: tx,
+            },
+        );
+    }
+
+    let empty_answers = HashMap::new();
+    let structured_content = crate::chat::ask_user::structured_content(
+        &prompt,
+        crate::chat::ask_user::ASK_USER_PHASE_AWAITING,
+        &empty_answers,
+    );
+    let _ = app.emit(
+        "chat-user-prompt",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+            "toolCallId": record.id,
+            "id": record.id,
+            "name": record.name,
+            "source": record.source,
+            "prompt": prompt,
+            "structuredContent": structured_content,
+        }),
+    );
+
+    let result = tokio::select! {
+        result = timeout(Duration::from_secs(600), rx) => result,
+        _ = wait_for_chat_cancel(state, conversation_id, generation) => {
+            let mut pending = state
+                .pending_chat_user_prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            return crate::chat::ask_user::cancelled_response();
+        }
+    };
+    match result {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) => {
+            let mut pending = state
+                .pending_chat_user_prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            crate::chat::ask_user::cancelled_response()
+        }
+        Err(_) => {
+            let mut pending = state
+                .pending_chat_user_prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            crate::chat::ask_user::timeout_response()
         }
     }
 }
@@ -4020,6 +4185,7 @@ mod tests {
             crate::mcp::types::native_skill_activate_tool(),
             crate::mcp::types::native_skill_read_file_tool(),
             crate::mcp::types::native_skill_run_script_tool(),
+            crate::chat::ask_user::ask_user_tool(),
             crate::chat::todo::todo_write_tool(),
             crate::chat::todo::todo_update_tool(),
             readonly_mcp_tool,
@@ -4040,6 +4206,7 @@ mod tests {
         assert!(names.contains(&"memory_read".to_string()));
         assert!(names.contains(&"skill_activate".to_string()));
         assert!(names.contains(&"skill_read_file".to_string()));
+        assert!(names.contains(&"ask_user".to_string()));
         assert!(names.contains(&"todo_write".to_string()));
         assert!(names.contains(&"todo_update".to_string()));
         assert!(names.contains(&"mcp__docs__search".to_string()));
