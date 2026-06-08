@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -15,15 +14,25 @@ use uuid::Uuid;
 
 use crate::apple_intelligence::APPLE_INTELLIGENCE_BASE_URL;
 use crate::chat::agent::{prepare as agent_prepare, stop as agent_stop};
+use crate::chat::attachments::{
+    compose_user_content_for_api, is_attachable_file_name, read_attachment_as_data_url,
+    resolve_attachment_file_path, save_message_attachments, save_pasted_attachment,
+    save_pasted_image, stored_image_paths_for_attachments, title_source_for_user_message,
+    PastedAttachmentSave, PastedImageSave,
+};
 use crate::chat::model::{
     generate_request_from_openai_messages, model_messages_from_openai_messages,
     openai_messages_from_model_messages, AnthropicMessagesProvider, AppleLocalProvider,
     GenerateOptions, GenerateOutput, LanguageModelProvider, MessagePart, ModelMessage, ModelRole,
     OpenAiChatProvider,
 };
+use crate::chat::model_metadata::{
+    chat_max_output_tokens_for_model, context_window_for_model, model_can_generate_images_directly,
+    model_supports_image_generation, model_supports_vision,
+};
 use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{ModelInfo, ModelProvider, ProviderApiFormat, Settings};
+use crate::settings::{ModelProvider, ProviderApiFormat, Settings};
 use crate::skills;
 use crate::state::AppState;
 
@@ -34,9 +43,8 @@ use super::storage::{
     load_conversation, save_conversation, update_assistant, update_project,
 };
 use super::{
-    AgentPlanState, AgentTodoState, Attachment, ChatAssistant, ChatMessage, ContextUsageSegment,
-    Conversation, ConversationContextState, ConversationContextSummary, ToolCallRecord,
-    ToolCallStatus,
+    AgentPlanState, AgentTodoState, ChatAssistant, ChatMessage, ContextUsageSegment, Conversation,
+    ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
 };
 
 const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
@@ -653,10 +661,6 @@ pub(crate) fn chat_python_complete(
     Ok(())
 }
 
-const MAX_ATTACHMENT_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
-const MAX_PASTED_IMAGE_BYTES: usize = 12 * 1024 * 1024;
-const MAX_PASTED_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
-const FALLBACK_CONTEXT_WINDOW_TOKENS: usize = 200_000;
 const AUTO_COMPRESS_RATIO: f32 = 0.85;
 const CONTEXT_BLOCK_RATIO: f32 = 1.0;
 const KEEP_RECENT_RAW_MESSAGES: usize = 8;
@@ -697,46 +701,22 @@ pub(crate) fn chat_save_pasted_image(
     mime_type: String,
     data_base64: String,
 ) -> Result<serde_json::Value, String> {
-    let mime = normalize_pasted_image_mime(&mime_type)?;
-    let ext = extension_for_image_mime(mime);
-    let mut safe_name = sanitize_attachment_name(&name);
-    if attachment_type_for_name(&safe_name) != "image" {
-        safe_name = format!("{safe_name}.{ext}");
-    }
-
-    let payload = data_base64.trim();
-    if payload.is_empty() {
-        return Ok(serde_json::json!({
+    match save_pasted_image(&name, &mime_type, &data_base64)? {
+        PastedImageSave::Saved {
+            path,
+            name,
+            mime_type,
+        } => Ok(serde_json::json!({
+            "success": true,
+            "path": path.to_string_lossy(),
+            "name": name,
+            "mimeType": mime_type,
+        })),
+        PastedImageSave::Failed { error } => Ok(serde_json::json!({
             "success": false,
-            "error": "剪贴板图片为空",
-        }));
+            "error": error,
+        })),
     }
-
-    let bytes = match general_purpose::STANDARD.decode(payload) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return Ok(serde_json::json!({
-                "success": false,
-                "error": format!("解析剪贴板图片失败: {err}"),
-            }));
-        }
-    };
-    if bytes.len() > MAX_PASTED_IMAGE_BYTES {
-        return Ok(serde_json::json!({
-            "success": false,
-            "error": "剪贴板图片过大，无法添加",
-        }));
-    }
-
-    let (path, saved_name) = write_pasted_attachment_bytes(&safe_name, &bytes)
-        .map_err(|e| format!("保存剪贴板图片失败: {e}"))?;
-
-    Ok(serde_json::json!({
-        "success": true,
-        "path": path.to_string_lossy(),
-        "name": saved_name,
-        "mimeType": mime,
-    }))
 }
 
 #[tauri::command]
@@ -744,44 +724,17 @@ pub(crate) fn chat_save_pasted_attachment(
     name: String,
     data_base64: String,
 ) -> Result<serde_json::Value, String> {
-    let safe_name = sanitize_attachment_name(&name);
-    if !is_attachable_file_name(&safe_name) {
-        return Ok(serde_json::json!({
+    match save_pasted_attachment(&name, &data_base64)? {
+        PastedAttachmentSave::Saved { path, name } => Ok(serde_json::json!({
+            "success": true,
+            "path": path.to_string_lossy(),
+            "name": name,
+        })),
+        PastedAttachmentSave::Failed { error } => Ok(serde_json::json!({
             "success": false,
-            "error": "无效的文件名",
-        }));
+            "error": error,
+        })),
     }
-
-    let payload = data_base64.trim();
-    if payload.is_empty() {
-        return Ok(serde_json::json!({
-            "success": false,
-            "error": "剪贴板附件为空",
-        }));
-    }
-
-    let bytes = match general_purpose::STANDARD.decode(payload) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return Ok(serde_json::json!({
-                "success": false,
-                "error": format!("解析剪贴板附件失败: {err}"),
-            }));
-        }
-    };
-    if bytes.len() > MAX_PASTED_ATTACHMENT_BYTES {
-        return Ok(serde_json::json!({
-            "success": false,
-            "error": "剪贴板附件过大，无法添加",
-        }));
-    }
-
-    let (path, saved_name) = write_pasted_attachment_bytes(&safe_name, &bytes)?;
-    Ok(serde_json::json!({
-        "success": true,
-        "path": path.to_string_lossy(),
-        "name": saved_name,
-    }))
 }
 
 /// 读取系统剪贴板中的文件路径（Finder / 资源管理器复制文件）。
@@ -819,353 +772,6 @@ pub(crate) fn chat_read_clipboard_files() -> Result<serde_json::Value, String> {
         "success": true,
         "files": files,
     }))
-}
-
-fn write_pasted_attachment_bytes(name: &str, bytes: &[u8]) -> Result<(PathBuf, String), String> {
-    let dir = std::env::temp_dir().join("kivio-chat-paste");
-    fs::create_dir_all(&dir).map_err(|e| format!("创建临时附件目录失败: {e}"))?;
-    let file_name = format!("paste-{}-{}", Uuid::new_v4(), name);
-    let path = dir.join(&file_name);
-    fs::write(&path, bytes).map_err(|e| format!("保存剪贴板附件失败: {e}"))?;
-    Ok((path, name.to_string()))
-}
-
-fn is_attachable_file_name(name: &str) -> bool {
-    !name.trim().is_empty()
-}
-
-fn resolve_attachment_file_path(
-    app: &AppHandle,
-    conversation_id: Option<&str>,
-    path: &str,
-) -> Result<PathBuf, String> {
-    if path.trim().is_empty() {
-        return Err("附件路径为空".to_string());
-    }
-
-    if let Some(conversation_id) = conversation_id {
-        if path.contains('/') || path.contains('\\') {
-            return Err("无效的附件路径".to_string());
-        }
-        let dir = conversation_attachments_dir(app, conversation_id)?;
-        let full = dir.join(path);
-        if !full.is_file() {
-            return Err(format!("附件不存在: {path}"));
-        }
-        return Ok(full);
-    }
-
-    let full = PathBuf::from(path);
-    if !full.is_file() {
-        return Err(format!("文件不存在: {path}"));
-    }
-    Ok(full)
-}
-
-fn normalize_pasted_image_mime(mime_type: &str) -> Result<&'static str, String> {
-    match mime_type.trim().to_ascii_lowercase().as_str() {
-        "image/png" => Ok("image/png"),
-        "image/jpeg" | "image/jpg" => Ok("image/jpeg"),
-        "image/gif" => Ok("image/gif"),
-        "image/webp" => Ok("image/webp"),
-        "image/bmp" => Ok("image/bmp"),
-        "image/tiff" => Ok("image/tiff"),
-        "image/heic" => Ok("image/heic"),
-        "image/heif" => Ok("image/heif"),
-        _ => Err("仅支持粘贴图片".to_string()),
-    }
-}
-
-fn extension_for_image_mime(mime_type: &str) -> &'static str {
-    match mime_type {
-        "image/jpeg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/bmp" => "bmp",
-        "image/tiff" => "tiff",
-        "image/heic" => "heic",
-        "image/heif" => "heif",
-        _ => "png",
-    }
-}
-
-fn mime_type_for_attachment(name: &str) -> &'static str {
-    let ext = Path::new(name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "tif" | "tiff" => "image/tiff",
-        "heic" => "image/heic",
-        "heif" => "image/heif",
-        "pdf" => "application/pdf",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "xlsm" => "application/vnd.ms-excel.sheet.macroenabled.12",
-        "csv" => "text/csv",
-        "tsv" => "text/tab-separated-values",
-        "txt" => "text/plain",
-        "md" => "text/markdown",
-        _ => "application/octet-stream",
-    }
-}
-
-fn read_attachment_as_data_url(path: &Path) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|e| format!("读取附件信息失败: {e}"))?;
-    if metadata.len() > MAX_ATTACHMENT_PREVIEW_BYTES {
-        return Err("附件过大，无法在界面内预览".to_string());
-    }
-    let bytes = fs::read(path).map_err(|e| format!("读取附件失败: {e}"))?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("attachment");
-    let mime = mime_type_for_attachment(file_name);
-    let encoded = general_purpose::STANDARD.encode(bytes);
-    Ok(format!("data:{mime};base64,{encoded}"))
-}
-
-fn save_message_attachments(
-    app: &AppHandle,
-    conversation_id: &str,
-    attachment_paths: Vec<String>,
-) -> Result<Vec<Attachment>, String> {
-    let mut attachments = Vec::new();
-    if attachment_paths.is_empty() {
-        return Ok(attachments);
-    }
-
-    let dir = conversation_attachments_dir(app, conversation_id)?;
-    for source in attachment_paths {
-        let source_path = Path::new(&source);
-        if !source_path.is_file() {
-            return Err(format!("附件不存在或不是文件: {source}"));
-        }
-
-        let id = format!("att_{}", Uuid::new_v4());
-        let original_name = source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("attachment");
-        let safe_name = sanitize_attachment_name(original_name);
-        let stored_name = format!("{}-{}", id, safe_name);
-        let dest = dir.join(&stored_name);
-        fs::copy(source_path, &dest).map_err(|e| format!("保存附件失败: {e}"))?;
-
-        attachments.push(Attachment {
-            id,
-            attachment_type: attachment_type_for_name(original_name).to_string(),
-            name: original_name.to_string(),
-            path: stored_name,
-        });
-    }
-
-    Ok(attachments)
-}
-
-fn sanitize_attachment_name(name: &str) -> String {
-    let sanitized: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let trimmed = sanitized.trim_matches(['.', ' ', '_']).trim();
-    if trimmed.is_empty() {
-        "attachment".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn attachment_type_for_name(name: &str) -> &'static str {
-    let ext = Path::new(name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "heif" => {
-            "image"
-        }
-        _ => "file",
-    }
-}
-
-fn attachment_type_label(attachment_type: &str) -> &'static str {
-    match attachment_type {
-        "image" => "图片",
-        _ => "文件",
-    }
-}
-
-fn attachment_extension(name: &str) -> String {
-    Path::new(name)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .unwrap_or_default()
-}
-
-fn attachment_skill_for_name(name: &str) -> Option<&'static str> {
-    match attachment_extension(name).as_str() {
-        "pdf" => Some("pdf"),
-        "doc" | "docx" => Some("docx"),
-        "xls" | "xlsx" | "xlsm" | "csv" | "tsv" => Some("xlsx"),
-        _ => None,
-    }
-}
-
-fn attachment_format_label(attachment: &Attachment) -> &'static str {
-    if attachment.attachment_type == "image" {
-        return "图片";
-    }
-
-    match attachment_extension(&attachment.name).as_str() {
-        "pdf" => "PDF",
-        "doc" | "docx" => "Word 文档",
-        "xls" | "xlsx" | "xlsm" => "Excel 工作簿",
-        "csv" => "CSV 表格",
-        "tsv" => "TSV 表格",
-        "txt" | "md" => "文本文件",
-        _ => attachment_type_label(&attachment.attachment_type),
-    }
-}
-
-fn stored_attachment_path_for_prompt(
-    attachment: &Attachment,
-    attachment_dir: Option<&Path>,
-) -> String {
-    attachment_dir
-        .map(|dir| dir.join(&attachment.path).display().to_string())
-        .unwrap_or_else(|| attachment.path.clone())
-}
-
-fn attachment_processing_hint(attachment: &Attachment) -> String {
-    if attachment.attachment_type == "image" {
-        return "图片附件会随本轮请求发送给视觉模型。".to_string();
-    }
-
-    if let Some(skill) = attachment_skill_for_name(&attachment.name) {
-        format!(
-            "推荐复用现成 `{skill}` Skill：需要读取或分析该文件时，先调用 skill_activate(name=\"{skill}\")，再按该 Skill 的 SKILL.md / reference / scripts 流程处理安全副本路径。"
-        )
-    } else {
-        "此文件已保存为 Kivio 安全副本；仅在有可用读取工具或对应 Skill 时处理正文。".to_string()
-    }
-}
-
-fn compose_user_content_for_api(
-    content: &str,
-    attachments: &[Attachment],
-    attachment_dir: Option<&Path>,
-) -> String {
-    let trimmed = content.trim();
-    if attachments.is_empty() {
-        return trimmed.to_string();
-    }
-
-    let has_images = attachments
-        .iter()
-        .any(|attachment| attachment.attachment_type == "image");
-    let has_files = attachments
-        .iter()
-        .any(|attachment| attachment.attachment_type != "image");
-    let attachment_lines = attachments
-        .iter()
-        .map(|attachment| {
-            let stored_path = stored_attachment_path_for_prompt(attachment, attachment_dir);
-            format!(
-                "- {} ({})\n  - 附件 ID：{}\n  - Kivio 安全副本路径：{}\n  - 处理建议：{}",
-                attachment.name,
-                attachment_format_label(attachment),
-                attachment.id,
-                stored_path,
-                attachment_processing_hint(attachment)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let capability_note = match (has_images, has_files) {
-        (true, true) => {
-            "图片附件会随本轮请求发送给视觉模型；文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析。"
-        }
-        (true, false) => "图片附件会随本轮请求发送给视觉模型。",
-        (false, true) => {
-            "文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析；不要仅凭文件名臆测内容。"
-        }
-        (false, false) => "",
-    };
-    let attachment_note = format!(
-        "[已添加附件]\n{}\n\n注意：{}",
-        attachment_lines, capability_note
-    );
-
-    if trimmed.is_empty() {
-        attachment_note
-    } else {
-        format!("{trimmed}\n\n{attachment_note}")
-    }
-}
-
-fn title_source_for_user_message(content: &str, attachments: &[Attachment]) -> String {
-    let trimmed = content.trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-
-    let names = attachments
-        .iter()
-        .map(|attachment| attachment.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    if names.is_empty() {
-        "新对话".to_string()
-    } else {
-        format!("附件: {names}")
-    }
-}
-
-fn stored_image_paths_for_attachments(
-    app: &AppHandle,
-    conversation_id: &str,
-    attachments: &[Attachment],
-) -> Result<Vec<PathBuf>, String> {
-    let image_attachments = attachments
-        .iter()
-        .filter(|attachment| attachment.attachment_type == "image")
-        .collect::<Vec<_>>();
-    if image_attachments.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let dir = conversation_attachments_dir(app, conversation_id)?;
-    image_attachments
-        .into_iter()
-        .map(|attachment| {
-            let stored = Path::new(&attachment.path);
-            if stored.components().count() != 1 {
-                return Err(format!("Invalid attachment path: {}", attachment.path));
-            }
-            let path = dir.join(stored);
-            if !path.is_file() {
-                return Err(format!("图片附件不存在: {}", attachment.name));
-            }
-            Ok(path)
-        })
-        .collect()
 }
 
 async fn complete_assistant_reply(
@@ -2024,232 +1630,6 @@ fn resolve_forced_skill_id(
     } else {
         None
     }
-}
-
-fn context_window_from_model_info(info: Option<&ModelInfo>) -> Option<usize> {
-    info.and_then(|info| info.context_window)
-        .and_then(|tokens| usize::try_from(tokens).ok())
-        .filter(|tokens| *tokens > 0)
-}
-
-fn max_output_from_model_info(info: Option<&ModelInfo>) -> Option<u32> {
-    info.and_then(|info| info.max_output)
-        .and_then(|tokens| u32::try_from(tokens).ok())
-        .filter(|tokens| *tokens > 0)
-}
-
-fn model_vision_from_model_info(info: Option<&ModelInfo>) -> Option<bool> {
-    info.and_then(|info| info.capabilities.as_ref())
-        .and_then(|capabilities| capabilities.vision)
-}
-
-fn model_image_generation_from_model_info(info: Option<&ModelInfo>) -> Option<bool> {
-    info.and_then(|info| info.capabilities.as_ref())
-        .and_then(|capabilities| capabilities.image_generation)
-}
-
-fn model_database_entries() -> Option<&'static serde_json::Map<String, Value>> {
-    static MODEL_DATABASE: OnceLock<Value> = OnceLock::new();
-    MODEL_DATABASE
-        .get_or_init(|| {
-            serde_json::from_str(include_str!("../../../src/data/modelDatabase.json"))
-                .unwrap_or(Value::Null)
-        })
-        .as_object()
-}
-
-fn model_database_entry(model: &str) -> Option<&'static Value> {
-    let model = model.trim();
-    if model.is_empty() {
-        return None;
-    }
-
-    let entries = model_database_entries()?;
-    let name = model.to_ascii_lowercase();
-    let stripped = name.rsplit('/').next().unwrap_or(&name);
-
-    if let Some(entry) = entries.get(name.as_str()) {
-        return Some(entry);
-    }
-    if let Some(entry) = entries.get(stripped) {
-        return Some(entry);
-    }
-
-    let candidates = if name == stripped {
-        vec![stripped]
-    } else {
-        vec![name.as_str(), stripped]
-    };
-
-    entries
-        .iter()
-        .filter_map(|(key, entry)| {
-            if key == "_meta"
-                || !candidates
-                    .iter()
-                    .any(|candidate| candidate.starts_with(key) && key.len() < candidate.len())
-            {
-                return None;
-            }
-            Some((key.len(), entry))
-        })
-        .max_by_key(|(key_len, _)| *key_len)
-        .map(|(_, entry)| entry)
-        .or_else(|| {
-            entries
-                .iter()
-                .filter_map(|(key, entry)| {
-                    if key == "_meta"
-                        || !candidates
-                            .iter()
-                            .any(|candidate| key != candidate && candidate.contains(key))
-                    {
-                        return None;
-                    }
-                    Some((key.len(), entry))
-                })
-                .max_by_key(|(key_len, _)| *key_len)
-                .map(|(_, entry)| entry)
-        })
-}
-
-fn model_database_context_window(model: &str) -> Option<usize> {
-    context_window_from_database_entry(model_database_entry(model))
-}
-
-fn model_database_max_output(model: &str) -> Option<u32> {
-    max_output_from_database_entry(model_database_entry(model))
-}
-
-fn context_window_from_database_entry(entry: Option<&Value>) -> Option<usize> {
-    entry?
-        .get("contextWindow")
-        .and_then(Value::as_u64)
-        .and_then(|tokens| usize::try_from(tokens).ok())
-        .filter(|tokens| *tokens > 0)
-}
-
-fn max_output_from_database_entry(entry: Option<&Value>) -> Option<u32> {
-    entry?
-        .get("maxOutput")
-        .and_then(Value::as_u64)
-        .and_then(|tokens| u32::try_from(tokens).ok())
-        .filter(|tokens| *tokens > 0)
-}
-
-fn model_database_vision(model: &str) -> Option<bool> {
-    model_database_entry(model)?
-        .get("capabilities")
-        .and_then(|capabilities| capabilities.get("vision"))
-        .and_then(Value::as_bool)
-}
-
-fn model_database_image_generation(model: &str) -> Option<bool> {
-    model_database_entry(model)?
-        .get("capabilities")
-        .and_then(|capabilities| capabilities.get("imageGeneration"))
-        .and_then(Value::as_bool)
-}
-
-fn model_supports_vision(provider: Option<&ModelProvider>, model: &str) -> Option<bool> {
-    let provider = provider?;
-    model_vision_from_model_info(provider.model_overrides.get(model))
-        .or_else(|| model_database_vision(model))
-}
-
-fn model_supports_image_generation(provider: Option<&ModelProvider>, model: &str) -> Option<bool> {
-    let provider = provider?;
-    model_image_generation_from_model_info(provider.model_overrides.get(model))
-        .or_else(|| model_database_image_generation(model))
-        .or_else(|| image_generation_model_name_heuristic(provider, model))
-}
-
-fn model_can_generate_images_directly(provider: &ModelProvider, model: &str) -> bool {
-    model_supports_image_generation(Some(provider), model) == Some(true)
-        && crate::chat::image_generation::has_known_direct_image_generation_route(provider, model)
-}
-
-fn image_generation_model_name_heuristic(provider: &ModelProvider, model: &str) -> Option<bool> {
-    let descriptor = format!(
-        "{} {} {} {}",
-        provider.name, provider.base_url, provider.api_format, model
-    )
-    .to_ascii_lowercase();
-    let known_image_model = [
-        "gpt-image",
-        "dall-e",
-        "grok-imagine-image",
-        "gemini-3.1-flash-image",
-        "gemini-3-pro-image",
-        "gemini-2.5-flash-image",
-        "flux",
-        "recraft",
-        "riverflow",
-        "stable-diffusion",
-        "sdxl",
-        "ideogram",
-        "imagen",
-        "image-generation",
-        "image_generation",
-    ]
-    .iter()
-    .any(|needle| descriptor.contains(needle));
-    if known_image_model {
-        Some(true)
-    } else {
-        None
-    }
-}
-
-fn context_window_for_model(provider: Option<&ModelProvider>, model: &str) -> (usize, bool) {
-    if let Some(tokens) = context_window_from_model_info(
-        provider.and_then(|provider| provider.model_overrides.get(model)),
-    ) {
-        return (tokens, false);
-    }
-    if let Some(tokens) = model_database_context_window(model) {
-        return (tokens, false);
-    }
-
-    let lower = model.to_ascii_lowercase();
-    let known = [
-        ("1m", 1_000_000usize),
-        ("200k", 200_000usize),
-        ("128k", 128_000usize),
-        ("100k", 100_000usize),
-        ("64k", 64_000usize),
-        ("32k", 32_000usize),
-        ("16k", 16_000usize),
-        ("8k", 8_000usize),
-    ];
-    for (needle, tokens) in known {
-        if lower.contains(needle) {
-            return (tokens, false);
-        }
-    }
-    if lower.contains("claude") {
-        return (200_000, false);
-    }
-    if lower.contains("gpt-4o")
-        || lower.contains("gpt-4.1")
-        || lower.contains("gpt-5")
-        || lower.contains("deepseek")
-        || lower.contains("qwen")
-        || lower.contains("gemini")
-    {
-        return (128_000, true);
-    }
-    (FALLBACK_CONTEXT_WINDOW_TOKENS, true)
-}
-
-fn chat_max_output_tokens_for_model(
-    provider: Option<&ModelProvider>,
-    model: &str,
-    fallback: u32,
-) -> u32 {
-    max_output_from_model_info(provider.and_then(|provider| provider.model_overrides.get(model)))
-        .or_else(|| model_database_max_output(model))
-        .unwrap_or(fallback)
 }
 
 fn active_summary(conversation: &Conversation) -> Option<&ConversationContextSummary> {
@@ -4300,23 +3680,8 @@ fn generate_title(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::Attachment;
     use std::collections::HashMap;
-
-    fn test_provider_with_overrides(model_overrides: HashMap<String, ModelInfo>) -> ModelProvider {
-        ModelProvider {
-            id: "provider".to_string(),
-            name: "Provider".to_string(),
-            api_keys: vec!["sk-test".to_string()],
-            api_key_legacy: None,
-            base_url: "https://api.example.com/v1".to_string(),
-            available_models: Vec::new(),
-            enabled_models: Vec::new(),
-            supports_tools: true,
-            enabled: true,
-            api_format: "openai_chat".to_string(),
-            model_overrides,
-        }
-    }
 
     fn test_provider(id: &str, name: &str, enabled_models: Vec<&str>) -> ModelProvider {
         ModelProvider {
@@ -4332,101 +3697,6 @@ mod tests {
             api_format: "openai_chat".to_string(),
             model_overrides: HashMap::new(),
         }
-    }
-
-    #[test]
-    fn attachment_type_detects_images_case_insensitively() {
-        assert_eq!(attachment_type_for_name("screenshot.PNG"), "image");
-        assert_eq!(attachment_type_for_name("scan.tif"), "image");
-        assert_eq!(attachment_type_for_name("photo.heic"), "image");
-        assert_eq!(attachment_type_for_name("notes.pdf"), "file");
-    }
-
-    #[test]
-    fn attachable_file_names_accept_any_non_empty_name() {
-        assert!(is_attachable_file_name("notes.pdf"));
-        assert!(is_attachable_file_name("sheet.xlsx"));
-        assert!(is_attachable_file_name("archive.zip"));
-        assert!(is_attachable_file_name("main.rs"));
-        assert!(!is_attachable_file_name("   "));
-    }
-
-    #[test]
-    fn sanitize_attachment_name_removes_path_like_characters() {
-        assert_eq!(sanitize_attachment_name("../secret?.png"), "secret_.png");
-        assert_eq!(sanitize_attachment_name("   "), "attachment");
-    }
-
-    #[test]
-    fn context_window_uses_model_override_before_name_heuristic() {
-        let mut overrides = HashMap::new();
-        overrides.insert(
-            "deepseek-v4-flash".to_string(),
-            ModelInfo {
-                context_window: Some(1_048_576),
-                ..ModelInfo::default()
-            },
-        );
-        let provider = test_provider_with_overrides(overrides);
-
-        assert_eq!(
-            context_window_for_model(Some(&provider), "deepseek-v4-flash"),
-            (1_048_576, false)
-        );
-    }
-
-    #[test]
-    fn context_window_uses_builtin_model_database_defaults() {
-        assert_eq!(
-            context_window_for_model(None, "deepseek-v4-flash"),
-            (1_048_576, false)
-        );
-    }
-
-    #[test]
-    fn chat_max_output_uses_builtin_model_database_defaults() {
-        assert_eq!(
-            chat_max_output_tokens_for_model(None, "deepseek-v4-flash", 32_768),
-            131_072
-        );
-    }
-
-    #[test]
-    fn chat_max_output_uses_model_override_before_database() {
-        let mut overrides = HashMap::new();
-        overrides.insert(
-            "deepseek-v4-flash".to_string(),
-            ModelInfo {
-                max_output: Some(65_536),
-                ..ModelInfo::default()
-            },
-        );
-        let provider = test_provider_with_overrides(overrides);
-
-        assert_eq!(
-            chat_max_output_tokens_for_model(Some(&provider), "deepseek-v4-flash", 32_768),
-            65_536
-        );
-    }
-
-    #[test]
-    fn chat_max_output_falls_back_to_setting_when_metadata_missing() {
-        assert_eq!(
-            chat_max_output_tokens_for_model(None, "custom-model", 32_768),
-            32_768
-        );
-    }
-
-    #[test]
-    fn context_window_keeps_name_heuristic_when_metadata_missing() {
-        assert_eq!(
-            context_window_for_model(None, "custom-200k"),
-            (200_000, false)
-        );
-        assert_eq!(
-            context_window_for_model(None, "custom-deepseek-model"),
-            (128_000, true)
-        );
     }
 
     #[test]
@@ -4464,44 +3734,6 @@ mod tests {
             ),
             None
         );
-    }
-
-    #[test]
-    fn compose_user_content_for_api_mentions_attachment_names() {
-        let content = compose_user_content_for_api(
-            "看看这个",
-            &[Attachment {
-                id: "att_1".to_string(),
-                attachment_type: "image".to_string(),
-                name: "screen.png".to_string(),
-                path: "att_1-screen.png".to_string(),
-            }],
-            None,
-        );
-
-        assert!(content.contains("看看这个"));
-        assert!(content.contains("screen.png"));
-        assert!(content.contains("图片附件会随本轮请求发送给视觉模型"));
-    }
-
-    #[test]
-    fn compose_user_content_for_api_recommends_document_skill() {
-        let content = compose_user_content_for_api(
-            "总结一下",
-            &[Attachment {
-                id: "att_1".to_string(),
-                attachment_type: "file".to_string(),
-                name: "report.PDF".to_string(),
-                path: "att_1-report.PDF".to_string(),
-            }],
-            Some(Path::new("/Users/test/Library/Application Support/com.zmair.kivio/conversations/conv_1_attachments")),
-        );
-
-        assert!(content.contains("report.PDF"));
-        assert!(content.contains("PDF"));
-        assert!(content.contains("skill_activate(name=\"pdf\")"));
-        assert!(content.contains("Kivio 安全副本路径"));
-        assert!(content.contains("不要仅凭文件名臆测内容"));
     }
 
     #[test]
@@ -4669,21 +3901,6 @@ mod tests {
         );
 
         assert!(should_answer_inline_without_file_write(Some(&content)));
-    }
-
-    #[test]
-    fn title_source_uses_attachment_name_when_content_empty() {
-        let title = title_source_for_user_message(
-            "",
-            &[Attachment {
-                id: "att_1".to_string(),
-                attachment_type: "file".to_string(),
-                name: "notes.pdf".to_string(),
-                path: "att_1-notes.pdf".to_string(),
-            }],
-        );
-
-        assert_eq!(title, "附件: notes.pdf");
     }
 
     #[test]
