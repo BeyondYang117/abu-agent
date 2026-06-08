@@ -551,7 +551,11 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "url": { "type": "string", "description": "HTTPS URL" }
+                "url": { "type": "string", "description": "HTTPS URL" },
+                "reader_fallback": {
+                    "type": "boolean",
+                    "description": "Whether to try a hosted reader fallback when direct fetch fails or returns too little readable text. Defaults to true."
+                }
             },
             "required": ["url"]
         }),
