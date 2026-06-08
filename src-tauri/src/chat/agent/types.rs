@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::chat::types::{ChatAssistantSnapshot, ToolCallRecord};
+use crate::chat::types::{ChatAssistantSnapshot, ChatMessageSegment, ToolCallRecord};
 use crate::mcp::ChatToolDefinition;
 use crate::settings::{ChatToolsConfig, ModelProvider, Settings};
 use crate::skills;
@@ -68,6 +68,7 @@ pub struct AgentStepResult {
     pub phase: AgentPhase,
     pub response_messages: Vec<Value>,
     pub tool_records: Vec<ToolCallRecord>,
+    pub segments: Vec<ChatMessageSegment>,
     pub streamed: bool,
     pub stop_reason: Option<AgentStopReason>,
 }
@@ -77,6 +78,7 @@ pub struct AgentRunResult {
     pub content: String,
     pub reasoning: Option<String>,
     pub tool_records: Vec<ToolCallRecord>,
+    pub segments: Vec<ChatMessageSegment>,
     pub api_messages: Vec<Value>,
     pub steps: Vec<AgentStepResult>,
 }

@@ -178,6 +178,39 @@ pub struct ToolCallRecord {
     pub structured_content: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMessageSegmentKind {
+    Text,
+    Reasoning,
+    Tool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMessageSegmentPhase {
+    Auxiliary,
+    Plain,
+    ToolLoop,
+    Synthesis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatMessageSegment {
+    pub id: String,
+    pub kind: ChatMessageSegmentKind,
+    pub phase: ChatMessageSegmentPhase,
+    pub order: u32,
+    #[serde(default)]
+    pub step_number: Option<u8>,
+    #[serde(default)]
+    pub round: Option<u32>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+}
+
 /// 对话消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -192,6 +225,8 @@ pub struct ChatMessage {
     pub artifacts: Vec<ChatToolArtifact>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallRecord>,
+    #[serde(default)]
+    pub segments: Vec<ChatMessageSegment>,
     /// Hidden OpenAI-compatible transcript messages produced while answering this UI message.
     ///
     /// Tool calls stay rendered as metadata in `tool_calls`, but strict tool-calling

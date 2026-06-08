@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin};
 
-use crate::chat::types::ToolCallRecord;
+use crate::chat::types::{ChatMessageSegment, ToolCallRecord};
 
 use super::execute::ToolExecutionContext;
 
@@ -14,6 +14,7 @@ pub trait AgentHost: Send + Sync {
         message_id: &str,
         delta: &str,
         reasoning_delta: Option<&str>,
+        segment: Option<&ChatMessageSegment>,
     );
 
     fn emit_stream_done(

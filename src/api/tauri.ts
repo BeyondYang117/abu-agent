@@ -47,6 +47,23 @@ export type LensStreamPayload = {
   full?: string
 }
 
+export type ChatStreamSegmentKind = 'text' | 'reasoning' | 'tool'
+
+export type ChatStreamSegmentPhase = 'auxiliary' | 'plain' | 'tool_loop' | 'synthesis'
+
+export type ChatStreamSegment = {
+  id: string
+  kind: ChatStreamSegmentKind
+  phase: ChatStreamSegmentPhase
+  order: number
+  step_number?: number | null
+  stepNumber?: number | null
+  round?: number | null
+  text?: string | null
+  tool_call_id?: string | null
+  toolCallId?: string | null
+}
+
 export type ChatStreamPayload = {
   conversationId: string
   runId: string
@@ -55,6 +72,14 @@ export type ChatStreamPayload = {
   kind: 'answer'
   delta: string
   reasoningDelta?: string
+  segmentId?: string | null
+  segmentKind?: ChatStreamSegmentKind | null
+  phase?: ChatStreamSegmentPhase | null
+  order?: number | null
+  stepNumber?: number | null
+  round?: number | null
+  toolCallId?: string | null
+  segment?: ChatStreamSegment | null
   done?: boolean
   reason?: 'done' | 'cancelled' | 'error'
   full?: string

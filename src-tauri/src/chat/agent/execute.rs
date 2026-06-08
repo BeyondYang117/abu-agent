@@ -522,7 +522,7 @@ mod tests {
     };
 
     use crate::chat::agent::host::AgentHostFuture;
-    use crate::chat::types::ToolCallStatus;
+    use crate::chat::types::{ChatMessageSegment, ToolCallStatus};
     use crate::mcp::types::native_skill_activate_tool;
 
     #[derive(Default)]
@@ -539,6 +539,7 @@ mod tests {
             _message_id: &str,
             _delta: &str,
             _reasoning_delta: Option<&str>,
+            _segment: Option<&ChatMessageSegment>,
         ) {
         }
 

@@ -104,6 +104,106 @@ This can ask the user to approve a payload that will never execute and makes gua
 
 Keep provider-side multiple tool-call support separate from local execution concurrency.
 
+## Scenario: Assistant Timeline Segments
+
+### 1. Scope / Trigger
+
+- Trigger: changes that alter Chat assistant message storage, `chat-stream` payloads, streaming preview state, final assistant replay, or frontend assistant rendering.
+- Assistant output is a time-ordered timeline, not three independent buckets. Runtime text, reasoning, and tool calls must be representable as interleaved `segments`.
+
+### 2. Signatures
+
+- Persistent model: `ChatMessage.segments: Vec<ChatMessageSegment>` with `#[serde(default)]` for old conversations.
+- Segment shape: `ChatMessageSegment { id, kind, phase, order, step_number?, round?, text?, tool_call_id? }`.
+- Segment enums:
+  - `kind`: `text | reasoning | tool`
+  - `phase`: `auxiliary | plain | tool_loop | synthesis`
+- Runtime result: `AgentRunResult.segments` and `AgentStepResult.segments`.
+- Stream host: `AgentHost::emit_stream_delta(..., segment: Option<&ChatMessageSegment>)`.
+- Tauri event: `chat-stream` includes `segmentId`, `segmentKind`, `phase`, `order`, `stepNumber`, `round`, `toolCallId`, and full `segment`.
+
+### 3. Contracts
+
+- The backend is the source of truth for segment order. The frontend must not synthesize guessed tool segments from `chat-tool` progress events.
+- `SegmentBuilder` starts assistant-runtime segment ordering at `1000`. Auxiliary tool segments may use lower orders such as `100`.
+- Planning/tool-loop narration uses `kind = text`, `phase = tool_loop`. Final answer text uses `phase = synthesis` when tools are involved, otherwise `plain`.
+- Reasoning is represented by `kind = reasoning` segments and may appear during tool loop or synthesis.
+- Tool calls must get `kind = tool` segments before or alongside visible tool progress. Visible skipped, cancelled, blocked, auxiliary, unknown, and invalid tool calls still need tool segments so the timeline has no holes.
+- Hidden disabled built-in feedback such as disabled `web_search` retry hints must not create visible tool segments when it does not create a visible `ToolCallRecord`.
+- Persisted legacy fields are derived by `push_assistant_message` / edit helpers:
+  - `content` is the `\n\n` join of all non-empty `kind = text` segments whose phase is `plain` or `synthesis`.
+  - `reasoning` is the `\n\n` join of all non-empty `kind = reasoning` segments.
+  - `tool_calls` remains the full record list in runtime/model order.
+- `model_messages` for storage must use the same final legacy content/reasoning and preserve the tool transcript. Editing an assistant final answer must replace only final `plain`/`synthesis` text segments and rewrite replay messages to the edited final answer.
+- Streaming and persisted rendering share the same segment shape. `chat-tool` events update tool record state only; `chat-stream` segment fields update timeline layout.
+- Finish must not blank the assistant preview before persisted content is available. If `done` is delayed until after the invoke response, the frontend should patch from the returned conversation or await the pending done handler before clearing the snapshot.
+
+### 4. Validation & Error Matrix
+
+| Condition | Runtime behavior |
+|---|---|
+| Old assistant message has no `segments` | Deserialize successfully; synthesize fallback segments from `content`, `reasoning`, and `tool_calls` when rewriting or normalizing. |
+| Runtime result has content/reasoning but no matching final segment | `normalize_assistant_segments` appends a final text/reasoning segment before save. |
+| Tool record has no matching tool segment | `normalize_assistant_segments` appends a tool segment with `auxiliary` for round `0`/Mixer or `tool_loop` otherwise. |
+| Plan-mode blocked or approval-denied tool is skipped/cancelled | Persist and stream a visible tool segment plus the matching `ToolCallRecord`. |
+| Disabled built-in fallback feedback is hidden | Append model-facing feedback only; do not emit a visible segment or record. |
+| Assistant final answer is edited | Preserve prior tool-loop text/reasoning/tool segments, replace final text segments, clear stale `api_messages`, and rewrite `model_messages`. |
+| Stream `done` arrives after invoke success | Do not create an empty preview; finish from the returned persisted conversation or the pending done handler. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: model narrates a plan, calls `read_file`, narrates another step, then writes a synthesis. The UI renders text -> tool -> text -> final in the same order during streaming and after reload.
+- Good: auxiliary vision analysis runs before the main model. It appears as an auxiliary tool segment before the main assistant timeline.
+- Base: old messages without `segments` still render with the legacy tool/reasoning/content fallback.
+- Bad: frontend receives `chat-tool` and inserts a guessed tool segment based on arrival time, causing stream order to differ from persisted order.
+- Bad: save writes only `segments` and leaves legacy `content` stale, so copy/export/replay uses the wrong final answer.
+- Bad: send/regenerate clears streaming preview in `finally` before reload or returned conversation has been applied, causing a blank frame.
+
+### 6. Tests Required
+
+- Serde compatibility: old assistant JSON without `segments` loads successfully.
+- Legacy derivation: `content_from_segments` joins only `plain`/`synthesis` text; `reasoning_from_segments` joins reasoning segments.
+- Segment normalization: auxiliary and skipped/cancelled tool records receive matching tool segments.
+- Stream order: visible tool segments are produced from model-call order and hidden disabled built-ins are excluded.
+- Edit replay: editing an assistant reply rewrites replay to the edited final answer while preserving tool transcript output.
+- Frontend type/build: `npm run typecheck` verifies `chat-stream` segment payloads and `MessageBubble` timeline rendering props.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+api.onChatTool((payload) => {
+  snapshot.segments.push(makeToolSegmentFromArrivalTime(payload))
+})
+```
+
+This makes streaming layout depend on event timing instead of the model/tool-call order saved by the backend.
+
+```rust
+message.segments = segments;
+message.content = content;
+```
+
+This can leave legacy fields, replay, copy/export, and old UI paths inconsistent with the timeline.
+
+#### Correct
+
+```rust
+let segments = normalize_assistant_segments(&content, reasoning.as_deref(), &tool_calls, segments);
+let stored_content = content_from_segments(&segments).unwrap_or_else(|| content.clone());
+let stored_reasoning = reasoning_from_segments(&segments).or(reasoning);
+```
+
+```typescript
+const segment = streamPayloadToSegment(payload)
+if (segment) {
+  snapshot.segments = upsertStreamSegment(snapshot.segments, segment, delta)
+}
+```
+
+Backend-owned segments define the timeline; legacy fields are deterministic projections of that same timeline.
+
 ## Scenario: Agent Todo Runtime State
 
 ### 1. Scope / Trigger

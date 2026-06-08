@@ -25,6 +25,7 @@ import type {
   AgentPlanMode,
   AgentPlanState,
   AgentTodoState,
+  ChatMessageSegment,
   PendingAttachment,
   SkillMeta,
   ToolCallRecord,
@@ -32,6 +33,7 @@ import type {
 import {
   api,
   type ChatExternalSendRequest,
+  type ChatStreamPayload,
   type ChatToolConfirmPayload,
   type ChatToolDefinition,
   type ChatToolProgressPayload,
@@ -149,6 +151,76 @@ function toolEventToRecord(payload: ChatToolProgressPayload): ToolCallRecord {
     spanId: payload.spanId ?? undefined,
     structuredContent: payload.structuredContent,
   }
+}
+
+function segmentToolCallId(segment: ChatMessageSegment): string {
+  return segment.tool_call_id ?? segment.toolCallId ?? ''
+}
+
+function segmentStepNumber(segment: ChatMessageSegment): number | null | undefined {
+  return segment.step_number ?? segment.stepNumber
+}
+
+function streamPayloadToSegment(payload: ChatStreamPayload): ChatMessageSegment | null {
+  const raw = payload.segment ?? null
+  const id = payload.segmentId ?? raw?.id
+  const kind = payload.segmentKind ?? raw?.kind
+  const phase = payload.phase ?? raw?.phase
+  const order = payload.order ?? raw?.order
+  if (!id || !kind || !phase || order == null) return null
+
+  const stepNumber = raw?.step_number ?? raw?.stepNumber ?? payload.stepNumber ?? null
+  const toolCallId = raw?.tool_call_id ?? raw?.toolCallId ?? payload.toolCallId ?? null
+  return {
+    id,
+    kind,
+    phase,
+    order,
+    step_number: stepNumber,
+    stepNumber,
+    round: raw?.round ?? payload.round ?? null,
+    text: raw?.text ?? null,
+    tool_call_id: toolCallId,
+    toolCallId,
+  }
+}
+
+function upsertStreamSegment(
+  segments: ChatMessageSegment[],
+  incoming: ChatMessageSegment,
+  delta = '',
+): ChatMessageSegment[] {
+  const incomingToolCallId = segmentToolCallId(incoming)
+  const index = segments.findIndex((segment) => (
+    segment.id === incoming.id ||
+    (incoming.kind === 'tool' &&
+      segment.kind === 'tool' &&
+      incomingToolCallId &&
+      segmentToolCallId(segment) === incomingToolCallId)
+  ))
+  const existing = index >= 0 ? segments[index] : null
+  const nextText = incoming.kind === 'tool'
+    ? incoming.text ?? existing?.text ?? null
+    : (() => {
+        const base = existing?.text ?? incoming.text ?? ''
+        const append = !existing && incoming.text && incoming.text === delta ? '' : delta
+        return `${base}${append}`
+      })()
+  const existingStepNumber = existing ? segmentStepNumber(existing) : null
+  const incomingStepNumber = segmentStepNumber(incoming)
+  const nextSegment: ChatMessageSegment = {
+    ...existing,
+    ...incoming,
+    step_number: incomingStepNumber ?? existingStepNumber ?? null,
+    stepNumber: incomingStepNumber ?? existingStepNumber ?? null,
+    tool_call_id: incoming.tool_call_id ?? incoming.toolCallId ?? existing?.tool_call_id ?? existing?.toolCallId ?? null,
+    toolCallId: incoming.toolCallId ?? incoming.tool_call_id ?? existing?.toolCallId ?? existing?.tool_call_id ?? null,
+    text: nextText,
+  }
+  const next = index < 0
+    ? [...segments, nextSegment]
+    : segments.map((segment, i) => (i === index ? nextSegment : segment))
+  return next.sort((a, b) => a.order - b.order)
 }
 
 function normalizeSkill(skill: import('../api/tauri').SkillMeta): SkillMeta {
@@ -270,6 +342,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [streamingReasoning, setStreamingReasoning] = useState('')
   const [reasoningStreaming, setReasoningStreaming] = useState(false)
   const [streamError, setStreamError] = useState('')
+  const [streamingSegments, setStreamingSegments] = useState<ChatMessageSegment[]>([])
   /** 发送中待显示的用户消息（与 conversation 分离，避免 route reload 冲掉） */
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessage | null>(null)
   const [pendingUserMessageConversationId, setPendingUserMessageConversationId] = useState<string | null>(null)
@@ -306,7 +379,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const externalSendQueueRef = useRef<ChatExternalSendRequest[]>([])
   const externalSendDrainProcessingRef = useRef(false)
   const externalSendDrainRequestedRef = useRef(false)
-  const pendingStreamDoneRef = useRef<Record<string, () => void>>({})
+  const pendingStreamDoneRef = useRef<Record<string, () => Promise<void>>>({})
   const streamSnapshotsRef = useRef<Record<string, ConversationStreamSnapshot>>({})
   const streamErrorsRef = useRef<Record<string, string>>({})
   const pendingToolConfirmsRef = useRef<Record<string, ChatToolConfirmPayload>>({})
@@ -386,6 +459,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setStreamingReasoning('')
     setReasoningStreaming(false)
     setStreamingToolCalls([])
+    setStreamingSegments([])
     activeRunIdRef.current = null
     streamStartedAtRef.current = null
     streamingContentRef.current = ''
@@ -418,6 +492,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreamingReasoning(snapshot.reasoning)
       setReasoningStreaming(snapshot.reasoningStreaming)
       setStreamingToolCalls(snapshot.toolCalls)
+      setStreamingSegments(snapshot.segments)
       activeRunIdRef.current = snapshot.runId
       streamStartedAtRef.current = snapshot.startedAt
       streamingContentRef.current = snapshot.content
@@ -438,6 +513,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setStreamingReasoning(snapshot.reasoning)
     setReasoningStreaming(snapshot.reasoningStreaming)
     setStreamingToolCalls(snapshot.toolCalls)
+    setStreamingSegments(snapshot.segments)
     activeRunIdRef.current = snapshot.runId
     streamStartedAtRef.current = snapshot.startedAt
     streamingContentRef.current = snapshot.content
@@ -846,15 +922,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [applyConversation, contextCompressing, refreshSidebar])
 
   const finishStreamingRun = useCallback(
-    (payload: { reason?: string; conversationId?: string }) => {
+    async (payload: { reason?: string; conversationId?: string }) => {
       const conversationId = payload.conversationId ?? currentConversationIdRef.current
-      if (conversationId) {
-        delete streamSnapshotsRef.current[conversationId]
-        syncGeneratingConversationIds()
-      }
-      if (conversationId && currentConversationIdRef.current === conversationId) {
-        clearStreamingPreview()
-      }
       if (payload.reason !== 'cancelled') {
         resetLocalCancellation()
       }
@@ -866,27 +935,56 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
       if (conversationId && payload.reason !== 'cancelled') {
         if (currentConversationIdRef.current === conversationId) {
-          void reloadConversation(conversationId)
+          await reloadConversation(conversationId, { force: true })
         }
         refreshSidebar()
+      }
+      if (conversationId) {
+        delete streamSnapshotsRef.current[conversationId]
+        delete pendingToolConfirmsRef.current[conversationId]
+        syncGeneratingConversationIds()
+      }
+      if (conversationId && currentConversationIdRef.current === conversationId) {
+        setPendingToolConfirm(null)
+        clearStreamingPreview()
       }
     },
     [clearStreamingPreview, refreshSidebar, reloadConversation, resetLocalCancellation, setStreamErrorForConversation, syncGeneratingConversationIds],
   )
 
-  const flushPendingStreamDone = useCallback((conversationId?: string) => {
+  const flushPendingStreamDone = useCallback(async (conversationId?: string): Promise<boolean> => {
     if (conversationId) {
       const pending = pendingStreamDoneRef.current[conversationId]
       delete pendingStreamDoneRef.current[conversationId]
-      pending?.()
-      return
+      if (!pending) return false
+      await pending()
+      return true
     }
     const pendingByConversation = pendingStreamDoneRef.current
     pendingStreamDoneRef.current = {}
+    let flushed = false
     for (const pending of Object.values(pendingByConversation)) {
-      pending()
+      await pending()
+      flushed = true
     }
+    return flushed
   }, [])
+
+  const finishStreamingRunWithConversation = useCallback((
+    conversationId: string,
+    conversation: Conversation,
+  ) => {
+    if (currentConversationIdRef.current === conversationId) {
+      applyConversation(conversation)
+      setPendingToolConfirm(null)
+    }
+    delete streamSnapshotsRef.current[conversationId]
+    delete pendingToolConfirmsRef.current[conversationId]
+    syncGeneratingConversationIds()
+    if (currentConversationIdRef.current === conversationId) {
+      clearStreamingPreview()
+    }
+  }, [applyConversation, clearStreamingPreview, syncGeneratingConversationIds])
 
   useEffect(() => {
     let cancelled = false
@@ -902,10 +1000,26 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         )) {
           return
         }
+        if (!streamSnapshotsRef.current[payload.conversationId]) {
+          if (!isConversationInFlight(inFlightConversationsRef.current, payload.conversationId)) {
+            if (payload.done) {
+              void finishStreamingRun(payload)
+            }
+            return
+          }
+        }
         const snapshot = ensureStreamSnapshot(payload.conversationId)
         if (payload.runId) {
           if (snapshot.runId && snapshot.runId !== payload.runId) return
           snapshot.runId = payload.runId
+        }
+        const segment = streamPayloadToSegment(payload)
+        if (segment) {
+          snapshot.segments = upsertStreamSegment(
+            snapshot.segments,
+            segment,
+            segment.kind === 'reasoning' ? payload.reasoningDelta ?? '' : payload.delta ?? '',
+          )
         }
         if (payload.reasoningDelta) {
           snapshot.streaming = true
@@ -925,7 +1039,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             pendingStreamDoneRef.current[payload.conversationId] = () => finishStreamingRun(payload)
             return
           }
-          finishStreamingRun(payload)
+          void finishStreamingRun(payload)
         }
       })
       if (cancelled) {
@@ -1491,6 +1605,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     snapshot.reasoning = ''
     snapshot.reasoningStreaming = false
     snapshot.toolCalls = []
+    snapshot.segments = []
     snapshot.startedAt = startedAt
     snapshot.runId = null
     syncGeneratingConversationIds()
@@ -1502,6 +1617,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreamingReasoning('')
       setReasoningStreaming(false)
       setStreamingToolCalls([])
+      setStreamingSegments([])
       setStreamErrorForConversation(conversationId, '')
       activeRunIdRef.current = null
       streamStartedAtRef.current = startedAt
@@ -1516,6 +1632,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       ? inferSingleAttachmentSkillId(attachments, enabledSkills)
       : effectiveSkillId ?? inferSingleAttachmentSkillId(attachments, enabledSkills)
 
+    let persistedConversation: Conversation | null = null
     try {
       const updatedConv = await chatApi.sendMessage(
         conversationId,
@@ -1523,18 +1640,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         attachments,
         attachmentSkillId,
       )
+      persistedConversation = updatedConv
       if (currentConversationIdRef.current === conversationId) {
         applyAssistantStreamStats(updatedConv)
         setPendingUserMessage(null)
         setPendingUserMessageConversationId(null)
         applyConversation(updatedConv)
-        clearStreamSnapshot(conversationId)
         refreshSidebar()
         if (!locallyCancelledConversationIdRef.current) {
           resetLocalCancellation()
         }
       } else {
-        clearStreamSnapshot(conversationId)
         refreshSidebar()
       }
     } catch (err) {
@@ -1548,7 +1664,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreamErrorForConversation(conversationId, message)
     } finally {
       clearConversationInFlight(conversationId)
-      flushPendingStreamDone(conversationId)
+      if (!(await flushPendingStreamDone(conversationId))) {
+        if (persistedConversation) {
+          finishStreamingRunWithConversation(conversationId, persistedConversation)
+        } else {
+          clearStreamSnapshot(conversationId)
+        }
+      }
     }
     return true
   }, [
@@ -1562,6 +1684,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     effectiveSkillId,
     enabledSkills,
     ensureStreamSnapshot,
+    finishStreamingRunWithConversation,
     flushPendingStreamDone,
     markConversationInFlight,
     refreshSidebar,
@@ -1748,6 +1871,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       snapshot.reasoning = ''
       snapshot.reasoningStreaming = false
       snapshot.toolCalls = []
+      snapshot.segments = []
       snapshot.startedAt = startedAt
       snapshot.runId = null
       syncGeneratingConversationIds()
@@ -1759,6 +1883,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setStreamingReasoning('')
         setReasoningStreaming(false)
         setStreamingToolCalls([])
+        setStreamingSegments([])
         setStreamErrorForConversation(conversationId, '')
         activeRunIdRef.current = null
         streamStartedAtRef.current = startedAt
@@ -1767,15 +1892,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
 
       markConversationInFlight(conversationId)
+      let persistedConversation: Conversation | null = null
       try {
         const updated = await chatApi.regenerateMessage(conversationId, messageId)
+        persistedConversation = updated
         if (currentConversationIdRef.current === conversationId) {
           applyAssistantStreamStats(updated)
           applyConversation(updated)
-          clearStreamSnapshot(conversationId)
           refreshSidebar()
         } else {
-          clearStreamSnapshot(conversationId)
           refreshSidebar()
         }
       } catch (err) {
@@ -1790,13 +1915,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         }
       } finally {
         clearConversationInFlight(conversationId)
-        flushPendingStreamDone(conversationId)
-        if (currentConversationIdRef.current === conversationId) {
-          clearStreamingPreview()
+        if (!(await flushPendingStreamDone(conversationId))) {
+          if (persistedConversation) {
+            finishStreamingRunWithConversation(conversationId, persistedConversation)
+          } else {
+            clearStreamSnapshot(conversationId)
+          }
         }
       }
     },
-    [applyAssistantStreamStats, applyConversation, clearConversationInFlight, clearStreamSnapshot, clearStreamingPreview, currentConversation, ensureStreamSnapshot, flushPendingStreamDone, markConversationInFlight, refreshSidebar, reloadConversation, resetLocalCancellation, setStreamErrorForConversation, syncGeneratingConversationIds],
+    [applyAssistantStreamStats, applyConversation, clearConversationInFlight, clearStreamSnapshot, currentConversation, ensureStreamSnapshot, finishStreamingRunWithConversation, flushPendingStreamDone, markConversationInFlight, refreshSidebar, reloadConversation, resetLocalCancellation, setStreamErrorForConversation, syncGeneratingConversationIds],
   )
 
   const handleModelChange = async (providerId: string, model: string) => {
@@ -2171,6 +2299,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       streamingReasoning={streamingReasoning}
                       reasoningStreaming={reasoningStreaming}
                       streamingToolCalls={streamingToolCalls}
+                      streamingSegments={streamingSegments}
                       error={streamError}
                       lastAssistantStreamStats={lastAssistantStreamStats}
                       onUpdateMessage={handleUpdateMessage}

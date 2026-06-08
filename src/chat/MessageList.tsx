@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AgentPlanState, AgentTodoState, ChatMessage, ToolCallRecord } from './types'
+import type { AgentPlanState, AgentTodoState, ChatMessage, ChatMessageSegment, ToolCallRecord } from './types'
 import { MessageBubble } from './MessageBubble'
 
 const INITIAL_VISIBLE_MESSAGES = 60
@@ -18,6 +18,7 @@ interface MessageListProps {
   streamingReasoning?: string
   reasoningStreaming?: boolean
   streamingToolCalls?: ToolCallRecord[]
+  streamingSegments?: ChatMessageSegment[]
   agentPlanState?: AgentPlanState | null
   agentTodoState?: AgentTodoState | null
   error?: string
@@ -35,6 +36,7 @@ export function MessageList({
   streamingReasoning = '',
   reasoningStreaming = false,
   streamingToolCalls = [],
+  streamingSegments = [],
   agentPlanState = null,
   agentTodoState = null,
   error,
@@ -129,7 +131,7 @@ export function MessageList({
     if (!stickToBottomRef.current) return
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, streaming, streamingContent, streamingReasoning, reasoningStreaming, streamingToolCalls, error])
+  }, [messages, streaming, streamingContent, streamingReasoning, reasoningStreaming, streamingToolCalls, streamingSegments, error])
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="custom-scrollbar flex-1 overflow-y-auto">
@@ -167,7 +169,7 @@ export function MessageList({
           />
         ))}
 
-        {streaming && (streamingContent || streamingReasoning || streamingToolCalls.length > 0) && (
+        {streaming && (streamingContent || streamingReasoning || streamingToolCalls.length > 0 || streamingSegments.length > 0) && (
           <MessageBubble
             message={{
               id: 'streaming-assistant',
@@ -176,6 +178,7 @@ export function MessageList({
               reasoning: streamingReasoning || undefined,
               artifacts: [],
               tool_calls: streamingToolCalls,
+              segments: streamingSegments,
               timestamp: Math.floor(Date.now() / 1000),
             }}
             conversationId={conversationId}
@@ -183,7 +186,7 @@ export function MessageList({
           />
         )}
 
-        {streaming && !streamingContent && !streamingReasoning && streamingToolCalls.length === 0 && (
+        {streaming && !streamingContent && !streamingReasoning && streamingToolCalls.length === 0 && streamingSegments.length === 0 && (
           <div className="chat-motion-fade-up flex justify-start py-3">
             <span className="reasoning-shimmer-text text-sm font-medium">正在思考…</span>
           </div>

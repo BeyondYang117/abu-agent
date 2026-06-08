@@ -4,7 +4,10 @@ use crate::chat::model::{
     generate_request_from_openai_messages, AnthropicMessagesProvider, GenerateOptions,
     GenerateOutput, LanguageModelProvider, ModelError, OpenAiChatProvider, PendingToolCall,
 };
-use crate::chat::types::{ToolCallRecord, ToolCallStatus};
+use crate::chat::types::{
+    ChatMessageSegment, ChatMessageSegmentKind, ChatMessageSegmentPhase, ToolCallRecord,
+    ToolCallStatus,
+};
 use crate::mcp::ChatToolDefinition;
 use crate::settings::{ProviderApiFormat, Settings};
 use crate::skills;
@@ -16,10 +19,11 @@ use super::execute::{
 use super::host::AgentHost;
 use super::prepare::{prepare_agent_step, PrepareStepInput};
 use super::stop::{
-    assistant_api_message_for_tool_calls, empty_assistant_response_error,
-    extract_reasoning_content, extract_tool_calls, final_assistant_api_message,
-    final_response_from_planning_message, is_tools_unsupported_error, merge_reasoning,
-    patch_system_message, sanitize_assistant_text_response, step_limit_system_message,
+    assistant_api_message_for_tool_calls, assistant_content_from_api_message,
+    empty_assistant_response_error, extract_reasoning_content, extract_tool_calls,
+    final_assistant_api_message, final_response_from_planning_message, is_tools_unsupported_error,
+    merge_reasoning, patch_system_message, sanitize_assistant_text_response,
+    step_limit_system_message,
 };
 use super::stream::{should_emit_done, validate_stream_output, AgentStreamSink, ChatStreamOutput};
 use super::types::{
@@ -58,6 +62,111 @@ struct ExecutableToolCall<'a> {
     tool: &'a ChatToolDefinition,
 }
 
+struct SegmentBuilder {
+    next_order: u32,
+    segments: Vec<ChatMessageSegment>,
+}
+
+impl SegmentBuilder {
+    fn new() -> Self {
+        Self {
+            next_order: 1000,
+            segments: Vec::new(),
+        }
+    }
+
+    fn reserve(
+        &mut self,
+        kind: ChatMessageSegmentKind,
+        phase: ChatMessageSegmentPhase,
+        step_number: Option<u8>,
+        round: Option<u32>,
+        suffix: &str,
+    ) -> ChatMessageSegment {
+        let segment = ChatMessageSegment {
+            id: format!("seg_{}_{}", self.next_order, suffix),
+            kind,
+            phase,
+            order: self.next_order,
+            step_number,
+            round,
+            text: None,
+            tool_call_id: None,
+        };
+        self.next_order = self.next_order.saturating_add(1);
+        segment
+    }
+
+    fn append_text_from_template(
+        &mut self,
+        template: &ChatMessageSegment,
+        text: impl Into<String>,
+    ) -> Option<ChatMessageSegment> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return None;
+        }
+        let mut segment = template.clone();
+        segment.text = Some(text);
+        self.segments.push(segment.clone());
+        Some(segment)
+    }
+
+    fn append_tool_calls(
+        &mut self,
+        phase: ChatMessageSegmentPhase,
+        step_number: Option<u8>,
+        round: u32,
+        calls: &[PendingToolCall],
+    ) -> Vec<ChatMessageSegment> {
+        let mut segments = Vec::new();
+        for call in calls {
+            let segment = ChatMessageSegment {
+                id: format!("seg_{}_tool_{}", self.next_order, call.id),
+                kind: ChatMessageSegmentKind::Tool,
+                phase: phase.clone(),
+                order: self.next_order,
+                step_number,
+                round: Some(round),
+                text: None,
+                tool_call_id: Some(call.id.clone()),
+            };
+            self.next_order = self.next_order.saturating_add(1);
+            self.segments.push(segment.clone());
+            segments.push(segment);
+        }
+        segments
+    }
+
+    fn all(self) -> Vec<ChatMessageSegment> {
+        self.segments
+    }
+}
+
+fn segment_phase_for_agent_phase(phase: AgentPhase) -> ChatMessageSegmentPhase {
+    match phase {
+        AgentPhase::Plain => ChatMessageSegmentPhase::Plain,
+        AgentPhase::Synthesis => ChatMessageSegmentPhase::Synthesis,
+        AgentPhase::ToolLoop => ChatMessageSegmentPhase::ToolLoop,
+    }
+}
+
+fn visible_tool_segment_calls(
+    tools: &[ChatToolDefinition],
+    blocked_tool_calls: &[ChatToolDefinition],
+    tool_calls: &[PendingToolCall],
+) -> Vec<PendingToolCall> {
+    tool_calls
+        .iter()
+        .filter(|call| {
+            match_tool_call(tools, &call.function_name).is_some()
+                || match_tool_call(blocked_tool_calls, &call.function_name).is_some()
+                || disabled_tool_content(call).is_none()
+        })
+        .cloned()
+        .collect()
+}
+
 pub async fn run_agent_loop(
     mut config: AgentRunConfig<'_>,
     host: &dyn AgentHost,
@@ -74,6 +183,7 @@ pub async fn run_agent_loop(
     let mut planning_final_already_streamed = false;
     let mut steps = Vec::new();
     let mut step_number = 0u8;
+    let mut segment_builder = SegmentBuilder::new();
 
     if !tools.is_empty() {
         let mut tried_skill_only_tools = false;
@@ -100,6 +210,20 @@ pub async fn run_agent_loop(
                 tools: &tools,
                 phase: AgentPhase::ToolLoop,
             });
+            let planning_text_segment = segment_builder.reserve(
+                ChatMessageSegmentKind::Text,
+                ChatMessageSegmentPhase::ToolLoop,
+                Some(step_number),
+                Some(round),
+                &format!("step_{step_number}_text"),
+            );
+            let planning_reasoning_segment = segment_builder.reserve(
+                ChatMessageSegmentKind::Reasoning,
+                ChatMessageSegmentPhase::ToolLoop,
+                Some(step_number),
+                Some(round),
+                &format!("step_{step_number}_reasoning"),
+            );
             let planning_result = if config.stream_enabled {
                 match stream_scoped_chat_completion_inner(
                     config.state,
@@ -117,6 +241,8 @@ pub async fn run_agent_loop(
                     config.generation,
                     "Chat tools planning",
                     prepared.stream_policy,
+                    Some(planning_text_segment.clone()),
+                    Some(planning_reasoning_segment.clone()),
                 )
                 .await
                 {
@@ -214,6 +340,7 @@ pub async fn run_agent_loop(
                         phase: AgentPhase::ToolLoop,
                         response_messages: Vec::new(),
                         tool_records: Vec::new(),
+                        segments: Vec::new(),
                         streamed: false,
                         stop_reason: Some(AgentStopReason::ProviderToolsUnsupported),
                     });
@@ -223,18 +350,70 @@ pub async fn run_agent_loop(
             };
             let tool_calls = extract_tool_calls(&message);
             if tool_calls.is_empty() {
+                let response =
+                    sanitize_assistant_text_response(&assistant_content_from_api_message(&message));
+                let mut step_segments = Vec::new();
+                if !response.trim().is_empty() {
+                    let mut segment = planning_text_segment.clone();
+                    segment.phase = ChatMessageSegmentPhase::Plain;
+                    if planning_final_already_streamed {
+                        host.emit_stream_delta(
+                            &config.conversation_id,
+                            &config.run_id,
+                            &config.message_id,
+                            "",
+                            None,
+                            Some(&segment),
+                        );
+                    }
+                    if let Some(segment) =
+                        segment_builder.append_text_from_template(&segment, response)
+                    {
+                        step_segments.push(segment);
+                    }
+                }
+                if let Some(reasoning) = extract_reasoning_content(&message) {
+                    let mut segment = planning_reasoning_segment.clone();
+                    segment.phase = ChatMessageSegmentPhase::Plain;
+                    if planning_final_already_streamed {
+                        host.emit_stream_delta(
+                            &config.conversation_id,
+                            &config.run_id,
+                            &config.message_id,
+                            "",
+                            None,
+                            Some(&segment),
+                        );
+                    }
+                    if let Some(segment) =
+                        segment_builder.append_text_from_template(&segment, reasoning)
+                    {
+                        step_segments.push(segment);
+                    }
+                }
                 planning_final_message = Some(message.clone());
                 steps.push(AgentStepResult {
                     step_number,
                     phase: AgentPhase::ToolLoop,
                     response_messages: vec![message],
                     tool_records: Vec::new(),
+                    segments: step_segments,
                     streamed: planning_final_already_streamed,
                     stop_reason: Some(AgentStopReason::Natural),
                 });
                 break;
             }
             planning_final_already_streamed = false;
+            let planning_text =
+                sanitize_assistant_text_response(&assistant_content_from_api_message(&message));
+            let mut step_segments = Vec::new();
+            if !planning_text.trim().is_empty() {
+                if let Some(segment) =
+                    segment_builder.append_text_from_template(&planning_text_segment, planning_text)
+                {
+                    step_segments.push(segment);
+                }
+            }
             if let Some(reasoning) = extract_reasoning_content(&message) {
                 if !config.stream_enabled {
                     host.emit_stream_delta(
@@ -243,10 +422,36 @@ pub async fn run_agent_loop(
                         &config.message_id,
                         "",
                         Some(&reasoning),
+                        Some(&planning_reasoning_segment),
                     );
+                }
+                if let Some(segment) = segment_builder
+                    .append_text_from_template(&planning_reasoning_segment, reasoning.clone())
+                {
+                    step_segments.push(segment);
                 }
                 planning_reasoning_parts.push(reasoning);
             }
+
+            let visible_tool_calls =
+                visible_tool_segment_calls(&tools, &blocked_tool_calls, &tool_calls);
+            let tool_segments = segment_builder.append_tool_calls(
+                ChatMessageSegmentPhase::ToolLoop,
+                Some(step_number),
+                round,
+                &visible_tool_calls,
+            );
+            for segment in &tool_segments {
+                host.emit_stream_delta(
+                    &config.conversation_id,
+                    &config.run_id,
+                    &config.message_id,
+                    "",
+                    None,
+                    Some(segment),
+                );
+            }
+            step_segments.extend(tool_segments);
 
             let assistant_message = assistant_api_message_for_tool_calls(&message, &tool_calls);
             runtime_messages.push(assistant_message);
@@ -281,6 +486,7 @@ pub async fn run_agent_loop(
                 phase: AgentPhase::ToolLoop,
                 response_messages: step_response_messages,
                 tool_records: step_tool_records,
+                segments: step_segments,
                 streamed: config.stream_enabled,
                 stop_reason: if round_cancelled {
                     Some(AgentStopReason::Cancelled)
@@ -300,6 +506,7 @@ pub async fn run_agent_loop(
                     &config.language,
                     &planning_reasoning_parts,
                     tool_records,
+                    segment_builder.all(),
                     generated_api_messages,
                     steps,
                 ));
@@ -331,6 +538,7 @@ pub async fn run_agent_loop(
                 &config.message_id,
                 &response,
                 None,
+                None,
             );
             host.emit_stream_done(
                 &config.conversation_id,
@@ -347,6 +555,7 @@ pub async fn run_agent_loop(
             content: response,
             reasoning,
             tool_records,
+            segments: segment_builder.all(),
             api_messages: generated_api_messages,
             steps,
         });
@@ -370,8 +579,23 @@ pub async fn run_agent_loop(
     } else {
         AgentStreamPolicy::SynthesisDeferEmpty
     };
+    let response_phase = segment_phase_for_agent_phase(phase);
+    let response_segment = segment_builder.reserve(
+        ChatMessageSegmentKind::Text,
+        response_phase.clone(),
+        Some(step_number),
+        None,
+        &format!("step_{step_number}_text"),
+    );
+    let response_reasoning_segment = segment_builder.reserve(
+        ChatMessageSegmentKind::Reasoning,
+        response_phase.clone(),
+        Some(step_number),
+        None,
+        &format!("step_{step_number}_reasoning"),
+    );
 
-    let (response, reasoning) = if config.stream_enabled {
+    let (response, reasoning, response_reasoning) = if config.stream_enabled {
         let stream = stream_scoped_chat_completion_inner(
             config.state,
             host,
@@ -388,6 +612,8 @@ pub async fn run_agent_loop(
             config.generation,
             "Chat stream",
             synthesis_stream_policy,
+            Some(response_segment.clone()),
+            Some(response_reasoning_segment.clone()),
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -407,9 +633,14 @@ pub async fn run_agent_loop(
                     ));
                 }
                 return Ok(AgentRunResult {
-                    content: stored_content,
+                    content: stored_content.clone(),
                     reasoning,
                     tool_records,
+                    segments: {
+                        segment_builder
+                            .append_text_from_template(&response_segment, stored_content);
+                        segment_builder.all()
+                    },
                     api_messages: generated_api_messages,
                     steps,
                 });
@@ -429,6 +660,7 @@ pub async fn run_agent_loop(
                     &config.message_id,
                     &fallback,
                     None,
+                    Some(&response_segment),
                 );
                 host.emit_stream_done(
                     &config.conversation_id,
@@ -443,7 +675,7 @@ pub async fn run_agent_loop(
                         final_reasoning_for_api.as_deref(),
                     ));
                 }
-                (fallback, reasoning)
+                (fallback, reasoning, final_reasoning_for_api)
             } else {
                 return Err(empty_assistant_response_error("Chat stream"));
             }
@@ -454,7 +686,7 @@ pub async fn run_agent_loop(
                     final_reasoning_for_api.as_deref(),
                 ));
             }
-            (response, reasoning)
+            (response, reasoning, final_reasoning_for_api)
         }
     } else {
         let message = tokio::select! {
@@ -490,6 +722,7 @@ pub async fn run_agent_loop(
             &planning_reasoning_parts,
             extract_reasoning_content(&message),
         );
+        let response_reasoning = extract_reasoning_content(&message);
         if response.trim().is_empty() && !tool_records.is_empty() {
             eprintln!(
                 "Chat agent empty synthesis fallback: conversation_id={} run_id={} provider_id={} model={} phase={:?} stream=false tool_records={} finish_reason={}",
@@ -511,6 +744,7 @@ pub async fn run_agent_loop(
                 &config.message_id,
                 &fallback,
                 None,
+                Some(&response_segment),
             );
             host.emit_stream_done(
                 &config.conversation_id,
@@ -525,7 +759,7 @@ pub async fn run_agent_loop(
                     extract_reasoning_content(&message).as_deref(),
                 ));
             }
-            (fallback, reasoning)
+            (fallback, reasoning, response_reasoning)
         } else if response.trim().is_empty() {
             host.emit_stream_done(
                 &config.conversation_id,
@@ -542,6 +776,7 @@ pub async fn run_agent_loop(
                 &config.message_id,
                 &response,
                 None,
+                Some(&response_segment),
             );
             host.emit_stream_done(
                 &config.conversation_id,
@@ -553,15 +788,35 @@ pub async fn run_agent_loop(
             if !generated_api_messages.is_empty() {
                 generated_api_messages.push(message);
             }
-            (response, reasoning)
+            (response, reasoning, response_reasoning)
         }
     };
+    let mut final_step_segments = Vec::new();
+    if !response.trim().is_empty() {
+        if let Some(segment) =
+            segment_builder.append_text_from_template(&response_segment, response.clone())
+        {
+            final_step_segments.push(segment);
+        }
+    }
+    if let Some(reasoning_part) = response_reasoning
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(segment) =
+            segment_builder.append_text_from_template(&response_reasoning_segment, reasoning_part)
+        {
+            final_step_segments.push(segment);
+        }
+    }
 
     steps.push(AgentStepResult {
         step_number,
         phase,
         response_messages: Vec::new(),
         tool_records: Vec::new(),
+        segments: final_step_segments,
         streamed: config.stream_enabled,
         stop_reason: Some(AgentStopReason::Natural),
     });
@@ -570,6 +825,7 @@ pub async fn run_agent_loop(
         content: response,
         reasoning,
         tool_records,
+        segments: segment_builder.all(),
         api_messages: generated_api_messages,
         steps,
     })
@@ -1160,6 +1416,8 @@ async fn stream_scoped_chat_completion_inner(
     generation: u64,
     label: &str,
     policy: AgentStreamPolicy,
+    text_segment: Option<ChatMessageSegment>,
+    reasoning_segment: Option<ChatMessageSegment>,
 ) -> Result<ChatStreamOutput, ModelError> {
     let request = generate_request_from_openai_messages(
         model,
@@ -1179,6 +1437,8 @@ async fn stream_scoped_chat_completion_inner(
         run_id,
         message_id,
         matches!(policy, AgentStreamPolicy::PlanningNoDoneUntilNoTools),
+        text_segment,
+        reasoning_segment,
     );
     let output = tokio::select! {
         result = stream_with_chat_provider(
@@ -1204,6 +1464,7 @@ async fn stream_scoped_chat_completion_inner(
             ));
         }
     };
+    sink.flush_pending_text();
     let (snapshot_content, snapshot_reasoning) = sink.snapshot();
     let stream_output = ChatStreamOutput::from_generate_output_with_snapshot(
         output,
@@ -1247,10 +1508,27 @@ fn cancelled_tool_round_run_result(
     language: &str,
     planning_reasoning_parts: &[String],
     tool_records: Vec<ToolCallRecord>,
+    mut segments: Vec<ChatMessageSegment>,
     mut generated_api_messages: Vec<Value>,
     steps: Vec<AgentStepResult>,
 ) -> AgentRunResult {
     let stopped_content = stopped_generation_content(language);
+    let next_order = segments
+        .iter()
+        .map(|segment| segment.order)
+        .max()
+        .unwrap_or(999)
+        .saturating_add(1);
+    segments.push(ChatMessageSegment {
+        id: format!("seg_{}_cancelled_synthesis", next_order),
+        kind: ChatMessageSegmentKind::Text,
+        phase: ChatMessageSegmentPhase::Synthesis,
+        order: next_order,
+        step_number: None,
+        round: None,
+        text: Some(stopped_content.clone()),
+        tool_call_id: None,
+    });
     if !generated_api_messages.is_empty() {
         generated_api_messages.push(final_assistant_api_message(&stopped_content, None));
     }
@@ -1258,6 +1536,7 @@ fn cancelled_tool_round_run_result(
         content: stopped_content,
         reasoning: merge_reasoning(planning_reasoning_parts, None),
         tool_records,
+        segments,
         api_messages: generated_api_messages,
         steps,
     }
@@ -1364,6 +1643,7 @@ mod tests {
             _message_id: &str,
             _delta: &str,
             _reasoning_delta: Option<&str>,
+            _segment: Option<&ChatMessageSegment>,
         ) {
         }
 
@@ -1500,6 +1780,28 @@ mod tests {
             "run_python" => serde_json::json!({ "code": "print(1)" }),
             _ => serde_json::json!({}),
         }
+    }
+
+    #[test]
+    fn visible_tool_segment_calls_skip_hidden_disabled_builtin_feedback() {
+        let tools = vec![native_read_file_tool()];
+        let blocked = vec![native_run_python_tool()];
+        let calls = vec![
+            pending_tool_call("call_read", "read_file"),
+            pending_tool_call("call_blocked", "run_python"),
+            pending_tool_call("call_hidden_disabled", "web_search"),
+            pending_tool_call("call_unknown", "mcp__server__tool"),
+        ];
+
+        let visible = visible_tool_segment_calls(&tools, &blocked, &calls);
+
+        assert_eq!(
+            visible
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["call_read", "call_blocked", "call_unknown"]
+        );
     }
 
     fn test_mcp_tool(name: &str, annotations: Value) -> ChatToolDefinition {
@@ -1912,12 +2214,23 @@ mod tests {
             "zh-CN",
             &["planning".to_string()],
             vec![tool_record.clone()],
+            vec![ChatMessageSegment {
+                id: "seg_1000_tool_call_read".to_string(),
+                kind: ChatMessageSegmentKind::Tool,
+                phase: ChatMessageSegmentPhase::ToolLoop,
+                order: 1000,
+                step_number: Some(1),
+                round: Some(1),
+                text: None,
+                tool_call_id: Some("call_read".to_string()),
+            }],
             vec![assistant_message.clone(), tool_response.clone()],
             vec![AgentStepResult {
                 step_number: 1,
                 phase: AgentPhase::ToolLoop,
                 response_messages: vec![assistant_message.clone(), tool_response.clone()],
                 tool_records: vec![tool_record],
+                segments: Vec::new(),
                 streamed: true,
                 stop_reason: Some(AgentStopReason::Cancelled),
             }],
@@ -1926,6 +2239,15 @@ mod tests {
         assert_eq!(result.content, "已停止生成。");
         assert_eq!(result.reasoning.as_deref(), Some("planning"));
         assert_eq!(result.tool_records.len(), 1);
+        assert!(result.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Tool
+                && segment.tool_call_id.as_deref() == Some("call_read")
+        }));
+        assert!(result.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Text
+                && segment.phase == ChatMessageSegmentPhase::Synthesis
+                && segment.text.as_deref() == Some("已停止生成。")
+        }));
         assert!(matches!(
             result.tool_records[0].status,
             ToolCallStatus::Cancelled

@@ -99,6 +99,23 @@ export interface ChatToolArtifact {
   sizeBytes?: number | null
 }
 
+export type ChatMessageSegmentKind = 'text' | 'reasoning' | 'tool'
+
+export type ChatMessageSegmentPhase = 'auxiliary' | 'plain' | 'tool_loop' | 'synthesis'
+
+export interface ChatMessageSegment {
+  id: string
+  kind: ChatMessageSegmentKind
+  phase: ChatMessageSegmentPhase
+  order: number
+  step_number?: number | null
+  stepNumber?: number | null
+  round?: number | null
+  text?: string | null
+  tool_call_id?: string | null
+  toolCallId?: string | null
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -108,6 +125,7 @@ export interface ChatMessage {
   artifacts?: ChatToolArtifact[]
   tool_calls?: ToolCallRecord[]
   toolCalls?: ToolCallRecord[]
+  segments?: ChatMessageSegment[]
   api_messages?: unknown[]
   apiMessages?: unknown[]
   model_messages?: unknown[]

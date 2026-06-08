@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::chat::model::{GenerateOutput, ModelError, PendingToolCall, StreamPart, StreamSink};
+use crate::chat::types::ChatMessageSegment;
 
 use super::host::AgentHost;
 use super::stop::{
@@ -37,6 +38,8 @@ pub struct AgentStreamSink<'a> {
     message_id: String,
     accumulator: Arc<Mutex<ChatStreamAccumulator>>,
     buffer_tool_planning_text: bool,
+    text_segment: Option<ChatMessageSegment>,
+    reasoning_segment: Option<ChatMessageSegment>,
     text_buffer: String,
     text_suppressed: bool,
 }
@@ -48,6 +51,8 @@ impl<'a> AgentStreamSink<'a> {
         run_id: &str,
         message_id: &str,
         buffer_tool_planning_text: bool,
+        text_segment: Option<ChatMessageSegment>,
+        reasoning_segment: Option<ChatMessageSegment>,
     ) -> Self {
         Self {
             host,
@@ -56,6 +61,8 @@ impl<'a> AgentStreamSink<'a> {
             message_id: message_id.to_string(),
             accumulator: Arc::new(Mutex::new(ChatStreamAccumulator::default())),
             buffer_tool_planning_text,
+            text_segment,
+            reasoning_segment,
             text_buffer: String::new(),
             text_suppressed: false,
         }
@@ -73,6 +80,7 @@ impl<'a> AgentStreamSink<'a> {
             &self.message_id,
             delta,
             None,
+            self.text_segment.as_ref(),
         );
     }
 
@@ -129,6 +137,7 @@ impl StreamSink for AgentStreamSink<'_> {
                     &self.message_id,
                     "",
                     Some(&delta),
+                    self.reasoning_segment.as_ref(),
                 );
             }
             StreamPart::Error { message } => return Err(ModelError::new(message)),

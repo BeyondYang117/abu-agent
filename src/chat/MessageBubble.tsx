@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from 'react'
-import { Check, ChevronDown, Copy, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, Copy, Trash2 } from 'lucide-react'
 import { copyToClipboard } from '../utils/clipboard'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
@@ -9,7 +9,7 @@ import { openChatImageViewer } from './imageViewer'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
-import type { ChatMessage, ChatToolArtifact } from './types'
+import type { ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
 
 const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
 
@@ -120,6 +120,117 @@ function ImageGenerationPending() {
   )
 }
 
+function segmentToolCallId(segment: ChatMessageSegment): string {
+  return segment.tool_call_id ?? segment.toolCallId ?? ''
+}
+
+function toolRecordId(toolCall: ToolCallRecord): string {
+  return toolCall.id || toolCall.toolCallId || toolCall.call_id || toolCall.callId || ''
+}
+
+function orderedSegments(segments?: ChatMessageSegment[]): ChatMessageSegment[] {
+  return [...(segments ?? [])].sort((a, b) => a.order - b.order)
+}
+
+function segmentText(segment: ChatMessageSegment): string {
+  return segment.text ?? ''
+}
+
+function MissingToolSegment({ toolCallId }: { toolCallId: string }) {
+  return (
+    <div className="not-prose mb-2 inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-[11.5px] leading-5 text-neutral-400 dark:text-neutral-500">
+      <AlertCircle size={12} strokeWidth={1.9} className="shrink-0" />
+      <span className="truncate">工具记录缺失{toolCallId ? ` · ${toolCallId}` : ''}</span>
+    </div>
+  )
+}
+
+function TimelineToolSegment({
+  segment,
+  toolCalls,
+}: {
+  segment: ChatMessageSegment
+  toolCalls: ToolCallRecord[]
+}) {
+  const toolCallId = segmentToolCallId(segment)
+  const toolCall = toolCalls.find((record) => toolRecordId(record) === toolCallId)
+  if (!toolCall) {
+    return <MissingToolSegment toolCallId={toolCallId} />
+  }
+  return (
+    <ToolCallErrorBoundary>
+      <ToolCallBlock toolCall={toolCall} />
+    </ToolCallErrorBoundary>
+  )
+}
+
+function TimelineTextSegment({
+  segment,
+  artifacts,
+}: {
+  segment: ChatMessageSegment
+  artifacts: ChatToolArtifact[]
+}) {
+  const text = segmentText(segment).trim()
+  if (!text) return null
+  const isProcessText = segment.phase === 'tool_loop' || segment.phase === 'auxiliary'
+  return (
+    <div className={isProcessText ? 'text-neutral-600 dark:text-neutral-300' : undefined}>
+      <ChatMarkdown
+        content={text}
+        artifacts={artifacts}
+        onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
+      />
+    </div>
+  )
+}
+
+function TimelineSegments({
+  segments,
+  toolCalls,
+  artifacts,
+  reasoningStreaming,
+}: {
+  segments: ChatMessageSegment[]
+  toolCalls: ToolCallRecord[]
+  artifacts: ChatToolArtifact[]
+  reasoningStreaming: boolean
+}) {
+  return (
+    <section aria-label="回答时间线" className="space-y-1.5">
+      {orderedSegments(segments).map((segment) => {
+        if (segment.kind === 'tool') {
+          return (
+            <TimelineToolSegment
+              key={segment.id}
+              segment={segment}
+              toolCalls={toolCalls}
+            />
+          )
+        }
+        if (segment.kind === 'reasoning') {
+          const reasoning = segmentText(segment)
+          if (!reasoning.trim()) return null
+          return (
+            <ReasoningBlock
+              key={segment.id}
+              reasoning={reasoning}
+              streaming={reasoningStreaming}
+            />
+          )
+        }
+        return (
+          <TimelineTextSegment
+            key={segment.id}
+            segment={segment}
+            artifacts={artifacts}
+          />
+        )
+      })}
+    </section>
+  )
+}
+
 function MessageBubbleComponent({
   message,
   conversationId,
@@ -133,17 +244,23 @@ function MessageBubbleComponent({
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
   const attachments = message.attachments ?? []
   const toolCalls = message.tool_calls ?? message.toolCalls ?? []
+  const [isEditing, setIsEditing] = useState(false)
+  const timelineSegments = orderedSegments(message.segments)
+  const hasTimelineSegments = !isEditing && timelineSegments.length > 0
   const messageArtifacts = message.artifacts ?? []
   const toolArtifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? [])
   const renderArtifacts = [...messageArtifacts, ...toolArtifacts]
   const isDirectImageGenerationPending =
     !isUser && message.content.trim() === DIRECT_IMAGE_GENERATION_PENDING
+  const artifactReferenceContent = [
+    message.content,
+    ...timelineSegments.map((segment) => segmentText(segment)),
+  ].join('\n\n')
   const unreferencedImageArtifacts = renderArtifacts.filter(
-    (artifact) => !artifactIsReferenced(message.content, artifact),
+    (artifact) => !artifactIsReferenced(artifactReferenceContent, artifact),
   )
   const hasAnswerContent = !isDirectImageGenerationPending && message.content.trim().length > 0
   const hasGeneratedImages = unreferencedImageArtifacts.length > 0
-  const [isEditing, setIsEditing] = useState(false)
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -239,7 +356,7 @@ function MessageBubbleComponent({
   return (
     <div className="chat-motion-fade-up flex justify-start py-3">
       <div className={`${isDirectImageGenerationPending ? 'w-full' : 'max-w-[85%]'} min-w-0`}>
-        {toolCalls.length > 0 && !isEditing && (
+        {toolCalls.length > 0 && !isEditing && !hasTimelineSegments && (
           <section
             aria-label="工具调用"
             className={message.content.trim().length > 0 || message.reasoning ? 'mb-3' : ''}
@@ -276,7 +393,7 @@ function MessageBubbleComponent({
           </section>
         )}
 
-        {message.reasoning && !isEditing && (
+        {message.reasoning && !isEditing && !hasTimelineSegments && (
           <ReasoningBlock reasoning={message.reasoning} streaming={reasoningStreaming} />
         )}
 
@@ -313,6 +430,21 @@ function MessageBubbleComponent({
           </div>
         ) : isDirectImageGenerationPending ? (
           <ImageGenerationPending />
+        ) : hasTimelineSegments ? (
+          <>
+            <TimelineSegments
+              segments={timelineSegments}
+              toolCalls={toolCalls}
+              artifacts={renderArtifacts}
+              reasoningStreaming={reasoningStreaming}
+            />
+            {hasGeneratedImages && (
+              <GeneratedImageArtifacts
+                artifacts={unreferencedImageArtifacts}
+                onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
+              />
+            )}
+          </>
         ) : (
           (hasAnswerContent || hasGeneratedImages) && (
             <section aria-label="回答">

@@ -42,7 +42,8 @@ use super::storage::{
     load_conversation, save_conversation, update_assistant, update_project,
 };
 use super::{
-    AgentPlanState, AgentTodoState, ChatAssistant, ChatMessage, ContextUsageSegment, Conversation,
+    AgentPlanState, AgentTodoState, ChatAssistant, ChatMessage, ChatMessageSegment,
+    ChatMessageSegmentKind, ChatMessageSegmentPhase, ContextUsageSegment, Conversation,
     ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
 };
 
@@ -488,6 +489,7 @@ pub(crate) async fn chat_send_message(
         reasoning: None,
         artifacts: Vec::new(),
         tool_calls: Vec::new(),
+        segments: Vec::new(),
         api_messages: Vec::new(),
         model_messages: Vec::new(),
         active_skill_id: None,
@@ -840,6 +842,15 @@ async fn complete_assistant_reply(
             last_user_image_paths.len(),
         );
         let started = Instant::now();
+        emit_chat_stream_delta(
+            app,
+            &conversation.id,
+            &run_id,
+            &assistant_message_id,
+            "",
+            None,
+            Some(&tool_segment_for_record(&record, 100, None)),
+        );
         emit_chat_tool_record(
             app,
             &conversation.id,
@@ -1088,6 +1099,8 @@ async fn complete_assistant_reply(
     merge_latest_agent_todo_state(app, conversation);
     merge_latest_agent_plan_state(app, conversation);
     capture_agent_plan_draft_if_needed(app, conversation, plan_mode, &result.content);
+    let mut segments = auxiliary_tool_segments(&auxiliary_tool_records);
+    segments.extend(result.segments);
     let mut tool_records = auxiliary_tool_records;
     tool_records.extend(result.tool_records);
     push_assistant_message(
@@ -1101,6 +1114,7 @@ async fn complete_assistant_reply(
         Vec::new(),
         tool_records,
         result.api_messages,
+        segments,
         skill_id.as_deref(),
         title_from_first_user,
     )
@@ -1145,6 +1159,7 @@ async fn complete_direct_image_generation_reply(
         &assistant_message_id,
         DIRECT_IMAGE_GENERATION_PENDING,
         None,
+        Some(&plain_text_segment(1000, DIRECT_IMAGE_GENERATION_PENDING)),
     );
 
     let model = conversation.model.clone();
@@ -1196,11 +1211,12 @@ async fn complete_direct_image_generation_reply(
                 settings,
                 conversation,
                 assistant_message_id,
-                content,
+                content.clone(),
                 None,
                 output.artifacts,
                 Vec::new(),
                 Vec::new(),
+                vec![plain_text_segment(1000, content.as_str())],
                 active_skill.as_deref(),
                 title_from_first_user,
             )
@@ -1264,12 +1280,17 @@ async fn push_assistant_message(
     artifacts: Vec<ChatToolArtifact>,
     tool_calls: Vec<ToolCallRecord>,
     api_messages: Vec<Value>,
+    segments: Vec<ChatMessageSegment>,
     active_skill_id: Option<&str>,
     title_from_first_user: Option<&str>,
 ) -> Result<(), String> {
+    let segments =
+        normalize_assistant_segments(&content, reasoning.as_deref(), &tool_calls, segments);
+    let stored_content = content_from_segments(&segments).unwrap_or_else(|| content.clone());
+    let stored_reasoning = reasoning_from_segments(&segments).or(reasoning);
     let generated_title = if let Some(user_content) = title_from_first_user {
         if conversation.messages.len() == 1 && conversation.title == "新对话" {
-            Some(resolve_conversation_title(settings, state, user_content, &content).await)
+            Some(resolve_conversation_title(settings, state, user_content, &stored_content).await)
         } else {
             None
         }
@@ -1280,17 +1301,18 @@ async fn push_assistant_message(
     conversation.messages.push(ChatMessage {
         id: message_id,
         role: "assistant".to_string(),
-        content: content.clone(),
+        content: stored_content.clone(),
         attachments: vec![],
-        reasoning: reasoning.clone(),
+        reasoning: stored_reasoning.clone(),
         artifacts,
         model_messages: assistant_model_messages_for_storage(
-            &content,
-            reasoning.as_deref(),
+            &stored_content,
+            stored_reasoning.as_deref(),
             &api_messages,
             &tool_calls,
         ),
         tool_calls,
+        segments,
         api_messages,
         active_skill_id: active_skill_id.map(|id| id.to_string()),
         timestamp: chrono::Local::now().timestamp(),
@@ -1313,6 +1335,296 @@ async fn push_assistant_message(
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(app, conversation)?;
     Ok(())
+}
+
+fn normalize_assistant_segments(
+    content: &str,
+    reasoning: Option<&str>,
+    tool_calls: &[ToolCallRecord],
+    mut segments: Vec<ChatMessageSegment>,
+) -> Vec<ChatMessageSegment> {
+    if segments.is_empty() {
+        segments = synthesize_assistant_segments(content, reasoning, tool_calls);
+    }
+
+    let mut next_order = next_segment_order(&segments);
+    if !content.trim().is_empty() && content_from_segments(&segments).is_none() {
+        segments.push(ChatMessageSegment {
+            id: format!("seg_{}_synthesis_text", next_order),
+            kind: ChatMessageSegmentKind::Text,
+            phase: if tool_calls.is_empty() {
+                ChatMessageSegmentPhase::Plain
+            } else {
+                ChatMessageSegmentPhase::Synthesis
+            },
+            order: next_order,
+            step_number: None,
+            round: None,
+            text: Some(content.to_string()),
+            tool_call_id: None,
+        });
+        next_order = next_order.saturating_add(1);
+    }
+
+    if reasoning_from_segments(&segments).is_none() {
+        if let Some(reasoning) = reasoning.map(str::trim).filter(|value| !value.is_empty()) {
+            segments.push(ChatMessageSegment {
+                id: format!("seg_{}_reasoning", next_order),
+                kind: ChatMessageSegmentKind::Reasoning,
+                phase: ChatMessageSegmentPhase::Synthesis,
+                order: next_order,
+                step_number: None,
+                round: None,
+                text: Some(reasoning.to_string()),
+                tool_call_id: None,
+            });
+            next_order = next_order.saturating_add(1);
+        }
+    }
+
+    let existing_tool_segment_ids = segments
+        .iter()
+        .filter_map(|segment| {
+            if segment.kind == ChatMessageSegmentKind::Tool {
+                segment.tool_call_id.clone()
+            } else {
+                None
+            }
+        })
+        .collect::<std::collections::HashSet<_>>();
+    for record in tool_calls {
+        if existing_tool_segment_ids.contains(&record.id) {
+            continue;
+        }
+        segments.push(tool_segment_for_record(record, next_order, None));
+        next_order = next_order.saturating_add(1);
+    }
+
+    segments.sort_by_key(|segment| segment.order);
+    segments
+}
+
+fn synthesize_assistant_segments(
+    content: &str,
+    reasoning: Option<&str>,
+    tool_calls: &[ToolCallRecord],
+) -> Vec<ChatMessageSegment> {
+    let mut segments = Vec::new();
+    let mut order = 1000u32;
+    for record in tool_calls {
+        segments.push(tool_segment_for_record(record, order, None));
+        order = order.saturating_add(1);
+    }
+    if let Some(reasoning) = reasoning.map(str::trim).filter(|value| !value.is_empty()) {
+        segments.push(ChatMessageSegment {
+            id: format!("seg_{}_reasoning", order),
+            kind: ChatMessageSegmentKind::Reasoning,
+            phase: if tool_calls.is_empty() {
+                ChatMessageSegmentPhase::Plain
+            } else {
+                ChatMessageSegmentPhase::Synthesis
+            },
+            order,
+            step_number: None,
+            round: None,
+            text: Some(reasoning.to_string()),
+            tool_call_id: None,
+        });
+        order = order.saturating_add(1);
+    }
+    if !content.trim().is_empty() {
+        segments.push(ChatMessageSegment {
+            id: format!("seg_{}_text", order),
+            kind: ChatMessageSegmentKind::Text,
+            phase: if tool_calls.is_empty() {
+                ChatMessageSegmentPhase::Plain
+            } else {
+                ChatMessageSegmentPhase::Synthesis
+            },
+            order,
+            step_number: None,
+            round: None,
+            text: Some(content.to_string()),
+            tool_call_id: None,
+        });
+    }
+    segments
+}
+
+fn auxiliary_tool_segments(records: &[ToolCallRecord]) -> Vec<ChatMessageSegment> {
+    records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| tool_segment_for_record(record, 100 + index as u32, None))
+        .collect()
+}
+
+fn tool_segment_for_record(
+    record: &ToolCallRecord,
+    order: u32,
+    step_number: Option<u8>,
+) -> ChatMessageSegment {
+    ChatMessageSegment {
+        id: format!("seg_{}_tool_{}", order, record.id),
+        kind: ChatMessageSegmentKind::Tool,
+        phase: if record.round == 0 || record.source == "mixer" {
+            ChatMessageSegmentPhase::Auxiliary
+        } else {
+            ChatMessageSegmentPhase::ToolLoop
+        },
+        order,
+        step_number,
+        round: Some(record.round),
+        text: None,
+        tool_call_id: Some(record.id.clone()),
+    }
+}
+
+fn plain_text_segment(order: u32, text: &str) -> ChatMessageSegment {
+    ChatMessageSegment {
+        id: format!("seg_{}_plain_text", order),
+        kind: ChatMessageSegmentKind::Text,
+        phase: ChatMessageSegmentPhase::Plain,
+        order,
+        step_number: None,
+        round: None,
+        text: Some(text.to_string()),
+        tool_call_id: None,
+    }
+}
+
+fn content_from_segments(segments: &[ChatMessageSegment]) -> Option<String> {
+    let content = joined_segment_text(segments, |segment| {
+        segment.kind == ChatMessageSegmentKind::Text
+            && matches!(
+                segment.phase,
+                ChatMessageSegmentPhase::Plain | ChatMessageSegmentPhase::Synthesis
+            )
+    });
+    if content.trim().is_empty() {
+        None
+    } else {
+        Some(content)
+    }
+}
+
+fn reasoning_from_segments(segments: &[ChatMessageSegment]) -> Option<String> {
+    let reasoning = joined_segment_text(segments, |segment| {
+        segment.kind == ChatMessageSegmentKind::Reasoning
+    });
+    if reasoning.trim().is_empty() {
+        None
+    } else {
+        Some(reasoning)
+    }
+}
+
+fn joined_segment_text(
+    segments: &[ChatMessageSegment],
+    predicate: impl Fn(&ChatMessageSegment) -> bool,
+) -> String {
+    let mut parts = segments
+        .iter()
+        .filter(|segment| predicate(segment))
+        .filter_map(|segment| {
+            let text = segment.text.as_deref()?.trim();
+            if text.is_empty() {
+                None
+            } else {
+                Some((segment.order, text.to_string()))
+            }
+        })
+        .collect::<Vec<_>>();
+    parts.sort_by_key(|(order, _)| *order);
+    parts
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn next_segment_order(segments: &[ChatMessageSegment]) -> u32 {
+    segments
+        .iter()
+        .map(|segment| segment.order)
+        .max()
+        .unwrap_or(999)
+        .saturating_add(1)
+}
+
+fn replace_final_text_segments_for_edit(message: &mut ChatMessage, content: &str) {
+    let mut segments = if message.segments.is_empty() {
+        synthesize_assistant_segments(
+            &message.content,
+            message.reasoning.as_deref(),
+            &message.tool_calls,
+        )
+    } else {
+        std::mem::take(&mut message.segments)
+    };
+    segments.retain(|segment| {
+        !(segment.kind == ChatMessageSegmentKind::Text
+            && matches!(
+                segment.phase,
+                ChatMessageSegmentPhase::Plain | ChatMessageSegmentPhase::Synthesis
+            ))
+    });
+    let order = next_segment_order(&segments);
+    segments.push(ChatMessageSegment {
+        id: format!("seg_{}_edited_synthesis", order),
+        kind: ChatMessageSegmentKind::Text,
+        phase: if message.tool_calls.is_empty() {
+            ChatMessageSegmentPhase::Plain
+        } else {
+            ChatMessageSegmentPhase::Synthesis
+        },
+        order,
+        step_number: None,
+        round: None,
+        text: Some(content.to_string()),
+        tool_call_id: None,
+    });
+    segments.sort_by_key(|segment| segment.order);
+    message.segments = segments;
+    message.content =
+        content_from_segments(&message.segments).unwrap_or_else(|| content.to_string());
+    message.reasoning = reasoning_from_segments(&message.segments);
+    message.model_messages = edited_assistant_model_messages(message);
+    message.api_messages = Vec::new();
+}
+
+fn edited_assistant_model_messages(message: &ChatMessage) -> Vec<ModelMessage> {
+    let mut replay = message.model_messages.clone();
+    if replay.is_empty() && !message.api_messages.is_empty() {
+        replay = model_messages_from_openai_messages(message.api_messages.clone());
+    }
+
+    let edited_answer = assistant_model_messages_for_storage(
+        &message.content,
+        message.reasoning.as_deref(),
+        &[],
+        &[],
+    );
+    if edited_answer.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(final_answer_idx) = replay.iter().rposition(|model_message| {
+        model_message.role == ModelRole::Assistant
+            && !model_message
+                .content
+                .iter()
+                .any(|part| matches!(part, MessagePart::ToolCall { .. }))
+    }) {
+        replay.truncate(final_answer_idx);
+        replay.extend(edited_answer);
+        replay
+    } else if replay.is_empty() {
+        edited_answer
+    } else {
+        replay.extend(edited_answer);
+        replay
+    }
 }
 
 fn merge_latest_agent_todo_state(app: &AppHandle, conversation: &mut Conversation) {
@@ -2803,6 +3115,7 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         message_id: &str,
         delta: &str,
         reasoning_delta: Option<&str>,
+        segment: Option<&ChatMessageSegment>,
     ) {
         emit_chat_stream_delta(
             &self.app,
@@ -2811,6 +3124,7 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
             message_id,
             delta,
             reasoning_delta,
+            segment,
         );
     }
 
@@ -3136,6 +3450,7 @@ fn emit_chat_stream_delta(
     message_id: &str,
     delta: &str,
     reasoning_delta: Option<&str>,
+    segment: Option<&ChatMessageSegment>,
 ) {
     let _ = app.emit(
         "chat-stream",
@@ -3147,6 +3462,14 @@ fn emit_chat_stream_delta(
             "kind": "answer",
             "delta": delta,
             "reasoningDelta": reasoning_delta,
+            "segmentId": segment.map(|segment| segment.id.as_str()),
+            "segmentKind": segment.map(|segment| &segment.kind),
+            "phase": segment.map(|segment| &segment.phase),
+            "order": segment.map(|segment| segment.order),
+            "stepNumber": segment.and_then(|segment| segment.step_number),
+            "round": segment.and_then(|segment| segment.round),
+            "toolCallId": segment.and_then(|segment| segment.tool_call_id.as_deref()),
+            "segment": segment,
         }),
     );
 }
@@ -3312,7 +3635,7 @@ pub(crate) async fn chat_update_message(
     }
 
     mark_summary_stale_if_needed(&mut conversation, idx);
-    conversation.messages[idx].content = trimmed.to_string();
+    replace_final_text_segments_for_edit(&mut conversation.messages[idx], trimmed);
     conversation.messages[idx].timestamp = chrono::Local::now().timestamp();
     let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
     conversation.context_state = context_state.clone();
@@ -3929,6 +4252,309 @@ mod tests {
         assert_eq!(tool_result_is_error, Some(true));
     }
 
+    fn test_tool_record(
+        id: &str,
+        source: &str,
+        round: u32,
+        status: ToolCallStatus,
+    ) -> ToolCallRecord {
+        ToolCallRecord {
+            id: id.to_string(),
+            name: if source == "mixer" {
+                "mixer_vision".to_string()
+            } else {
+                "run_python".to_string()
+            },
+            source: source.to_string(),
+            server_id: None,
+            arguments: "{}".to_string(),
+            status,
+            result_preview: None,
+            error: None,
+            duration_ms: None,
+            started_at: None,
+            completed_at: None,
+            round,
+            sensitive: false,
+            artifacts: Vec::new(),
+            trace_id: None,
+            span_id: None,
+            structured_content: None,
+        }
+    }
+
+    #[test]
+    fn old_assistant_message_without_segments_deserializes() {
+        let message: ChatMessage = serde_json::from_value(serde_json::json!({
+            "id": "msg_legacy",
+            "role": "assistant",
+            "content": "legacy answer",
+            "timestamp": 42
+        }))
+        .expect("legacy message should deserialize");
+
+        assert_eq!(message.content, "legacy answer");
+        assert!(message.segments.is_empty());
+        assert!(message.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn segment_legacy_fields_join_only_their_owned_segment_kinds() {
+        let segments = vec![
+            ChatMessageSegment {
+                id: "seg_tool_loop_text".to_string(),
+                kind: ChatMessageSegmentKind::Text,
+                phase: ChatMessageSegmentPhase::ToolLoop,
+                order: 20,
+                step_number: Some(1),
+                round: Some(1),
+                text: Some("planning text".to_string()),
+                tool_call_id: None,
+            },
+            ChatMessageSegment {
+                id: "seg_plain".to_string(),
+                kind: ChatMessageSegmentKind::Text,
+                phase: ChatMessageSegmentPhase::Plain,
+                order: 10,
+                step_number: None,
+                round: None,
+                text: Some("plain answer".to_string()),
+                tool_call_id: None,
+            },
+            ChatMessageSegment {
+                id: "seg_reasoning".to_string(),
+                kind: ChatMessageSegmentKind::Reasoning,
+                phase: ChatMessageSegmentPhase::ToolLoop,
+                order: 30,
+                step_number: Some(1),
+                round: Some(1),
+                text: Some("reasoning block".to_string()),
+                tool_call_id: None,
+            },
+            ChatMessageSegment {
+                id: "seg_synthesis".to_string(),
+                kind: ChatMessageSegmentKind::Text,
+                phase: ChatMessageSegmentPhase::Synthesis,
+                order: 40,
+                step_number: Some(2),
+                round: None,
+                text: Some("final answer".to_string()),
+                tool_call_id: None,
+            },
+        ];
+
+        assert_eq!(
+            content_from_segments(&segments).as_deref(),
+            Some("plain answer\n\nfinal answer")
+        );
+        assert_eq!(
+            reasoning_from_segments(&segments).as_deref(),
+            Some("reasoning block")
+        );
+    }
+
+    #[test]
+    fn normalize_segments_adds_auxiliary_and_skipped_tool_segments() {
+        let tool_calls = vec![
+            test_tool_record("call_aux", "mixer", 0, ToolCallStatus::Success),
+            test_tool_record("call_blocked", "native", 1, ToolCallStatus::Skipped),
+        ];
+        let segments = normalize_assistant_segments(
+            "final",
+            None,
+            &tool_calls,
+            vec![ChatMessageSegment {
+                id: "seg_final".to_string(),
+                kind: ChatMessageSegmentKind::Text,
+                phase: ChatMessageSegmentPhase::Synthesis,
+                order: 1000,
+                step_number: Some(2),
+                round: None,
+                text: Some("final".to_string()),
+                tool_call_id: None,
+            }],
+        );
+
+        let auxiliary = segments
+            .iter()
+            .find(|segment| segment.tool_call_id.as_deref() == Some("call_aux"))
+            .expect("auxiliary tool should have a segment");
+        let skipped = segments
+            .iter()
+            .find(|segment| segment.tool_call_id.as_deref() == Some("call_blocked"))
+            .expect("skipped tool should have a segment");
+
+        assert_eq!(auxiliary.kind, ChatMessageSegmentKind::Tool);
+        assert_eq!(auxiliary.phase, ChatMessageSegmentPhase::Auxiliary);
+        assert_eq!(skipped.kind, ChatMessageSegmentKind::Tool);
+        assert_eq!(skipped.phase, ChatMessageSegmentPhase::ToolLoop);
+    }
+
+    #[test]
+    fn editing_assistant_reply_replaces_final_text_segments_only() {
+        let tool_call = test_tool_record("call_blocked", "native", 1, ToolCallStatus::Skipped);
+        let mut message = ChatMessage {
+            id: "msg_assistant".to_string(),
+            role: "assistant".to_string(),
+            content: "old final".to_string(),
+            attachments: Vec::new(),
+            reasoning: Some("reasoning block".to_string()),
+            artifacts: Vec::new(),
+            tool_calls: vec![tool_call],
+            segments: vec![
+                ChatMessageSegment {
+                    id: "seg_plan".to_string(),
+                    kind: ChatMessageSegmentKind::Text,
+                    phase: ChatMessageSegmentPhase::ToolLoop,
+                    order: 1000,
+                    step_number: Some(1),
+                    round: Some(1),
+                    text: Some("planning text".to_string()),
+                    tool_call_id: None,
+                },
+                ChatMessageSegment {
+                    id: "seg_tool".to_string(),
+                    kind: ChatMessageSegmentKind::Tool,
+                    phase: ChatMessageSegmentPhase::ToolLoop,
+                    order: 1001,
+                    step_number: Some(1),
+                    round: Some(1),
+                    text: None,
+                    tool_call_id: Some("call_blocked".to_string()),
+                },
+                ChatMessageSegment {
+                    id: "seg_reasoning".to_string(),
+                    kind: ChatMessageSegmentKind::Reasoning,
+                    phase: ChatMessageSegmentPhase::ToolLoop,
+                    order: 1002,
+                    step_number: Some(1),
+                    round: Some(1),
+                    text: Some("reasoning block".to_string()),
+                    tool_call_id: None,
+                },
+                ChatMessageSegment {
+                    id: "seg_old".to_string(),
+                    kind: ChatMessageSegmentKind::Text,
+                    phase: ChatMessageSegmentPhase::Synthesis,
+                    order: 1003,
+                    step_number: Some(2),
+                    round: None,
+                    text: Some("old final".to_string()),
+                    tool_call_id: None,
+                },
+            ],
+            api_messages: Vec::new(),
+            model_messages: Vec::new(),
+            active_skill_id: None,
+            timestamp: 1,
+        };
+
+        replace_final_text_segments_for_edit(&mut message, "new final");
+
+        assert_eq!(message.content, "new final");
+        assert_eq!(message.reasoning.as_deref(), Some("reasoning block"));
+        assert!(message.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Tool
+                && segment.tool_call_id.as_deref() == Some("call_blocked")
+        }));
+        assert!(message.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Text
+                && segment.phase == ChatMessageSegmentPhase::ToolLoop
+                && segment.text.as_deref() == Some("planning text")
+        }));
+        assert!(!message.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Text
+                && matches!(
+                    segment.phase,
+                    ChatMessageSegmentPhase::Plain | ChatMessageSegmentPhase::Synthesis
+                )
+                && segment.text.as_deref() == Some("old final")
+        }));
+        assert!(message.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Text
+                && segment.phase == ChatMessageSegmentPhase::Synthesis
+                && segment.text.as_deref() == Some("new final")
+        }));
+    }
+
+    #[test]
+    fn editing_assistant_reply_rewrites_replay_to_edited_final_answer() {
+        let mut message = ChatMessage {
+            id: "msg_assistant".to_string(),
+            role: "assistant".to_string(),
+            content: "old final".to_string(),
+            attachments: Vec::new(),
+            reasoning: Some("old visible reasoning".to_string()),
+            artifacts: Vec::new(),
+            tool_calls: vec![test_tool_record(
+                "call_1",
+                "native",
+                1,
+                ToolCallStatus::Success,
+            )],
+            segments: vec![
+                ChatMessageSegment {
+                    id: "seg_reasoning".to_string(),
+                    kind: ChatMessageSegmentKind::Reasoning,
+                    phase: ChatMessageSegmentPhase::Synthesis,
+                    order: 999,
+                    step_number: Some(2),
+                    round: None,
+                    text: Some("old visible reasoning".to_string()),
+                    tool_call_id: None,
+                },
+                ChatMessageSegment {
+                    id: "seg_old".to_string(),
+                    kind: ChatMessageSegmentKind::Text,
+                    phase: ChatMessageSegmentPhase::Synthesis,
+                    order: 1000,
+                    step_number: Some(2),
+                    round: None,
+                    text: Some("old final".to_string()),
+                    tool_call_id: None,
+                },
+            ],
+            api_messages: vec![
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"/tmp/old.txt\"}"
+                        }
+                    }]
+                }),
+                serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "tool output"
+                }),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": "old final",
+                    "reasoning_content": "old final reasoning"
+                }),
+            ],
+            model_messages: Vec::new(),
+            active_skill_id: None,
+            timestamp: 1,
+        };
+
+        replace_final_text_segments_for_edit(&mut message, "new final");
+
+        assert!(message.api_messages.is_empty());
+        let replay = openai_messages_from_model_messages(&message.model_messages);
+        let serialized = serde_json::to_string(&replay).expect("replay serializes");
+        assert!(serialized.contains("tool output"));
+        assert!(serialized.contains("new final"));
+        assert!(serialized.contains("old visible reasoning"));
+        assert!(!serialized.contains("old final"));
+        assert!(!serialized.contains("old final reasoning"));
+    }
+
     fn test_chat_message(id: &str, role: &str, content: &str, timestamp: i64) -> ChatMessage {
         ChatMessage {
             id: id.to_string(),
@@ -3938,6 +4564,7 @@ mod tests {
             reasoning: None,
             artifacts: Vec::new(),
             tool_calls: Vec::new(),
+            segments: Vec::new(),
             api_messages: Vec::new(),
             model_messages: Vec::new(),
             active_skill_id: None,
@@ -4101,6 +4728,7 @@ mod tests {
                     reasoning: None,
                     artifacts: Vec::new(),
                     tool_calls: Vec::new(),
+                    segments: Vec::new(),
                     api_messages: Vec::new(),
                     model_messages: Vec::new(),
                     active_skill_id: None,
@@ -4114,6 +4742,7 @@ mod tests {
                     reasoning: Some("hidden thinking".to_string()),
                     artifacts: Vec::new(),
                     tool_calls: Vec::new(),
+                    segments: Vec::new(),
                     api_messages: vec![
                         serde_json::json!({
                             "role": "assistant",
@@ -4235,6 +4864,7 @@ mod tests {
                     reasoning: None,
                     artifacts: Vec::new(),
                     tool_calls: Vec::new(),
+                    segments: Vec::new(),
                     api_messages: vec![
                         serde_json::json!({
                             "role": "assistant",

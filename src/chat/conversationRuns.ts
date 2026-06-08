@@ -5,6 +5,7 @@ export interface ConversationStreamSnapshot {
   reasoning: string
   reasoningStreaming: boolean
   toolCalls: import('./types').ToolCallRecord[]
+  segments: import('./types').ChatMessageSegment[]
   startedAt: number | null
 }
 
@@ -48,6 +49,7 @@ export function createEmptyStreamSnapshot(): ConversationStreamSnapshot {
     reasoning: '',
     reasoningStreaming: false,
     toolCalls: [],
+    segments: [],
     startedAt: Date.now(),
   }
 }
