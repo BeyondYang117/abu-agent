@@ -1,5 +1,5 @@
 import { isValidElement, memo, useMemo, useState } from 'react'
-import { Code2, ExternalLink, Eye } from 'lucide-react'
+import { Check, Code2, Copy, ExternalLink, Eye } from 'lucide-react'
 import type { Components, UrlTransform } from 'react-markdown'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -10,6 +10,7 @@ import { normalizeMarkdownForRender } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
 import type { ChatToolArtifact } from './types'
 import { api } from '../api/tauri'
+import { copyToClipboard } from '../utils/clipboard'
 
 interface ChatMarkdownProps {
   content: string
@@ -27,6 +28,251 @@ const reasoningProseClass =
 function codeChildrenToString(children: unknown): string {
   if (Array.isArray(children)) return children.map((child) => String(child ?? '')).join('')
   return typeof children === 'string' ? children : String(children ?? '')
+}
+
+type HighlightToken = {
+  text: string
+  className?: string
+}
+
+type TokenRule = {
+  className: string
+  pattern: RegExp
+}
+
+const LANGUAGE_LABELS: Record<string, string> = {
+  bash: 'Shell',
+  cjs: 'JavaScript',
+  css: 'CSS',
+  html: 'HTML',
+  js: 'JavaScript',
+  javascript: 'JavaScript',
+  json: 'JSON',
+  jsx: 'JavaScript',
+  markdown: 'Markdown',
+  md: 'Markdown',
+  py: 'Python',
+  python: 'Python',
+  rs: 'Rust',
+  rust: 'Rust',
+  sh: 'Shell',
+  shell: 'Shell',
+  ts: 'TypeScript',
+  tsx: 'TypeScript',
+  typescript: 'TypeScript',
+  xml: 'XML',
+  yaml: 'YAML',
+  yml: 'YAML',
+}
+
+const jsKeywords =
+  'abstract|as|async|await|break|case|catch|class|const|continue|debugger|declare|default|delete|do|else|enum|export|extends|finally|for|from|function|get|if|implements|import|in|infer|instanceof|interface|keyof|let|module|namespace|new|of|private|protected|public|readonly|return|satisfies|set|static|super|switch|throw|try|type|typeof|var|void|while|with|yield'
+const rustKeywords =
+  'as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|unsafe|use|where|while'
+const pythonKeywords =
+  'and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield'
+
+function normalizeCodeLanguage(language?: string): string {
+  return (language ?? '').trim().toLowerCase().replace(/^language-/, '')
+}
+
+function codeLanguageLabel(language: string): string {
+  if (!language) return 'Code'
+  return LANGUAGE_LABELS[language] ?? language.toUpperCase()
+}
+
+function tokenPattern(source: string): RegExp {
+  return new RegExp(source, 'y')
+}
+
+function scanTokens(code: string, rules: TokenRule[]): HighlightToken[] {
+  const tokens: HighlightToken[] = []
+  let index = 0
+
+  while (index < code.length) {
+    let matched = false
+
+    for (const rule of rules) {
+      rule.pattern.lastIndex = index
+      const match = rule.pattern.exec(code)
+      if (!match?.[0]) continue
+      tokens.push({ text: match[0], className: rule.className })
+      index += match[0].length
+      matched = true
+      break
+    }
+
+    if (!matched) {
+      const previous = tokens[tokens.length - 1]
+      if (previous && !previous.className) {
+        previous.text += code[index]
+      } else {
+        tokens.push({ text: code[index] })
+      }
+      index += 1
+    }
+  }
+
+  return tokens
+}
+
+function cLikeRules(keywordSource: string): TokenRule[] {
+  return [
+    { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`) },
+    { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+    { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:${keywordSource})\b`) },
+    { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b(?:true|false|null|undefined|Some|None|Ok|Err)\b`) },
+    { className: 'text-cyan-700', pattern: tokenPattern(String.raw`\b[A-Za-z_$][\w$]*(?=\s*\()`) },
+    { className: 'text-violet-700', pattern: tokenPattern(String.raw`\b[A-Z][A-Za-z0-9_$]*\b`) },
+    { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`) },
+    { className: 'text-neutral-500', pattern: tokenPattern(String.raw`=>|->|::|[{}()[\].,;:+\-*/%=&|!<>?]+`) },
+  ]
+}
+
+function jsxRules(keywordSource: string): TokenRule[] {
+  return [
+    { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`) },
+    { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+    { className: 'text-blue-700', pattern: tokenPattern(String.raw`<\/?[A-Za-z][\w:.-]*`) },
+    { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b[A-Za-z_:][\w:.-]*(?=\s*=)`) },
+    { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:${keywordSource})\b`) },
+    { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b(?:true|false|null|undefined)\b`) },
+    { className: 'text-cyan-700', pattern: tokenPattern(String.raw`\b[A-Za-z_$][\w$]*(?=\s*\()`) },
+    { className: 'text-violet-700', pattern: tokenPattern(String.raw`\b[A-Z][A-Za-z0-9_$]*\b`) },
+    { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`) },
+    { className: 'text-neutral-500', pattern: tokenPattern(String.raw`\/?>|=>|[{}()[\].,;:+\-*/%=&|!<>?]+`) },
+  ]
+}
+
+function looksLikeJsx(code: string): boolean {
+  return /<\/?[A-Za-z][\w:.-]*(?:\s|>|\/>)/.test(code)
+}
+
+function rulesForLanguage(language: string, code = ''): TokenRule[] {
+  if (language === 'css') {
+    return [
+      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\*[\s\S]*?\*\/`) },
+      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: 'text-rose-700', pattern: tokenPattern(String.raw`[#.][A-Za-z_][\w-]*`) },
+      { className: 'text-cyan-700', pattern: tokenPattern(String.raw`@[A-Za-z-]+`) },
+      { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b[A-Za-z-]+(?=\s*:)`) },
+      { className: 'text-orange-700', pattern: tokenPattern(String.raw`#[\da-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms)?\b`) },
+      { className: 'text-violet-700', pattern: tokenPattern(String.raw`\b(?:border-box|flex|grid|block|inline|none|relative|absolute|fixed|sticky|solid|transparent)\b`) },
+      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[{}():;,>+~*-]+`) },
+    ]
+  }
+
+  if (language === 'html' || language === 'xml') {
+    return [
+      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`<!--[\s\S]*?-->`) },
+      { className: 'text-blue-700', pattern: tokenPattern(String.raw`<\/?[A-Za-z][\w:-]*`) },
+      { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b[A-Za-z_:][\w:.-]*(?=\=)`) },
+      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`\/?>|=`) },
+    ]
+  }
+
+  if (language === 'json') {
+    return [
+      { className: 'text-blue-700', pattern: tokenPattern(String.raw`"(?:\\.|[^"\\])*"(?=\s*:)`) },
+      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`"(?:\\.|[^"\\])*"`) },
+      { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b(?:true|false|null)\b`) },
+      { className: 'text-orange-700', pattern: tokenPattern(String.raw`-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b`) },
+      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[{}[\]:,]+`) },
+    ]
+  }
+
+  if (language === 'py' || language === 'python') {
+    return [
+      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`#[^\n]*`) },
+      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'''[\s\S]*?'''|"""[\s\S]*?"""|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:${pythonKeywords})\b`) },
+      { className: 'text-cyan-700', pattern: tokenPattern(String.raw`\b[A-Za-z_]\w*(?=\s*\()`) },
+      { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b\d+(?:\.\d+)?\b`) },
+      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[{}()[\].,;:+\-*/%=&|!<>?]+`) },
+    ]
+  }
+
+  if (language === 'sh' || language === 'shell' || language === 'bash') {
+    return [
+      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`#[^\n]*`) },
+      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:case|cat|cd|cp|do|done|echo|elif|else|esac|export|fi|for|function|git|grep|if|mkdir|mv|npm|rg|rm|sed|then|while)\b`) },
+      { className: 'text-violet-700', pattern: tokenPattern(String.raw`\$[A-Za-z_]\w*|\$\{[^}]+\}`) },
+      { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b\d+\b`) },
+      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[|&;<>(){}[\]!*?=]+`) },
+    ]
+  }
+
+  if (language === 'rust' || language === 'rs') {
+    return cLikeRules(rustKeywords)
+  }
+
+  if (language === 'jsx' || language === 'tsx') {
+    return jsxRules(jsKeywords)
+  }
+
+  if (language === 'js' || language === 'javascript' || language === 'ts' || language === 'typescript') {
+    if (looksLikeJsx(code)) return jsxRules(jsKeywords)
+    return cLikeRules(jsKeywords)
+  }
+
+  return [
+    { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/`) },
+    { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+    { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b\d+(?:\.\d+)?\b`) },
+  ]
+}
+
+function highlightCode(code: string, language: string) {
+  return scanTokens(code, rulesForLanguage(language, code)).map((token, index) => (
+    token.className
+      ? <span key={index} className={token.className}>{token.text}</span>
+      : token.text
+  ))
+}
+
+function normalizeCodeBlockText(code: string): string {
+  return code.replace(/\n$/, '')
+}
+
+function CodeBlock({ code, language }: { code: string; language: string }) {
+  const normalizedCode = useMemo(() => normalizeCodeBlockText(code), [code])
+  const highlighted = useMemo(
+    () => highlightCode(normalizedCode, language),
+    [normalizedCode, language],
+  )
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(normalizedCode)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  return (
+    <figure className="not-prose my-3 overflow-hidden rounded-lg border border-neutral-200/80 bg-neutral-50 text-neutral-950 shadow-sm dark:border-neutral-300/80 dark:bg-neutral-100 dark:text-neutral-950">
+      <div className="flex items-center gap-2 px-4 pb-1 pt-3">
+        <Code2 size={15} strokeWidth={2.4} className="shrink-0 text-neutral-800" />
+        <figcaption className="text-[13px] font-semibold leading-5 text-neutral-950">
+          {codeLanguageLabel(language)}
+        </figcaption>
+        <button
+          type="button"
+          onClick={() => void handleCopy()}
+          className="-mr-1 ml-auto rounded-md p-1.5 text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-900"
+          title={copied ? '已复制' : '复制代码'}
+          aria-label={copied ? '已复制' : '复制代码'}
+        >
+          {copied ? <Check size={17} strokeWidth={2.2} /> : <Copy size={17} strokeWidth={2.2} />}
+        </button>
+      </div>
+      <pre className="m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900">
+        <code className="font-mono">{highlighted}</code>
+      </pre>
+    </figure>
+  )
 }
 
 function htmlPreviewSrcDoc(html: string): string {
@@ -68,19 +314,16 @@ function HtmlCodePreview({ html }: { html: string }) {
 
   return (
     <>
-      <div className="my-3 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-950">
-        {view === 'preview' ? (
+      {view === 'preview' ? (
+        <div className="my-3 overflow-hidden rounded-lg border border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-950">
           <iframe
             title="HTML 预览"
             srcDoc={previewHtml}
             className="h-[520px] w-full border-0 bg-white"
           />
-        ) : (
-          <pre className="m-0 max-h-[520px] overflow-auto bg-neutral-950 p-4 text-[12px] leading-relaxed text-neutral-100">
-            <code>{html}</code>
-          </pre>
-        )}
-      </div>
+        </div>
+      ) : null}
+      {view === 'source' ? <CodeBlock code={html} language="html" /> : null}
       <div className="-mt-1 mb-2 flex justify-end gap-0.5">
         <button
           type="button"
@@ -110,11 +353,14 @@ const markdownComponents: Components = {
     const child = Array.isArray(children) ? children[0] : children
     if (isValidElement<{ className?: string; children?: unknown }>(child)) {
       const languageMatch = /language-([\w-]+)/.exec(child.props.className ?? '')
-      if (languageMatch?.[1]?.toLowerCase() === 'html') {
-        return <HtmlCodePreview html={codeChildrenToString(child.props.children)} />
+      const language = normalizeCodeLanguage(languageMatch?.[1])
+      const code = codeChildrenToString(child.props.children)
+      if (language === 'html') {
+        return <HtmlCodePreview html={code} />
       }
+      return <CodeBlock code={code} language={language} />
     }
-    return <pre>{children}</pre>
+    return <CodeBlock code={codeChildrenToString(children)} language="" />
   },
   table: ({ children }) => (
     <div className="my-3 max-w-full overflow-x-auto">

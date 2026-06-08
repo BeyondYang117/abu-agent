@@ -48,6 +48,7 @@ Questions to answer:
 - Markdown parser optimizations should target memoization, normalized input stability, and avoiding unnecessary historical-message rerenders.
 - Render assistant reasoning text through `ChatMarkdown` too, using a compact reasoning variant instead of raw `whitespace-pre-wrap` text. Model reasoning often includes Markdown lists, paths, and inline code, and it must not expose raw backticks in the UI.
 - Tailwind Typography adds visual backticks around inline `code` via pseudo-elements by default. Chat Markdown containers must disable `code::before` and `code::after` content and use explicit inline-code styling instead.
+- Render fenced code blocks with a Chat-specific `not-prose` component instead of Tailwind Typography's default dark `pre`. Code blocks should use a light card surface, compact inline language label, copy action, horizontal overflow, and lightweight syntax coloring without adding a large highlighting dependency unless the product explicitly accepts the bundle cost.
 
 ### Tauri window lifecycle
 
