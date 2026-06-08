@@ -170,52 +170,31 @@ pub fn ensure_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 /**
- * 确保独立设置窗口存在。
- *
- * 设置页不复用 main 输入翻译窗口；关闭设置页时销毁 settings WebView，
- * 再次打开时直接用 #settings URL 创建，避免输入翻译窗口闪一下。
- */
-pub fn ensure_settings_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    if let Some(window) = get_settings_window(app) {
-        return Ok(window);
-    }
-
-    WebviewWindowBuilder::new(
-        app,
-        "settings",
-        WebviewUrl::App("index.html#settings".into()),
-    )
-    .title("Kivio")
-    .inner_size(640.0, 520.0)
-    .min_inner_size(520.0, 420.0)
-    .resizable(true)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .visible_on_all_workspaces(true)
-    .skip_taskbar(true)
-    .visible(false)
-    .build()
-    .map_err(|e| e.to_string())
-}
-
-/**
  * 确保独立 Chat 窗口存在。
  */
 pub fn ensure_chat_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    ensure_chat_window_with_hash(app, "chat")
+}
+
+/**
+ * 确保独立 Chat 窗口存在，并在首次创建时进入指定 hash 路由。
+ */
+pub fn ensure_chat_window_with_hash(app: &AppHandle, hash: &str) -> Result<WebviewWindow, String> {
     if let Some(window) = get_chat_window(app) {
         return Ok(window);
     }
 
-    let mut builder =
-        WebviewWindowBuilder::new(app, "chat", WebviewUrl::App("index.html#chat".into()))
-            .title("Kivio")
-            .inner_size(1280.0, 800.0)
-            .min_inner_size(CHAT_MIN_INNER_WIDTH_COLLAPSED, CHAT_MIN_INNER_HEIGHT)
-            .resizable(true)
-            .visible_on_all_workspaces(false)
-            .skip_taskbar(false)
-            .visible(false);
+    let route = hash.trim_start_matches('#');
+    let route = if route.is_empty() { "chat" } else { route };
+    let url = format!("index.html#{route}");
+    let mut builder = WebviewWindowBuilder::new(app, "chat", WebviewUrl::App(url.into()))
+        .title("Kivio")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(CHAT_MIN_INNER_WIDTH_COLLAPSED, CHAT_MIN_INNER_HEIGHT)
+        .resizable(true)
+        .visible_on_all_workspaces(false)
+        .skip_taskbar(false)
+        .visible(false);
 
     #[cfg(target_os = "macos")]
     {

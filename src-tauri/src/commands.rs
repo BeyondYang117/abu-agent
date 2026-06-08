@@ -20,8 +20,8 @@ use crate::settings::{
 #[cfg(target_os = "macos")]
 use crate::shortcuts::{check_accessibility, check_screen_recording_permission};
 use crate::shortcuts::{
-    open_settings_window as open_settings_window_impl, register_hotkeys, restore_runtime_settings,
-    send_paste_shortcut, setup_tray,
+    open_chat_settings_window as open_settings_window_impl, register_hotkeys,
+    restore_runtime_settings, send_paste_shortcut, setup_tray,
 };
 use crate::state::AppState;
 use crate::utils::{language_name, resolve_target_lang};

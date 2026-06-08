@@ -3,6 +3,13 @@ import { i18n, type Lang } from './i18n'
 
 export type Platform = 'macos' | 'windows' | 'linux'
 
+export type SelectOption = {
+  value: string
+  label: string
+  detail?: string
+  title?: string
+}
+
 // 修饰键集合（录制快捷键时忽略）
 const modifierKeys = new Set(['Shift', 'Meta', 'Control', 'Alt', 'AltGraph'])
 
@@ -120,13 +127,15 @@ export const parseModelPairValue = (value: string): [string, string] => {
 
 export const isProviderEnabled = (provider: ModelProvider) => provider.enabled !== false
 
-export const buildModelPairOptions = (providers: ModelProvider[]) =>
+export const buildModelPairOptions = (providers: ModelProvider[]): SelectOption[] =>
   providers
     .filter(provider => isProviderEnabled(provider))
     .flatMap(provider =>
       provider.enabledModels.map(model => ({
         value: modelPairValue(provider.id, model),
-        label: `${provider.name} - ${model}`,
+        label: provider.name,
+        detail: model,
+        title: `${provider.name} - ${model}`,
       })),
     )
 

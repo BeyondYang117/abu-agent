@@ -15,7 +15,7 @@ use crate::state::AppState;
 use crate::windows::apply_macos_traffic_light_position;
 use crate::windows::{
     apply_chat_window_chrome, apply_frameless_window_chrome, ensure_chat_window,
-    ensure_main_window, ensure_settings_window, normalize_chat_window_behavior,
+    ensure_chat_window_with_hash, ensure_main_window, normalize_chat_window_behavior,
 };
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
@@ -766,32 +766,6 @@ pub(crate) fn send_paste_shortcut() {
     }
 }
 
-/// 打开独立设置窗口。
-/// 调整窗口大小为 640x520 并切到设置页；实际 show/focus 等前端 Settings 加载完成后执行。
-pub(crate) fn open_settings_window(app: &AppHandle) -> Result<(), String> {
-    let window = ensure_settings_window(app)?;
-    apply_frameless_window_chrome(&window);
-    let _ = window.hide();
-    let _ = window.set_always_on_top(false);
-    let _ = window.set_size(tauri::LogicalSize::new(640.0, 520.0));
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-
-    let _ = window.eval(
-    "window.location.hash = '#settings'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
-  );
-    // 仅向 settings webview 发送 open-settings 事件，避免广播到 screenshot/explain 等其他 webview
-    // 导致它们也被切到设置视图（出现多个设置界面的 bug）。
-    let _ = app.emit_to("settings", "open-settings", ());
-
-    let window_for_task = window.clone();
-    let _ = window.run_on_main_thread(move || {
-        let _ = window_for_task.center();
-    });
-
-    Ok(())
-}
-
 /// 打开独立 AI 客户端窗口。
 pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
     let existing_window = app.get_webview_window("chat");
@@ -810,6 +784,42 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
              }",
         );
         let _ = app.emit_to("chat", "chat-open-request", ());
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        let _ = window.show();
+        let _ = window.set_focus();
+        #[cfg(target_os = "macos")]
+        apply_macos_traffic_light_position(&window);
+    } else {
+        // 首次创建保持 hidden：前端在 useLayoutEffect 里恢复几何后再 show，避免默认尺寸闪一下。
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            apply_macos_traffic_light_position(&window);
+        }
+    }
+
+    Ok(())
+}
+
+/// 打开 AI 客户端内嵌设置页，替代旧版独立设置窗口。
+pub(crate) fn open_chat_settings_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = crate::windows::get_settings_window(app) {
+        let _ = window.close();
+    }
+
+    let existing_window = app.get_webview_window("chat");
+    let window = ensure_chat_window_with_hash(app, "chat/settings")?;
+    apply_chat_window_chrome(&window);
+    crate::windows::apply_chat_window_min_size(&window, false);
+    normalize_chat_window_behavior(&window);
+
+    if existing_window.is_some() {
+        let _ = window.eval(
+            "window.location.hash = '#chat/settings'; \
+             window.dispatchEvent(new HashChangeEvent('hashchange'));",
+        );
+        let _ = app.emit_to("chat", "open-settings", ());
         #[cfg(target_os = "macos")]
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         let _ = window.show();
@@ -946,8 +956,8 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 Err(err) => eprintln!("Failed to ensure main window: {}", err),
             },
             "settings" => {
-                if let Err(err) = open_settings_window(app) {
-                    eprintln!("Failed to open settings window: {}", err);
+                if let Err(err) = open_chat_settings_window(app) {
+                    eprintln!("Failed to open chat settings window: {}", err);
                 }
             }
             "quit" => {
