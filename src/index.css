@@ -121,6 +121,11 @@ body {
   mask-image: linear-gradient(to bottom, transparent 0, #000 1.7em);
 }
 
+.chat-markdown :where(code)::before,
+.chat-markdown :where(code)::after {
+  content: none;
+}
+
 /* 自定义滚动条 — 悬浮胶囊式 */
 .custom-scrollbar {
   scrollbar-width: thin;

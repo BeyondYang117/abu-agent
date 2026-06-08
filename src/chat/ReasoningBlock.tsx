@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { ChatMarkdown } from './ChatMarkdown'
 
 const COLLAPSE_LINE_LIMIT = 3
 const CHARS_PER_LINE = 60
@@ -76,7 +77,6 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
   const streamingPreview = streaming && showCollapsed
   const bodyClass = [
     'chat-motion-reasoning-body',
-    'whitespace-pre-wrap text-sm leading-relaxed text-neutral-400 dark:text-neutral-500',
     streaming ? 'opacity-95' : 'opacity-90',
     showCollapsed ? 'is-collapsed' : 'is-open',
     contentPulse ? 'reasoning-stream-tail' : '',
@@ -87,6 +87,7 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
     userExpandedRef.current = true
     setOpen((value) => !value)
   }
+  const visibleReasoning = showCollapsed ? collapsedPreview.preview : reasoning
 
   return (
     <section
@@ -136,7 +137,7 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
         {showCollapsed && collapsedPreview.truncated && !streaming ? (
           <span className="mr-0.5 opacity-50">…</span>
         ) : null}
-        {showCollapsed ? collapsedPreview.preview : reasoning}
+        <ChatMarkdown content={visibleReasoning} variant="reasoning" />
       </div>
     </section>
   )

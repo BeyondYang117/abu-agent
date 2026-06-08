@@ -15,10 +15,14 @@ interface ChatMarkdownProps {
   content: string
   artifacts?: ChatToolArtifact[]
   onImageClick?: (src: string, alt: string, name?: string) => void
+  variant?: 'default' | 'reasoning'
 }
 
 const proseClass =
-  'prose prose-sm dark:prose-invert max-w-none break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100 prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-li:my-0.5 prose-table:my-3 prose-table:shadow-none'
+  'chat-markdown prose prose-sm dark:prose-invert max-w-none break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100 prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-li:my-0.5 prose-table:my-3 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-800 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-100'
+
+const reasoningProseClass =
+  'chat-markdown chat-reasoning-markdown prose prose-sm dark:prose-invert max-w-none break-words text-sm leading-relaxed text-neutral-400 dark:text-neutral-500 prose-p:my-1 prose-p:first:mt-0 prose-p:last:mb-0 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-2 prose-li:my-0.5 prose-table:my-2 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-500 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-400'
 
 function codeChildrenToString(children: unknown): string {
   if (Array.isArray(children)) return children.map((child) => String(child ?? '')).join('')
@@ -184,7 +188,12 @@ function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, string>
   return lookup
 }
 
-function ChatMarkdownComponent({ content, artifacts = [], onImageClick }: ChatMarkdownProps) {
+function ChatMarkdownComponent({
+  content,
+  artifacts = [],
+  onImageClick,
+  variant = 'default',
+}: ChatMarkdownProps) {
   const normalized = useMemo(() => normalizeMarkdownForRender(content), [content])
   const components = useMemo<Components>(() => {
     const artifactLookup = buildArtifactLookup(artifacts)
@@ -218,7 +227,7 @@ function ChatMarkdownComponent({ content, artifacts = [], onImageClick }: ChatMa
   }, [artifacts, onImageClick])
 
   return (
-    <div className={proseClass}>
+    <div className={variant === 'reasoning' ? reasoningProseClass : proseClass}>
       <MarkdownErrorBoundary fallbackText={content}>
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkMath]}

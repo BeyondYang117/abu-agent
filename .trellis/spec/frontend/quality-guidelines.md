@@ -44,6 +44,8 @@ Questions to answer:
 - Keep Chat message Markdown rendering on the eager Chat load path. `MessageBubble` should statically import `ChatMarkdown` so conversation history and first assistant content render with Markdown immediately.
 - Do not lazy-load `ChatMarkdown` at the individual message boundary just to reduce the Chat chunk size. A plain-text fallback flash is worse for the Chat client than the bundle-size win.
 - Markdown parser optimizations should target memoization, normalized input stability, and avoiding unnecessary historical-message rerenders.
+- Render assistant reasoning text through `ChatMarkdown` too, using a compact reasoning variant instead of raw `whitespace-pre-wrap` text. Model reasoning often includes Markdown lists, paths, and inline code, and it must not expose raw backticks in the UI.
+- Tailwind Typography adds visual backticks around inline `code` via pseudo-elements by default. Chat Markdown containers must disable `code::before` and `code::after` content and use explicit inline-code styling instead.
 
 ### Tauri window lifecycle
 
