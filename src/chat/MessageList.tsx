@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentPlanState, AgentTodoState, ChatMessage, ChatMessageSegment, ToolCallRecord } from './types'
 import { MessageBubble } from './MessageBubble'
 
@@ -46,6 +46,7 @@ export function MessageList({
   onDeleteMessage,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const innerRef = useRef<HTMLDivElement>(null)
   // 用户是否“贴在底部”——决定流式生成时是否跟随钉底。默认 true（初次渲染贴底）
   const stickToBottomRef = useRef(true)
   const prevCountRef = useRef(0)
@@ -64,6 +65,13 @@ export function MessageList({
   const visibleMessages = hiddenMessageCount > 0
     ? messages.slice(hiddenMessageCount)
     : messages
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    lastScrollTopRef.current = el.scrollTop
+  }, [])
 
   const loadOlderMessages = useCallback(() => {
     const el = scrollRef.current
@@ -100,9 +108,8 @@ export function MessageList({
     setVisibleLimit(INITIAL_VISIBLE_MESSAGES)
     pendingPrependScrollHeightRef.current = null
     stickToBottomRef.current = true
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [conversationId])
+    scrollToBottom()
+  }, [conversationId, scrollToBottom])
 
   useLayoutEffect(() => {
     const previousScrollHeight = pendingPrependScrollHeightRef.current
@@ -129,13 +136,46 @@ export function MessageList({
   // 仅在“贴底”时随内容增长钉住底部；useLayoutEffect 保证绘制前完成，消除抽动
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [messages, streaming, streamingContent, streamingReasoning, reasoningStreaming, streamingToolCalls, streamingSegments, error])
+    scrollToBottom()
+  }, [
+    messages,
+    streaming,
+    streamingContent,
+    streamingReasoning,
+    reasoningStreaming,
+    streamingToolCalls,
+    streamingSegments,
+    error,
+    scrollToBottom,
+  ])
+
+  useEffect(() => {
+    const inner = innerRef.current
+    if (!inner || typeof ResizeObserver === 'undefined') return
+
+    let frame: number | null = null
+    const scrollIfPinned = () => {
+      frame = null
+      if (!stickToBottomRef.current) return
+      scrollToBottom()
+    }
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottomRef.current) return
+      if (frame != null) window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(scrollIfPinned)
+    })
+
+    observer.observe(inner)
+
+    return () => {
+      observer.disconnect()
+      if (frame != null) window.cancelAnimationFrame(frame)
+    }
+  }, [scrollToBottom])
 
   return (
     <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="custom-scrollbar flex-1 overflow-y-auto">
-      <div className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
+      <div ref={innerRef} className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
         <AgentPlanPanel planState={agentPlanState} />
         <AgentTodoPanel todoState={agentTodoState} />
 

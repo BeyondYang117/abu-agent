@@ -38,6 +38,8 @@ Questions to answer:
 - Prefer applying those classes from Chat components over adding component-local keyframes or animation libraries.
 - Always include a `prefers-reduced-motion` fallback when adding a new Chat animation utility.
 - Use small entrance/reveal motions for state continuity; do not change Chat routing, persistence, or streaming data flow to support cosmetic motion.
+- Streaming Chat scroll-follow must account for real content size changes, not only React data changes. When the user is still pinned to the bottom, observe the message-list inner content size and scroll again after late layout changes from reasoning Markdown, collapse animations, images, or tool blocks.
+- User intent wins over scroll-follow: upward wheel/scroll must disable auto-follow until the user returns near the bottom.
 
 ### Chat Markdown rendering
 
