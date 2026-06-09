@@ -1,9 +1,17 @@
 mod fetch;
 mod files;
+mod sandbox_exports;
 mod shell;
 
 pub use fetch::web_fetch;
-pub use files::{edit_file, read_file, write_file};
+pub use files::{
+    copy_path, create_dir, delete_path, edit_file, glob_files, list_dir, move_path, read_file,
+    search_files, stat_path, write_file,
+};
+pub use sandbox_exports::{
+    cleanup_stale_sandbox_exports, export_sandbox_artifacts, format_export_error,
+    format_exported_paths, remove_sandbox_exports_for_conversation, SandboxExportContext,
+};
 pub use shell::run_command;
 
 use std::{
@@ -20,6 +28,43 @@ const WRITE_BLOCKLIST_SEGMENTS: &[&str] = &[
     "Library/Keychains",
     "Library/Application Support/Keychain",
 ];
+
+#[derive(Debug, Clone)]
+pub struct ProjectWorkspaceContext {
+    pub project_id: String,
+    pub project_name: String,
+    pub root_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeToolWorkspace {
+    pub project: Option<ProjectWorkspaceContext>,
+    pub workspace_roots: Vec<String>,
+}
+
+impl NativeToolWorkspace {
+    pub fn global(workspace_roots: &[String]) -> Self {
+        Self {
+            project: None,
+            workspace_roots: workspace_roots.to_vec(),
+        }
+    }
+
+    pub fn project(project_id: String, project_name: String, root_path: Option<String>) -> Self {
+        Self {
+            project: Some(ProjectWorkspaceContext {
+                project_id,
+                project_name,
+                root_path: root_path.map(PathBuf::from),
+            }),
+            workspace_roots: Vec::new(),
+        }
+    }
+
+    pub fn has_project(&self) -> bool {
+        self.project.is_some()
+    }
+}
 
 pub fn user_home_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
@@ -50,10 +95,14 @@ pub fn resolve_workspace_path(
 
     if !workspace_roots.is_empty() {
         let allowed = workspace_roots.iter().any(|root| {
-            let root_path = Path::new(root.trim());
-            if root_path.as_os_str().is_empty() {
+            let expanded = match expand_home_prefix(root.trim()) {
+                Ok(path) => path,
+                Err(_) => return false,
+            };
+            if expanded.is_empty() {
                 return false;
             }
+            let root_path = Path::new(&expanded);
             let root_canon = fs_canonicalize_existing_or_self(root_path).ok();
             root_canon
                 .map(|root_canon| {
@@ -72,9 +121,234 @@ pub fn resolve_workspace_path(
     Ok(canonical)
 }
 
+pub fn resolve_tool_read_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    if workspace.has_project() {
+        return resolve_project_path(workspace, raw_path, false);
+    }
+    resolve_read_path(raw_path)
+}
+
+pub fn resolve_tool_write_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    if workspace.has_project() {
+        return resolve_project_path(workspace, raw_path, true);
+    }
+    resolve_workspace_path(raw_path, &workspace.workspace_roots)
+}
+
+pub fn resolve_tool_write_entry_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    if workspace.has_project() {
+        return resolve_project_entry_path(workspace, raw_path);
+    }
+    resolve_workspace_path(raw_path, &workspace.workspace_roots)
+}
+
+pub fn resolve_tool_existing_dir(
+    workspace: &NativeToolWorkspace,
+    raw_path: Option<&str>,
+) -> Result<PathBuf, String> {
+    if workspace.has_project() {
+        let path = match raw_path.map(str::trim).filter(|path| !path.is_empty()) {
+            Some(path) => resolve_project_path(workspace, path, false)?,
+            None => project_root_required(workspace)?,
+        };
+        if !path.is_dir() {
+            return Err(format!(
+                "Working directory is not a directory: {}",
+                path.display()
+            ));
+        }
+        return Ok(path);
+    }
+
+    if let Some(cwd_arg) = raw_path.map(str::trim).filter(|path| !path.is_empty()) {
+        let path = resolve_read_path(cwd_arg)?;
+        if !path.is_dir() {
+            return Err(format!(
+                "Working directory is not a directory: {}",
+                path.display()
+            ));
+        }
+        return Ok(path);
+    }
+
+    if let Some(root) = workspace
+        .workspace_roots
+        .iter()
+        .map(|root| root.trim())
+        .find(|root| !root.is_empty())
+    {
+        let path = resolve_read_path(root)?;
+        if !path.is_dir() {
+            return Err(format!(
+                "Working directory is not a directory: {}",
+                path.display()
+            ));
+        }
+        return Ok(path);
+    }
+
+    user_home_dir()
+}
+
+pub fn workspace_display_path(workspace: &NativeToolWorkspace, path: &Path) -> String {
+    if let Some(project) = &workspace.project {
+        if let Some(root) = project.root_path.as_ref() {
+            if let Ok(root_canon) = fs_canonicalize_existing_or_self(root) {
+                if let Ok(relative) = path.strip_prefix(&root_canon) {
+                    let rel = relative.to_string_lossy();
+                    return if rel.is_empty() {
+                        ".".to_string()
+                    } else {
+                        rel.to_string()
+                    };
+                }
+            }
+        }
+    }
+    path.display().to_string()
+}
+
 pub fn resolve_read_path(raw_path: &str) -> Result<PathBuf, String> {
     let candidate = candidate_path(raw_path)?;
     fs_canonicalize_existing_or_self(&candidate)
+}
+
+fn project_root_required(workspace: &NativeToolWorkspace) -> Result<PathBuf, String> {
+    let Some(project) = &workspace.project else {
+        return Err("No active project workspace.".to_string());
+    };
+    let Some(root_path) = project.root_path.as_ref() else {
+        return Err(format!(
+            "项目「{}」尚未绑定本地文件夹。请先在项目菜单中绑定文件夹，再使用文件或命令工具。",
+            project.project_name
+        ));
+    };
+    if !root_path.is_dir() {
+        return Err(format!(
+            "项目「{}」绑定的文件夹不存在或不可访问：{}",
+            project.project_name,
+            root_path.display()
+        ));
+    }
+    fs::canonicalize(root_path).map_err(|err| format!("Resolve project root failed: {err}"))
+}
+
+fn resolve_project_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+    allow_missing: bool,
+) -> Result<PathBuf, String> {
+    let root = project_root_required(workspace)?;
+    let expanded = expand_home_prefix(raw_path)?;
+    if expanded.trim().is_empty() {
+        return Err("路径为空，请提供项目内的文件或目录路径。".to_string());
+    }
+
+    let raw = Path::new(&expanded);
+    for component in raw.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err("项目路径不能包含 '..'，请使用项目内的明确相对路径。".to_string());
+        }
+    }
+
+    let candidate = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        root.join(raw)
+    };
+    let resolved = canonicalize_existing_or_missing(&candidate, allow_missing)?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "路径不在当前项目根目录内。项目「{}」根目录：{}",
+            workspace
+                .project
+                .as_ref()
+                .map(|project| project.project_name.as_str())
+                .unwrap_or(""),
+            root.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+fn resolve_project_entry_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
+    let root = project_root_required(workspace)?;
+    let expanded = expand_home_prefix(raw_path)?;
+    if expanded.trim().is_empty() {
+        return Err("路径为空，请提供项目内的文件或目录路径。".to_string());
+    }
+
+    let raw = Path::new(&expanded);
+    for component in raw.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err("项目路径不能包含 '..'，请使用项目内的明确相对路径。".to_string());
+        }
+    }
+
+    let candidate = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        root.join(raw)
+    };
+    let resolved = canonicalize_entry_or_missing(&candidate)?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "路径不在当前项目根目录内。项目「{}」根目录：{}",
+            workspace
+                .project
+                .as_ref()
+                .map(|project| project.project_name.as_str())
+                .unwrap_or(""),
+            root.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+fn canonicalize_existing_or_missing(path: &Path, _allow_missing: bool) -> Result<PathBuf, String> {
+    if path.exists() {
+        return fs::canonicalize(path).map_err(|err| format!("Resolve path failed: {err}"));
+    }
+
+    let mut missing = Vec::new();
+    let mut current = path;
+    while !current.exists() {
+        let name = current
+            .file_name()
+            .ok_or_else(|| "Invalid path".to_string())?;
+        missing.push(name.to_os_string());
+        current = current.parent().ok_or_else(|| "Invalid path".to_string())?;
+    }
+
+    let mut resolved =
+        fs::canonicalize(current).map_err(|err| format!("Resolve path failed: {err}"))?;
+    for name in missing.iter().rev() {
+        resolved.push(name);
+    }
+    Ok(resolved)
+}
+
+fn canonicalize_entry_or_missing(path: &Path) -> Result<PathBuf, String> {
+    if fs::symlink_metadata(path).is_ok() {
+        let parent = path.parent().ok_or_else(|| "Invalid path".to_string())?;
+        let parent =
+            fs::canonicalize(parent).map_err(|err| format!("Resolve path failed: {err}"))?;
+        let name = path.file_name().ok_or_else(|| "Invalid path".to_string())?;
+        return Ok(parent.join(name));
+    }
+    canonicalize_existing_or_missing(path, true)
 }
 
 pub fn assert_writable_path(path: &Path) -> Result<(), String> {
@@ -105,14 +379,35 @@ pub fn assert_writable_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn candidate_path(raw_path: &str) -> Result<PathBuf, String> {
+/// Expands a leading `~` / `~/` / `~\` to the user home directory (shell-style).
+fn expand_home_prefix(raw_path: &str) -> Result<String, String> {
     let trimmed = raw_path.trim();
     if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    if trimmed == "~" {
+        return Ok(user_home_dir()?.to_string_lossy().to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        let home = user_home_dir()?;
+        return Ok(home.join(rest).to_string_lossy().to_string());
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(rest) = trimmed.strip_prefix("~\\") {
+        let home = user_home_dir()?;
+        return Ok(home.join(rest).to_string_lossy().to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn candidate_path(raw_path: &str) -> Result<PathBuf, String> {
+    let expanded = expand_home_prefix(raw_path)?;
+    if expanded.is_empty() {
         return Err("路径为空，请提供要访问的文件或目录路径。".to_string());
     }
 
     let candidate = {
-        let path = Path::new(trimmed);
+        let path = Path::new(&expanded);
         if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -159,5 +454,44 @@ mod tests {
         );
 
         let _ = fs::remove_file(file);
+    }
+
+    #[test]
+    fn resolve_read_path_expands_tilde_home_prefix() {
+        let home = user_home_dir().expect("home");
+        let dir = home.join(format!(".kivio_tilde_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("sample.csv");
+        fs::write(&file, "alpha,beta").expect("write");
+
+        let rel = dir
+            .strip_prefix(&home)
+            .expect("dir under home")
+            .to_string_lossy();
+        let tilde_path = format!("~/{}/sample.csv", rel);
+        let resolved = resolve_read_path(&tilde_path).expect("resolve tilde path");
+        assert_eq!(resolved, fs::canonicalize(&file).expect("canonical file"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_workspace_path_expands_tilde_prefix() {
+        let home = user_home_dir().expect("home");
+        let dir = home.join(format!(".kivio_tilde_ws_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("note.txt");
+        fs::write(&file, "ok").expect("write");
+
+        let rel = dir
+            .strip_prefix(&home)
+            .expect("dir under home")
+            .to_string_lossy();
+        let tilde_root = format!("~/{rel}");
+        let resolved =
+            resolve_workspace_path(&format!("~/{rel}/note.txt"), &[tilde_root]).expect("resolve");
+        assert_eq!(resolved, fs::canonicalize(&file).expect("canonical file"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -61,7 +61,14 @@ impl ChatToolDefinition {
         self.source == "native"
             && matches!(
                 self.name.as_str(),
-                "web_search" | "web_fetch" | "read_file" | "memory_read"
+                "web_search"
+                    | "web_fetch"
+                    | "read_file"
+                    | "list_dir"
+                    | "search_files"
+                    | "glob_files"
+                    | "stat_path"
+                    | "memory_read"
             )
     }
 }
@@ -302,16 +309,108 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__read_file".to_string(),
         name: "read_file".to_string(),
-        description: "Read any local text file that Kivio can access. Optional offset/limit are 1-based line numbers.".to_string(),
+        description: "Read a local text file. In a project conversation, paths are relative to the bound project root by default and absolute paths must stay inside that project. Outside a project, paths may be absolute, home-relative, or use ~/. Optional offset/limit are 1-based line numbers.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Absolute or home-relative file path" },
+                "path": { "type": "string", "description": "Project-relative, absolute, home-relative, or ~/ file path depending on workspace mode" },
                 "offset": { "type": "integer", "description": "1-based start line (optional)" },
                 "limit": { "type": "integer", "description": "Max lines to return (optional)" }
+            },
+            "required": ["path"]
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_list_dir_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__list_dir".to_string(),
+        name: "list_dir".to_string(),
+        description: "List files and directories. In a project conversation, paths are project-relative by default and cannot escape the project root.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Directory path, defaults to project root/current workspace" },
+                "include_hidden": { "type": "boolean", "description": "Include dotfiles and hidden entries" },
+                "max_entries": { "type": "integer", "description": "Maximum entries to return, default 200, max 500" }
+            }
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_search_files_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__search_files".to_string(),
+        name: "search_files".to_string(),
+        description: "Search text files for a literal query under a directory. In project conversations this is scoped to the project root and skips common dependency/build folders.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Literal text to search for" },
+                "path": { "type": "string", "description": "Directory path, defaults to project root/current workspace" },
+                "case_sensitive": { "type": "boolean", "description": "Case-sensitive matching, default false" },
+                "include_hidden": { "type": "boolean", "description": "Include dotfiles and hidden entries" },
+                "max_results": { "type": "integer", "description": "Maximum matches to return, default 100, max 200" }
+            },
+            "required": ["query"]
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_glob_files_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__glob_files".to_string(),
+        name: "glob_files".to_string(),
+        description: "Find files/directories by glob pattern such as \"src/**/*.tsx\". In project conversations this is scoped to the project root.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": { "type": "string", "description": "Glob pattern with *, ?, and ** support" },
+                "path": { "type": "string", "description": "Directory path to search, defaults to project root/current workspace" },
+                "include_hidden": { "type": "boolean", "description": "Include dotfiles and hidden entries" },
+                "max_results": { "type": "integer", "description": "Maximum paths to return, default 200, max 500" }
+            },
+            "required": ["pattern"]
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_stat_path_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__stat_path".to_string(),
+        name: "stat_path".to_string(),
+        description: "Return metadata for a file or directory. In project conversations this is scoped to the project root.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "File or directory path" }
             },
             "required": ["path"]
         }),
@@ -325,14 +424,14 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write_file".to_string(),
-        description: "Write or overwrite a text file under the user home directory only when the user explicitly asks to save/write/create a local file or provides a target path. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. After success, summarize the path/result without repeating the full file content unless the user explicitly asked for both.".to_string(),
+        description: "Write or overwrite a text file. In a project conversation, paths are relative to the bound project root by default and cannot escape it. Use only when the user explicitly asks to save/write/create a local file or provides a target path. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. After success, summarize the path/result without repeating the full file content unless the user explicitly asked for both.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Absolute or home-relative target path explicitly requested by the user" },
+                "path": { "type": "string", "description": "Project-relative path in project mode, otherwise an explicitly requested absolute/home/~/ path" },
                 "content": { "type": "string", "description": "Full text content to save" }
             },
             "required": ["path", "content"]
@@ -347,7 +446,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__edit_file".to_string(),
         name: "edit_file".to_string(),
-        description: "Replace old_string with new_string in a text file. Fails if old_string is missing or appears multiple times unless replace_all is true.".to_string(),
+        description: "Replace old_string with new_string in a text file. In a project conversation, paths are project-relative by default and cannot escape the project root. Fails if old_string is missing or appears multiple times unless replace_all is true.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -367,11 +466,98 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn native_create_dir_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__create_dir".to_string(),
+        name: "create_dir".to_string(),
+        description: "Create a directory, including missing parents. In project conversations the path is project-relative by default and cannot escape the project root.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Directory path to create" }
+            },
+            "required": ["path"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_delete_path_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__delete_path".to_string(),
+        name: "delete_path".to_string(),
+        description: "Delete a file or empty directory; set recursive=true to delete a non-empty directory. In project conversations the path cannot escape the project root and the project root itself cannot be deleted.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "File or directory path to delete" },
+                "recursive": { "type": "boolean", "description": "Delete non-empty directories recursively" }
+            },
+            "required": ["path"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_move_path_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__move_path".to_string(),
+        name: "move_path".to_string(),
+        description: "Move or rename a file/directory. In project conversations both paths are project-relative by default and cannot escape the project root.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "from": { "type": "string", "description": "Source path" },
+                "to": { "type": "string", "description": "Destination path" }
+            },
+            "required": ["from", "to"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_copy_path_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__copy_path".to_string(),
+        name: "copy_path".to_string(),
+        description: "Copy a file or directory. In project conversations both paths are project-relative by default and cannot escape the project root.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "from": { "type": "string", "description": "Source path" },
+                "to": { "type": "string", "description": "Destination path" }
+            },
+            "required": ["from", "to"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
 pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "run_command".to_string(),
-        description: "Run a shell command (build, test, etc.) in an existing working directory. Requires user approval. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
+        description: "Run a host shell command (build, test, etc.). In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -395,7 +581,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, basic ML, chart/data code, document analysis, and sandbox-compatible package installs. Common Pyodide packages such as numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, and micropip are auto-loaded when imported; missing compatible packages may be installed inside the sandbox with micropip. To analyze local documents or chat attachments, pass readable file paths in files; the app copies them into the Pyodide filesystem for this run. stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, basic ML, chart/data code, document analysis, and sandbox-compatible package installs. Bundled packages auto-load on import: numpy, matplotlib, pandas, scipy, sympy, scikit-learn, statsmodels, pillow, seaborn, openpyxl, xlrd, et_xmlfile, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as read_file; in project conversations these are project-relative and cannot escape the project root. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. chart.png, summary.csv, report.xlsx); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts and caches them under ~/Kivio/runs/<conversation>/<message>/ for ~7 days; use write_file when the user explicitly wants a durable deliverable at a specific host path (e.g. ~/Desktop). stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -579,9 +765,17 @@ pub fn list_native_builtin_tool_defs(
     }
     if native.read_file {
         tools.push(native_read_file_tool());
+        tools.push(native_list_dir_tool());
+        tools.push(native_search_files_tool());
+        tools.push(native_glob_files_tool());
+        tools.push(native_stat_path_tool());
     }
     if native.write_file {
         tools.push(native_write_file_tool());
+        tools.push(native_create_dir_tool());
+        tools.push(native_delete_path_tool());
+        tools.push(native_move_path_tool());
+        tools.push(native_copy_path_tool());
     }
     if native.edit_file {
         tools.push(native_edit_file_tool());

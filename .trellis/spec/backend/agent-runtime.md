@@ -392,3 +392,124 @@ push_assistant_message(..., conversation, ...).await?;
 ```
 
 Plan mode must be enforced by both prompt context and backend tool availability, and persisted state must be merged before the final save.
+
+## Scenario: Project Workspace Filesystem
+
+### 1. Scope / Trigger
+
+- Trigger: changes that connect Chat projects to local folders, alter `Conversation.project_id`, `ChatProject.root_path`, native filesystem tools, command cwd behavior, or model-facing tool descriptions.
+- Project workspace support is a workspace permission system, not an OS sandbox. Native filesystem tools are project-scoped in project conversations; `run_command` is a sensitive host-shell capability that starts from the project root by default and is governed by approval/user-intent semantics rather than a chroot-like guarantee.
+
+### 2. Signatures
+
+- Persistent project model: `ChatProject { id, name, description?, color?, root_path?, created_at, updated_at }`.
+- Persistent conversation model: `Conversation.project_id: Option<String>` with `folder: Option<String>` retained for legacy display/fallback.
+- Tauri commands:
+  - `chat_get_conversations(offset, limit, folder?, project_id?) -> { success, conversations }`
+  - `chat_create_conversation(provider_id?, model?, folder?, project_id?, assistant_id?) -> { success, conversation }`
+  - `chat_create_project(name, description?, color?, root_path?) -> { success, project }`
+  - `chat_update_project(project_id, name?, description?, color?, root_path?) -> { success, project }`
+  - `chat_update_conversation(conversation_id, ..., folder?, project_id?, ...) -> { success, conversation }`
+- Workspace resolver: `NativeToolWorkspace::{global(workspace_roots), project(project_id, project_name, root_path)}`.
+- Native project filesystem tools:
+  - Read/list/search/stat: `read_file`, `list_dir`, `search_files`, `glob_files`, `stat_path`
+  - Mutations: `write_file`, `edit_file`, `create_dir`, `delete_path`, `move_path`, `copy_path`
+  - Commands: `run_command`
+  - Python file inputs: `run_python.files`
+
+### 3. Contracts
+
+- Project membership uses `Conversation.project_id` as the durable link. `folder` is compatibility/display data and may be used only as a fallback for legacy conversations without `project_id`.
+- Project roots are normalized to canonical absolute directories before storage. Empty `root_path` means the project is chat-only until the user binds a folder. Project update commands must distinguish an omitted nullable field from an explicit `null`; explicit `null` clears `description`, `color`, or `root_path`, while omitted fields preserve the current value.
+- Tool execution resolves `conversation_id -> Conversation -> ChatProject -> root_path` at native tool call time.
+- In project mode, native file-tool relative paths resolve under the project root. Absolute paths for native file tools are accepted only if their canonical target stays inside the same root.
+- Missing write targets are checked by canonicalizing the nearest existing parent, then joining missing path components. This prevents parent symlink escapes.
+- Paths containing `..` are rejected before filesystem access.
+- In project mode, `run_command` defaults its startup `cwd` to the project root. Explicit `cwd` is validated as a workspace-local startup directory and must be an existing directory. The shell command itself remains a host-shell command; do not describe it as sharing the exact native file-tool boundary.
+- `run_command` must remain sensitive/approval-gated under the default policy. Model-facing instructions must say to honor explicit user constraints such as “do not use shell” or “do not access project-outside paths”, and to explain or ask before cross-directory, destructive, network, or environment-changing shell commands.
+- In project mode without a bound `root_path`, filesystem tools and command tools return a clear bind-folder-first error.
+- Outside project mode, existing global native-tool behavior remains the fallback: read paths use readable local path resolution, write paths use `workspaceRoots`/home constraints, and command cwd falls back to first workspace root or home.
+- Model-facing prompt/tool descriptions must distinguish native file tools from host shell behavior: project file paths are project-relative by default and backend validation enforces the native file-tool boundary; shell is a sensitive host capability with default project cwd and approval/user-intent controls.
+- Read-only project tools may join the native parallel-safe set only when they do not require approval: `read_file`, `list_dir`, `search_files`, `glob_files`, `stat_path`.
+- Mutation tools and `run_command` remain approval-sensitive and serial.
+- `copy_path` must reject copying a directory to itself or any descendant path before creating the destination, otherwise recursive copy can grow without bound.
+- Deleting a symlink inside the project deletes the link entry itself. Boundary checks for delete/move-source operations must not follow the final symlink target; parent directories are still resolved canonically so parent symlinks cannot escape the project.
+- `glob_files.pattern` is a pattern relative to the search `path`; absolute or `..`-containing path-like patterns must return a clear argument error instead of a silent empty match set.
+
+### 4. Validation & Error Matrix
+
+| Condition | Runtime behavior |
+|---|---|
+| Project id is provided when creating/updating a conversation | Resolve by id, set `conversation.project_id`, and mirror project name into `folder`. |
+| Only legacy `folder` is provided | Resolve project by name when possible; otherwise preserve folder as legacy grouping. |
+| Project root is empty | Store `root_path = None`; project remains chat-only for filesystem operations. |
+| Project update omits `root_path` | Preserve the existing project root. |
+| Project update explicitly clears `root_path` | Store `root_path = None`; project becomes chat-only for filesystem operations. |
+| Project root is relative, missing, or not a directory | Reject project create/update with a user-facing error. |
+| Project native file-tool path contains `..` | Reject before touching the filesystem. |
+| Project native file-tool absolute path resolves outside root | Reject with a project-root boundary error. |
+| Project write target does not exist and parent symlink points outside root | Reject after canonical parent resolution. |
+| `copy_path` directory destination equals or is inside source | Reject before creating the destination directory. |
+| Project `run_command.cwd` is omitted | Use project root. |
+| Project `run_command.cwd` resolves outside root or is not a directory | Reject before spawning the process. This validates only the startup directory, not every path the shell may touch after launch. |
+| User explicitly says not to use shell | Do not call `run_command`; if shell is required for verification, ask first. |
+| Project-internal symlink points outside root and `delete_path` targets the symlink | Delete the link entry without deleting or reading the outside target. |
+| `glob_files.pattern` is absolute or contains `..` | Return an argument error explaining that `pattern` is relative and `path` selects the search root. |
+| Legacy/no-root project uses file or command tool | Return an error telling the user to bind a local folder first. |
+| Non-project conversation uses tools | Preserve global workspace-root fallback behavior. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: user selects a sidebar project bound to `/repo/app`, asks to inspect `src/App.tsx`, and the model calls `read_file({ path: "src/App.tsx" })`.
+- Good: user asks to run tests in a project conversation; `run_command({ command: "npm test" })` runs from the project root without needing an explicit cwd.
+- Good: user asks for a repo-wide shell command that touches a sibling repo; the agent explains that shell is a host capability and asks for confirmation instead of claiming the project is a hard sandbox.
+- Base: old name-only projects continue showing conversations, but file tools explain that a folder must be bound first.
+- Bad: tool execution relies on the project name alone after rename; use `project_id` instead.
+- Bad: prompt says paths should stay in the project, but backend still accepts `/Users/...` outside root.
+- Bad: prompt implies `run_command` is sandboxed the same way as `read_file`, causing misleading safety claims.
+- Bad: user says “do not run shell”, but the model calls `run_command` for convenience.
+
+### 6. Tests Required
+
+- Storage compatibility: old conversations without `project_id` still list under the matching project name.
+- Conversation create/update: project id sets both `project_id` and legacy `folder`.
+- Project create/update: root path is canonicalized and invalid roots are rejected.
+- Project update: explicit `null` clears `root_path`, while omitted `root_path` leaves it unchanged.
+- Native path resolver: rejects `..`, absolute outside-root paths, and symlink parent escapes for missing write targets.
+- Native tools: read/list/search/stat succeed on project-relative paths; write/edit/delete/move/copy cannot escape root.
+- Native tools: `delete_path` removes a project-internal symlink whose target is outside root, without touching the target.
+- Native tools: `glob_files` rejects absolute or `..` path-like patterns with an explicit error.
+- Native tools: `copy_path` rejects directory copies into itself or descendants.
+- Command cwd: omitted cwd uses root; outside-root explicit cwd is rejected as a startup directory.
+- Prompt/tool definitions: new tool names appear in schemas, disabled-tool feedback, project-relative file-tool wording, and non-sandbox shell wording.
+- Frontend type/build: `npm run typecheck` verifies project id/root path propagation.
+- Backend checks: targeted `cargo test --manifest-path src-tauri/Cargo.toml native_tools mcp::types chat::agent::prepare -- --nocapture` or equivalent split filters, plus full `cargo test` when practical.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let full = resolve_workspace_path(path, workspace_roots)?;
+```
+
+This ignores the active conversation project and keeps writes scoped to global settings instead of the selected workspace.
+
+```rust
+let cwd = arguments.get("cwd").unwrap_or("~/");
+```
+
+This ignores the project default startup directory and approval semantics.
+
+#### Correct
+
+```rust
+let workspace = resolve_native_workspace(app, workspace_roots, native_ctx.as_ref())?;
+let full = resolve_tool_write_path(&workspace, path)?;
+```
+
+```rust
+let cwd = resolve_tool_existing_dir(&workspace, arguments.get("cwd").and_then(|v| v.as_str()))?;
+```
+
+Resolve the current project at tool-call time, use shared project-aware resolvers for native file paths and command startup cwd, and describe shell as a sensitive host capability rather than a project sandbox.
