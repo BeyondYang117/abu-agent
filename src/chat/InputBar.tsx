@@ -1503,17 +1503,17 @@ export function InputBar({
           </div>
         </div>
         {projectEntryEnabled && (
-          <div className="relative z-0 -mt-3 flex min-h-[40px] w-full items-end rounded-b-[24px] bg-[color-mix(in_srgb,var(--theme-surface-muted)_72%,transparent)] px-3 pb-2 pt-4 dark:bg-neutral-800/50">
+          <div className="relative z-10 mt-2 flex justify-start px-3">
             <button
               type="button"
               onClick={toggleProjectMenu}
               disabled={disabled}
               className={`inline-flex h-[26px] max-w-full items-center gap-1 rounded-full px-2 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 dark:focus-visible:ring-neutral-600 ${
                 projectMenuOpen
-                  ? 'bg-neutral-200 text-neutral-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:bg-neutral-700 dark:text-neutral-100'
+                  ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
                   : selectedProject
-                    ? 'bg-neutral-200/50 text-neutral-700 hover:bg-neutral-200/80 dark:bg-neutral-700/45 dark:text-neutral-200 dark:hover:bg-neutral-700/70'
-                    : 'bg-transparent text-neutral-500 hover:bg-neutral-200/70 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700/55 dark:hover:text-neutral-100'
+                    ? 'text-neutral-700 hover:bg-neutral-200/60 dark:text-neutral-200 dark:hover:bg-neutral-700/55'
+                    : 'text-neutral-500 hover:bg-neutral-200/50 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700/55 dark:hover:text-neutral-100'
               } disabled:cursor-default disabled:opacity-50`}
               aria-expanded={projectMenuOpen}
               aria-haspopup="menu"
