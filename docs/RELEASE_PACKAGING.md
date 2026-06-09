@@ -45,7 +45,7 @@ GitHub release packaging:
    ```
 6. Build and upload the Apple Silicon macOS DMG locally from Apple Silicon hardware.
 7. `.github/workflows/release.yml` builds the Windows release assets only:
-   - `windows` on `windows-latest` with `--bundles msi,nsis`
+   - `windows` on `windows-latest` with `--bundles nsis`
 8. Watch the workflow and inspect the release assets:
    ```bash
    gh run watch <RUN_ID> --repo abu/kivio --exit-status

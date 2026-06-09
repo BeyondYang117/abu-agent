@@ -38,7 +38,7 @@ jobs:
         include:
           - id: windows
             platform: windows-latest
-            args: "--bundles msi,nsis"
+            args: "--bundles nsis"
 
     runs-on: ${{ matrix.platform }}
 
@@ -80,7 +80,7 @@ jobs:
             Automated build artifacts for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
             - macOS: DMG is built and uploaded locally
-            - Windows: MSI + NSIS (.exe)
+            - Windows: NSIS (.exe)
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
