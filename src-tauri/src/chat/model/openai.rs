@@ -582,6 +582,7 @@ fn handle_openai_stream_tool_calls(
         {
             partial.name = Some(name.to_string());
         }
+        let mut started_now = false;
         if !partial.started {
             if let (Some(id), Some(name)) = (partial.id.as_deref(), partial.name.as_deref()) {
                 sink.emit(StreamPart::ToolCallStart {
@@ -589,6 +590,15 @@ fn handle_openai_stream_tool_calls(
                     name: name.to_string(),
                 })?;
                 partial.started = true;
+                started_now = true;
+            }
+        }
+        if started_now && !partial.arguments_raw.is_empty() {
+            if let Some(id) = partial.id.as_deref() {
+                sink.emit(StreamPart::ToolCallDelta {
+                    id: id.to_string(),
+                    delta: partial.arguments_raw.clone(),
+                })?;
             }
         }
         if let Some(delta) = call
@@ -598,7 +608,10 @@ fn handle_openai_stream_tool_calls(
             .filter(|value| !value.is_empty())
         {
             partial.arguments_raw.push_str(delta);
-            if let Some(id) = partial.id.as_deref() {
+            if partial.started {
+                let Some(id) = partial.id.as_deref() else {
+                    continue;
+                };
                 sink.emit(StreamPart::ToolCallDelta {
                     id: id.to_string(),
                     delta: delta.to_string(),
@@ -624,6 +637,18 @@ fn finish_tool_call_partials(
         } else {
             partial.arguments_raw
         };
+        if !partial.started {
+            sink.emit(StreamPart::ToolCallStart {
+                id: id.clone(),
+                name: name.clone(),
+            })?;
+            if raw != "{}" {
+                sink.emit(StreamPart::ToolCallDelta {
+                    id: id.clone(),
+                    delta: raw.clone(),
+                })?;
+            }
+        }
         let (arguments, arguments_parse_error) = super::parse_tool_arguments(&raw);
         let call = PendingToolCall {
             id,
@@ -731,6 +756,75 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["q"], "rust");
         assert!(matches!(parts[0], StreamPart::ToolCallStart { .. }));
+        assert!(matches!(
+            parts.last(),
+            Some(StreamPart::ToolCallDone { .. })
+        ));
+    }
+
+    #[test]
+    fn stream_tool_call_replays_arguments_buffered_before_start() {
+        let mut parts = Vec::new();
+        let mut partials = Vec::new();
+        let early_arguments = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": "{\"path\":\"demo.txt\""}
+                    }]
+                }
+            }]
+        });
+        let delayed_start = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_delayed",
+                        "function": {"name": "write_file"}
+                    }]
+                }
+            }]
+        });
+        let final_arguments = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": ",\"content\":\"ok\"}"}
+                    }]
+                }
+            }]
+        });
+
+        {
+            let mut sink = |part| {
+                parts.push(part);
+                Ok(())
+            };
+            handle_openai_stream_tool_calls(&early_arguments, &mut partials, &mut sink)
+                .expect("early arguments");
+        }
+        assert!(parts.is_empty());
+        let mut sink = |part| {
+            parts.push(part);
+            Ok(())
+        };
+        handle_openai_stream_tool_calls(&delayed_start, &mut partials, &mut sink)
+            .expect("delayed start");
+        handle_openai_stream_tool_calls(&final_arguments, &mut partials, &mut sink)
+            .expect("final arguments");
+        let calls = finish_tool_call_partials(&mut partials, &mut sink).expect("finish");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_delayed");
+        assert_eq!(calls[0].arguments["content"], "ok");
+        assert!(matches!(parts[0], StreamPart::ToolCallStart { .. }));
+        assert!(matches!(
+            &parts[1],
+            StreamPart::ToolCallDelta { delta, .. } if delta.contains("demo.txt")
+        ));
         assert!(matches!(
             parts.last(),
             Some(StreamPart::ToolCallDone { .. })

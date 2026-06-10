@@ -35,6 +35,7 @@
 - MCP approval/sensitivity must prefer tool metadata over name guessing: `destructiveHint == true`, `openWorldHint == true`, or `readOnlyHint == false` imply sensitive/confirmation behavior under confirm policies; `readOnlyHint == true` allows auto-approval for trusted non-sensitive tools. User-selected `approval_policy == "auto"` still bypasses approval prompts but must not make non-read-only MCP tools parallel.
 - Preserve MCP metadata across all backend/frontend boundaries: `annotations`, `outputSchema`, and tool result `structuredContent` must not be dropped. When a MCP result includes `structuredContent`, persist it on `ToolCallRecord` and include it in the model-facing tool content unless the text result already contains the same JSON.
 - Tool records emitted from the agent loop should include `trace_id = run_id` and a deterministic `span_id` such as `tool_round_<round>_<tool_call_id>` so future tracing/export can correlate events without changing storage shape.
+- Provider-streamed tool call chunks are real runtime state. When `ToolCallStart` arrives during tool planning, the backend must emit a backend-owned tool segment plus a pending `ToolCallRecord`; as argument deltas arrive it may update the same record with a compact progress preview, and when `ToolCallDone` arrives normal tool execution should continue with the same `tool_call_id`.
 - Serial by default: writes/edits, command execution, `run_python`, Skill runtime tools, Mixer image generation, memory mutation, arbitrary MCP tools, unknown calls, and invalid arguments.
 - `ask_user` is a native blocking clarification tool. It is allowed in Plan mode, bypasses sensitive tool approval, must stay serial, and must flush any pending parallel batch before waiting for the user's answer.
 - `ask_user` must persist `ToolCallRecord.structured_content.askUser` with `phase`, original `questions`, and final `answers`; emit `chat-user-prompt` while awaiting; resolve through `chat_submit_user_choice`; and append a stable matching `role: tool` result using the original `tool_call_id`.
@@ -59,12 +60,14 @@
 | `ask_user` awaiting answer | Emit inline prompt state, block the same run until answer/skip/cancel/timeout, then append the answer JSON as the tool result. |
 | Generation cancelled while a tool is running | Mark active and unstarted tool records cancelled where possible, append matching tool result messages in original order, and stop launching remaining calls. |
 | Tool timeout | Mark the tool record error and return the timeout message as tool content. |
+| Provider stream fails after a visible tool-call draft starts but before executable arguments are complete | Mark the draft `ToolCallRecord` error, preserve its tool segment, and return an `AgentRunResult` with `stream_outcome = "error"` instead of bubbling an invoke error that clears the conversation turn. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: a model emits `read_file` and `web_fetch` in one round; both enter running state before either finishes, but replay messages preserve model order.
 - Good: a trusted MCP server exposes two tools with `readOnlyHint: true`; both may overlap, and their `structuredContent` remains visible in records/events/model replay.
 - Good: a model emits `read_file`, `ask_user`, then `web_fetch`; the read finishes first, `ask_user` waits inline for the user's answer, and `web_fetch` starts only after the answer tool result is ready.
+- Good: a model starts streaming `write_file` arguments for a long generated file; the UI shows a backend-emitted pending tool record while arguments are being generated, and if the provider stream times out before `ToolCallDone`, the tool record becomes error without losing the user/assistant turn.
 - Base: a model emits only `run_python`; calls execute one at a time and keep old lifecycle behavior.
 - Bad: a scheduler parallelizes `skill_activate` or an arbitrary MCP stdio tool without explicit read-only annotations and races shared state or external side effects.
 - Bad: a scheduler includes `ask_user` in a parallel batch, allowing later tools to run before the user's answer has entered the transcript.
@@ -76,6 +79,7 @@
 - Prove explicitly read-only MCP tools overlap while destructive/open-world/non-read-only MCP tools remain serial.
 - Prove returned `response_messages` and persisted `tool_records` follow original call order.
 - Prove schema-invalid arguments produce error records and never call the executor or approval hook.
+- Prove streamed tool-call start/delta/done events emit backend-owned tool draft records and tool segments before execution.
 - Prove MCP `annotations`, `outputSchema`, and result `structuredContent` survive parse/registry/command/TypeScript boundaries.
 - Prove serial-only tools never overlap.
 - Prove `ask_user` remains allowed in Plan mode and remains serial between parallel-safe tools.
@@ -132,10 +136,12 @@ Keep provider-side multiple tool-call support separate from local execution conc
 ### 3. Contracts
 
 - The backend is the source of truth for segment order. The frontend must not synthesize guessed tool segments from `chat-tool` progress events.
+- Streaming tool-call preparation segments are also backend-owned. Frontend rendering may update the matching tool record from `chat-tool`, but it must not create a separate inferred segment when provider tool-call deltas arrive.
 - `SegmentBuilder` starts assistant-runtime segment ordering at `1000`. Auxiliary tool segments may use lower orders such as `100`.
 - Planning/tool-loop narration uses `kind = text`, `phase = tool_loop`. Final answer text uses `phase = synthesis` when tools are involved, otherwise `plain`.
 - Reasoning is represented by `kind = reasoning` segments and may appear during tool loop or synthesis. Within the same model step, reasoning must display before that step's text; reserve reasoning segments before text segments and keep frontend rendering compatible with older persisted messages that had the reverse order.
 - Tool calls must get `kind = tool` segments before or alongside visible tool progress. Visible skipped, cancelled, blocked, auxiliary, unknown, and invalid tool calls still need tool segments so the timeline has no holes.
+- Long-running tool argument generation is visible before execution: `ToolCallStart` should create a `kind = tool` segment and a pending tool record even though the tool has not executed yet. The label should distinguish argument/content generation from actual file mutation execution.
 - Hidden disabled built-in feedback such as disabled `web_search` retry hints must not create visible tool segments when it does not create a visible `ToolCallRecord`.
 - Persisted legacy fields are derived by `push_assistant_message` / edit helpers:
   - `content` is the `\n\n` join of all non-empty `kind = text` segments whose phase is `plain` or `synthesis`.
@@ -513,3 +519,149 @@ let cwd = resolve_tool_existing_dir(&workspace, arguments.get("cwd").and_then(|v
 ```
 
 Resolve the current project at tool-call time, use shared project-aware resolvers for native file paths and command startup cwd, and describe shell as a sensitive host capability rather than a project sandbox.
+
+## Scenario: Agent File Mutation Tools
+
+### 1. Scope / Trigger
+
+- Trigger: changes to native file mutation tools, tool-call result records, MCP structured content handling, agent file-editing prompts, or Chat UI rendering of file changes.
+- Agent coding edits should prefer targeted mutations with visible diff metadata. Whole-file writes remain available for new files, explicit full replacement, or requested deliverable files.
+
+### 2. Signatures
+
+- Native tools:
+  - `write_file({ path, content }) -> FileMutationResult`
+  - `edit_file({ path, old_string, new_string, replace_all? }) -> FileMutationResult`
+  - `patch({ patch }) -> FileMutationResult`
+- Patch grammar:
+
+```text
+*** Begin Patch
+*** Add File: path/to/new.ts
++content
+*** Update File: path/to/existing.ts
+@@
+ context
+-old
++new
+*** Delete File: path/to/old.ts
+*** End Patch
+```
+
+- Structured result:
+
+```rust
+FileMutationResult {
+    operation,
+    resolved_path?,
+    files: Vec<FileMutationFile>,
+    bytes_written,
+    additions,
+    removals,
+    diff,
+    warnings,
+    diagnostics,
+}
+```
+
+- Per-file result:
+
+```rust
+FileMutationFile {
+    path,
+    operation,
+    bytes_written,
+    additions,
+    removals,
+    diff,
+}
+```
+
+### 3. Contracts
+
+- `write_file`, `edit_file`, and `patch` must return `McpToolCallResult.structured_content = FileMutationResult` and a concise text `content` summary for model replay.
+- `ToolCallRecord.structured_content` must preserve file mutation metadata across backend events, persisted messages, and frontend rendering. Do not rely on raw JSON previews for file mutation UX.
+- Tool content sent back to the model may include `structuredContent` when the text summary does not already contain the same JSON, following the shared MCP structured-content contract.
+- `write_file` is for new files, explicit whole-file replacement, or requested deliverables. Existing-file small edits should use `edit_file`; multi-file or larger code edits should use `patch`.
+- Inline code/demo requests that do not ask to save locally must hide `write_file` and `patch` from the model. `edit_file` may remain available because project-edit requests still need targeted existing-file edits.
+- `patch` file headers must be project-relative: no absolute path, `~`, backslashes, roots, or `..`.
+- In project mode, all file mutations must use project-aware resolvers and stay inside the bound project root. Outside project mode, they must preserve global workspace/home write constraints.
+- File mutation tools must be serial, approval-sensitive tools. They must not join the native parallel-safe read-only batch.
+- File mutation tools must acquire per-resolved-path in-process locks before reading current contents and before applying writes/deletes. Multi-file `patch` locks all resolved targets in sorted order to avoid deadlocks.
+- `patch` must fully validate and build all planned file results before applying any filesystem changes. A failed hunk, missing target, duplicate target, traversal path, or existing Add File target must leave every involved file unchanged.
+- `edit_file` requires exactly one `old_string` match unless `replace_all` is true.
+- Diff metadata may use lightweight unified diffs, but additions/removals must match the per-file changed lines shown in the diff.
+- Frontend file mutation blocks should show operation, target path or file count, `+/-` stats, warnings/diagnostics, and an expandable diff.
+
+### 4. Validation & Error Matrix
+
+| Condition | Runtime behavior |
+|---|---|
+| `write_file.path` missing or content missing | Return a tool argument error before writing. |
+| `edit_file.old_string` is missing in the file | Return an error and do not write. |
+| `edit_file.old_string` appears multiple times and `replace_all` is false | Return an error telling the model to use a unique old string or `replace_all=true`. |
+| `edit_file.old_string == new_string` | Return a structured noop result with a warning and do not rewrite content. |
+| `patch` does not start/end with the required markers | Return a parse error and do not write. |
+| `patch` path is absolute, uses `~`, contains backslashes, roots, or `..` | Reject before resolving/writing. |
+| `patch` Add File target already exists | Return an error and do not write any file. |
+| `patch` Update/Delete target is not an existing file | Return an error and do not write any file. |
+| `patch` hunk content is not an exact unique match | Return an error and do not write any file. |
+| Two patch headers refer to the same textual or resolved file path | Return an error before applying. |
+| Concurrent runs mutate the same resolved path | Later mutation waits on the in-process path lock before reading/applying. |
+| Final provider synthesis fails after a successful mutation | Keep the completed tool record and surface provider failure separately. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: user asks to change one label in `src/App.tsx`; the model reads the file and calls `edit_file` with a unique old/new replacement.
+- Good: user asks for coordinated frontend/backend edits; the model emits a single `patch` that updates several files and the UI shows affected files plus diff stats.
+- Good: a provider fails after `patch` succeeds; the chat timeline still shows the patch block as completed with its files and diff metadata.
+- Base: user asks to create a new `index.html`; the model calls `write_file` and receives a structured create result.
+- Bad: regenerating an entire existing source file through `write_file` for a two-line change.
+- Bad: applying the first file in a multi-file patch before verifying later hunks; failures would leave a half-applied repo.
+- Bad: storing file mutation details only in model-facing text; the frontend cannot reliably render paths, stats, or diff.
+
+### 6. Tests Required
+
+- Native tools: `write_file` returns structured diff stats for create/overwrite.
+- Native tools: `edit_file` enforces uniqueness and returns a structured noop warning when old/new match.
+- Patch parser/apply: add, update, and delete files in one patch.
+- Patch safety: failed hunk does not partially modify earlier planned files.
+- Patch safety: traversal/absolute/backslash/tilde paths are rejected.
+- Patch safety: duplicate textual or resolved paths are rejected.
+- Runtime: `write_file`, `edit_file`, and `patch` preserve `structured_content` on `ToolCallRecord` and model replay content.
+- Prompt/filter: inline code-block requests remove `write_file` and `patch`, while save/edit intents keep them.
+- Frontend type/build: `npm run typecheck` verifies file mutation structured content parsing and `ToolCallBlock` rendering.
+- Backend checks: run targeted native/MCP/agent prompt tests plus full `cargo test --manifest-path src-tauri/Cargo.toml` when practical.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let after = apply_first_hunk_and_write(path)?;
+let second = apply_second_file()?; // can fail after the first file changed
+```
+
+This leaves the project half-mutated when a later file fails.
+
+```tsx
+const preview = toolCall.resultPreview || JSON.stringify(toolCall.raw)
+```
+
+This treats file changes as opaque text and loses reliable diff/status rendering.
+
+#### Correct
+
+```rust
+let plans = build_all_patch_plans(&ops)?;
+let _guard = acquire_file_mutation_locks(plans.iter().map(|p| p.path.clone()))?;
+let file_results = build_file_results(&plans)?;
+apply_plans(plans)?;
+```
+
+```tsx
+const mutation = structuredFileMutation(toolCall)
+return mutation ? <FileMutationDetails mutation={mutation} /> : <GenericToolDetails />
+```
+
+Build and validate all mutation plans first, lock resolved target paths before reading/applying, persist structured metadata, and render file changes from that structured contract.

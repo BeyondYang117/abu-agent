@@ -2950,7 +2950,9 @@ fn apply_inline_code_request_tool_filter(
     if !should_answer_inline_without_file_write(last_user_api_content) {
         return;
     }
-    tools.retain(|tool| !(tool.source == "native" && tool.name == "write_file"));
+    tools.retain(|tool| {
+        !(tool.source == "native" && matches!(tool.name.as_str(), "write_file" | "patch"))
+    });
 }
 
 fn should_answer_inline_without_file_write(last_user_api_content: Option<&str>) -> bool {
@@ -3830,12 +3832,38 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
             if record.name == "edit_file" {
                 if let Some(old) = parsed
                     .as_ref()
-                    .and_then(|value| value.get("old"))
+                    .and_then(|value| value.get("old_string").or_else(|| value.get("old")))
                     .and_then(|value| value.as_str())
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 {
                     lines.push(format!("Replace: {}", truncate_chars(old, 180)));
+                }
+            }
+        }
+        "patch" => {
+            if let Some(patch) = parsed
+                .as_ref()
+                .and_then(|value| value.get("patch"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let files = patch
+                    .lines()
+                    .filter_map(|line| {
+                        line.strip_prefix("*** Add File: ")
+                            .or_else(|| line.strip_prefix("*** Update File: "))
+                            .or_else(|| line.strip_prefix("*** Delete File: "))
+                    })
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .take(4)
+                    .collect::<Vec<_>>();
+                if files.is_empty() {
+                    lines.push(format!("Patch: {}", truncate_chars(patch, 180)));
+                } else {
+                    lines.push(format!("Patch files: {}", files.join(", ")));
                 }
             }
         }
@@ -4215,11 +4243,12 @@ mod tests {
     }
 
     #[test]
-    fn inline_code_request_filter_removes_only_write_file_for_fenced_code() {
+    fn inline_code_request_filter_removes_file_creation_tools_for_fenced_code() {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
             crate::mcp::types::native_edit_file_tool(),
+            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(
@@ -4229,19 +4258,22 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "read_file"));
         assert!(!tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(!tools.iter().any(|tool| tool.name == "patch"));
         assert!(tools.iter().any(|tool| tool.name == "edit_file"));
     }
 
     #[test]
-    fn inline_code_request_filter_does_not_hide_write_file_for_generic_demo_words() {
+    fn inline_code_request_filter_does_not_hide_file_tools_for_generic_demo_words() {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(&mut tools, Some("生成一个完整的 HTML demo"));
 
         assert!(tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(tools.iter().any(|tool| tool.name == "patch"));
     }
 
     #[test]
@@ -4249,11 +4281,13 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(&mut tools, Some("把完整 HTML 放到代码块里给我"));
 
         assert!(!tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(!tools.iter().any(|tool| tool.name == "patch"));
     }
 
     #[test]
@@ -4262,6 +4296,7 @@ mod tests {
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
             crate::mcp::types::native_edit_file_tool(),
+            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(
@@ -4271,6 +4306,7 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "write_file"));
         assert!(tools.iter().any(|tool| tool.name == "edit_file"));
+        assert!(tools.iter().any(|tool| tool.name == "patch"));
     }
 
     #[test]

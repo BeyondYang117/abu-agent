@@ -424,7 +424,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write_file".to_string(),
-        description: "Write or overwrite a text file. In a project conversation, paths are relative to the bound project root by default and cannot escape it. Use only when the user explicitly asks to save/write/create a local file or provides a target path. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. After success, summarize the path/result without repeating the full file content unless the user explicitly asked for both.".to_string(),
+        description: "Create a new text file or explicitly overwrite a whole file. In a project conversation, paths are relative to the bound project root by default and cannot escape it. For small edits to an existing file, prefer edit_file; for coordinated multi-file code edits, prefer patch. Use write_file only when the user explicitly asks to save/write/create a local file, provides a target path, or asks for a full-file replacement. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -446,7 +446,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__edit_file".to_string(),
         name: "edit_file".to_string(),
-        description: "Replace old_string with new_string in a text file. In a project conversation, paths are project-relative by default and cannot escape the project root. Fails if old_string is missing or appears multiple times unless replace_all is true.".to_string(),
+        description: "Make a targeted single-file text edit by replacing old_string with new_string. Prefer this for small edits to existing files. In a project conversation, paths are project-relative by default and cannot escape the project root. Fails if old_string is missing or appears multiple times unless replace_all is true. Returns structured file mutation metadata including unified diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -459,6 +459,30 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
                 "replace_all": { "type": "boolean" }
             },
             "required": ["path", "old_string", "new_string"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_patch_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__patch".to_string(),
+        name: "patch".to_string(),
+        description: "Apply a V4A/Codex-style multi-file patch for code edits. Prefer this for coordinated changes across files or larger existing-file edits. Supports *** Add File, *** Update File with @@ hunks using space/-/+ lines, and *** Delete File. Patch file paths must be project-relative and cannot contain '..' or absolute roots. Returns structured file mutation metadata including affected files, additions/removals, and a unified diff.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "patch": {
+                    "type": "string",
+                    "description": "Patch text beginning with *** Begin Patch and ending with *** End Patch"
+                }
+            },
+            "required": ["patch"]
         }),
         sensitive: true,
         annotations: None,
@@ -779,6 +803,7 @@ pub fn list_native_builtin_tool_defs(
     }
     if native.edit_file {
         tools.push(native_edit_file_tool());
+        tools.push(native_patch_tool());
     }
     if native.run_command {
         tools.push(native_run_command_tool());
@@ -866,6 +891,7 @@ mod tests {
         assert!(!native_memory_modify_tool().sensitive);
         assert!(native_write_file_tool().sensitive);
         assert!(native_edit_file_tool().sensitive);
+        assert!(native_patch_tool().sensitive);
         assert!(native_run_command_tool().sensitive);
     }
 
@@ -875,9 +901,10 @@ mod tests {
 
         assert!(tool.description.contains("explicitly asks"));
         assert!(tool.description.contains("code block"));
+        assert!(tool.description.contains("prefer edit_file"));
         assert!(tool
             .description
-            .contains("without repeating the full file content"));
+            .contains("structured file mutation metadata"));
     }
 
     #[test]

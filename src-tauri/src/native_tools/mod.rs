@@ -5,8 +5,8 @@ mod shell;
 
 pub use fetch::web_fetch;
 pub use files::{
-    copy_path, create_dir, delete_path, edit_file, glob_files, list_dir, move_path, read_file,
-    search_files, stat_path, write_file,
+    copy_path, create_dir, delete_path, edit_file, glob_files, list_dir, move_path, patch,
+    read_file, search_files, stat_path, write_file, FileMutationResult,
 };
 pub use sandbox_exports::{
     cleanup_stale_sandbox_exports, export_sandbox_artifacts, format_export_error,

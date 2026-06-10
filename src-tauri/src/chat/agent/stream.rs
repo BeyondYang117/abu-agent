@@ -3,9 +3,14 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::chat::model::{GenerateOutput, ModelError, PendingToolCall, StreamPart, StreamSink};
-use crate::chat::types::ChatMessageSegment;
+use crate::chat::types::{
+    ChatMessageSegment, ChatMessageSegmentKind, ChatMessageSegmentPhase, ToolCallRecord,
+    ToolCallStatus,
+};
+use crate::mcp::ChatToolDefinition;
 
 use super::host::AgentHost;
+use super::prepare::disabled_builtin_tool_feedback;
 use super::stop::{
     empty_assistant_response_error, final_assistant_api_message, pending_tool_calls_from_dsml,
     sanitize_assistant_text_response,
@@ -21,6 +26,101 @@ struct ChatStreamAccumulator {
 struct ChatStreamSnapshot {
     content: String,
     reasoning: String,
+}
+
+#[derive(Clone)]
+pub struct ToolCallDraftTracker {
+    inner: Arc<Mutex<ToolCallDraftState>>,
+}
+
+struct ToolCallDraftState {
+    tools: Vec<ChatToolDefinition>,
+    round: u32,
+    step_number: Option<u8>,
+    next_order: u32,
+    drafts: Vec<ToolCallDraft>,
+}
+
+struct ToolCallDraft {
+    model_name: String,
+    arguments_raw: String,
+    record: ToolCallRecord,
+    segment: ChatMessageSegment,
+    last_emitted_argument_chars: usize,
+    done: bool,
+}
+
+impl ToolCallDraftTracker {
+    pub fn new(
+        tools: Vec<ChatToolDefinition>,
+        round: u32,
+        step_number: Option<u8>,
+        first_order: u32,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(ToolCallDraftState {
+                tools,
+                round,
+                step_number,
+                next_order: first_order,
+                drafts: Vec::new(),
+            })),
+        }
+    }
+
+    pub fn has_started(&self) -> bool {
+        !self
+            .inner
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .drafts
+            .is_empty()
+    }
+
+    pub fn segments(&self) -> Vec<ChatMessageSegment> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .drafts
+            .iter()
+            .map(|draft| draft.segment.clone())
+            .collect()
+    }
+
+    pub fn has_unfinished_drafts(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .drafts
+            .iter()
+            .any(|draft| !draft.done)
+    }
+
+    pub fn mark_error(&self, error: &str) -> Vec<ToolCallRecord> {
+        let now = chrono::Local::now().timestamp();
+        let mut guard = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        for draft in &mut guard.drafts {
+            draft.record.status = ToolCallStatus::Error;
+            draft.record.completed_at = Some(now);
+            draft.record.duration_ms = draft
+                .record
+                .started_at
+                .map(|started| (now.saturating_sub(started) as u64).saturating_mul(1000))
+                .or(Some(0));
+            draft.record.error = Some(error.to_string());
+            draft.record.result_preview = None;
+            draft.record.structured_content = Some(tool_draft_structured_content(
+                &draft.model_name,
+                "error",
+                draft.arguments_raw.chars().count(),
+            ));
+        }
+        guard
+            .drafts
+            .iter()
+            .map(|draft| draft.record.clone())
+            .collect()
+    }
 }
 
 fn chat_stream_snapshot(accumulator: &Arc<Mutex<ChatStreamAccumulator>>) -> ChatStreamSnapshot {
@@ -40,6 +140,7 @@ pub struct AgentStreamSink<'a> {
     buffer_tool_planning_text: bool,
     text_segment: Option<ChatMessageSegment>,
     reasoning_segment: Option<ChatMessageSegment>,
+    tool_draft_tracker: Option<ToolCallDraftTracker>,
     text_buffer: String,
     text_suppressed: bool,
 }
@@ -53,6 +154,7 @@ impl<'a> AgentStreamSink<'a> {
         buffer_tool_planning_text: bool,
         text_segment: Option<ChatMessageSegment>,
         reasoning_segment: Option<ChatMessageSegment>,
+        tool_draft_tracker: Option<ToolCallDraftTracker>,
     ) -> Self {
         Self {
             host,
@@ -63,6 +165,7 @@ impl<'a> AgentStreamSink<'a> {
             buffer_tool_planning_text,
             text_segment,
             reasoning_segment,
+            tool_draft_tracker,
             text_buffer: String::new(),
             text_suppressed: false,
         }
@@ -117,6 +220,170 @@ impl<'a> AgentStreamSink<'a> {
         let delta = std::mem::take(&mut self.text_buffer);
         self.emit_text_delta(&delta);
     }
+
+    fn emit_tool_call_start(&mut self, id: String, name: String) {
+        let Some(tracker) = self.tool_draft_tracker.as_ref() else {
+            return;
+        };
+        let mut guard = tracker.inner.lock().unwrap_or_else(|err| err.into_inner());
+        if guard.drafts.iter().any(|draft| draft.record.id == id) {
+            return;
+        }
+        if find_tool_definition(&guard.tools, &name).is_none()
+            && disabled_builtin_tool_feedback(&name).is_some()
+        {
+            return;
+        }
+        let (record_name, source, server_id, sensitive) =
+            if let Some(tool) = find_tool_definition(&guard.tools, &name) {
+                (
+                    tool.name.clone(),
+                    tool.source.clone(),
+                    tool.server_id.clone(),
+                    tool.sensitive,
+                )
+            } else {
+                (name.clone(), "unknown".to_string(), None, false)
+            };
+        let order = guard.next_order;
+        guard.next_order = guard.next_order.saturating_add(1);
+        let now = chrono::Local::now().timestamp();
+        let segment = ChatMessageSegment {
+            id: format!("seg_{}_tool_{}", order, id),
+            kind: ChatMessageSegmentKind::Tool,
+            phase: ChatMessageSegmentPhase::ToolLoop,
+            order,
+            step_number: guard.step_number,
+            round: Some(guard.round),
+            text: None,
+            tool_call_id: Some(id.clone()),
+        };
+        let record = ToolCallRecord {
+            id: id.clone(),
+            name: record_name,
+            source,
+            server_id,
+            arguments: tool_draft_arguments(&name, "generating_arguments", 0),
+            status: ToolCallStatus::Pending,
+            result_preview: Some(tool_draft_preview(&name, "generating_arguments", 0)),
+            error: None,
+            duration_ms: None,
+            started_at: Some(now),
+            completed_at: None,
+            round: guard.round,
+            sensitive,
+            artifacts: Vec::new(),
+            trace_id: Some(self.run_id.clone()),
+            span_id: Some(tool_draft_span_id(guard.round, &id)),
+            structured_content: Some(tool_draft_structured_content(
+                &name,
+                "generating_arguments",
+                0,
+            )),
+        };
+        guard.drafts.push(ToolCallDraft {
+            model_name: name,
+            arguments_raw: String::new(),
+            record: record.clone(),
+            segment: segment.clone(),
+            last_emitted_argument_chars: 0,
+            done: false,
+        });
+        drop(guard);
+        self.host.emit_stream_delta(
+            &self.conversation_id,
+            &self.run_id,
+            &self.message_id,
+            "",
+            None,
+            Some(&segment),
+        );
+        self.host.emit_tool_record(
+            &self.conversation_id,
+            &self.run_id,
+            &self.message_id,
+            &record,
+        );
+    }
+
+    fn emit_tool_call_delta(&mut self, id: String, delta: String) {
+        let Some(tracker) = self.tool_draft_tracker.as_ref() else {
+            return;
+        };
+        let record_to_emit = {
+            let mut guard = tracker.inner.lock().unwrap_or_else(|err| err.into_inner());
+            let Some(draft) = guard.drafts.iter_mut().find(|draft| draft.record.id == id) else {
+                return;
+            };
+            draft.arguments_raw.push_str(&delta);
+            let chars = draft.arguments_raw.chars().count();
+            if chars == 0 || chars.saturating_sub(draft.last_emitted_argument_chars) < 2048 {
+                return;
+            }
+            draft.last_emitted_argument_chars = chars;
+            draft.record.arguments =
+                tool_draft_arguments(&draft.model_name, "generating_arguments", chars);
+            draft.record.result_preview = Some(tool_draft_preview(
+                &draft.model_name,
+                "generating_arguments",
+                chars,
+            ));
+            draft.record.structured_content = Some(tool_draft_structured_content(
+                &draft.model_name,
+                "generating_arguments",
+                chars,
+            ));
+            Some(draft.record.clone())
+        };
+        if let Some(record) = record_to_emit {
+            self.host.emit_tool_record(
+                &self.conversation_id,
+                &self.run_id,
+                &self.message_id,
+                &record,
+            );
+        }
+    }
+
+    fn emit_tool_call_done(&mut self, call: &PendingToolCall) {
+        let Some(tracker) = self.tool_draft_tracker.as_ref() else {
+            return;
+        };
+        let record_to_emit = {
+            let mut guard = tracker.inner.lock().unwrap_or_else(|err| err.into_inner());
+            let Some(draft) = guard
+                .drafts
+                .iter_mut()
+                .find(|draft| draft.record.id == call.id)
+            else {
+                return;
+            };
+            draft.done = true;
+            draft.arguments_raw = call.arguments_raw.clone();
+            let chars = draft.arguments_raw.chars().count();
+            draft.last_emitted_argument_chars = chars;
+            draft.record.arguments = call.arguments_raw.clone();
+            draft.record.result_preview = Some(tool_draft_preview(
+                &draft.model_name,
+                "arguments_ready",
+                chars,
+            ));
+            draft.record.structured_content = Some(tool_draft_structured_content(
+                &draft.model_name,
+                "arguments_ready",
+                chars,
+            ));
+            Some(draft.record.clone())
+        };
+        if let Some(record) = record_to_emit {
+            self.host.emit_tool_record(
+                &self.conversation_id,
+                &self.run_id,
+                &self.message_id,
+                &record,
+            );
+        }
+    }
 }
 
 impl StreamSink for AgentStreamSink<'_> {
@@ -141,14 +408,75 @@ impl StreamSink for AgentStreamSink<'_> {
                 );
             }
             StreamPart::Error { message } => return Err(ModelError::new(message)),
-            StreamPart::Finish { .. }
-            | StreamPart::ToolCallStart { .. }
-            | StreamPart::ToolCallDelta { .. }
-            | StreamPart::ToolCallDone { .. }
-            | StreamPart::ToolResult { .. } => {}
+            StreamPart::ToolCallStart { id, name } => self.emit_tool_call_start(id, name),
+            StreamPart::ToolCallDelta { id, delta } => self.emit_tool_call_delta(id, delta),
+            StreamPart::ToolCallDone { call } => self.emit_tool_call_done(&call),
+            StreamPart::Finish { .. } | StreamPart::ToolResult { .. } => {}
         }
         Ok(())
     }
+}
+
+fn find_tool_definition<'a>(
+    tools: &'a [ChatToolDefinition],
+    function_name: &str,
+) -> Option<&'a ChatToolDefinition> {
+    tools
+        .iter()
+        .find(|tool| tool.openai_tool_name() == function_name || tool.name == function_name)
+}
+
+fn tool_draft_span_id(round: u32, tool_call_id: &str) -> String {
+    format!("tool_round_{}_{}", round, tool_call_id)
+}
+
+fn tool_draft_arguments(name: &str, phase: &str, argument_chars: usize) -> String {
+    serde_json::json!({
+        "_kivioToolDraft": true,
+        "tool": name,
+        "phase": phase,
+        "argumentChars": argument_chars,
+    })
+    .to_string()
+}
+
+fn tool_draft_structured_content(name: &str, phase: &str, argument_chars: usize) -> Value {
+    serde_json::json!({
+        "toolDraft": {
+            "toolName": name,
+            "phase": phase,
+            "argumentChars": argument_chars,
+        }
+    })
+}
+
+fn tool_draft_preview(name: &str, phase: &str, argument_chars: usize) -> String {
+    if phase == "arguments_ready" {
+        return "工具参数已生成，等待调用…".to_string();
+    }
+    let prefix = match name {
+        "write_file" => "正在生成文件内容",
+        "edit_file" => "正在生成编辑参数",
+        "patch" => "正在生成补丁",
+        _ => "正在生成工具参数",
+    };
+    if argument_chars == 0 {
+        format!("{prefix}…")
+    } else {
+        format!("{prefix}…已收到 {} 字符", format_count(argument_chars))
+    }
+}
+
+fn format_count(value: usize) -> String {
+    let text = value.to_string();
+    let mut out = String::new();
+    for (idx, ch) in text.chars().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }
 
 pub fn should_flush_tool_planning_text_buffer(buffer: &str) -> bool {
@@ -295,7 +623,95 @@ pub fn validate_stream_output(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::chat::agent::execute::ToolExecutionContext;
+    use crate::chat::agent::host::AgentHostFuture;
+    use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
+    use crate::mcp::types::native_write_file_tool;
+
+    #[derive(Default)]
+    struct TestHost {
+        records: Mutex<Vec<ToolCallRecord>>,
+        segments: Mutex<Vec<ChatMessageSegment>>,
+        done_reasons: Mutex<Vec<String>>,
+    }
+
+    impl AgentHost for TestHost {
+        fn emit_stream_delta(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _delta: &str,
+            _reasoning_delta: Option<&str>,
+            segment: Option<&ChatMessageSegment>,
+        ) {
+            if let Some(segment) = segment {
+                self.segments
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .push(segment.clone());
+            }
+        }
+
+        fn emit_stream_done(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            reason: &str,
+            _full: &str,
+        ) {
+            self.done_reasons
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(reason.to_string());
+        }
+
+        fn emit_tool_record(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            record: &ToolCallRecord,
+        ) {
+            self.records
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(record.clone());
+        }
+
+        fn request_tool_approval<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+        ) -> AgentHostFuture<'a, bool> {
+            Box::pin(async { true })
+        }
+
+        fn request_user_response<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+            _prompt: AskUserPromptPayload,
+        ) -> AgentHostFuture<'a, AskUserResponseResult> {
+            Box::pin(async { crate::chat::ask_user::skipped_response() })
+        }
+
+        fn is_generation_active(&self, _conversation_id: &str, _generation: u64) -> bool {
+            true
+        }
+
+        fn wait_for_generation_inactive<'a>(
+            &'a self,
+            _conversation_id: &'a str,
+            _generation: u64,
+        ) -> AgentHostFuture<'a, ()> {
+            Box::pin(async { std::future::pending::<()>().await })
+        }
+    }
 
     #[test]
     fn tool_planning_text_buffer_delays_possible_dsml_prefix() {
@@ -305,6 +721,138 @@ mod tests {
             "普通回答已经足够长，可以开始流式显示了"
         ));
         assert!(should_flush_tool_planning_text_buffer("first line\n"));
+    }
+
+    #[test]
+    fn tool_call_stream_parts_emit_draft_records_and_segments() {
+        let host = TestHost::default();
+        let tracker = ToolCallDraftTracker::new(vec![native_write_file_tool()], 2, Some(3), 1002);
+        let mut sink = AgentStreamSink::new(
+            &host,
+            "conversation",
+            "run",
+            "message",
+            true,
+            None,
+            None,
+            Some(tracker.clone()),
+        );
+
+        sink.emit(StreamPart::ToolCallStart {
+            id: "call_write".to_string(),
+            name: "write_file".to_string(),
+        })
+        .expect("start should emit");
+        sink.emit(StreamPart::ToolCallDelta {
+            id: "call_write".to_string(),
+            delta: "{\"path\":\"demo.html\",\"content\":\"".to_string(),
+        })
+        .expect("delta should emit");
+        let call = PendingToolCall {
+            id: "call_write".to_string(),
+            function_name: "write_file".to_string(),
+            arguments: serde_json::json!({
+                "path": "demo.html",
+                "content": "<html></html>"
+            }),
+            arguments_raw: "{\"path\":\"demo.html\",\"content\":\"<html></html>\"}".to_string(),
+            arguments_parse_error: None,
+        };
+        sink.emit(StreamPart::ToolCallDone { call })
+            .expect("done should emit");
+
+        let records = host.records.lock().unwrap_or_else(|err| err.into_inner());
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, "call_write");
+        assert_eq!(records[0].name, "write_file");
+        assert!(matches!(records[0].status, ToolCallStatus::Pending));
+        assert!(records[0]
+            .result_preview
+            .as_deref()
+            .unwrap_or_default()
+            .contains("正在生成文件内容"));
+        assert_eq!(records[0].trace_id.as_deref(), Some("run"));
+        assert_eq!(
+            records[0].span_id.as_deref(),
+            Some("tool_round_2_call_write")
+        );
+        assert!(records[1]
+            .result_preview
+            .as_deref()
+            .unwrap_or_default()
+            .contains("工具参数已生成"));
+        assert!(records[1].arguments.contains("demo.html"));
+
+        let segments = host.segments.lock().unwrap_or_else(|err| err.into_inner());
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].kind, ChatMessageSegmentKind::Tool);
+        assert_eq!(segments[0].phase, ChatMessageSegmentPhase::ToolLoop);
+        assert_eq!(segments[0].tool_call_id.as_deref(), Some("call_write"));
+        assert_eq!(segments[0].order, 1002);
+        assert!(tracker.has_started());
+        assert!(!tracker.has_unfinished_drafts());
+    }
+
+    #[test]
+    fn tool_call_draft_error_preserves_backend_record_after_stream_failure() {
+        let host = TestHost::default();
+        let tracker = ToolCallDraftTracker::new(vec![native_write_file_tool()], 1, Some(1), 1000);
+        let mut sink = AgentStreamSink::new(
+            &host,
+            "conversation",
+            "run",
+            "message",
+            true,
+            None,
+            None,
+            Some(tracker.clone()),
+        );
+
+        sink.emit(StreamPart::ToolCallStart {
+            id: "call_write".to_string(),
+            name: "write_file".to_string(),
+        })
+        .expect("start should emit");
+        sink.emit(StreamPart::ToolCallDelta {
+            id: "call_write".to_string(),
+            delta: "{\"path\":\"large.html\",\"content\":\"".to_string(),
+        })
+        .expect("delta should emit");
+
+        let failed = tracker.mark_error("Chat tools planning read body failed");
+
+        assert_eq!(failed.len(), 1);
+        let record = &failed[0];
+        assert_eq!(record.id, "call_write");
+        assert_eq!(record.name, "write_file");
+        assert!(matches!(record.status, ToolCallStatus::Error));
+        assert_eq!(
+            record.error.as_deref(),
+            Some("Chat tools planning read body failed")
+        );
+        assert_eq!(record.trace_id.as_deref(), Some("run"));
+        assert_eq!(record.span_id.as_deref(), Some("tool_round_1_call_write"));
+        assert_eq!(
+            record
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.pointer("/toolDraft/phase"))
+                .and_then(Value::as_str),
+            Some("error")
+        );
+        assert_eq!(
+            record
+                .structured_content
+                .as_ref()
+                .and_then(|value| value.pointer("/toolDraft/argumentChars"))
+                .and_then(Value::as_u64),
+            Some("{\"path\":\"large.html\",\"content\":\"".chars().count() as u64)
+        );
+
+        let segments = host.segments.lock().unwrap_or_else(|err| err.into_inner());
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].tool_call_id.as_deref(), Some("call_write"));
+        assert!(tracker.has_unfinished_drafts());
     }
 
     #[test]

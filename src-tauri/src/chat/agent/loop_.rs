@@ -26,7 +26,10 @@ use super::stop::{
     merge_reasoning, patch_system_message, sanitize_assistant_text_response,
     step_limit_system_message,
 };
-use super::stream::{should_emit_done, validate_stream_output, AgentStreamSink, ChatStreamOutput};
+use super::stream::{
+    should_emit_done, validate_stream_output, AgentStreamSink, ChatStreamOutput,
+    ToolCallDraftTracker,
+};
 use super::types::{
     AgentPhase, AgentRunConfig, AgentRunResult, AgentStepResult, AgentStopReason, AgentStreamPolicy,
 };
@@ -139,6 +142,22 @@ impl SegmentBuilder {
         segments
     }
 
+    fn append_existing_segments(
+        &mut self,
+        mut segments: Vec<ChatMessageSegment>,
+    ) -> Vec<ChatMessageSegment> {
+        for segment in &segments {
+            self.next_order = self.next_order.max(segment.order.saturating_add(1));
+        }
+        self.segments.extend(segments.iter().cloned());
+        segments.sort_by_key(|segment| segment.order);
+        segments
+    }
+
+    fn next_order(&self) -> u32 {
+        self.next_order
+    }
+
     fn all(self) -> Vec<ChatMessageSegment> {
         self.segments
     }
@@ -225,6 +244,12 @@ pub async fn run_agent_loop(
                 Some(round),
                 &format!("step_{step_number}_text"),
             );
+            let planning_tool_drafts = ToolCallDraftTracker::new(
+                prepared.active_tools.clone(),
+                round,
+                Some(step_number),
+                segment_builder.next_order(),
+            );
             let planning_result = if config.stream_enabled {
                 match stream_scoped_chat_completion_inner(
                     config.state,
@@ -244,6 +269,7 @@ pub async fn run_agent_loop(
                     prepared.stream_policy,
                     Some(planning_text_segment.clone()),
                     Some(planning_reasoning_segment.clone()),
+                    Some(planning_tool_drafts.clone()),
                 )
                 .await
                 {
@@ -255,6 +281,23 @@ pub async fn run_agent_loop(
                             message: stream.to_openai_compatible_message(),
                             streamed: true,
                         })
+                    }
+                    Err(err) if planning_tool_drafts.has_started() => {
+                        eprintln!(
+                            "Chat tools planning stream interrupted while generating tool arguments; surfacing tool draft error without retry: {}",
+                            err
+                        );
+                        return Ok(tool_planning_failed_run_result(
+                            host,
+                            &config,
+                            segment_builder,
+                            planning_text_segment.clone(),
+                            planning_tool_drafts,
+                            &planning_reasoning_parts,
+                            generated_api_messages,
+                            steps,
+                            err.to_string(),
+                        ));
                     }
                     Err(err) if err.is_stream_read_interrupted() => {
                         eprintln!(
@@ -440,22 +483,28 @@ pub async fn run_agent_loop(
 
             let visible_tool_calls =
                 visible_tool_segment_calls(&tools, &blocked_tool_calls, &tool_calls);
-            let tool_segments = segment_builder.append_tool_calls(
-                ChatMessageSegmentPhase::ToolLoop,
-                Some(step_number),
-                round,
-                &visible_tool_calls,
-            );
-            for segment in &tool_segments {
-                host.emit_stream_delta(
-                    &config.conversation_id,
-                    &config.run_id,
-                    &config.message_id,
-                    "",
-                    None,
-                    Some(segment),
+            let draft_tool_segments = planning_tool_drafts.segments();
+            let tool_segments = if draft_tool_segments.is_empty() {
+                let tool_segments = segment_builder.append_tool_calls(
+                    ChatMessageSegmentPhase::ToolLoop,
+                    Some(step_number),
+                    round,
+                    &visible_tool_calls,
                 );
-            }
+                for segment in &tool_segments {
+                    host.emit_stream_delta(
+                        &config.conversation_id,
+                        &config.run_id,
+                        &config.message_id,
+                        "",
+                        None,
+                        Some(segment),
+                    );
+                }
+                tool_segments
+            } else {
+                segment_builder.append_existing_segments(draft_tool_segments)
+            };
             step_segments.extend(tool_segments);
 
             let assistant_message = assistant_api_message_for_tool_calls(&message, &tool_calls);
@@ -620,9 +669,57 @@ pub async fn run_agent_loop(
             synthesis_stream_policy,
             Some(response_segment.clone()),
             Some(response_reasoning_segment.clone()),
+            None,
         )
         .await
-        .map_err(|err| err.to_string())?;
+        .map_err(|err| {
+            if tool_records.is_empty() {
+                err.to_string()
+            } else {
+                eprintln!(
+                    "Chat synthesis stream failed after tool records; preserving tool results with fallback: {}",
+                    err
+                );
+                String::new()
+            }
+        });
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(err) if err.is_empty() && !tool_records.is_empty() => {
+                let fallback = synthesis_failed_fallback_response(&config.language);
+                host.emit_stream_delta(
+                    &config.conversation_id,
+                    &config.run_id,
+                    &config.message_id,
+                    &fallback,
+                    None,
+                    Some(&response_segment),
+                );
+                host.emit_stream_done(
+                    &config.conversation_id,
+                    &config.run_id,
+                    &config.message_id,
+                    "done",
+                    &fallback,
+                );
+                if !generated_api_messages.is_empty() {
+                    generated_api_messages.push(final_assistant_api_message(&fallback, None));
+                }
+                return Ok(AgentRunResult {
+                    content: fallback.clone(),
+                    reasoning: merge_reasoning(&planning_reasoning_parts, None),
+                    tool_records,
+                    segments: {
+                        segment_builder.append_text_from_template(&response_segment, fallback);
+                        segment_builder.all()
+                    },
+                    api_messages: generated_api_messages,
+                    steps,
+                    stream_outcome: "error".to_string(),
+                });
+            }
+            Err(err) => return Err(err),
+        };
         if stream.cancelled {
             if !tool_records.is_empty() {
                 let stored_content = if stream.content.trim().is_empty() {
@@ -696,7 +793,7 @@ pub async fn run_agent_loop(
             (response, reasoning, final_reasoning_for_api)
         }
     } else {
-        let message = tokio::select! {
+        let message_result = tokio::select! {
             result = call_chat_completion_message(
                 config.state,
                 &config.provider,
@@ -709,7 +806,7 @@ pub async fn run_agent_loop(
                 &config.conversation_id,
                 &config.message_id,
                 "Chat API",
-            ) => result?,
+            ) => result,
             _ = host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
                 host.emit_stream_done(
                     &config.conversation_id,
@@ -720,6 +817,47 @@ pub async fn run_agent_loop(
                 );
                 return Err("cancelled".to_string());
             }
+        };
+        let message = match message_result {
+            Ok(message) => message,
+            Err(err) if !tool_records.is_empty() => {
+                eprintln!(
+                    "Chat synthesis request failed after tool records; preserving tool results with fallback: {}",
+                    err
+                );
+                let fallback = synthesis_failed_fallback_response(&config.language);
+                host.emit_stream_delta(
+                    &config.conversation_id,
+                    &config.run_id,
+                    &config.message_id,
+                    &fallback,
+                    None,
+                    Some(&response_segment),
+                );
+                host.emit_stream_done(
+                    &config.conversation_id,
+                    &config.run_id,
+                    &config.message_id,
+                    "done",
+                    &fallback,
+                );
+                if !generated_api_messages.is_empty() {
+                    generated_api_messages.push(final_assistant_api_message(&fallback, None));
+                }
+                return Ok(AgentRunResult {
+                    content: fallback.clone(),
+                    reasoning: merge_reasoning(&planning_reasoning_parts, None),
+                    tool_records,
+                    segments: {
+                        segment_builder.append_text_from_template(&response_segment, fallback);
+                        segment_builder.all()
+                    },
+                    api_messages: generated_api_messages,
+                    steps,
+                    stream_outcome: "error".to_string(),
+                });
+            }
+            Err(err) => return Err(err),
         };
         let response = sanitize_assistant_text_response(
             message
@@ -1440,6 +1578,7 @@ async fn stream_scoped_chat_completion_inner(
     policy: AgentStreamPolicy,
     text_segment: Option<ChatMessageSegment>,
     reasoning_segment: Option<ChatMessageSegment>,
+    tool_draft_tracker: Option<ToolCallDraftTracker>,
 ) -> Result<ChatStreamOutput, ModelError> {
     let request = generate_request_from_openai_messages(
         model,
@@ -1462,6 +1601,7 @@ async fn stream_scoped_chat_completion_inner(
         matches!(policy, AgentStreamPolicy::PlanningNoDoneUntilNoTools),
         text_segment,
         reasoning_segment,
+        tool_draft_tracker.clone(),
     );
     let output = tokio::select! {
         result = stream_with_chat_provider(
@@ -1495,7 +1635,12 @@ async fn stream_scoped_chat_completion_inner(
         snapshot_reasoning,
     );
     validate_stream_output(label, policy, &stream_output).map_err(|err| {
-        host.emit_stream_done(conversation_id, run_id, message_id, "error", "");
+        if !tool_draft_tracker
+            .as_ref()
+            .is_some_and(|tracker| tracker.has_unfinished_drafts())
+        {
+            host.emit_stream_done(conversation_id, run_id, message_id, "error", "");
+        }
         ModelError::new(err)
     })?;
     if should_emit_done(policy, &stream_output) {
@@ -1519,11 +1664,104 @@ fn empty_synthesis_fallback_response(language: &str) -> String {
     }
 }
 
+fn synthesis_failed_fallback_response(language: &str) -> String {
+    if language.starts_with("zh") {
+        "工具调用已经完成，但最终总结生成失败。上方工具结果已保存在本轮回复中，你可以继续追问，或让我重新生成总结。".to_string()
+    } else {
+        "The tool calls completed, but final summary generation failed. The tool results above were saved with this reply; you can continue from them or regenerate the summary.".to_string()
+    }
+}
+
+fn tool_planning_failed_fallback_response(language: &str) -> String {
+    if language.starts_with("zh") {
+        "工具调用参数生成失败，这一步还没有真正执行写入。主对话已保留，你可以让我缩小范围、改用补丁，或重新生成。".to_string()
+    } else {
+        "Tool-call argument generation failed before the write actually ran. This conversation was preserved; you can ask me to narrow the scope, use a patch, or regenerate.".to_string()
+    }
+}
+
 fn stopped_generation_content(language: &str) -> String {
     if language.starts_with("zh") {
         "已停止生成。".to_string()
     } else {
         "Generation stopped.".to_string()
+    }
+}
+
+fn tool_planning_failed_run_result(
+    host: &dyn AgentHost,
+    config: &AgentRunConfig<'_>,
+    mut segment_builder: SegmentBuilder,
+    planning_text_segment: ChatMessageSegment,
+    tool_draft_tracker: ToolCallDraftTracker,
+    planning_reasoning_parts: &[String],
+    mut generated_api_messages: Vec<Value>,
+    mut steps: Vec<AgentStepResult>,
+    error: String,
+) -> AgentRunResult {
+    let failed_records = tool_draft_tracker.mark_error(&error);
+    for record in &failed_records {
+        host.emit_tool_record(
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            record,
+        );
+    }
+
+    let mut step_segments = segment_builder.append_existing_segments(tool_draft_tracker.segments());
+    let content = tool_planning_failed_fallback_response(&config.language);
+    let mut final_segment = planning_text_segment;
+    final_segment.phase = ChatMessageSegmentPhase::Synthesis;
+    final_segment.round = None;
+    if let Some(segment) =
+        segment_builder.append_text_from_template(&final_segment, content.clone())
+    {
+        step_segments.push(segment.clone());
+        host.emit_stream_delta(
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            &content,
+            None,
+            Some(&segment),
+        );
+    } else {
+        host.emit_stream_delta(
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            &content,
+            None,
+            None,
+        );
+    }
+    host.emit_stream_done(
+        &config.conversation_id,
+        &config.run_id,
+        &config.message_id,
+        "done",
+        &content,
+    );
+    generated_api_messages.push(final_assistant_api_message(&content, None));
+    steps.push(AgentStepResult {
+        step_number: final_segment.step_number.unwrap_or_default(),
+        phase: AgentPhase::ToolLoop,
+        response_messages: Vec::new(),
+        tool_records: failed_records.clone(),
+        segments: step_segments,
+        streamed: config.stream_enabled,
+        stop_reason: Some(AgentStopReason::Natural),
+    });
+
+    AgentRunResult {
+        content,
+        reasoning: merge_reasoning(planning_reasoning_parts, None),
+        tool_records: failed_records,
+        segments: segment_builder.all(),
+        api_messages: generated_api_messages,
+        steps,
+        stream_outcome: "error".to_string(),
     }
 }
 

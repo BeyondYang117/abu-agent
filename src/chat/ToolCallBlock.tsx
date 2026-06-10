@@ -34,7 +34,7 @@ export interface ToolCallBlockProps {
 }
 
 const defaultLabels: ToolCallBlockLabels = {
-  pending: '等待调用',
+  pending: '准备调用',
   running: '调用中',
   success: '已完成',
   completed: '已完成',
@@ -45,6 +45,30 @@ const defaultLabels: ToolCallBlockLabels = {
   result: '结果',
   source: '来源',
   tool: '工具',
+}
+
+interface FileMutationFile {
+  path: string
+  operation: string
+  bytesWritten?: number
+  bytes_written?: number
+  additions: number
+  removals: number
+  diff?: string
+}
+
+interface FileMutationStructuredContent {
+  operation: string
+  resolvedPath?: string | null
+  resolved_path?: string | null
+  files?: FileMutationFile[]
+  bytesWritten?: number
+  bytes_written?: number
+  additions?: number
+  removals?: number
+  diff?: string
+  warnings?: string[]
+  diagnostics?: unknown[]
 }
 
 function compactText(text: string, max = 220): string {
@@ -158,6 +182,211 @@ function structuredTodoState(toolCall: ToolCallRecord): AgentTodoState | null {
   }
 }
 
+function stringArrayValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function normalizeFileMutationFile(value: unknown): FileMutationFile | null {
+  const file = objectValue(value)
+  if (!file) return null
+  const path = typeof file.path === 'string' ? file.path.trim() : ''
+  if (!path) return null
+  return {
+    path,
+    operation: typeof file.operation === 'string' ? file.operation : 'edit',
+    bytesWritten: numberValue(file.bytesWritten),
+    bytes_written: numberValue(file.bytes_written),
+    additions: numberValue(file.additions),
+    removals: numberValue(file.removals),
+    diff: typeof file.diff === 'string' ? file.diff : '',
+  }
+}
+
+function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructuredContent | null {
+  const rawName = toolRawName(toolCall)
+  if (rawName !== 'write_file' && rawName !== 'edit_file' && rawName !== 'patch') return null
+
+  const structured = objectValue(toolCall.structured_content ?? toolCall.structuredContent)
+  if (!structured) return null
+  if (objectValue(structured.toolDraft)) return null
+  const operation = typeof structured.operation === 'string' ? structured.operation : rawName
+  const files = Array.isArray(structured.files)
+    ? structured.files
+      .map((file) => normalizeFileMutationFile(file))
+      .filter((file): file is FileMutationFile => Boolean(file))
+    : []
+  const resolvedPath = typeof structured.resolvedPath === 'string'
+    ? structured.resolvedPath
+    : typeof structured.resolved_path === 'string'
+      ? structured.resolved_path
+      : null
+
+  const hasMutationShape = Boolean(
+    typeof structured.operation === 'string' ||
+    resolvedPath ||
+    files.length > 0 ||
+    typeof structured.diff === 'string' ||
+    typeof structured.additions === 'number' ||
+    typeof structured.removals === 'number' ||
+    Array.isArray(structured.warnings) ||
+    Array.isArray(structured.diagnostics),
+  )
+  if (!hasMutationShape) return null
+  return {
+    operation,
+    resolvedPath,
+    resolved_path: resolvedPath,
+    files,
+    bytesWritten: numberValue(structured.bytesWritten),
+    bytes_written: numberValue(structured.bytes_written),
+    additions: numberValue(structured.additions),
+    removals: numberValue(structured.removals),
+    diff: typeof structured.diff === 'string' ? structured.diff : '',
+    warnings: stringArrayValue(structured.warnings),
+    diagnostics: Array.isArray(structured.diagnostics) ? structured.diagnostics : [],
+  }
+}
+
+function fileMutationStats(mutation: FileMutationStructuredContent): string {
+  return `+${mutation.additions ?? 0} -${mutation.removals ?? 0}`
+}
+
+function fileMutationTarget(mutation: FileMutationStructuredContent): string {
+  if (mutation.files?.length === 1) return mutation.files[0]?.path || ''
+  if (mutation.files?.length) return `${mutation.files.length} 个文件`
+  return mutation.resolvedPath || mutation.resolved_path || ''
+}
+
+function fileMutationPreview(mutation: FileMutationStructuredContent): string {
+  const target = fileMutationTarget(mutation)
+  const stats = fileMutationStats(mutation)
+  return [target, stats].filter(Boolean).join(' · ')
+}
+
+function FileMutationDetails({ mutation }: { mutation: FileMutationStructuredContent }) {
+  const files = mutation.files ?? []
+  const warnings = mutation.warnings ?? []
+  const diagnostics = mutation.diagnostics ?? []
+  const diff = (mutation.diff || files.map((file) => file.diff).filter(Boolean).join('\n')).trim()
+
+  return (
+    <div className="space-y-1.5">
+      {files.length > 0 && (
+        <div>
+          <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+            文件变更
+          </div>
+          <div className="space-y-0.5 text-neutral-500 dark:text-neutral-400">
+            {files.map((file, index) => (
+              <div key={`${file.path}-${index}`} className="flex min-w-0 items-center gap-1.5">
+                <span className="shrink-0 text-neutral-400 dark:text-neutral-500">
+                  {fileOperationLabel(file.operation)}
+                </span>
+                <span className="min-w-0 truncate">{file.path}</span>
+                <span className="shrink-0 tabular-nums text-[#C56646] dark:text-[#E39A78]">
+                  +{file.additions}
+                </span>
+                <span className="shrink-0 tabular-nums text-red-500/80">
+                  -{file.removals}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div>
+          <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+            警告
+          </div>
+          <div className="whitespace-pre-wrap break-words text-amber-600 dark:text-amber-300">
+            {warnings.join('\n')}
+          </div>
+        </div>
+      )}
+      {diagnostics.length > 0 && (
+        <div>
+          <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+            诊断
+          </div>
+          <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
+            {previewValue(diagnostics, 900)}
+          </div>
+        </div>
+      )}
+      {diff && (
+        <div>
+          <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+            Diff
+          </div>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/[0.035] px-2 py-1.5 font-mono text-[10.5px] leading-4 text-neutral-600 dark:bg-white/[0.055] dark:text-neutral-300">
+            {diff}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function fileOperationLabel(operation: string): string {
+  switch (operation) {
+    case 'create':
+      return '新增'
+    case 'overwrite':
+      return '覆盖'
+    case 'edit':
+      return '修改'
+    case 'delete':
+      return '删除'
+    case 'noop':
+      return '无变更'
+    case 'patch':
+      return '补丁'
+    default:
+      return operation || '变更'
+  }
+}
+
+function extractPatchArgumentFiles(patch: string): string[] {
+  const files: string[] = []
+  for (const line of patch.split(/\r?\n/)) {
+    const path = line.startsWith('*** Add File: ')
+      ? line.slice('*** Add File: '.length)
+      : line.startsWith('*** Update File: ')
+        ? line.slice('*** Update File: '.length)
+        : line.startsWith('*** Delete File: ')
+          ? line.slice('*** Delete File: '.length)
+          : ''
+    if (path.trim()) files.push(path.trim())
+  }
+  return files
+}
+
+function fileToolArgumentPreview(toolCall: ToolCallRecord, args: Record<string, unknown> | null): string {
+  const rawName = toolRawName(toolCall)
+  const path = typeof args?.path === 'string' ? args.path.trim() : ''
+  if (rawName === 'write_file') {
+    return path ? path : '写入文件'
+  }
+  if (rawName === 'edit_file') {
+    const oldString = typeof args?.old_string === 'string' ? compactText(args.old_string, 80) : ''
+    return [path, oldString ? `替换 ${oldString}` : ''].filter(Boolean).join(' · ')
+  }
+  if (rawName === 'patch') {
+    const patch = typeof args?.patch === 'string' ? args.patch : ''
+    const files = extractPatchArgumentFiles(patch)
+    if (files.length === 1) return files[0]
+    if (files.length > 1) return `${files.length} 个文件 · ${files.slice(0, 3).join(', ')}`
+    return '补丁'
+  }
+  return ''
+}
+
 function formatDuration(ms?: number): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return ''
   if (ms < 1000) return `${Math.round(ms)}ms`
@@ -200,6 +429,7 @@ function getToolName(toolCall: ToolCallRecord): string {
   if (raw === 'read_file') return hasOffset ? '读取文件片段' : '读取文件'
   if (raw === 'write_file') return '写入文件'
   if (raw === 'edit_file') return '编辑文件'
+  if (raw === 'patch') return '应用补丁'
   if (raw === 'run_command' && /\bpdftotext\b/.test(command)) return '提取 PDF 文本'
   if (raw === 'run_command') return '终端命令'
   if (raw === 'run_python') return 'Python'
@@ -244,6 +474,12 @@ function getArgumentPreview(toolCall: ToolCallRecord): string {
     const target = content || id
     return ['更新条目', status, target].filter(Boolean).join(' · ')
   }
+  const fileMutation = structuredFileMutation(toolCall)
+  if (fileMutation) {
+    return fileMutationPreview(fileMutation)
+  }
+  const fileArgsPreview = fileToolArgumentPreview(toolCall, args)
+  if (fileArgsPreview) return fileArgsPreview
   if (rawName === 'mixer_vision') {
     const imageCount = typeof args?.images === 'number' ? args.images : null
     const provider = typeof args?.provider === 'string' ? args.provider : ''
@@ -285,6 +521,10 @@ function getResultPreview(toolCall: ToolCallRecord): string {
     const counts = formatTodoCounts(structuredTodoState(toolCall)?.items)
     return counts ? `已同步 ${counts}` : '已同步'
   }
+  const fileMutation = structuredFileMutation(toolCall)
+  if (fileMutation) {
+    return `已应用 ${fileMutationPreview(fileMutation)}`
+  }
   const raw =
     toolCall.result_preview ||
     toolCall.resultPreview ||
@@ -300,6 +540,12 @@ function getRunningPreview(toolCall: ToolCallRecord): string {
   }
   if (raw === 'run_python') {
     return '正在加载 Python 环境…'
+  }
+  if (raw === 'write_file') {
+    return '正在写入文件…'
+  }
+  if (raw === 'edit_file' || raw === 'patch') {
+    return '正在应用文件变更…'
   }
   if (raw === 'mixer_vision') {
     return '正在分析图片并提取视觉信息…'
@@ -404,11 +650,20 @@ function DefaultToolCallBlock({
   const toolName = getToolName(toolCall)
   const source = getSource(toolCall)
   const duration = formatDuration(getDuration(toolCall))
+  const fileMutation = useMemo(() => structuredFileMutation(toolCall), [toolCall])
   const argumentPreview = useMemo(() => getArgumentPreview(toolCall), [toolCall])
   const resultPreview = useMemo(() => getResultPreview(toolCall), [toolCall])
   const error = toolCall.error ? compactToolError(toolCall.error) : ''
   const rowPreview = error || resultPreview || (status === 'running' ? getRunningPreview(toolCall) : '') || argumentPreview
-  const hasDetails = Boolean(argumentPreview || resultPreview || error)
+  const hasFileMutationDetails = Boolean(
+    fileMutation && (
+      fileMutation.files?.length ||
+      fileMutation.diff ||
+      fileMutation.warnings?.length ||
+      fileMutation.diagnostics?.length
+    ),
+  )
+  const hasDetails = Boolean(argumentPreview || resultPreview || error || hasFileMutationDetails)
 
   return (
     <div className="not-prose mb-2 text-[11.5px] leading-5 text-neutral-500 dark:text-neutral-400">
@@ -483,6 +738,9 @@ function DefaultToolCallBlock({
                   {resultPreview}
                 </div>
               </div>
+            )}
+            {fileMutation && hasFileMutationDetails && (
+              <FileMutationDetails mutation={fileMutation} />
             )}
             {error && (
               <div className="whitespace-pre-wrap break-words text-red-500">

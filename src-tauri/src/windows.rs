@@ -1,6 +1,5 @@
 use tauri::{
-    window::Color, AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    window::Color, AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 #[cfg(target_os = "macos")]
 use tauri::{LogicalPosition, TitleBarStyle};

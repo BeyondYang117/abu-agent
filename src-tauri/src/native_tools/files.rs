@@ -1,9 +1,13 @@
 use std::{
+    collections::HashSet,
     fs,
+    io::Write,
     path::{Path, PathBuf},
+    sync::{Condvar, Mutex, OnceLock},
     time::UNIX_EPOCH,
 };
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::{
@@ -26,6 +30,49 @@ const DEFAULT_IGNORED_DIRS: &[&str] = &[
     ".turbo",
     ".vite",
 ];
+
+static FILE_MUTATION_LOCKS: OnceLock<FileMutationLocks> = OnceLock::new();
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileMutationResult {
+    pub operation: String,
+    pub resolved_path: Option<String>,
+    pub files: Vec<FileMutationFile>,
+    pub bytes_written: u64,
+    pub additions: usize,
+    pub removals: usize,
+    pub diff: String,
+    pub warnings: Vec<String>,
+    pub diagnostics: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileMutationFile {
+    pub path: String,
+    pub operation: String,
+    pub bytes_written: u64,
+    pub additions: usize,
+    pub removals: usize,
+    pub diff: String,
+}
+
+impl FileMutationResult {
+    pub fn summary(&self) -> String {
+        let stats = format!("+{} -{}", self.additions, self.removals);
+        if let Some(file) = self.files.first().filter(|_| self.files.len() == 1) {
+            return format!(
+                "{} {} ({stats})",
+                mutation_operation_label(&file.operation),
+                file.path
+            );
+        }
+        format!(
+            "{} {} file(s) ({stats})",
+            mutation_operation_label(&self.operation),
+            self.files.len()
+        )
+    }
+}
 
 pub fn read_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
     let path = arguments
@@ -67,7 +114,10 @@ pub fn read_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<S
     Ok(lines[start..end].join("\n"))
 }
 
-pub fn write_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
+pub fn write_file(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+) -> Result<FileMutationResult, String> {
     let path = arguments
         .get("path")
         .and_then(|v| v.as_str())
@@ -80,18 +130,139 @@ pub fn write_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<
     if !workspace.has_project() {
         assert_writable_path(&full)?;
     }
+    let _guard = acquire_file_mutation_locks([full.clone()])?;
+    let before = if full.is_file() {
+        Some(fs::read_to_string(&full).map_err(|err| format!("Read existing file failed: {err}"))?)
+    } else {
+        None
+    };
     if let Some(parent) = full.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("Create parent dirs failed: {err}"))?;
     }
     fs::write(&full, content).map_err(|err| format!("Write file failed: {err}"))?;
-    Ok(format!(
-        "Wrote {} bytes to {}",
-        content.len(),
-        workspace_display_path(workspace, &full)
+    let operation = if before.is_some() {
+        "overwrite"
+    } else {
+        "create"
+    };
+    Ok(file_mutation_result(
+        operation,
+        vec![planned_file_result(
+            workspace,
+            full,
+            operation,
+            before.as_deref(),
+            Some(content),
+        )?],
     ))
 }
 
-pub fn edit_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
+pub fn write_file_chunk(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+) -> Result<FileMutationResult, String> {
+    let path = required_string(arguments, "path")?;
+    let mode = required_string(arguments, "mode")?;
+    let full = resolve_tool_write_path(workspace, path)?;
+    if !workspace.has_project() {
+        assert_writable_path(&full)?;
+    }
+    let _guard = acquire_file_mutation_locks([full.clone()])?;
+
+    match mode {
+        "start" => {
+            let content = required_string(arguments, "content")?;
+            let before = if full.is_file() {
+                Some(
+                    fs::read_to_string(&full)
+                        .map_err(|err| format!("Read existing file failed: {err}"))?,
+                )
+            } else {
+                None
+            };
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|err| format!("Create parent dirs failed: {err}"))?;
+            }
+            fs::write(&full, content).map_err(|err| format!("Write file chunk failed: {err}"))?;
+            let file_operation = if before.is_some() {
+                "overwrite"
+            } else {
+                "create"
+            };
+            Ok(file_mutation_result(
+                "write_chunk_start",
+                vec![planned_file_result(
+                    workspace,
+                    full,
+                    file_operation,
+                    before.as_deref(),
+                    Some(content),
+                )?],
+            ))
+        }
+        "append" => {
+            let content = required_string(arguments, "content")?;
+            if !full.is_file() {
+                return Err("write_file_chunk append requires an existing file; call mode=start first".to_string());
+            }
+            let before =
+                fs::read_to_string(&full).map_err(|err| format!("Read file failed: {err}"))?;
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(&full)
+                .map_err(|err| format!("Open file for append failed: {err}"))?;
+            file.write_all(content.as_bytes())
+                .map_err(|err| format!("Append file chunk failed: {err}"))?;
+            let mut after = before.clone();
+            after.push_str(content);
+            Ok(file_mutation_result(
+                "write_chunk_append",
+                vec![planned_file_result(
+                    workspace,
+                    full,
+                    "append",
+                    Some(&before),
+                    Some(&after),
+                )?],
+            ))
+        }
+        "finish" => {
+            if !full.is_file() {
+                return Err("write_file_chunk finish requires an existing file".to_string());
+            }
+            let content =
+                fs::read_to_string(&full).map_err(|err| format!("Read file failed: {err}"))?;
+            let display_path = workspace_display_path(workspace, &full);
+            Ok(FileMutationResult {
+                operation: "write_chunk_finish".to_string(),
+                resolved_path: Some(display_path.clone()),
+                files: vec![FileMutationFile {
+                    path: display_path,
+                    operation: "finish".to_string(),
+                    bytes_written: content.len() as u64,
+                    additions: 0,
+                    removals: 0,
+                    diff: String::new(),
+                }],
+                bytes_written: content.len() as u64,
+                additions: 0,
+                removals: 0,
+                diff: String::new(),
+                warnings: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+        other => Err(format!(
+            "write_file_chunk mode must be start, append, or finish; got {other}"
+        )),
+    }
+}
+
+pub fn edit_file(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+) -> Result<FileMutationResult, String> {
     let path = arguments
         .get("path")
         .and_then(|v| v.as_str())
@@ -113,13 +284,32 @@ pub fn edit_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<S
     if !workspace.has_project() {
         assert_writable_path(&full)?;
     }
+    let _guard = acquire_file_mutation_locks([full.clone()])?;
     if !full.is_file() {
         return Err(format!("不是可编辑的文件: {path}"));
     }
 
     let content = fs::read_to_string(&full).map_err(|err| format!("Read file failed: {err}"))?;
     if old_string == new_string {
-        return Ok(format!("No changes made: {path}"));
+        let display_path = workspace_display_path(workspace, &full);
+        return Ok(FileMutationResult {
+            operation: "edit".to_string(),
+            resolved_path: Some(display_path.clone()),
+            files: vec![FileMutationFile {
+                path: display_path,
+                operation: "noop".to_string(),
+                bytes_written: content.len() as u64,
+                additions: 0,
+                removals: 0,
+                diff: String::new(),
+            }],
+            bytes_written: content.len() as u64,
+            additions: 0,
+            removals: 0,
+            diff: String::new(),
+            warnings: vec!["old_string and new_string are identical; no changes made.".to_string()],
+            diagnostics: Vec::new(),
+        });
     }
     if !content.contains(old_string) {
         return Err("old_string not found in file".to_string());
@@ -137,11 +327,574 @@ pub fn edit_file(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<S
         content.replacen(old_string, new_string, 1)
     };
     fs::write(&full, &updated).map_err(|err| format!("Write file failed: {err}"))?;
-    Ok(format!(
-        "Updated {} ({} replacement(s))",
-        workspace_display_path(workspace, &full),
-        if replace_all { count } else { 1 }
+    Ok(file_mutation_result(
+        "edit",
+        vec![planned_file_result(
+            workspace,
+            full,
+            "edit",
+            Some(&content),
+            Some(&updated),
+        )?],
     ))
+}
+
+pub fn patch(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+) -> Result<FileMutationResult, String> {
+    let patch = arguments
+        .get("patch")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "patch requires patch".to_string())?;
+    let ops = parse_patch(patch)?;
+    if ops.is_empty() {
+        return Err("patch contains no file operations".to_string());
+    }
+
+    let mut seen = HashSet::new();
+    let mut resolved_ops = Vec::new();
+    let mut seen_resolved = HashSet::new();
+    for op in ops {
+        validate_patch_path(&op.path)?;
+        if !seen.insert(op.path.clone()) {
+            return Err(format!(
+                "patch modifies the same file more than once: {}",
+                op.path
+            ));
+        }
+        let full = match &op.kind {
+            PatchOpKind::Add { .. } | PatchOpKind::Update { .. } => {
+                resolve_tool_write_path(workspace, &op.path)?
+            }
+            PatchOpKind::Delete => resolve_tool_write_entry_path(workspace, &op.path)?,
+        };
+        if !workspace.has_project() {
+            assert_writable_path(&full)?;
+        }
+        if !seen_resolved.insert(full.clone()) {
+            return Err(format!(
+                "patch modifies the same resolved file more than once: {}",
+                workspace_display_path(workspace, &full)
+            ));
+        }
+        resolved_ops.push(ResolvedPatchOperation {
+            path: op.path,
+            full,
+            kind: op.kind,
+        });
+    }
+
+    let _guard = acquire_file_mutation_locks(resolved_ops.iter().map(|op| op.full.clone()))?;
+    let mut plans = Vec::new();
+    for op in resolved_ops {
+        match op.kind {
+            PatchOpKind::Add { lines } => {
+                if op.full.exists() {
+                    return Err(format!("Add File target already exists: {}", op.path));
+                }
+                let content = patch_added_content(&lines);
+                plans.push(PlannedMutation {
+                    path: op.full,
+                    operation: "create".to_string(),
+                    before: None,
+                    after: Some(content),
+                });
+            }
+            PatchOpKind::Update { hunks } => {
+                if !op.full.is_file() {
+                    return Err(format!("Update File target is not a file: {}", op.path));
+                }
+                let before = fs::read_to_string(&op.full)
+                    .map_err(|err| format!("Read file failed: {err}"))?;
+                let after = apply_patch_hunks(&before, &hunks, &op.path)?;
+                plans.push(PlannedMutation {
+                    path: op.full,
+                    operation: "edit".to_string(),
+                    before: Some(before),
+                    after: Some(after),
+                });
+            }
+            PatchOpKind::Delete => {
+                if !op.full.is_file() {
+                    return Err(format!("Delete File target is not a file: {}", op.path));
+                }
+                let before = fs::read_to_string(&op.full)
+                    .map_err(|err| format!("Read file failed: {err}"))?;
+                plans.push(PlannedMutation {
+                    path: op.full,
+                    operation: "delete".to_string(),
+                    before: Some(before),
+                    after: None,
+                });
+            }
+        }
+    }
+
+    let mut file_results = Vec::new();
+    for plan in &plans {
+        file_results.push(planned_file_result(
+            workspace,
+            plan.path.clone(),
+            &plan.operation,
+            plan.before.as_deref(),
+            plan.after.as_deref(),
+        )?);
+    }
+
+    for plan in plans {
+        match plan.after {
+            Some(content) => {
+                if let Some(parent) = plan.path.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|err| format!("Create parent dirs failed: {err}"))?;
+                }
+                fs::write(&plan.path, content)
+                    .map_err(|err| format!("Write file failed: {err}"))?;
+            }
+            None => {
+                fs::remove_file(&plan.path).map_err(|err| format!("Delete file failed: {err}"))?;
+            }
+        }
+    }
+
+    Ok(file_mutation_result("patch", file_results))
+}
+
+#[derive(Debug)]
+struct PlannedMutation {
+    path: PathBuf,
+    operation: String,
+    before: Option<String>,
+    after: Option<String>,
+}
+
+#[derive(Debug)]
+struct ResolvedPatchOperation {
+    path: String,
+    full: PathBuf,
+    kind: PatchOpKind,
+}
+
+#[derive(Debug)]
+struct PatchOperation {
+    path: String,
+    kind: PatchOpKind,
+}
+
+#[derive(Debug)]
+enum PatchOpKind {
+    Add { lines: Vec<String> },
+    Update { hunks: Vec<PatchHunk> },
+    Delete,
+}
+
+#[derive(Debug)]
+struct PatchHunk {
+    lines: Vec<PatchLine>,
+}
+
+#[derive(Debug)]
+enum PatchLine {
+    Context(String),
+    Remove(String),
+    Add(String),
+}
+
+struct FileMutationLocks {
+    active: Mutex<HashSet<PathBuf>>,
+    ready: Condvar,
+}
+
+struct FileMutationLockGuard {
+    paths: Vec<PathBuf>,
+}
+
+impl Drop for FileMutationLockGuard {
+    fn drop(&mut self) {
+        let Some(locks) = FILE_MUTATION_LOCKS.get() else {
+            return;
+        };
+        let Ok(mut active) = locks.active.lock() else {
+            return;
+        };
+        for path in &self.paths {
+            active.remove(path);
+        }
+        locks.ready.notify_all();
+    }
+}
+
+fn acquire_file_mutation_locks<I>(paths: I) -> Result<FileMutationLockGuard, String>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let locks = FILE_MUTATION_LOCKS.get_or_init(|| FileMutationLocks {
+        active: Mutex::new(HashSet::new()),
+        ready: Condvar::new(),
+    });
+    let mut paths = paths.into_iter().collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    let mut active = locks
+        .active
+        .lock()
+        .map_err(|_| "File mutation lock is unavailable".to_string())?;
+    while paths.iter().any(|path| active.contains(path)) {
+        active = locks
+            .ready
+            .wait(active)
+            .map_err(|_| "File mutation lock is unavailable".to_string())?;
+    }
+    for path in &paths {
+        active.insert(path.clone());
+    }
+    Ok(FileMutationLockGuard { paths })
+}
+
+fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
+    let lines = patch
+        .lines()
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect::<Vec<_>>();
+    let first = lines
+        .first()
+        .map(|line| line.trim())
+        .ok_or_else(|| "patch is empty".to_string())?;
+    if first != "*** Begin Patch" {
+        return Err("patch must start with *** Begin Patch".to_string());
+    }
+
+    let mut idx = 1usize;
+    let mut ops = Vec::new();
+    while idx < lines.len() {
+        let line = lines[idx].trim();
+        if line == "*** End Patch" {
+            return Ok(ops);
+        }
+        if let Some(path) = line.strip_prefix("*** Add File: ") {
+            idx += 1;
+            let mut added = Vec::new();
+            while idx < lines.len() && !lines[idx].starts_with("*** ") {
+                let raw = &lines[idx];
+                let Some(content) = raw.strip_prefix('+') else {
+                    return Err(format!("Add File lines must start with '+': {path}"));
+                };
+                added.push(content.to_string());
+                idx += 1;
+            }
+            ops.push(PatchOperation {
+                path: path.trim().to_string(),
+                kind: PatchOpKind::Add { lines: added },
+            });
+            continue;
+        }
+        if let Some(path) = line.strip_prefix("*** Update File: ") {
+            idx += 1;
+            let mut hunks = Vec::new();
+            let mut current = Vec::new();
+            while idx < lines.len() && !lines[idx].starts_with("*** ") {
+                let raw = &lines[idx];
+                if raw.starts_with("@@") {
+                    if !current.is_empty() {
+                        hunks.push(PatchHunk { lines: current });
+                        current = Vec::new();
+                    }
+                    idx += 1;
+                    continue;
+                }
+                if raw == r"\ No newline at end of file" {
+                    idx += 1;
+                    continue;
+                }
+                let Some(marker) = raw.chars().next() else {
+                    return Err(format!(
+                        "Update File hunk has an empty unmarked line: {path}"
+                    ));
+                };
+                let content = raw.get(marker.len_utf8()..).unwrap_or("").to_string();
+                match marker {
+                    ' ' => current.push(PatchLine::Context(content)),
+                    '-' => current.push(PatchLine::Remove(content)),
+                    '+' => current.push(PatchLine::Add(content)),
+                    _ => {
+                        return Err(format!(
+                            "Update File hunk lines must start with ' ', '-' or '+': {path}"
+                        ))
+                    }
+                }
+                idx += 1;
+            }
+            if !current.is_empty() {
+                hunks.push(PatchHunk { lines: current });
+            }
+            if hunks.is_empty() {
+                return Err(format!("Update File has no hunks: {path}"));
+            }
+            ops.push(PatchOperation {
+                path: path.trim().to_string(),
+                kind: PatchOpKind::Update { hunks },
+            });
+            continue;
+        }
+        if let Some(path) = line.strip_prefix("*** Delete File: ") {
+            idx += 1;
+            while idx < lines.len() && !lines[idx].starts_with("*** ") {
+                if !lines[idx].trim().is_empty() {
+                    return Err(format!("Delete File cannot include hunk content: {path}"));
+                }
+                idx += 1;
+            }
+            ops.push(PatchOperation {
+                path: path.trim().to_string(),
+                kind: PatchOpKind::Delete,
+            });
+            continue;
+        }
+        return Err(format!("Unsupported patch line: {}", lines[idx]));
+    }
+
+    Err("patch must end with *** End Patch".to_string())
+}
+
+fn validate_patch_path(path: &str) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("patch file path is empty".to_string());
+    }
+    if trimmed.starts_with('~') {
+        return Err("patch file paths must be project-relative; '~' is not allowed".to_string());
+    }
+    if trimmed.contains('\\') {
+        return Err("patch file paths must use forward slashes".to_string());
+    }
+    let parsed = Path::new(trimmed);
+    if parsed.is_absolute() {
+        return Err("patch file paths must be relative, not absolute".to_string());
+    }
+    if parsed.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err("patch file paths cannot contain '..' or roots".to_string());
+    }
+    Ok(())
+}
+
+fn patch_added_content(lines: &[String]) -> String {
+    lines.join("\n")
+}
+
+fn apply_patch_hunks(before: &str, hunks: &[PatchHunk], path: &str) -> Result<String, String> {
+    let line_ending = if before.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut lines = split_logical_lines(before);
+    for hunk in hunks {
+        let (old_lines, new_lines) = hunk_old_new_lines(hunk);
+        if old_lines.is_empty() {
+            return Err(format!("Patch hunk for {path} has no context or removals"));
+        }
+        let start = find_unique_subsequence(&lines, &old_lines)
+            .ok_or_else(|| format!("Patch hunk did not match file content exactly: {path}"))?;
+        lines.splice(start..start + old_lines.len(), new_lines);
+    }
+    Ok(lines.join(line_ending))
+}
+
+fn hunk_old_new_lines(hunk: &PatchHunk) -> (Vec<String>, Vec<String>) {
+    let mut old_lines = Vec::new();
+    let mut new_lines = Vec::new();
+    for line in &hunk.lines {
+        match line {
+            PatchLine::Context(content) => {
+                old_lines.push(content.clone());
+                new_lines.push(content.clone());
+            }
+            PatchLine::Remove(content) => old_lines.push(content.clone()),
+            PatchLine::Add(content) => new_lines.push(content.clone()),
+        }
+    }
+    (old_lines, new_lines)
+}
+
+fn find_unique_subsequence(haystack: &[String], needle: &[String]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    let mut found = None;
+    for idx in 0..=haystack.len() - needle.len() {
+        if haystack[idx..idx + needle.len()] == *needle {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(idx);
+        }
+    }
+    found
+}
+
+fn split_logical_lines(content: &str) -> Vec<String> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    content
+        .replace("\r\n", "\n")
+        .split('\n')
+        .map(str::to_string)
+        .collect()
+}
+
+fn file_mutation_result(operation: &str, files: Vec<FileMutationFile>) -> FileMutationResult {
+    let resolved_path = files
+        .first()
+        .filter(|_| files.len() == 1)
+        .map(|file| file.path.clone());
+    let bytes_written = files.iter().map(|file| file.bytes_written).sum();
+    let additions = files.iter().map(|file| file.additions).sum();
+    let removals = files.iter().map(|file| file.removals).sum();
+    let diff = files
+        .iter()
+        .map(|file| file.diff.as_str())
+        .filter(|diff| !diff.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    FileMutationResult {
+        operation: operation.to_string(),
+        resolved_path,
+        files,
+        bytes_written,
+        additions,
+        removals,
+        diff,
+        warnings: Vec::new(),
+        diagnostics: Vec::new(),
+    }
+}
+
+fn planned_file_result(
+    workspace: &NativeToolWorkspace,
+    path: PathBuf,
+    operation: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Result<FileMutationFile, String> {
+    let display_path = workspace_display_path(workspace, &path);
+    let (diff, additions, removals) = unified_diff(&display_path, before, after);
+    Ok(FileMutationFile {
+        path: display_path,
+        operation: operation.to_string(),
+        bytes_written: after.map(|content| content.len() as u64).unwrap_or(0),
+        additions,
+        removals,
+        diff,
+    })
+}
+
+fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (String, usize, usize) {
+    let old_lines = diff_lines(before.unwrap_or(""));
+    let new_lines = diff_lines(after.unwrap_or(""));
+    if old_lines == new_lines {
+        return (String::new(), 0, 0);
+    }
+
+    let mut prefix = 0usize;
+    while prefix < old_lines.len()
+        && prefix < new_lines.len()
+        && old_lines[prefix] == new_lines[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut old_end = old_lines.len();
+    let mut new_end = new_lines.len();
+    while old_end > prefix && new_end > prefix && old_lines[old_end - 1] == new_lines[new_end - 1] {
+        old_end -= 1;
+        new_end -= 1;
+    }
+
+    let removed = &old_lines[prefix..old_end];
+    let added = &new_lines[prefix..new_end];
+    let context_start = prefix.saturating_sub(3);
+    let old_context_end = (old_end + 3).min(old_lines.len());
+    let new_context_end = (new_end + 3).min(new_lines.len());
+    let old_hunk_len = old_context_end.saturating_sub(context_start);
+    let new_hunk_len = new_context_end.saturating_sub(context_start);
+    let old_start = if old_lines.is_empty() {
+        0
+    } else {
+        context_start + 1
+    };
+    let new_start = if new_lines.is_empty() {
+        0
+    } else {
+        context_start + 1
+    };
+
+    let old_header = if before.is_none() {
+        "/dev/null".to_string()
+    } else {
+        format!("a/{path}")
+    };
+    let new_header = if after.is_none() {
+        "/dev/null".to_string()
+    } else {
+        format!("b/{path}")
+    };
+    let mut out = String::new();
+    out.push_str(&format!("--- {old_header}\n+++ {new_header}\n"));
+    out.push_str(&format!(
+        "@@ -{},{} +{},{} @@\n",
+        old_start, old_hunk_len, new_start, new_hunk_len
+    ));
+    for line in &old_lines[context_start..prefix] {
+        out.push_str(&format!(" {line}\n"));
+    }
+    for line in removed {
+        out.push_str(&format!("-{line}\n"));
+    }
+    for line in added {
+        out.push_str(&format!("+{line}\n"));
+    }
+    for line in &new_lines[new_end..new_context_end] {
+        out.push_str(&format!(" {line}\n"));
+    }
+    (out, added.len(), removed.len())
+}
+
+fn diff_lines(content: &str) -> Vec<String> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let normalized = content.replace("\r\n", "\n");
+    let mut lines = normalized
+        .split('\n')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if normalized.ends_with('\n') {
+        lines.pop();
+    }
+    lines
+}
+
+fn mutation_operation_label(operation: &str) -> &'static str {
+    match operation {
+        "create" => "Created",
+        "overwrite" => "Overwrote",
+        "edit" => "Updated",
+        "delete" => "Deleted",
+        "noop" => "No changes",
+        "patch" => "Patched",
+        "append" => "Appended",
+        "finish" => "Finished",
+        _ => "Changed",
+    }
 }
 
 pub fn list_dir(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
@@ -701,10 +1454,197 @@ mod tests {
             }),
         )
         .expect("noop edit");
-        assert!(result.contains("No changes made"));
+        assert_eq!(result.files[0].operation, "noop");
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no changes made")));
         assert_eq!(fs::read_to_string(&file).expect("read"), "hello world");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_returns_structured_diff_metadata() {
+        let root = std::env::temp_dir().join(format!("kivio_write_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let result = write_file(
+            &workspace,
+            &json!({
+                "path": "hello.txt",
+                "content": "alpha\nbeta\n"
+            }),
+        )
+        .expect("write");
+
+        assert_eq!(result.operation, "create");
+        assert_eq!(result.resolved_path.as_deref(), Some("hello.txt"));
+        assert_eq!(result.files[0].path, "hello.txt");
+        assert_eq!(result.additions, 2);
+        assert_eq!(result.removals, 0);
+        assert!(result.diff.contains("+++ b/hello.txt"));
+        assert!(result.diff.contains("+alpha"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_add_update_and_delete_files() {
+        let root = std::env::temp_dir().join(format!("kivio_patch_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(root.join("edit.txt"), "alpha\nbeta\ngamma\n").expect("write edit");
+        fs::write(root.join("delete.txt"), "gone\n").expect("write delete");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let result = patch(
+            &workspace,
+            &json!({
+                "patch": "*** Begin Patch\n*** Add File: new.txt\n+first\n+second\n*** Update File: edit.txt\n@@\n alpha\n-beta\n+delta\n gamma\n*** Delete File: delete.txt\n*** End Patch"
+            }),
+        )
+        .expect("patch");
+
+        assert_eq!(result.operation, "patch");
+        assert_eq!(result.files.len(), 3);
+        assert_eq!(
+            fs::read_to_string(root.join("new.txt")).expect("read new"),
+            "first\nsecond"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("edit.txt")).expect("read edit"),
+            "alpha\ndelta\ngamma\n"
+        );
+        assert!(!root.join("delete.txt").exists());
+        assert_eq!(result.additions, 3);
+        assert_eq!(result.removals, 2);
+        assert!(result.diff.contains("--- a/edit.txt"));
+        assert!(result.diff.contains("+delta"));
+        assert!(result.diff.contains("--- a/delete.txt"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_failure_does_not_partially_modify_files() {
+        let root = std::env::temp_dir().join(format!("kivio_patch_fail_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(root.join("a.txt"), "alpha\n").expect("write a");
+        fs::write(root.join("b.txt"), "beta\n").expect("write b");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let err = patch(
+            &workspace,
+            &json!({
+                "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-alpha\n+changed\n*** Update File: b.txt\n@@\n-missing\n+changed\n*** End Patch"
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("did not match"));
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).expect("read a"),
+            "alpha\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("b.txt")).expect("read b"),
+            "beta\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_rejects_traversal_paths() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_patch_escape_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let err = patch(
+            &workspace,
+            &json!({
+                "patch": "*** Begin Patch\n*** Add File: ../escape.txt\n+nope\n*** End Patch"
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.contains(".."));
+        assert!(!root.join("../escape.txt").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_rejects_non_relative_header_paths() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_patch_invalid_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        for (path, expected) in [
+            ("/tmp/escape.txt", "relative"),
+            ("~/escape.txt", "~"),
+            ("dir\\escape.txt", "forward slashes"),
+        ] {
+            let err = patch(
+                &workspace,
+                &json!({
+                    "patch": format!("*** Begin Patch\n*** Add File: {path}\n+nope\n*** End Patch")
+                }),
+            )
+            .unwrap_err();
+            assert!(
+                err.contains(expected),
+                "expected {expected:?} in {err:?} for {path:?}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_rejects_duplicate_resolved_targets() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_patch_duplicate_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let err = patch(
+            &workspace,
+            &json!({
+                "patch": "*** Begin Patch\n*** Add File: same.txt\n+one\n*** Add File: ./same.txt\n+two\n*** End Patch"
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("same resolved file"));
+        assert!(!root.join("same.txt").exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

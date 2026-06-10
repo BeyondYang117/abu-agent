@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 
 use crate::{
-    native_tools::{resolve_tool_read_path, NativeToolWorkspace},
+    native_tools::{resolve_tool_read_path, FileMutationResult, NativeToolWorkspace},
     settings::{
         ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
         SKILL_SCRIPT_MIN_TIMEOUT_MS,
@@ -525,6 +525,16 @@ async fn call_native_tool(
             .await;
     }
 
+    if matches!(tool.name.as_str(), "write_file" | "edit_file" | "patch") {
+        let result = match tool.name.as_str() {
+            "write_file" => crate::native_tools::write_file(&workspace, &arguments)?,
+            "edit_file" => crate::native_tools::edit_file(&workspace, &arguments)?,
+            "patch" => crate::native_tools::patch(&workspace, &arguments)?,
+            _ => unreachable!(),
+        };
+        return file_mutation_tool_result(result);
+    }
+
     let content = match tool.name.as_str() {
         "web_search" => {
             let query = arguments
@@ -571,8 +581,6 @@ async fn call_native_tool(
         "search_files" => crate::native_tools::search_files(&workspace, &arguments)?,
         "glob_files" => crate::native_tools::glob_files(&workspace, &arguments)?,
         "stat_path" => crate::native_tools::stat_path(&workspace, &arguments)?,
-        "write_file" => crate::native_tools::write_file(&workspace, &arguments)?,
-        "edit_file" => crate::native_tools::edit_file(&workspace, &arguments)?,
         "create_dir" => crate::native_tools::create_dir(&workspace, &arguments)?,
         "delete_path" => crate::native_tools::delete_path(&workspace, &arguments)?,
         "move_path" => crate::native_tools::move_path(&workspace, &arguments)?,
@@ -594,6 +602,19 @@ async fn call_native_tool(
         raw: Value::Null,
         artifacts: Vec::new(),
         structured_content: None,
+    })
+}
+
+fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallResult, String> {
+    let content = result.summary();
+    let structured = serde_json::to_value(&result)
+        .map_err(|err| format!("Serialize file mutation result failed: {err}"))?;
+    Ok(McpToolCallResult {
+        content,
+        is_error: false,
+        raw: structured.clone(),
+        artifacts: Vec::new(),
+        structured_content: Some(structured),
     })
 }
 
