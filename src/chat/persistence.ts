@@ -2,8 +2,8 @@ import type { Window } from '@tauri-apps/api/window'
 export const CHAT_DEFAULT_SIZE = { width: 1280, height: 800 }
 /** 侧栏收起时可缩到的最小尺寸 */
 export const CHAT_MIN_SIZE_COLLAPSED = { width: 400, height: 400 }
-/** 侧栏展开时整窗最小尺寸（260px 侧栏 + 主内容区） */
-export const CHAT_MIN_SIZE_EXPANDED = { width: 660, height: 400 }
+/** 侧栏展开时整窗最小尺寸（240px 侧栏 + 主内容区） */
+export const CHAT_MIN_SIZE_EXPANDED = { width: 640, height: 400 }
 export const CHAT_MIN_SIZE = CHAT_MIN_SIZE_COLLAPSED
 export function getChatPlatformWindowSize(
   size: { width: number; height: number },

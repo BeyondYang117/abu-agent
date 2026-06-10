@@ -1255,7 +1255,7 @@ export function InputBar({
               aria-hidden
             />
             <div
-              className={`chat-motion-popover absolute left-0 z-40 w-[min(240px,calc(100vw-32px))] overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+              className={`chat-motion-popover absolute left-0 z-40 w-[min(220px,calc(100vw-32px))] overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
               style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
               data-tauri-drag-region="false"
             >
@@ -1347,7 +1347,7 @@ export function InputBar({
                   </button>
                   {projectCreateMenuOpen && (
                     <div
-                      className="absolute left-0 top-full z-50 mt-1 w-32 rounded-lg border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 sm:bottom-0 sm:left-full sm:top-auto sm:mt-0 sm:ml-1"
+                      className="absolute left-0 top-full z-50 mt-1 w-[152px] rounded-lg border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 sm:bottom-0 sm:left-full sm:top-auto sm:mt-0 sm:ml-1"
                       role="menu"
                     >
                       <button

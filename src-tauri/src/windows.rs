@@ -5,8 +5,8 @@ use tauri::{
 
 /// 侧栏收起时主内容区最小宽度（与前端 `CHAT_MIN_SIZE_COLLAPSED` 一致）。
 pub const CHAT_MIN_INNER_WIDTH_COLLAPSED: f64 = 400.0;
-/// 侧栏展开时整窗最小宽度（260px 侧栏 + 主内容区最小宽度）。
-pub const CHAT_MIN_INNER_WIDTH_EXPANDED: f64 = 660.0;
+/// 侧栏展开时整窗最小宽度（240px 侧栏 + 主内容区最小宽度）。
+pub const CHAT_MIN_INNER_WIDTH_EXPANDED: f64 = 640.0;
 pub const CHAT_MIN_INNER_HEIGHT: f64 = 400.0;
 const CHAT_DEFAULT_INNER_WIDTH: f64 = 1280.0;
 const CHAT_DEFAULT_INNER_HEIGHT: f64 = 800.0;
