@@ -1,7 +1,9 @@
 use tauri::{
-    window::Color, AppHandle, LogicalPosition, LogicalSize, Manager, TitleBarStyle, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder,
+    window::Color, AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
 };
+#[cfg(target_os = "macos")]
+use tauri::{LogicalPosition, TitleBarStyle};
 
 /// 侧栏收起时主内容区最小宽度（与前端 `CHAT_MIN_SIZE_COLLAPSED` 一致）。
 pub const CHAT_MIN_INNER_WIDTH_COLLAPSED: f64 = 400.0;
@@ -123,8 +125,47 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window.set_decorations(false);
-        let _ = window.set_shadow(false);
         let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+        #[cfg(target_os = "windows")]
+        {
+            let _ = window.set_shadow(true);
+            apply_windows_chat_window_frame(window);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = window.set_shadow(false);
+    }
+}
+
+// Windows Chat: let DWM own the outer shadow/corners. The WebView content
+// fills the window without a second CSS-drawn rounded frame.
+#[cfg(target_os = "windows")]
+fn apply_windows_chat_window_frame(window: &WebviewWindow) {
+    use std::ffi::c_void;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+
+    unsafe {
+        let corner = DWMWCP_ROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as *const c_void,
+            std::mem::size_of_val(&corner) as u32,
+        );
+
+        let border_color = DWMWA_COLOR_NONE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color as *const _ as *const c_void,
+            std::mem::size_of_val(&border_color) as u32,
+        );
     }
 }
 

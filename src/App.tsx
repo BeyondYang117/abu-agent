@@ -8,6 +8,7 @@ import { ChatWindowHost } from './chat/ChatWindowHost'
 import {
   getRememberedChatRoute,
   hashPath,
+  isChatWindowPlacementVisible,
   isChatPath,
   isChatSettingsPath,
   rememberChatGeometry,
@@ -332,8 +333,14 @@ function App() {
     if (!isTauriRuntime()) return
     try {
       const win = (await import('@tauri-apps/api/window')).getCurrentWindow()
-      const visible = await win.isVisible()
-      if (!visible) {
+      const [visible, minimized] = await Promise.all([win.isVisible(), win.isMinimized()])
+      const placementVisible = visible && !minimized
+        ? await isChatWindowPlacementVisible(win)
+        : false
+      if (!visible || minimized || !placementVisible) {
+        if (minimized) {
+          await win.unminimize()
+        }
         await restoreChatWindowGeometry(win)
         await api.showWindow()
         await api.focusWindow()
