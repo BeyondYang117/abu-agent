@@ -5,8 +5,8 @@ mod shell;
 
 pub use fetch::web_fetch;
 pub use files::{
-    copy_path, create_dir, delete_path, edit_file, glob_files, list_dir, move_path, patch,
-    read_file, search_files, stat_path, write_file, write_file_chunk, FileMutationResult,
+    copy_path, create_dir, delete_path, edit_file, glob_files, list_dir, move_path, read_file,
+    search_files, stat_path, write_file, FileMutationResult, ReadFileResult, ReadFileState,
 };
 pub use sandbox_exports::{
     cleanup_stale_sandbox_exports, export_sandbox_artifacts, format_export_error,
@@ -126,6 +126,12 @@ pub fn resolve_tool_read_path(
     raw_path: &str,
 ) -> Result<PathBuf, String> {
     if workspace.has_project() {
+        // An explicit absolute or ~/ path may leave the project root for reads,
+        // matching non-project conversations (reads are unrestricted there).
+        let expanded = expand_home_prefix(raw_path)?;
+        if Path::new(&expanded).is_absolute() {
+            return resolve_read_path(raw_path);
+        }
         return resolve_project_path(workspace, raw_path, false);
     }
     resolve_read_path(raw_path)
@@ -136,9 +142,14 @@ pub fn resolve_tool_write_path(
     raw_path: &str,
 ) -> Result<PathBuf, String> {
     if workspace.has_project() {
+        if let Some(path) = resolve_project_escape_write_path(workspace, raw_path, false)? {
+            return Ok(path);
+        }
         return resolve_project_path(workspace, raw_path, true);
     }
-    resolve_workspace_path(raw_path, &workspace.workspace_roots)
+    let path = resolve_workspace_path(raw_path, &workspace.workspace_roots)?;
+    assert_writable_path(&path)?;
+    Ok(path)
 }
 
 pub fn resolve_tool_write_entry_path(
@@ -146,9 +157,46 @@ pub fn resolve_tool_write_entry_path(
     raw_path: &str,
 ) -> Result<PathBuf, String> {
     if workspace.has_project() {
+        if let Some(path) = resolve_project_escape_write_path(workspace, raw_path, true)? {
+            return Ok(path);
+        }
         return resolve_project_entry_path(workspace, raw_path);
     }
-    resolve_workspace_path(raw_path, &workspace.workspace_roots)
+    let path = resolve_workspace_path(raw_path, &workspace.workspace_roots)?;
+    assert_writable_path(&path)?;
+    Ok(path)
+}
+
+/// In a project conversation, an explicit absolute or ~/ path that resolves
+/// outside the project root falls back to the global write rules (home-bounded,
+/// blocklist, workspace_roots) instead of being rejected. Relative paths never
+/// escape. Returns Ok(None) when the path belongs to the normal project flow.
+fn resolve_project_escape_write_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+    entry: bool,
+) -> Result<Option<PathBuf>, String> {
+    let expanded = expand_home_prefix(raw_path)?;
+    let raw = Path::new(&expanded);
+    if !raw.is_absolute() {
+        return Ok(None);
+    }
+    if let Ok(root) = project_root_required(workspace) {
+        // Entry semantics must not follow a final symlink, or an in-root link
+        // pointing outside would be misclassified as an escape and the global
+        // flow would delete the link target instead of the link itself.
+        let probed = if entry {
+            canonicalize_entry_or_missing(raw)?
+        } else {
+            canonicalize_existing_or_missing(raw, true)?
+        };
+        if probed.starts_with(&root) {
+            return Ok(None);
+        }
+    }
+    let path = resolve_workspace_path(raw_path, &workspace.workspace_roots)?;
+    assert_writable_path(&path)?;
+    Ok(Some(path))
 }
 
 pub fn resolve_tool_existing_dir(

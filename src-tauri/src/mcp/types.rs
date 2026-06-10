@@ -309,7 +309,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__read_file".to_string(),
         name: "read_file".to_string(),
-        description: "Read a local text file. In a project conversation, paths are relative to the bound project root by default and absolute paths must stay inside that project. Outside a project, paths may be absolute, home-relative, or use ~/. Optional offset/limit are 1-based line numbers.".to_string(),
+        description: "Read a local text file. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -424,7 +424,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write_file".to_string(),
-        description: "Create a new text file or explicitly overwrite a whole file. In a project conversation, paths are relative to the bound project root by default and cannot escape it. For small edits to an existing file, prefer edit_file; for coordinated multi-file code edits, prefer patch. Use write_file only when the user explicitly asks to save/write/create a local file, provides a target path, or asks for a full-file replacement. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. Returns structured file mutation metadata including diff stats. For long files (more than about 200 lines or 8 KB of content), prefer write_file_chunk so progress persists to disk incrementally.".to_string(),
+        description: "Write a full text file: create it if missing, overwrite it if it exists. Use this when the user explicitly asks to save/write/create a local file or gives a target path; for small changes to an existing file prefer edit_file. Do not call it just because the user asked for a code block or inline code — answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -442,34 +442,11 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     }
 }
 
-pub fn native_write_file_chunk_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "native__write_file_chunk".to_string(),
-        name: "write_file_chunk".to_string(),
-        description: "Write a LONG text file incrementally in chunks instead of one giant write_file call. Use this whenever the content is long (roughly more than 200 lines or 8 KB). Protocol: call with mode=start and the first portion of content to create/overwrite the file; call with mode=append and the next portion to append (the file must already exist); finally call with mode=finish to verify and return the final file state. Each call persists to disk immediately, so if generation is interrupted only the chunk currently being generated is lost — resume by reading the file and appending the remainder. Chunks of roughly 100-300 lines are ideal. Paths follow the same project-relative rules as write_file. Returns structured file mutation metadata.".to_string(),
-        source: "native".to_string(),
-        server_id: None,
-        server_name: Some("Kivio".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Project-relative path in project mode, otherwise an explicitly requested absolute/home/~/ path. Must be the same path across start/append/finish calls." },
-                "mode": { "type": "string", "enum": ["start", "append", "finish"], "description": "start = create/overwrite the file with the first chunk; append = add the next chunk to the existing file; finish = verify and return the final state" },
-                "content": { "type": "string", "description": "Chunk text. Required for mode=start and mode=append; ignored for mode=finish." }
-            },
-            "required": ["path", "mode"]
-        }),
-        sensitive: true,
-        annotations: None,
-        output_schema: None,
-    }
-}
-
 pub fn native_edit_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__edit_file".to_string(),
         name: "edit_file".to_string(),
-        description: "Make a targeted single-file text edit by replacing old_string with new_string. Prefer this for small edits to existing files. In a project conversation, paths are project-relative by default and cannot escape the project root. Fails if old_string is missing or appears multiple times unless replace_all is true. Returns structured file mutation metadata including unified diff stats.".to_string(),
+        description: "Replace old_string with new_string in one file. old_string must match the current file content exactly and uniquely; set replace_all=true to replace every occurrence. Prefer this over write_file for small edits. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -482,30 +459,6 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
                 "replace_all": { "type": "boolean" }
             },
             "required": ["path", "old_string", "new_string"]
-        }),
-        sensitive: true,
-        annotations: None,
-        output_schema: None,
-    }
-}
-
-pub fn native_patch_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "native__patch".to_string(),
-        name: "patch".to_string(),
-        description: "Apply a V4A/Codex-style multi-file patch for code edits. Prefer this for coordinated changes across files or larger existing-file edits. Supports *** Add File, *** Update File with @@ hunks using space/-/+ lines, and *** Delete File. Patch file paths must be project-relative and cannot contain '..' or absolute roots. Returns structured file mutation metadata including affected files, additions/removals, and a unified diff.".to_string(),
-        source: "native".to_string(),
-        server_id: None,
-        server_name: Some("Kivio".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "patch": {
-                    "type": "string",
-                    "description": "Patch text beginning with *** Begin Patch and ending with *** End Patch"
-                }
-            },
-            "required": ["patch"]
         }),
         sensitive: true,
         annotations: None,
@@ -819,7 +772,6 @@ pub fn list_native_builtin_tool_defs(
     }
     if native.write_file {
         tools.push(native_write_file_tool());
-        tools.push(native_write_file_chunk_tool());
         tools.push(native_create_dir_tool());
         tools.push(native_delete_path_tool());
         tools.push(native_move_path_tool());
@@ -827,7 +779,6 @@ pub fn list_native_builtin_tool_defs(
     }
     if native.edit_file {
         tools.push(native_edit_file_tool());
-        tools.push(native_patch_tool());
     }
     if native.run_command {
         tools.push(native_run_command_tool());
@@ -914,9 +865,7 @@ mod tests {
         assert!(!native_memory_read_tool().sensitive);
         assert!(!native_memory_modify_tool().sensitive);
         assert!(native_write_file_tool().sensitive);
-        assert!(native_write_file_chunk_tool().sensitive);
         assert!(native_edit_file_tool().sensitive);
-        assert!(native_patch_tool().sensitive);
         assert!(native_run_command_tool().sensitive);
     }
 
@@ -930,27 +879,38 @@ mod tests {
         assert!(tool
             .description
             .contains("structured file mutation metadata"));
-        assert!(tool.description.contains("write_file_chunk"));
     }
 
     #[test]
-    fn write_file_chunk_tool_shares_write_file_gate_and_is_not_read_only() {
+    fn write_gate_exposes_exactly_whole_file_and_path_tools() {
         let mut native = crate::settings::ChatNativeToolsConfig::default();
         let defs = list_native_builtin_tool_defs(&native, false, false);
-        assert!(!defs.iter().any(|tool| tool.name == "write_file_chunk"));
+        assert!(defs.is_empty() || !defs.iter().any(|tool| tool.name == "write_file"));
 
         native.write_file = true;
+        native.edit_file = true;
         let defs = list_native_builtin_tool_defs(&native, false, false);
-        assert!(defs.iter().any(|tool| tool.name == "write_file"));
-        assert!(defs.iter().any(|tool| tool.name == "write_file_chunk"));
-
-        let tool = native_write_file_chunk_tool();
-        assert_eq!(tool.id, "native__write_file_chunk");
-        assert_eq!(tool.source, "native");
-        assert!(!tool.is_read_only_tool());
-        assert!(tool.description.contains("mode=start"));
-        assert!(tool.description.contains("append"));
-        assert!(tool.description.contains("finish"));
+        let names: Vec<&str> = defs.iter().map(|tool| tool.name.as_str()).collect();
+        for expected in [
+            "write_file",
+            "create_dir",
+            "delete_path",
+            "move_path",
+            "copy_path",
+            "edit_file",
+        ] {
+            assert!(names.contains(&expected), "{expected} should be exposed");
+        }
+        for removed in [
+            "patch",
+            "write_file_chunk",
+            "begin_file_write",
+            "append_file_write",
+            "finish_file_write",
+            "abort_file_write",
+        ] {
+            assert!(!names.contains(&removed), "{removed} must not be exposed");
+        }
     }
 
     #[test]

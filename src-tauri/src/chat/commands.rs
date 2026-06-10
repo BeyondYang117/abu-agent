@@ -84,6 +84,24 @@ fn chat_memory_prompt_for_request(
     }
 }
 
+/// Resolves the conversation's project binding into prompt context so the
+/// model knows the path base before generating file tool arguments.
+fn project_prompt_context_for(
+    app: &AppHandle,
+    conversation: &Conversation,
+) -> Option<agent_prepare::ProjectPromptContext> {
+    let project = crate::chat::storage::resolve_conversation_project(app, conversation)
+        .ok()
+        .flatten()?;
+    Some(agent_prepare::ProjectPromptContext {
+        name: project.name,
+        root_path: project
+            .root_path
+            .map(|root| root.trim().to_string())
+            .filter(|root| !root.is_empty()),
+    })
+}
+
 /// 获取对话列表
 #[tauri::command]
 pub(crate) fn chat_get_conversations(
@@ -1096,6 +1114,7 @@ async fn complete_assistant_reply(
         crate::chat::ask_user::format_prompt(&language, ask_user_tools_available);
     let agent_plan_prompt =
         crate::chat::plan::format_prompt(&conversation.agent_plan_state, &language);
+    let project_prompt_context = project_prompt_context_for(app, conversation);
     let system_prompt = agent_prepare::build_chat_system_prompt(
         &language,
         !main_image_paths.is_empty(),
@@ -1112,6 +1131,7 @@ async fn complete_assistant_reply(
         Some(&agent_plan_prompt),
         Some(&agent_ask_user_prompt),
         Some(&agent_todo_prompt),
+        project_prompt_context.as_ref(),
     );
 
     let runtime_messages = build_chat_api_messages(
@@ -1145,6 +1165,7 @@ async fn complete_assistant_reply(
             &language,
             false,
         )),
+        project_prompt_context.as_ref(),
     );
 
     let host = ChatAgentHost {
@@ -2533,6 +2554,7 @@ async fn compute_context_state(
             &language,
             todo_tools_available,
         )),
+        project_prompt_context_for(app, conversation).as_ref(),
     );
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let request_messages = build_chat_api_messages(
@@ -2950,13 +2972,7 @@ fn apply_inline_code_request_tool_filter(
     if !should_answer_inline_without_file_write(last_user_api_content) {
         return;
     }
-    tools.retain(|tool| {
-        !(tool.source == "native"
-            && matches!(
-                tool.name.as_str(),
-                "write_file" | "write_file_chunk" | "patch"
-            ))
-    });
+    tools.retain(|tool| !(tool.source == "native" && tool.name == "write_file"));
 }
 
 fn should_answer_inline_without_file_write(last_user_api_content: Option<&str>) -> bool {
@@ -3845,32 +3861,6 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
                 }
             }
         }
-        "patch" => {
-            if let Some(patch) = parsed
-                .as_ref()
-                .and_then(|value| value.get("patch"))
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                let files = patch
-                    .lines()
-                    .filter_map(|line| {
-                        line.strip_prefix("*** Add File: ")
-                            .or_else(|| line.strip_prefix("*** Update File: "))
-                            .or_else(|| line.strip_prefix("*** Delete File: "))
-                    })
-                    .map(str::trim)
-                    .filter(|path| !path.is_empty())
-                    .take(4)
-                    .collect::<Vec<_>>();
-                if files.is_empty() {
-                    lines.push(format!("Patch: {}", truncate_chars(patch, 180)));
-                } else {
-                    lines.push(format!("Patch files: {}", files.join(", ")));
-                }
-            }
-        }
         _ => {}
     }
 
@@ -4251,9 +4241,7 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
-            crate::mcp::types::native_write_file_chunk_tool(),
             crate::mcp::types::native_edit_file_tool(),
-            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(
@@ -4263,8 +4251,6 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "read_file"));
         assert!(!tools.iter().any(|tool| tool.name == "write_file"));
-        assert!(!tools.iter().any(|tool| tool.name == "write_file_chunk"));
-        assert!(!tools.iter().any(|tool| tool.name == "patch"));
         assert!(tools.iter().any(|tool| tool.name == "edit_file"));
     }
 
@@ -4273,13 +4259,11 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
-            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(&mut tools, Some("生成一个完整的 HTML demo"));
 
         assert!(tools.iter().any(|tool| tool.name == "write_file"));
-        assert!(tools.iter().any(|tool| tool.name == "patch"));
     }
 
     #[test]
@@ -4287,13 +4271,11 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
-            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(&mut tools, Some("把完整 HTML 放到代码块里给我"));
 
         assert!(!tools.iter().any(|tool| tool.name == "write_file"));
-        assert!(!tools.iter().any(|tool| tool.name == "patch"));
     }
 
     #[test]
@@ -4302,7 +4284,6 @@ mod tests {
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
             crate::mcp::types::native_edit_file_tool(),
-            crate::mcp::types::native_patch_tool(),
         ];
 
         apply_inline_code_request_tool_filter(
@@ -4312,7 +4293,6 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "write_file"));
         assert!(tools.iter().any(|tool| tool.name == "edit_file"));
-        assert!(tools.iter().any(|tool| tool.name == "patch"));
     }
 
     #[test]
@@ -4344,7 +4324,6 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
-            crate::mcp::types::native_write_file_chunk_tool(),
             crate::mcp::types::native_run_command_tool(),
             crate::mcp::types::native_run_python_tool(),
             crate::mcp::types::native_memory_read_tool(),
@@ -4379,7 +4358,6 @@ mod tests {
         assert!(names.contains(&"todo_update".to_string()));
         assert!(names.contains(&"mcp__docs__search".to_string()));
         assert!(!names.contains(&"write_file".to_string()));
-        assert!(!names.contains(&"write_file_chunk".to_string()));
         assert!(!names.contains(&"run_command".to_string()));
         assert!(!names.contains(&"run_python".to_string()));
         assert!(!names.contains(&"memory_modify".to_string()));
@@ -4387,7 +4365,6 @@ mod tests {
         assert!(!names.contains(&"skill_run_script".to_string()));
         assert!(!names.contains(&"mcp__fs__write".to_string()));
         assert!(blocked_names.contains(&"write_file".to_string()));
-        assert!(blocked_names.contains(&"write_file_chunk".to_string()));
         assert!(blocked_names.contains(&"run_command".to_string()));
         assert!(blocked_names.contains(&"run_python".to_string()));
         assert!(blocked_names.contains(&"memory_modify".to_string()));

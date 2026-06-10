@@ -2193,20 +2193,19 @@ mod tests {
     }
 
     #[test]
-    fn write_file_chunk_stays_outside_parallel_whitelist() {
+    fn write_tools_stay_outside_parallel_whitelist() {
         let mut settings = Settings::default();
         settings.chat_tools.approval_policy = "auto".to_string();
-        assert!(
-            !tool_call_parallel_eligible(
-                &settings,
-                &crate::mcp::types::native_write_file_chunk_tool()
-            ),
-            "write_file_chunk must stay serial even when approval is auto"
-        );
-        assert!(!tool_call_parallel_eligible(
-            &settings,
-            &crate::mcp::types::native_write_file_tool()
-        ));
+        for tool in [
+            crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_edit_file_tool(),
+        ] {
+            assert!(
+                !tool_call_parallel_eligible(&settings, &tool),
+                "{} must stay serial even when approval is auto",
+                tool.name
+            );
+        }
         assert!(
             tool_call_parallel_eligible(&settings, &native_read_file_tool()),
             "read-only tools remain parallel-eligible"

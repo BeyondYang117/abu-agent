@@ -165,9 +165,7 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
         "glob_files",
         "stat_path",
         "write_file",
-        "write_file_chunk",
         "edit_file",
-        "patch",
         "create_dir",
         "delete_path",
         "move_path",
@@ -232,6 +230,7 @@ pub fn build_chat_system_prompt(
     agent_plan_prompt: Option<&str>,
     agent_ask_user_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
+    project_context: Option<&ProjectPromptContext>,
 ) -> String {
     build_chat_system_prompt_with_segments(
         language,
@@ -249,8 +248,38 @@ pub fn build_chat_system_prompt(
         agent_plan_prompt,
         agent_ask_user_prompt,
         agent_todo_prompt,
+        project_context,
     )
     .0
+}
+
+/// Project binding facts injected into the system prompt so the model knows
+/// the default path base before generating file tool arguments.
+#[derive(Debug, Clone)]
+pub struct ProjectPromptContext {
+    pub name: String,
+    pub root_path: Option<String>,
+}
+
+fn project_context_prompt(project: &ProjectPromptContext, language: &str) -> String {
+    match (&project.root_path, language.starts_with("zh")) {
+        (Some(root), true) => format!(
+            "当前是项目对话，项目「{}」已绑定文件夹：{root}。文件/命令工具的相对路径以该目录为根；写入明确的绝对路径或 ~/ 路径（如 ~/Desktop/x.html）会写到项目外的全局位置。",
+            project.name
+        ),
+        (Some(root), false) => format!(
+            "This is a project conversation. Project \"{}\" is bound to folder: {root}. Relative paths in file/command tools resolve from that root; writing an explicit absolute or ~/ path (e.g. ~/Desktop/x.html) targets that global location outside the project.",
+            project.name
+        ),
+        (None, true) => format!(
+            "当前是项目对话，但项目「{}」尚未绑定本地文件夹；文件/命令工具不可用，需要用户先在项目菜单中绑定文件夹。",
+            project.name
+        ),
+        (None, false) => format!(
+            "This is a project conversation, but project \"{}\" has no bound folder; file/command tools are unavailable until the user binds one from the project menu.",
+            project.name
+        ),
+    }
 }
 
 pub fn build_chat_system_prompt_with_segments(
@@ -269,6 +298,7 @@ pub fn build_chat_system_prompt_with_segments(
     agent_plan_prompt: Option<&str>,
     agent_ask_user_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
+    project_context: Option<&ProjectPromptContext>,
 ) -> (String, Vec<ContextUsageSegment>) {
     let mut prompt = String::new();
     let mut segments = Vec::new();
@@ -303,6 +333,16 @@ pub fn build_chat_system_prompt_with_segments(
         "Runtime context",
         &crate::settings::chat_current_datetime_context(language),
     );
+
+    if let Some(project) = project_context {
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "runtime_context",
+            "Runtime context",
+            &project_context_prompt(project, language),
+        );
+    }
 
     if let Some(memory) = memory_prompt
         .map(str::trim)
@@ -810,21 +850,33 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
     };
     let mut prompt = if language.starts_with("zh") {
         let image_generation_hint = if has_image_generation {
-            "用户要求创建、生成、绘制图片时，必须调用 mixer_generate_image；不要只用文字描述会生成什么。mixer_generate_image 使用设置中的混音器生图模型，返回可渲染图片 artifact。"
+            "\n- 用户要求创建、生成、绘制图片时，必须调用 mixer_generate_image，不要只用文字描述。"
         } else {
-            "生图工具未启用；用户要求生成图片时，说明需要先在「混音器」里配置生图模型。"
+            "\n- 生图工具未启用；用户要求生成图片时，说明需要先在「混音器」里配置生图模型。"
         };
         format!(
-            "内置工具（已启用）：{list}。只允许调用这里列出的内置工具。memory_read 可读取 L1/L2 记忆；L1 已在启用记忆时默认注入，通常不需要再读，L2 必须通过 memory_read 按需读取。memory_modify 用于追加、替换、删除或归档记忆，L1 只能保存每次都该知道的短约束且最多 5000 字节，L2 保存长期流程和知识且不会自动加载。项目对话绑定本地文件夹后，read_file、list_dir、search_files、glob_files、stat_path、write_file、edit_file、patch、create_dir、delete_path、move_path、copy_path 的路径默认相对项目根目录，绝对路径也必须在项目根目录内；patch 里的文件路径必须是项目相对路径。旧项目如果未绑定文件夹，文件/命令工具会提示先绑定。非项目对话沿用全局文件路径规则。只有当用户明确要求保存/写入/创建本地文件、修改项目文件，或给出目标路径时，才调用写入/编辑/删除/移动类工具。代码编辑优先级：已有文件小改用 edit_file；多文件或较大代码改动用 patch；新建文件、明确整文件覆盖或指定交付文件才用 write_file。如果用户要求“生成代码块”“用 ```html 包起来”“给完整代码”“做一个 demo”但没有明确要求保存文件，应直接在回答中生成内容，不要调用 write_file 或 patch；文件变更工具成功后只简短说明保存路径、变更文件和结果，不要再把完整文件内容复述一遍，除非用户明确要求同时保存并展示全文。run_command 是敏感的宿主 shell 能力：项目对话中默认从项目根目录启动，显式 cwd 只是启动目录并按工作区校验；它不等同于文件工具边界。执行跨目录、破坏性、联网、修改环境，或用户明确禁止的命令前，必须说明原因并等待用户确认。write_file、edit_file、patch、create_dir、delete_path、move_path、copy_path、run_command 可能会请求用户确认；memory_read / memory_modify 无需确认；run_command 非零退出码代表执行失败，不要用它运行 Skill 自带脚本，Skill 脚本必须走 skill_run_script。run_command 不得用 pip/pip3/python -m pip 安装包来绕过 run_python 沙盒失败；只有用户明确要求修改本机 Python 环境时，才能设置 allow_host_python_package_install=true 且使用 --user 或虚拟环境。run_python 在 Pyodide 沙盒中运行，不能直接访问或修改本机文件系统；files 支持与 read_file 相同的路径写法，项目对话中同样限定在项目根目录内，挂载后在 Python 中使用 KIVIO_INPUT_FILES[0] 等虚拟路径，禁止在 Python 内 open 宿主绝对路径。已捆绑包在 import 时自动加载：numpy、matplotlib、pandas、pillow、seaborn、openpyxl、xlrd、et_xmlfile、pypdf、micropip；优先直接 import，不要手写 await micropip.install。run_python 适合数据运算、统计分析、文档分析和生成图表；用相对路径保存产物（例如 chart.png、summary.csv、report.xlsx），不要保存到 /Users 或 ~/Desktop 等本机路径，不要 print base64 或 data:image URL。应用会自动捕获图片、csv、xlsx、json、md 等沙盒文件，缓存到 ~/Kivio/runs/<对话>/<消息>/（约 7 天自动清理），图片会在 Chat 内渲染。用户明确要求交付到桌面或指定路径时，再用 write_file。联网搜索、网页读取、生产 API 调用等任务若有专门工具，应优先使用已启用的专门工具或对应 Skill 脚本；{zh_live_access_hint}不要为了 Python 包使用 host pip 安装，除非用户明确要求操作本机环境。用户要用 Python 跑代码/计算时优先 run_python，不要用 skill_run_script，除非用户点名某个 Skill。"
+            "内置工具（已启用）：{list}。只能调用此列表中的内置工具。\n\
+- 项目对话中文件/命令工具的相对路径以项目根目录为根；写入明确的绝对路径或 ~/ 路径（如 ~/Desktop/x.html）会落到项目外的全局位置。非项目对话用绝对路径或 ~/ 路径。\n\
+- 用户明确要求保存/修改/删除本地文件或给出目标路径时才动文件：小改用 edit_file，新建或整文件覆盖用 write_file。只要求“生成代码块”时直接在回答里输出，不调用 write_file。写入成功后简短说明路径即可，不要复述文件内容。\n\
+- 写入/删除/移动类工具和 run_command 可能需要用户确认；memory_read（按需读 L2，L1 已注入）和 memory_modify 无需确认。\n\
+- run_command 在宿主 shell 从项目根目录执行，非零退出码即失败；破坏性、联网、改环境的命令先说明并等确认。Skill 脚本走 skill_run_script；不要用 pip 装宿主包绕过沙盒。\n\
+- run_python 在 Pyodide 沙盒运行，只用于数据运算、分析、文档处理和图表；不要用它生成或打印代码/HTML 文本，代码直接写在回答里。无宿主文件系统访问；files 挂载本地文件后用 KIVIO_INPUT_FILES[n] 路径，numpy、pandas、matplotlib、pillow、openpyxl、pypdf 可直接 import。产物保存为相对路径文件名（如 chart.png），应用会自动捕获渲染；不要 print base64。\n\
+- {zh_live_access_hint}"
         ) + image_generation_hint
     } else {
         let image_generation_hint = if has_image_generation {
-            " When the user asks to create, generate, or draw an image, you must call mixer_generate_image; do not merely describe the image. mixer_generate_image uses the Mixer image generation model configured in Settings and returns renderable image artifacts."
+            "\n- When the user asks to create, generate, or draw an image, call mixer_generate_image; do not merely describe it."
         } else {
-            " Image generation is not enabled; if the user asks to generate an image, explain that an image generation model must be configured under Mixer first."
+            "\n- Image generation is not enabled; if asked, explain that an image model must be configured under Mixer first."
         };
         format!(
-            "Built-in tools enabled: {list}. Only call built-in tools listed here. memory_read reads L1/L2 memory; L1 is already injected by default when memory is enabled, so usually read L2 on demand. memory_modify appends, replaces, removes, or archives memory; L1 is short online memory limited to 5000 bytes, while L2 stores long-term workflows and knowledge and is never auto-loaded. When a project conversation is bound to a local folder, read_file, list_dir, search_files, glob_files, stat_path, write_file, edit_file, patch, create_dir, delete_path, move_path, and copy_path use project-relative paths by default, and absolute paths must still stay inside that project root. Patch file paths must be project-relative. Legacy projects without a folder binding will ask the user to bind a folder before filesystem or command tools can operate. Non-project conversations keep the global path rules. Call write/edit/delete/move/copy tools only when the user explicitly asks to save/write/create/delete/move local files, modify project files, or provides a target path. Code-edit priority: use edit_file for small existing-file edits; use patch for multi-file or larger code edits; use write_file only for new files, explicit whole-file replacement, or a requested deliverable file. If the user asks for a code block, fenced HTML, complete code, or a demo without explicitly asking to save it, generate the content directly in the assistant answer and do not call write_file or patch. After a successful file mutation, briefly state the saved path/changed files/result without repeating the full file content unless the user explicitly asked to both save and display it. run_command is a sensitive host-shell capability: in project conversations it starts from the project root by default, and explicit cwd is only the startup directory and is validated against the workspace. It is not the same boundary as the file tools. Before running cross-directory, destructive, network, environment-changing, or user-forbidden commands, explain the reason and wait for user confirmation. write_file, edit_file, patch, create_dir, delete_path, move_path, copy_path, and run_command may require user approval; memory_read and memory_modify do not; run_command treats non-zero exit codes as failures. Do not use run_command to run Skill bundled scripts; use skill_run_script. Do not use pip/pip3/python -m pip through run_command to bypass run_python sandbox failures; only set allow_host_python_package_install=true when the user explicitly asks to modify the host Python environment, and then use --user or a virtual environment. run_python runs in a Pyodide sandbox with no direct host filesystem access. The files array accepts the same path syntax as read_file; in project conversations those paths are also limited to the project root. After mounting, use KIVIO_INPUT_FILES[0] and other virtual paths in Python, and never open host absolute paths inside Python. Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, and micropip; prefer plain import statements instead of await micropip.install. Use it for data computation, statistical analysis, document analysis, code execution, and charts. When generating files with run_python, save them to relative filenames in the Pyodide cwd such as chart.png, summary.csv, or report.xlsx; do not save to host paths such as /Users or ~/Desktop, and do not print base64 or data:image URLs. Kivio auto-captures images plus csv/xlsx/json/md/txt/html artifacts into ~/Kivio/runs/<conversation>/<message>/ for about 7 days and renders images in Chat. Use write_file when the user explicitly asks for a durable deliverable at a specific host path such as ~/Desktop. For web search, page reading, and production API calls, prefer enabled dedicated tools or the relevant Skill script when those dedicated tools are available; {en_live_access_hint} Do not use host pip to install Python packages unless the user explicitly asks to modify the host Python environment. For generic Python requests, use run_python—not skill_run_script—unless the user named a specific skill."
+            "Built-in tools enabled: {list}. Only call tools in this list.\n\
+- In project conversations, relative paths in file/command tools resolve from the project root; writing an explicit absolute or ~/ path (e.g. ~/Desktop/x.html) targets that global location outside the project. Non-project conversations use absolute or ~/ paths.\n\
+- Touch files only when the user explicitly asks to save/modify/delete local files or gives a target path: edit_file for small edits, write_file for new files or whole-file overwrites. If asked for a code block without saving, answer inline. After a write, state the path briefly; do not repeat the file content.\n\
+- Write/delete/move tools and run_command may need user approval; memory_read (L2 on demand; L1 is auto-injected) and memory_modify do not.\n\
+- run_command runs on the host shell from the project root; non-zero exit means failure. Explain and get confirmation before destructive, network, or environment-changing commands. Skill scripts go through skill_run_script; never use host pip to bypass the run_python sandbox.\n\
+- run_python runs in a Pyodide sandbox, only for data computation, analysis, document processing, and charts; never use it to generate or print code/HTML text — write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (chart.png); Kivio auto-captures and renders them. No base64 printing.\n\
+- {en_live_access_hint}"
         ) + image_generation_hint
     };
     if has_image_generation && !prompt.ends_with('.') && !prompt.ends_with('。') {
@@ -904,6 +956,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert!(prompt.contains("run_python"));
@@ -933,11 +986,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
-        assert!(prompt.contains("用 ```html 包起来"));
-        assert!(prompt.contains("不要调用 write_file"));
-        assert!(prompt.contains("不要再把完整文件内容复述一遍"));
+        assert!(prompt.contains("生成代码块"));
+        assert!(prompt.contains("不调用 write_file"));
+        assert!(prompt.contains("不要复述文件内容"));
     }
 
     #[test]
@@ -962,6 +1016,7 @@ mod tests {
             None,
             Some(&assistant),
             "你",
+            None,
             None,
             None,
             None,

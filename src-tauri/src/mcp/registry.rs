@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 
 use crate::{
-    native_tools::{resolve_tool_read_path, FileMutationResult, NativeToolWorkspace},
+    native_tools::{resolve_tool_read_path, FileMutationResult, NativeToolWorkspace, ReadFileResult},
     settings::{
         ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
         SKILL_SCRIPT_MIN_TIMEOUT_MS,
@@ -525,18 +525,13 @@ async fn call_native_tool(
             .await;
     }
 
-    if matches!(
-        tool.name.as_str(),
-        "write_file" | "write_file_chunk" | "edit_file" | "patch"
-    ) {
+    if matches!(tool.name.as_str(), "write_file" | "edit_file") {
         let tool_name = tool.name.clone();
         let result = run_blocking_file_mutation(&workspace, &arguments, move |workspace,
                                                                               arguments| {
             match tool_name.as_str() {
                 "write_file" => crate::native_tools::write_file(workspace, arguments),
-                "write_file_chunk" => crate::native_tools::write_file_chunk(workspace, arguments),
                 "edit_file" => crate::native_tools::edit_file(workspace, arguments),
-                "patch" => crate::native_tools::patch(workspace, arguments),
                 _ => unreachable!(),
             }
         })
@@ -585,7 +580,10 @@ async fn call_native_tool(
             }
             return crate::chat::memory::tool_modify(app, &arguments);
         }
-        "read_file" => crate::native_tools::read_file(&workspace, &arguments)?,
+        "read_file" => {
+            let result = crate::native_tools::read_file(&workspace, &arguments)?;
+            return read_file_tool_result(result);
+        }
         "list_dir" => crate::native_tools::list_dir(&workspace, &arguments)?,
         "search_files" => crate::native_tools::search_files(&workspace, &arguments)?,
         "glob_files" => crate::native_tools::glob_files(&workspace, &arguments)?,
@@ -649,9 +647,29 @@ where
 }
 
 fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallResult, String> {
-    let content = result.summary();
+    let summary = result.summary();
+    let content = if result.ok || result.warnings.is_empty() {
+        summary
+    } else {
+        format!("{}\n{}", summary, result.warnings.join("\n"))
+    };
+    let is_error = !result.ok;
     let structured = serde_json::to_value(&result)
         .map_err(|err| format!("Serialize file mutation result failed: {err}"))?;
+    Ok(McpToolCallResult {
+        content,
+        is_error,
+        raw: structured.clone(),
+        artifacts: Vec::new(),
+        structured_content: Some(structured),
+    })
+}
+
+fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCallResult, String> {
+    let structured = serde_json::to_value(&result)
+        .map_err(|err| format!("Serialize read_file result failed: {err}"))?;
+    let content = serde_json::to_string(&structured)
+        .map_err(|err| format!("Serialize read_file content failed: {err}"))?;
     Ok(McpToolCallResult {
         content,
         is_error: false,
@@ -798,5 +816,54 @@ async fn run_python_via_pyodide(
             pending.remove(&run_id);
             Err(format!("Python execution timed out after {timeout_ms}ms"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native_tools::{ReadFileResult, ReadFileState};
+
+    #[test]
+    fn read_file_tool_result_preserves_structured_content() {
+        let result = ReadFileResult {
+            path: "src/App.tsx".to_string(),
+            resolved_path: "/tmp/project/src/App.tsx".to_string(),
+            content: "alpha\nbeta".to_string(),
+            total_lines: 2,
+            start_line: 1,
+            end_line: 2,
+            truncated: false,
+            file_size: 10,
+            next_offset: None,
+            read_state: ReadFileState {
+                scope: "full".to_string(),
+                mtime: Some(123),
+                already_read: false,
+            },
+            warnings: Vec::new(),
+        };
+
+        let output = read_file_tool_result(result).expect("tool result");
+        let structured = output
+            .structured_content
+            .as_ref()
+            .expect("structured content");
+
+        assert!(!output.is_error);
+        assert_eq!(output.raw, *structured);
+        assert_eq!(structured["path"], "src/App.tsx");
+        assert_eq!(structured["resolved_path"], "/tmp/project/src/App.tsx");
+        assert_eq!(structured["content"], "alpha\nbeta");
+        assert_eq!(structured["total_lines"], 2);
+        assert_eq!(structured["start_line"], 1);
+        assert_eq!(structured["end_line"], 2);
+        assert_eq!(structured["truncated"], false);
+        assert_eq!(structured["file_size"], 10);
+        assert_eq!(structured["read_state"]["scope"], "full");
+        assert_eq!(
+            serde_json::from_str::<Value>(&output.content).expect("content JSON"),
+            *structured
+        );
     }
 }

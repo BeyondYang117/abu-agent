@@ -457,7 +457,6 @@ fn tool_draft_preview(name: &str, phase: &str, argument_chars: usize) -> String 
     let prefix = match name {
         "write_file" => "正在生成文件内容",
         "edit_file" => "正在生成编辑参数",
-        "patch" => "正在生成补丁",
         _ => "正在生成工具参数",
     };
     if argument_chars == 0 {

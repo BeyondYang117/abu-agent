@@ -57,8 +57,25 @@ interface FileMutationFile {
   diff?: string
 }
 
+interface FileWriteSession {
+  sessionId?: string
+  session_id?: string
+  status?: string
+  targetPath?: string
+  target_path?: string
+  currentOffset?: number
+  current_offset?: number
+  chunkCount?: number
+  chunk_count?: number
+  targetTouched?: boolean
+  target_touched?: boolean
+}
+
 interface FileMutationStructuredContent {
+  ok?: boolean
   operation: string
+  targetTouched?: boolean
+  target_touched?: boolean
   resolvedPath?: string | null
   resolved_path?: string | null
   files?: FileMutationFile[]
@@ -69,6 +86,7 @@ interface FileMutationStructuredContent {
   diff?: string
   warnings?: string[]
   diagnostics?: unknown[]
+  session?: FileWriteSession | null
 }
 
 function compactText(text: string, max = 220): string {
@@ -207,9 +225,54 @@ function normalizeFileMutationFile(value: unknown): FileMutationFile | null {
   }
 }
 
+function normalizeFileWriteSession(value: unknown): FileWriteSession | null {
+  const session = objectValue(value)
+  if (!session) return null
+  const sessionId = typeof session.sessionId === 'string'
+    ? session.sessionId
+    : typeof session.session_id === 'string'
+      ? session.session_id
+      : ''
+  const targetPath = typeof session.targetPath === 'string'
+    ? session.targetPath
+    : typeof session.target_path === 'string'
+      ? session.target_path
+      : ''
+  if (!sessionId && !targetPath) return null
+  return {
+    sessionId,
+    session_id: sessionId,
+    status: typeof session.status === 'string' ? session.status : '',
+    targetPath,
+    target_path: targetPath,
+    currentOffset: numberValue(session.currentOffset),
+    current_offset: numberValue(session.current_offset),
+    chunkCount: numberValue(session.chunkCount),
+    chunk_count: numberValue(session.chunk_count),
+    targetTouched: typeof session.targetTouched === 'boolean' ? session.targetTouched : undefined,
+    target_touched: typeof session.target_touched === 'boolean' ? session.target_touched : undefined,
+  }
+}
+
+// Names beyond write_file/edit_file are legacy-only: the chunked-write session
+// protocol and patch tool were removed in 2.6.9, but persisted conversations
+// still carry their ToolCallRecords and must keep rendering.
+function isFileMutationTool(rawName: string): boolean {
+  return [
+    'write_file',
+    'write_file_chunk',
+    'begin_file_write',
+    'append_file_write',
+    'finish_file_write',
+    'abort_file_write',
+    'edit_file',
+    'patch',
+  ].includes(rawName)
+}
+
 function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructuredContent | null {
   const rawName = toolRawName(toolCall)
-  if (rawName !== 'write_file' && rawName !== 'write_file_chunk' && rawName !== 'edit_file' && rawName !== 'patch') return null
+  if (!isFileMutationTool(rawName)) return null
 
   const structured = objectValue(toolCall.structured_content ?? toolCall.structuredContent)
   if (!structured) return null
@@ -225,10 +288,15 @@ function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructure
     : typeof structured.resolved_path === 'string'
       ? structured.resolved_path
       : null
+  const session = normalizeFileWriteSession(structured.session)
 
   const hasMutationShape = Boolean(
+    typeof structured.ok === 'boolean' ||
     typeof structured.operation === 'string' ||
+    typeof structured.targetTouched === 'boolean' ||
+    typeof structured.target_touched === 'boolean' ||
     resolvedPath ||
+    session ||
     files.length > 0 ||
     typeof structured.diff === 'string' ||
     typeof structured.additions === 'number' ||
@@ -238,7 +306,10 @@ function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructure
   )
   if (!hasMutationShape) return null
   return {
+    ok: typeof structured.ok === 'boolean' ? structured.ok : true,
     operation,
+    targetTouched: typeof structured.targetTouched === 'boolean' ? structured.targetTouched : undefined,
+    target_touched: typeof structured.target_touched === 'boolean' ? structured.target_touched : undefined,
     resolvedPath,
     resolved_path: resolvedPath,
     files,
@@ -249,6 +320,7 @@ function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructure
     diff: typeof structured.diff === 'string' ? structured.diff : '',
     warnings: stringArrayValue(structured.warnings),
     diagnostics: Array.isArray(structured.diagnostics) ? structured.diagnostics : [],
+    session,
   }
 }
 
@@ -259,23 +331,61 @@ function fileMutationStats(mutation: FileMutationStructuredContent): string {
 function fileMutationTarget(mutation: FileMutationStructuredContent): string {
   if (mutation.files?.length === 1) return mutation.files[0]?.path || ''
   if (mutation.files?.length) return `${mutation.files.length} 个文件`
+  const sessionTarget = mutation.session?.targetPath || mutation.session?.target_path || ''
+  if (sessionTarget) return sessionTarget
   return mutation.resolvedPath || mutation.resolved_path || ''
 }
 
 function fileMutationPreview(mutation: FileMutationStructuredContent): string {
   const target = fileMutationTarget(mutation)
-  const stats = fileMutationStats(mutation)
-  return [target, stats].filter(Boolean).join(' · ')
+  const session = mutation.session
+  const targetTouched = mutation.targetTouched ?? mutation.target_touched ?? session?.targetTouched ?? session?.target_touched
+  const sessionPreview = session
+    ? [
+      `${session.currentOffset ?? session.current_offset ?? 0} bytes`,
+      `${session.chunkCount ?? session.chunk_count ?? 0} 段`,
+      targetTouched === true ? '目标已修改' : '目标未修改',
+    ].join(' · ')
+    : ''
+  const stats = mutation.files?.length ? fileMutationStats(mutation) : ''
+  return [target, sessionPreview || stats].filter(Boolean).join(' · ')
 }
 
 function FileMutationDetails({ mutation }: { mutation: FileMutationStructuredContent }) {
   const files = mutation.files ?? []
   const warnings = mutation.warnings ?? []
   const diagnostics = mutation.diagnostics ?? []
+  const session = mutation.session
+  const targetTouched = mutation.targetTouched ?? mutation.target_touched ?? session?.targetTouched ?? session?.target_touched
   const diff = (mutation.diff || files.map((file) => file.diff).filter(Boolean).join('\n')).trim()
 
   return (
     <div className="space-y-1.5">
+      {session && (
+        <div>
+          <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+            文件草稿
+          </div>
+          <div className="space-y-0.5 text-neutral-500 dark:text-neutral-400">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0 text-neutral-400 dark:text-neutral-500">
+                {fileSessionStatusLabel(session.status)}
+              </span>
+              <span className="min-w-0 truncate">
+                {session.targetPath || session.target_path || fileMutationTarget(mutation)}
+              </span>
+            </div>
+            <div className="tabular-nums">
+              {(session.currentOffset ?? session.current_offset ?? 0).toLocaleString()} bytes · {(session.chunkCount ?? session.chunk_count ?? 0).toLocaleString()} 段 · {targetTouched ? '目标文件已修改' : '目标文件未修改'}
+            </div>
+            {(session.sessionId || session.session_id) && (
+              <div className="truncate text-neutral-400 dark:text-neutral-500">
+                {session.sessionId || session.session_id}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {files.length > 0 && (
         <div>
           <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
@@ -333,6 +443,21 @@ function FileMutationDetails({ mutation }: { mutation: FileMutationStructuredCon
   )
 }
 
+function fileSessionStatusLabel(status?: string): string {
+  switch (status) {
+    case 'drafting':
+      return '草稿中'
+    case 'committed':
+      return '已提交'
+    case 'aborted':
+      return '已取消'
+    case 'failed_uncommitted':
+      return '未提交失败'
+    default:
+      return status ? compactText(status, 24) : '草稿'
+  }
+}
+
 function fileOperationLabel(operation: string): string {
   switch (operation) {
     case 'create':
@@ -377,9 +502,27 @@ function fileToolArgumentPreview(toolCall: ToolCallRecord, args: Record<string, 
   if (rawName === 'write_file') {
     return path ? path : '写入文件'
   }
+  // Branches below for write_file_chunk/begin/append/finish/abort_file_write and
+  // patch are legacy-only (tools removed in 2.6.9; old conversations still render).
   if (rawName === 'write_file_chunk') {
     const mode = typeof args?.mode === 'string' ? args.mode.trim() : ''
     return [path, mode].filter(Boolean).join(' · ') || '分块写入文件'
+  }
+  if (rawName === 'begin_file_write') {
+    return path ? `${path} · 准备草稿` : '准备文件草稿'
+  }
+  if (rawName === 'append_file_write') {
+    const sessionId = typeof args?.session_id === 'string' ? args.session_id.trim() : ''
+    const offset = typeof args?.offset === 'number' ? `${args.offset} bytes` : ''
+    return [sessionId, offset].filter(Boolean).join(' · ') || '写入草稿分段'
+  }
+  if (rawName === 'finish_file_write') {
+    const sessionId = typeof args?.session_id === 'string' ? args.session_id.trim() : ''
+    return sessionId ? `${sessionId} · 提交草稿` : '提交文件草稿'
+  }
+  if (rawName === 'abort_file_write') {
+    const sessionId = typeof args?.session_id === 'string' ? args.session_id.trim() : ''
+    return sessionId ? `${sessionId} · 取消草稿` : '取消文件草稿'
   }
   if (rawName === 'edit_file') {
     const oldString = typeof args?.old_string === 'string' ? compactText(args.old_string, 80) : ''
@@ -436,7 +579,12 @@ function getToolName(toolCall: ToolCallRecord): string {
   if (raw === 'skill_run_script') return '执行 Skill 脚本'
   if (raw === 'read_file') return hasOffset ? '读取文件片段' : '读取文件'
   if (raw === 'write_file') return '写入文件'
+  // Legacy labels: tools removed in 2.6.9, kept for rendering old conversations.
   if (raw === 'write_file_chunk') return '分块写入文件'
+  if (raw === 'begin_file_write') return '准备文件草稿'
+  if (raw === 'append_file_write') return '写入草稿分段'
+  if (raw === 'finish_file_write') return '提交文件草稿'
+  if (raw === 'abort_file_write') return '取消文件草稿'
   if (raw === 'edit_file') return '编辑文件'
   if (raw === 'patch') return '应用补丁'
   if (raw === 'run_command' && /\bpdftotext\b/.test(command)) return '提取 PDF 文本'
@@ -532,6 +680,16 @@ function getResultPreview(toolCall: ToolCallRecord): string {
   }
   const fileMutation = structuredFileMutation(toolCall)
   if (fileMutation) {
+    const targetTouched = fileMutation.targetTouched ?? fileMutation.target_touched ?? fileMutation.session?.targetTouched ?? fileMutation.session?.target_touched
+    if (fileMutation.ok === false) {
+      return `未完成 ${fileMutationPreview(fileMutation)}`
+    }
+    if (fileMutation.session && !targetTouched) {
+      if (fileMutation.operation === 'abort_file_write') {
+        return `已取消 ${fileMutationPreview(fileMutation)}`
+      }
+      return `草稿已更新 ${fileMutationPreview(fileMutation)}`
+    }
     return `已应用 ${fileMutationPreview(fileMutation)}`
   }
   const raw =
@@ -550,10 +708,10 @@ function getRunningPreview(toolCall: ToolCallRecord): string {
   if (raw === 'run_python') {
     return '正在加载 Python 环境…'
   }
-  if (raw === 'write_file' || raw === 'write_file_chunk') {
+  if (raw === 'write_file') {
     return '正在写入文件…'
   }
-  if (raw === 'edit_file' || raw === 'patch') {
+  if (raw === 'edit_file') {
     return '正在应用文件变更…'
   }
   if (raw === 'mixer_vision') {
