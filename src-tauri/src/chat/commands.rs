@@ -2951,7 +2951,11 @@ fn apply_inline_code_request_tool_filter(
         return;
     }
     tools.retain(|tool| {
-        !(tool.source == "native" && matches!(tool.name.as_str(), "write_file" | "patch"))
+        !(tool.source == "native"
+            && matches!(
+                tool.name.as_str(),
+                "write_file" | "write_file_chunk" | "patch"
+            ))
     });
 }
 
@@ -4247,6 +4251,7 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_write_file_chunk_tool(),
             crate::mcp::types::native_edit_file_tool(),
             crate::mcp::types::native_patch_tool(),
         ];
@@ -4258,6 +4263,7 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "read_file"));
         assert!(!tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(!tools.iter().any(|tool| tool.name == "write_file_chunk"));
         assert!(!tools.iter().any(|tool| tool.name == "patch"));
         assert!(tools.iter().any(|tool| tool.name == "edit_file"));
     }
@@ -4338,6 +4344,7 @@ mod tests {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
             crate::mcp::types::native_write_file_tool(),
+            crate::mcp::types::native_write_file_chunk_tool(),
             crate::mcp::types::native_run_command_tool(),
             crate::mcp::types::native_run_python_tool(),
             crate::mcp::types::native_memory_read_tool(),
@@ -4372,6 +4379,7 @@ mod tests {
         assert!(names.contains(&"todo_update".to_string()));
         assert!(names.contains(&"mcp__docs__search".to_string()));
         assert!(!names.contains(&"write_file".to_string()));
+        assert!(!names.contains(&"write_file_chunk".to_string()));
         assert!(!names.contains(&"run_command".to_string()));
         assert!(!names.contains(&"run_python".to_string()));
         assert!(!names.contains(&"memory_modify".to_string()));
@@ -4379,6 +4387,7 @@ mod tests {
         assert!(!names.contains(&"skill_run_script".to_string()));
         assert!(!names.contains(&"mcp__fs__write".to_string()));
         assert!(blocked_names.contains(&"write_file".to_string()));
+        assert!(blocked_names.contains(&"write_file_chunk".to_string()));
         assert!(blocked_names.contains(&"run_command".to_string()));
         assert!(blocked_names.contains(&"run_python".to_string()));
         assert!(blocked_names.contains(&"memory_modify".to_string()));

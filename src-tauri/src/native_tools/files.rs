@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 
 use super::{
     assert_writable_path, resolve_tool_read_path, resolve_tool_write_entry_path,
-    resolve_tool_write_path, workspace_display_path, NativeToolWorkspace, MAX_READ_FILE_BYTES,
+    resolve_tool_write_path, user_home_dir, workspace_display_path, NativeToolWorkspace,
+    MAX_READ_FILE_BYTES,
 };
 
 const MAX_LIST_ENTRIES: usize = 500;
@@ -131,8 +132,10 @@ pub fn write_file(
         assert_writable_path(&full)?;
     }
     let _guard = acquire_file_mutation_locks([full.clone()])?;
-    let before = if full.is_file() {
-        Some(fs::read_to_string(&full).map_err(|err| format!("Read existing file failed: {err}"))?)
+    let existed = full.is_file();
+    // The existing content is only needed for the diff; degrade gracefully on non-UTF-8.
+    let before = if existed {
+        fs::read_to_string(&full).ok()
     } else {
         None
     };
@@ -140,21 +143,27 @@ pub fn write_file(
         fs::create_dir_all(parent).map_err(|err| format!("Create parent dirs failed: {err}"))?;
     }
     fs::write(&full, content).map_err(|err| format!("Write file failed: {err}"))?;
-    let operation = if before.is_some() {
-        "overwrite"
+    let operation = if existed { "overwrite" } else { "create" };
+    let diff_omitted = existed && before.is_none();
+    let file = if diff_omitted {
+        FileMutationFile {
+            path: workspace_display_path(workspace, &full),
+            operation: operation.to_string(),
+            bytes_written: content.len() as u64,
+            additions: 0,
+            removals: 0,
+            diff: String::new(),
+        }
     } else {
-        "create"
+        planned_file_result(workspace, full, operation, before.as_deref(), Some(content))?
     };
-    Ok(file_mutation_result(
-        operation,
-        vec![planned_file_result(
-            workspace,
-            full,
-            operation,
-            before.as_deref(),
-            Some(content),
-        )?],
-    ))
+    let mut result = file_mutation_result(operation, vec![file]);
+    if diff_omitted {
+        result
+            .warnings
+            .push("Existing file content is not valid UTF-8; diff omitted.".to_string());
+    }
+    Ok(result)
 }
 
 pub fn write_file_chunk(
@@ -171,12 +180,11 @@ pub fn write_file_chunk(
 
     match mode {
         "start" => {
-            let content = required_string(arguments, "content")?;
-            let before = if full.is_file() {
-                Some(
-                    fs::read_to_string(&full)
-                        .map_err(|err| format!("Read existing file failed: {err}"))?,
-                )
+            let content = required_raw_string(arguments, "content")?;
+            let existed = full.is_file();
+            // The existing content is only needed for the diff; degrade gracefully on non-UTF-8.
+            let before = if existed {
+                fs::read_to_string(&full).ok()
             } else {
                 None
             };
@@ -185,24 +193,36 @@ pub fn write_file_chunk(
                     .map_err(|err| format!("Create parent dirs failed: {err}"))?;
             }
             fs::write(&full, content).map_err(|err| format!("Write file chunk failed: {err}"))?;
-            let file_operation = if before.is_some() {
-                "overwrite"
+            let file_operation = if existed { "overwrite" } else { "create" };
+            let diff_omitted = existed && before.is_none();
+            let file = if diff_omitted {
+                FileMutationFile {
+                    path: workspace_display_path(workspace, &full),
+                    operation: file_operation.to_string(),
+                    bytes_written: content.len() as u64,
+                    additions: 0,
+                    removals: 0,
+                    diff: String::new(),
+                }
             } else {
-                "create"
-            };
-            Ok(file_mutation_result(
-                "write_chunk_start",
-                vec![planned_file_result(
+                planned_file_result(
                     workspace,
                     full,
                     file_operation,
                     before.as_deref(),
                     Some(content),
-                )?],
-            ))
+                )?
+            };
+            let mut result = file_mutation_result("write_chunk_start", vec![file]);
+            if diff_omitted {
+                result
+                    .warnings
+                    .push("Existing file content is not valid UTF-8; diff omitted.".to_string());
+            }
+            Ok(result)
         }
         "append" => {
-            let content = required_string(arguments, "content")?;
+            let content = required_raw_string(arguments, "content")?;
             if !full.is_file() {
                 return Err("write_file_chunk append requires an existing file; call mode=start first".to_string());
             }
@@ -442,23 +462,48 @@ pub fn patch(
         )?);
     }
 
-    for plan in plans {
-        match plan.after {
+    let display_paths: Vec<String> = plans
+        .iter()
+        .map(|plan| workspace_display_path(workspace, &plan.path))
+        .collect();
+    for (idx, plan) in plans.iter().enumerate() {
+        let outcome: Result<(), String> = match &plan.after {
             Some(content) => {
+                let mut step = Ok(());
                 if let Some(parent) = plan.path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|err| format!("Create parent dirs failed: {err}"))?;
+                    step = fs::create_dir_all(parent)
+                        .map_err(|err| format!("Create parent dirs failed: {err}"));
                 }
-                fs::write(&plan.path, content)
-                    .map_err(|err| format!("Write file failed: {err}"))?;
+                step.and_then(|_| {
+                    fs::write(&plan.path, content)
+                        .map_err(|err| format!("Write file failed: {err}"))
+                })
             }
-            None => {
-                fs::remove_file(&plan.path).map_err(|err| format!("Delete file failed: {err}"))?;
-            }
+            None => fs::remove_file(&plan.path)
+                .map_err(|err| format!("Delete file failed: {err}")),
+        };
+        if let Err(err) = outcome {
+            let applied = display_paths[..idx].join(", ");
+            let not_applied = display_paths[idx..].join(", ");
+            return Err(format!(
+                "{err}. Already applied: [{applied}]. Not applied: [{not_applied}]. The project is partially patched."
+            ));
         }
     }
 
-    Ok(file_mutation_result("patch", file_results))
+    let mut result = file_mutation_result("patch", file_results);
+    if !workspace.has_project() {
+        // Relative paths in global mode always resolve under the user's home
+        // directory (`candidate_path` joins home); workspace roots only filter
+        // which resolved paths are allowed, they are never the join base.
+        let base = user_home_dir()
+            .map(|home| home.display().to_string())
+            .unwrap_or_else(|_| "~".to_string());
+        result.warnings.push(format!(
+            "No project folder is bound to this conversation; patch paths were resolved under the global write base: {base}"
+        ));
+    }
+    Ok(result)
 }
 
 #[derive(Debug)]
@@ -608,9 +653,11 @@ fn parse_patch(patch: &str) -> Result<Vec<PatchOperation>, String> {
                     continue;
                 }
                 let Some(marker) = raw.chars().next() else {
-                    return Err(format!(
-                        "Update File hunk has an empty unmarked line: {path}"
-                    ));
+                    // Models often trim the leading space from empty context lines;
+                    // git apply tolerates this, so treat it as an empty context line.
+                    current.push(PatchLine::Context(String::new()));
+                    idx += 1;
+                    continue;
                 };
                 let content = raw.get(marker.len_utf8()..).unwrap_or("").to_string();
                 match marker {
@@ -686,7 +733,12 @@ fn validate_patch_path(path: &str) -> Result<(), String> {
 }
 
 fn patch_added_content(lines: &[String]) -> String {
-    lines.join("\n")
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut content = lines.join("\n");
+    content.push('\n');
+    content
 }
 
 fn apply_patch_hunks(before: &str, hunks: &[PatchHunk], path: &str) -> Result<String, String> {
@@ -797,6 +849,23 @@ fn planned_file_result(
     })
 }
 
+/// LCS guard: above this many DP cells for the changed middle region, fall back
+/// to a coarse single-hunk diff (whole middle as remove+add).
+const DIFF_LCS_MAX_CELLS: usize = 250_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffOpKind {
+    Equal,
+    Remove,
+    Add,
+}
+
+#[derive(Debug)]
+struct DiffOp<'a> {
+    kind: DiffOpKind,
+    text: &'a str,
+}
+
 fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (String, usize, usize) {
     let old_lines = diff_lines(before.unwrap_or(""));
     let new_lines = diff_lines(after.unwrap_or(""));
@@ -819,23 +888,40 @@ fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (Strin
         new_end -= 1;
     }
 
-    let removed = &old_lines[prefix..old_end];
-    let added = &new_lines[prefix..new_end];
-    let context_start = prefix.saturating_sub(3);
-    let old_context_end = (old_end + 3).min(old_lines.len());
-    let new_context_end = (new_end + 3).min(new_lines.len());
-    let old_hunk_len = old_context_end.saturating_sub(context_start);
-    let new_hunk_len = new_context_end.saturating_sub(context_start);
-    let old_start = if old_lines.is_empty() {
-        0
-    } else {
-        context_start + 1
-    };
-    let new_start = if new_lines.is_empty() {
-        0
-    } else {
-        context_start + 1
-    };
+    let ops = build_diff_ops(&old_lines, &new_lines, prefix, old_end, new_end);
+
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| op.kind != DiffOpKind::Equal)
+        .map(|(idx, _)| idx)
+        .collect();
+    if changed.is_empty() {
+        return (String::new(), 0, 0);
+    }
+
+    // Prefix sums of old/new lines consumed before each op index.
+    let mut old_consumed = vec![0usize; ops.len() + 1];
+    let mut new_consumed = vec![0usize; ops.len() + 1];
+    for (idx, op) in ops.iter().enumerate() {
+        old_consumed[idx + 1] = old_consumed[idx]
+            + usize::from(matches!(op.kind, DiffOpKind::Equal | DiffOpKind::Remove));
+        new_consumed[idx + 1] =
+            new_consumed[idx] + usize::from(matches!(op.kind, DiffOpKind::Equal | DiffOpKind::Add));
+    }
+
+    // Group changed ops into hunks: runs separated by 7+ unchanged lines split.
+    let mut groups: Vec<(usize, usize)> = Vec::new();
+    let mut group_start = changed[0];
+    let mut group_last = changed[0];
+    for &idx in &changed[1..] {
+        if idx - group_last - 1 >= 7 {
+            groups.push((group_start, group_last));
+            group_start = idx;
+        }
+        group_last = idx;
+    }
+    groups.push((group_start, group_last));
 
     let old_header = if before.is_none() {
         "/dev/null".to_string()
@@ -849,23 +935,132 @@ fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (Strin
     };
     let mut out = String::new();
     out.push_str(&format!("--- {old_header}\n+++ {new_header}\n"));
-    out.push_str(&format!(
-        "@@ -{},{} +{},{} @@\n",
-        old_start, old_hunk_len, new_start, new_hunk_len
-    ));
-    for line in &old_lines[context_start..prefix] {
-        out.push_str(&format!(" {line}\n"));
+    let mut additions = 0usize;
+    let mut removals = 0usize;
+    for (first, last) in groups {
+        let hunk_start = first.saturating_sub(3);
+        let hunk_end = (last + 4).min(ops.len());
+        let old_count = old_consumed[hunk_end] - old_consumed[hunk_start];
+        let new_count = new_consumed[hunk_end] - new_consumed[hunk_start];
+        let old_start = if old_count == 0 {
+            old_consumed[hunk_start]
+        } else {
+            old_consumed[hunk_start] + 1
+        };
+        let new_start = if new_count == 0 {
+            new_consumed[hunk_start]
+        } else {
+            new_consumed[hunk_start] + 1
+        };
+        out.push_str(&format!(
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"
+        ));
+        for op in &ops[hunk_start..hunk_end] {
+            match op.kind {
+                DiffOpKind::Equal => out.push_str(&format!(" {}\n", op.text)),
+                DiffOpKind::Remove => {
+                    removals += 1;
+                    out.push_str(&format!("-{}\n", op.text));
+                }
+                DiffOpKind::Add => {
+                    additions += 1;
+                    out.push_str(&format!("+{}\n", op.text));
+                }
+            }
+        }
     }
-    for line in removed {
-        out.push_str(&format!("-{line}\n"));
+    (out, additions, removals)
+}
+
+fn build_diff_ops<'a>(
+    old_lines: &'a [String],
+    new_lines: &'a [String],
+    prefix: usize,
+    old_end: usize,
+    new_end: usize,
+) -> Vec<DiffOp<'a>> {
+    let mut ops = Vec::with_capacity(old_lines.len() + new_lines.len());
+    for line in &old_lines[..prefix] {
+        ops.push(DiffOp {
+            kind: DiffOpKind::Equal,
+            text: line,
+        });
     }
-    for line in added {
-        out.push_str(&format!("+{line}\n"));
+    let middle_old = &old_lines[prefix..old_end];
+    let middle_new = &new_lines[prefix..new_end];
+    if middle_old.len().saturating_mul(middle_new.len()) > DIFF_LCS_MAX_CELLS {
+        // Coarse fallback: whole middle as remove+add in a single block.
+        for line in middle_old {
+            ops.push(DiffOp {
+                kind: DiffOpKind::Remove,
+                text: line,
+            });
+        }
+        for line in middle_new {
+            ops.push(DiffOp {
+                kind: DiffOpKind::Add,
+                text: line,
+            });
+        }
+    } else {
+        let m = middle_old.len();
+        let n = middle_new.len();
+        let width = n + 1;
+        let mut dp = vec![0u32; (m + 1) * width];
+        for i in (0..m).rev() {
+            for j in (0..n).rev() {
+                dp[i * width + j] = if middle_old[i] == middle_new[j] {
+                    dp[(i + 1) * width + j + 1] + 1
+                } else {
+                    dp[(i + 1) * width + j].max(dp[i * width + j + 1])
+                };
+            }
+        }
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < m && j < n {
+            if middle_old[i] == middle_new[j] {
+                ops.push(DiffOp {
+                    kind: DiffOpKind::Equal,
+                    text: &middle_old[i],
+                });
+                i += 1;
+                j += 1;
+            } else if dp[(i + 1) * width + j] >= dp[i * width + j + 1] {
+                ops.push(DiffOp {
+                    kind: DiffOpKind::Remove,
+                    text: &middle_old[i],
+                });
+                i += 1;
+            } else {
+                ops.push(DiffOp {
+                    kind: DiffOpKind::Add,
+                    text: &middle_new[j],
+                });
+                j += 1;
+            }
+        }
+        while i < m {
+            ops.push(DiffOp {
+                kind: DiffOpKind::Remove,
+                text: &middle_old[i],
+            });
+            i += 1;
+        }
+        while j < n {
+            ops.push(DiffOp {
+                kind: DiffOpKind::Add,
+                text: &middle_new[j],
+            });
+            j += 1;
+        }
     }
-    for line in &new_lines[new_end..new_context_end] {
-        out.push_str(&format!(" {line}\n"));
+    for line in &old_lines[old_end..] {
+        ops.push(DiffOp {
+            kind: DiffOpKind::Equal,
+            text: line,
+        });
     }
-    (out, added.len(), removed.len())
+    ops
 }
 
 fn diff_lines(content: &str) -> Vec<String> {
@@ -985,6 +1180,7 @@ pub fn delete_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result
     if !workspace.has_project() {
         assert_writable_path(&full)?;
     }
+    let _guard = acquire_file_mutation_locks([full.clone()])?;
     reject_workspace_root_delete(workspace, &full)?;
 
     let metadata = fs::symlink_metadata(&full).map_err(|_| format!("路径不存在: {path}"))?;
@@ -1010,12 +1206,13 @@ pub fn delete_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result
 pub fn move_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
     let from = required_string(arguments, "from")?;
     let to = required_string(arguments, "to")?;
-    let source = resolve_tool_write_path(workspace, from)?;
+    let source = resolve_tool_write_entry_path(workspace, from)?;
     let destination = resolve_tool_write_path(workspace, to)?;
     if !workspace.has_project() {
         assert_writable_path(&source)?;
         assert_writable_path(&destination)?;
     }
+    let _guard = acquire_file_mutation_locks([source.clone(), destination.clone()])?;
     reject_workspace_root_delete(workspace, &source)?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|err| format!("Create parent dirs failed: {err}"))?;
@@ -1036,6 +1233,7 @@ pub fn copy_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<S
     if !workspace.has_project() {
         assert_writable_path(&destination)?;
     }
+    let _guard = acquire_file_mutation_locks([destination.clone()])?;
     if source.is_dir() {
         reject_recursive_directory_copy(&source, &destination)?;
         copy_dir_recursive(&source, &destination)?;
@@ -1187,6 +1385,16 @@ fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, Strin
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{key} is required"))
+}
+
+/// Like `required_string`, but preserves the value verbatim (no trim). Chunked
+/// writes depend on exact leading/trailing whitespace — trimming would merge
+/// lines across chunk boundaries.
+fn required_raw_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, String> {
+    arguments
+        .get(key)
+        .and_then(|v| v.as_str())
         .ok_or_else(|| format!("{key} is required"))
 }
 
@@ -1518,7 +1726,7 @@ mod tests {
         assert_eq!(result.files.len(), 3);
         assert_eq!(
             fs::read_to_string(root.join("new.txt")).expect("read new"),
-            "first\nsecond"
+            "first\nsecond\n"
         );
         assert_eq!(
             fs::read_to_string(root.join("edit.txt")).expect("read edit"),
@@ -1670,6 +1878,60 @@ mod tests {
     }
 
     #[test]
+    fn write_file_chunk_start_append_finish_lifecycle_in_project_workspace() {
+        let root = std::env::temp_dir().join(format!("kivio_chunk_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let start = write_file_chunk(
+            &workspace,
+            &json!({ "path": "out/long.txt", "mode": "start", "content": "line1\nline2\n" }),
+        )
+        .expect("start");
+        assert_eq!(start.operation, "write_chunk_start");
+        assert_eq!(start.files.len(), 1);
+        assert_eq!(start.files[0].operation, "create");
+        assert_eq!(
+            fs::read_to_string(root.join("out/long.txt")).expect("read after start"),
+            "line1\nline2\n"
+        );
+
+        let append = write_file_chunk(
+            &workspace,
+            &json!({ "path": "out/long.txt", "mode": "append", "content": "line3\n" }),
+        )
+        .expect("append");
+        assert_eq!(append.operation, "write_chunk_append");
+        assert_eq!(append.files[0].operation, "append");
+        assert_eq!(
+            fs::read_to_string(root.join("out/long.txt")).expect("read after append"),
+            "line1\nline2\nline3\n"
+        );
+
+        let finish = write_file_chunk(
+            &workspace,
+            &json!({ "path": "out/long.txt", "mode": "finish" }),
+        )
+        .expect("finish");
+        assert_eq!(finish.operation, "write_chunk_finish");
+        assert_eq!(finish.files[0].operation, "finish");
+        assert_eq!(finish.bytes_written, "line1\nline2\nline3\n".len() as u64);
+
+        let err = write_file_chunk(
+            &workspace,
+            &json!({ "path": "out/missing.txt", "mode": "append", "content": "x" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("mode=start"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn copy_path_rejects_directory_copy_into_self_or_child() {
         let root = std::env::temp_dir().join(format!("kivio_copy_{}", uuid::Uuid::new_v4()));
         let source = root.join("src");
@@ -1762,5 +2024,195 @@ mod tests {
 
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_applies_empty_context_line_without_marker() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_patch_empty_ctx_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(root.join("spaced.txt"), "alpha\n\nbeta\n").expect("write spaced");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        // The empty context line between "alpha" and "-beta" has no leading space.
+        let result = patch(
+            &workspace,
+            &json!({
+                "patch": "*** Begin Patch\n*** Update File: spaced.txt\n@@\n alpha\n\n-beta\n+gamma\n*** End Patch"
+            }),
+        )
+        .expect("patch with empty context line");
+
+        assert_eq!(result.operation, "patch");
+        assert_eq!(
+            fs::read_to_string(root.join("spaced.txt")).expect("read spaced"),
+            "alpha\n\ngamma\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_added_content_emits_trailing_newline() {
+        assert_eq!(
+            patch_added_content(&["first".to_string(), "second".to_string()]),
+            "first\nsecond\n"
+        );
+        assert_eq!(patch_added_content(&[]), "");
+    }
+
+    #[test]
+    fn write_file_overwrites_non_utf8_file_with_warning() {
+        let root = std::env::temp_dir().join(format!("kivio_binary_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        fs::write(root.join("bin.dat"), [0xffu8, 0xfe, 0x01]).expect("write binary");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let result = write_file(
+            &workspace,
+            &json!({
+                "path": "bin.dat",
+                "content": "clean\n"
+            }),
+        )
+        .expect("overwrite non-utf8 file");
+
+        assert_eq!(result.operation, "overwrite");
+        assert!(result.diff.is_empty());
+        assert_eq!(result.additions, 0);
+        assert_eq!(result.removals, 0);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not valid UTF-8")));
+        assert_eq!(
+            fs::read_to_string(root.join("bin.dat")).expect("read"),
+            "clean\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn edit_file_replace_all_reports_exact_stats_with_multiple_hunks() {
+        let root = std::env::temp_dir().join(format!("kivio_hunks_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let mut lines = vec!["needle old".to_string()];
+        for i in 0..20 {
+            lines.push(format!("unchanged line {i}"));
+        }
+        lines.push("needle old".to_string());
+        let content = format!("{}\n", lines.join("\n"));
+        fs::write(root.join("scatter.txt"), &content).expect("write scatter");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "scatter.txt",
+                "old_string": "old",
+                "new_string": "new",
+                "replace_all": true
+            }),
+        )
+        .expect("replace all");
+
+        assert_eq!(result.additions, 2);
+        assert_eq!(result.removals, 2);
+        assert_eq!(result.diff.matches("@@ -").count(), 2);
+        let removed_lines = result
+            .diff
+            .lines()
+            .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+            .count();
+        let added_lines = result
+            .diff
+            .lines()
+            .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+            .count();
+        assert_eq!(removed_lines, 2);
+        assert_eq!(added_lines, 2);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn move_path_moves_project_symlink_without_following_target() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_move_link_root_{}", uuid::Uuid::new_v4()));
+        let outside =
+            std::env::temp_dir().join(format!("kivio_move_link_target_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir root");
+        fs::write(&outside, "outside").expect("write outside");
+        let link = root.join("outside-link.txt");
+        std::os::unix::fs::symlink(&outside, &link).expect("symlink");
+        let workspace = NativeToolWorkspace::project(
+            "proj_test".to_string(),
+            "Test".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let result = move_path(
+            &workspace,
+            &json!({
+                "from": "outside-link.txt",
+                "to": "moved-link.txt"
+            }),
+        )
+        .expect("move symlink");
+
+        assert!(result.contains("moved-link.txt"));
+        assert!(!link.exists() && fs::symlink_metadata(&link).is_err());
+        let moved = root.join("moved-link.txt");
+        let metadata = fs::symlink_metadata(&moved).expect("moved metadata");
+        assert!(metadata.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&outside).expect("read outside"), "outside");
+
+        let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn patch_in_global_workspace_warns_about_resolved_base() {
+        let home = super::super::user_home_dir().expect("home");
+        let name = format!("kivio_test_patch_global_{}.txt", uuid::Uuid::new_v4());
+        let workspace = NativeToolWorkspace::global(&[]);
+
+        let result = patch(
+            &workspace,
+            &json!({
+                "patch": format!("*** Begin Patch\n*** Add File: {name}\n+hello\n*** End Patch")
+            }),
+        )
+        .expect("global patch");
+
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("No project folder")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains(&home.display().to_string())));
+        let target = home.join(&name);
+        assert_eq!(
+            fs::read_to_string(&target).expect("read global file"),
+            "hello\n"
+        );
+
+        let _ = fs::remove_file(target);
     }
 }

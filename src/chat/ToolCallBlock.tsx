@@ -209,7 +209,7 @@ function normalizeFileMutationFile(value: unknown): FileMutationFile | null {
 
 function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructuredContent | null {
   const rawName = toolRawName(toolCall)
-  if (rawName !== 'write_file' && rawName !== 'edit_file' && rawName !== 'patch') return null
+  if (rawName !== 'write_file' && rawName !== 'write_file_chunk' && rawName !== 'edit_file' && rawName !== 'patch') return null
 
   const structured = objectValue(toolCall.structured_content ?? toolCall.structuredContent)
   if (!structured) return null
@@ -341,6 +341,10 @@ function fileOperationLabel(operation: string): string {
       return '覆盖'
     case 'edit':
       return '修改'
+    case 'append':
+      return '追加'
+    case 'finish':
+      return '完成'
     case 'delete':
       return '删除'
     case 'noop':
@@ -372,6 +376,10 @@ function fileToolArgumentPreview(toolCall: ToolCallRecord, args: Record<string, 
   const path = typeof args?.path === 'string' ? args.path.trim() : ''
   if (rawName === 'write_file') {
     return path ? path : '写入文件'
+  }
+  if (rawName === 'write_file_chunk') {
+    const mode = typeof args?.mode === 'string' ? args.mode.trim() : ''
+    return [path, mode].filter(Boolean).join(' · ') || '分块写入文件'
   }
   if (rawName === 'edit_file') {
     const oldString = typeof args?.old_string === 'string' ? compactText(args.old_string, 80) : ''
@@ -428,6 +436,7 @@ function getToolName(toolCall: ToolCallRecord): string {
   if (raw === 'skill_run_script') return '执行 Skill 脚本'
   if (raw === 'read_file') return hasOffset ? '读取文件片段' : '读取文件'
   if (raw === 'write_file') return '写入文件'
+  if (raw === 'write_file_chunk') return '分块写入文件'
   if (raw === 'edit_file') return '编辑文件'
   if (raw === 'patch') return '应用补丁'
   if (raw === 'run_command' && /\bpdftotext\b/.test(command)) return '提取 PDF 文本'
@@ -541,7 +550,7 @@ function getRunningPreview(toolCall: ToolCallRecord): string {
   if (raw === 'run_python') {
     return '正在加载 Python 环境…'
   }
-  if (raw === 'write_file') {
+  if (raw === 'write_file' || raw === 'write_file_chunk') {
     return '正在写入文件…'
   }
   if (raw === 'edit_file' || raw === 'patch') {

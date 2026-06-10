@@ -525,13 +525,22 @@ async fn call_native_tool(
             .await;
     }
 
-    if matches!(tool.name.as_str(), "write_file" | "edit_file" | "patch") {
-        let result = match tool.name.as_str() {
-            "write_file" => crate::native_tools::write_file(&workspace, &arguments)?,
-            "edit_file" => crate::native_tools::edit_file(&workspace, &arguments)?,
-            "patch" => crate::native_tools::patch(&workspace, &arguments)?,
-            _ => unreachable!(),
-        };
+    if matches!(
+        tool.name.as_str(),
+        "write_file" | "write_file_chunk" | "edit_file" | "patch"
+    ) {
+        let tool_name = tool.name.clone();
+        let result = run_blocking_file_mutation(&workspace, &arguments, move |workspace,
+                                                                              arguments| {
+            match tool_name.as_str() {
+                "write_file" => crate::native_tools::write_file(workspace, arguments),
+                "write_file_chunk" => crate::native_tools::write_file_chunk(workspace, arguments),
+                "edit_file" => crate::native_tools::edit_file(workspace, arguments),
+                "patch" => crate::native_tools::patch(workspace, arguments),
+                _ => unreachable!(),
+            }
+        })
+        .await?;
         return file_mutation_tool_result(result);
     }
 
@@ -582,9 +591,24 @@ async fn call_native_tool(
         "glob_files" => crate::native_tools::glob_files(&workspace, &arguments)?,
         "stat_path" => crate::native_tools::stat_path(&workspace, &arguments)?,
         "create_dir" => crate::native_tools::create_dir(&workspace, &arguments)?,
-        "delete_path" => crate::native_tools::delete_path(&workspace, &arguments)?,
-        "move_path" => crate::native_tools::move_path(&workspace, &arguments)?,
-        "copy_path" => crate::native_tools::copy_path(&workspace, &arguments)?,
+        "delete_path" => {
+            run_blocking_file_mutation(&workspace, &arguments, |workspace, arguments| {
+                crate::native_tools::delete_path(workspace, arguments)
+            })
+            .await?
+        }
+        "move_path" => {
+            run_blocking_file_mutation(&workspace, &arguments, |workspace, arguments| {
+                crate::native_tools::move_path(workspace, arguments)
+            })
+            .await?
+        }
+        "copy_path" => {
+            run_blocking_file_mutation(&workspace, &arguments, |workspace, arguments| {
+                crate::native_tools::copy_path(workspace, arguments)
+            })
+            .await?
+        }
         "run_command" => {
             crate::native_tools::run_command(
                 &workspace,
@@ -603,6 +627,25 @@ async fn call_native_tool(
         artifacts: Vec::new(),
         structured_content: None,
     })
+}
+
+/// Runs a file mutation tool on the blocking thread pool so in-process path
+/// lock waits (`Condvar::wait`) and large synchronous IO do not stall tokio
+/// runtime workers.
+async fn run_blocking_file_mutation<T, F>(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+    mutate: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&NativeToolWorkspace, &Value) -> Result<T, String> + Send + 'static,
+{
+    let workspace = workspace.clone();
+    let arguments = arguments.clone();
+    tokio::task::spawn_blocking(move || mutate(&workspace, &arguments))
+        .await
+        .map_err(|err| format!("File mutation task failed: {err}"))?
 }
 
 fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallResult, String> {

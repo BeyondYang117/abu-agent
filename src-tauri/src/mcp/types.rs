@@ -424,7 +424,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write_file".to_string(),
-        description: "Create a new text file or explicitly overwrite a whole file. In a project conversation, paths are relative to the bound project root by default and cannot escape it. For small edits to an existing file, prefer edit_file; for coordinated multi-file code edits, prefer patch. Use write_file only when the user explicitly asks to save/write/create a local file, provides a target path, or asks for a full-file replacement. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
+        description: "Create a new text file or explicitly overwrite a whole file. In a project conversation, paths are relative to the bound project root by default and cannot escape it. For small edits to an existing file, prefer edit_file; for coordinated multi-file code edits, prefer patch. Use write_file only when the user explicitly asks to save/write/create a local file, provides a target path, or asks for a full-file replacement. Do not use for requests to output a code block, HTML demo, or complete code inline; answer directly instead. Returns structured file mutation metadata including diff stats. For long files (more than about 200 lines or 8 KB of content), prefer write_file_chunk so progress persists to disk incrementally.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -435,6 +435,29 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
                 "content": { "type": "string", "description": "Full text content to save" }
             },
             "required": ["path", "content"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_write_file_chunk_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__write_file_chunk".to_string(),
+        name: "write_file_chunk".to_string(),
+        description: "Write a LONG text file incrementally in chunks instead of one giant write_file call. Use this whenever the content is long (roughly more than 200 lines or 8 KB). Protocol: call with mode=start and the first portion of content to create/overwrite the file; call with mode=append and the next portion to append (the file must already exist); finally call with mode=finish to verify and return the final file state. Each call persists to disk immediately, so if generation is interrupted only the chunk currently being generated is lost — resume by reading the file and appending the remainder. Chunks of roughly 100-300 lines are ideal. Paths follow the same project-relative rules as write_file. Returns structured file mutation metadata.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Project-relative path in project mode, otherwise an explicitly requested absolute/home/~/ path. Must be the same path across start/append/finish calls." },
+                "mode": { "type": "string", "enum": ["start", "append", "finish"], "description": "start = create/overwrite the file with the first chunk; append = add the next chunk to the existing file; finish = verify and return the final state" },
+                "content": { "type": "string", "description": "Chunk text. Required for mode=start and mode=append; ignored for mode=finish." }
+            },
+            "required": ["path", "mode"]
         }),
         sensitive: true,
         annotations: None,
@@ -796,6 +819,7 @@ pub fn list_native_builtin_tool_defs(
     }
     if native.write_file {
         tools.push(native_write_file_tool());
+        tools.push(native_write_file_chunk_tool());
         tools.push(native_create_dir_tool());
         tools.push(native_delete_path_tool());
         tools.push(native_move_path_tool());
@@ -890,6 +914,7 @@ mod tests {
         assert!(!native_memory_read_tool().sensitive);
         assert!(!native_memory_modify_tool().sensitive);
         assert!(native_write_file_tool().sensitive);
+        assert!(native_write_file_chunk_tool().sensitive);
         assert!(native_edit_file_tool().sensitive);
         assert!(native_patch_tool().sensitive);
         assert!(native_run_command_tool().sensitive);
@@ -905,6 +930,27 @@ mod tests {
         assert!(tool
             .description
             .contains("structured file mutation metadata"));
+        assert!(tool.description.contains("write_file_chunk"));
+    }
+
+    #[test]
+    fn write_file_chunk_tool_shares_write_file_gate_and_is_not_read_only() {
+        let mut native = crate::settings::ChatNativeToolsConfig::default();
+        let defs = list_native_builtin_tool_defs(&native, false, false);
+        assert!(!defs.iter().any(|tool| tool.name == "write_file_chunk"));
+
+        native.write_file = true;
+        let defs = list_native_builtin_tool_defs(&native, false, false);
+        assert!(defs.iter().any(|tool| tool.name == "write_file"));
+        assert!(defs.iter().any(|tool| tool.name == "write_file_chunk"));
+
+        let tool = native_write_file_chunk_tool();
+        assert_eq!(tool.id, "native__write_file_chunk");
+        assert_eq!(tool.source, "native");
+        assert!(!tool.is_read_only_tool());
+        assert!(tool.description.contains("mode=start"));
+        assert!(tool.description.contains("append"));
+        assert!(tool.description.contains("finish"));
     }
 
     #[test]

@@ -531,6 +531,7 @@ Resolve the current project at tool-call time, use shared project-aware resolver
 
 - Native tools:
   - `write_file({ path, content }) -> FileMutationResult`
+  - `write_file_chunk({ path, mode: start|append|finish, content? }) -> FileMutationResult`
   - `edit_file({ path, old_string, new_string, replace_all? }) -> FileMutationResult`
   - `patch({ patch }) -> FileMutationResult`
 - Patch grammar:
@@ -579,15 +580,19 @@ FileMutationFile {
 
 ### 3. Contracts
 
-- `write_file`, `edit_file`, and `patch` must return `McpToolCallResult.structured_content = FileMutationResult` and a concise text `content` summary for model replay.
+- `write_file`, `write_file_chunk`, `edit_file`, and `patch` must return `McpToolCallResult.structured_content = FileMutationResult` and a concise text `content` summary for model replay.
 - `ToolCallRecord.structured_content` must preserve file mutation metadata across backend events, persisted messages, and frontend rendering. Do not rely on raw JSON previews for file mutation UX.
 - Tool content sent back to the model may include `structuredContent` when the text summary does not already contain the same JSON, following the shared MCP structured-content contract.
 - `write_file` is for new files, explicit whole-file replacement, or requested deliverables. Existing-file small edits should use `edit_file`; multi-file or larger code edits should use `patch`.
-- Inline code/demo requests that do not ask to save locally must hide `write_file` and `patch` from the model. `edit_file` may remain available because project-edit requests still need targeted existing-file edits.
+- `write_file_chunk` is for long file content (roughly > 200 lines or > 8 KB) instead of one giant `write_file` argument: `mode=start` creates/overwrites the file with the first portion, `mode=append` requires an existing file and appends the next portion, `mode=finish` verifies the file and returns its final state. Every call persists immediately, so an interrupted generation keeps all prior chunks on disk.
+- `write_file_chunk` is serial, sensitive, and approval-gated like `write_file`: never in the native parallel-safe set, blocked in Plan mode, and it acquires the per-resolved-path in-process lock on every call.
+- Inline code/demo requests that do not ask to save locally must hide `write_file`, `write_file_chunk`, and `patch` from the model. `edit_file` may remain available because project-edit requests still need targeted existing-file edits.
 - `patch` file headers must be project-relative: no absolute path, `~`, backslashes, roots, or `..`.
+- A completely empty line inside an Update File hunk is tolerated as an empty context line (equivalent to `" "`), matching `git apply` behavior, not a parse error.
 - In project mode, all file mutations must use project-aware resolvers and stay inside the bound project root. Outside project mode, they must preserve global workspace/home write constraints.
 - File mutation tools must be serial, approval-sensitive tools. They must not join the native parallel-safe read-only batch.
-- File mutation tools must acquire per-resolved-path in-process locks before reading current contents and before applying writes/deletes. Multi-file `patch` locks all resolved targets in sorted order to avoid deadlocks.
+- File mutation tools must acquire per-resolved-path in-process locks before reading current contents and before applying writes/deletes. `delete_path`, `move_path` (source + destination), and `copy_path` (destination) acquire the same per-path mutation locks. Multi-file `patch` locks all resolved targets in sorted order to avoid deadlocks.
+- `move_path` resolves its source without following the final symlink (same entry semantics as `delete_path`): moving a project-internal symlink moves the link entry, not its target.
 - `patch` must fully validate and build all planned file results before applying any filesystem changes. A failed hunk, missing target, duplicate target, traversal path, or existing Add File target must leave every involved file unchanged.
 - `edit_file` requires exactly one `old_string` match unless `replace_all` is true.
 - Diff metadata may use lightweight unified diffs, but additions/removals must match the per-file changed lines shown in the diff.
@@ -598,6 +603,9 @@ FileMutationFile {
 | Condition | Runtime behavior |
 |---|---|
 | `write_file.path` missing or content missing | Return a tool argument error before writing. |
+| `write_file_chunk` mode=append or mode=finish targets a missing file | Return a tool error telling the model to call `mode=start` first; do not write. |
+| `write_file_chunk.mode` is not `start`/`append`/`finish` | Return a tool argument error before touching the filesystem. |
+| `write_file` overwrite or `write_file_chunk` mode=start hits an existing non-UTF-8 file | Succeed; report `overwrite` with diff omitted plus a warning explaining why. |
 | `edit_file.old_string` is missing in the file | Return an error and do not write. |
 | `edit_file.old_string` appears multiple times and `replace_all` is false | Return an error telling the model to use a unique old string or `replace_all=true`. |
 | `edit_file.old_string == new_string` | Return a structured noop result with a warning and do not rewrite content. |
@@ -615,21 +623,25 @@ FileMutationFile {
 - Good: user asks to change one label in `src/App.tsx`; the model reads the file and calls `edit_file` with a unique old/new replacement.
 - Good: user asks for coordinated frontend/backend edits; the model emits a single `patch` that updates several files and the UI shows affected files plus diff stats.
 - Good: a provider fails after `patch` succeeds; the chat timeline still shows the patch block as completed with its files and diff metadata.
+- Good: the model writes a 1000-line file in 4 `write_file_chunk` calls (start + 3 appends); the stream dies after chunk 2, chunks 1-2 are already on disk, and the next turn appends the rest instead of regenerating everything.
 - Base: user asks to create a new `index.html`; the model calls `write_file` and receives a structured create result.
 - Bad: regenerating an entire existing source file through `write_file` for a two-line change.
 - Bad: applying the first file in a multi-file patch before verifying later hunks; failures would leave a half-applied repo.
 - Bad: storing file mutation details only in model-facing text; the frontend cannot reliably render paths, stats, or diff.
+- Bad: a scheduler parallelizes `write_file_chunk` calls or reorders an append before its start; chunk order is the file content, so the calls must run serially in model order.
 
 ### 6. Tests Required
 
 - Native tools: `write_file` returns structured diff stats for create/overwrite.
+- Native tools: `write_file_chunk` start/append/finish persists each chunk immediately, append/finish on a missing file error with mode=start guidance, and the tool stays serial and blocked in Plan mode.
 - Native tools: `edit_file` enforces uniqueness and returns a structured noop warning when old/new match.
 - Patch parser/apply: add, update, and delete files in one patch.
+- Patch parser: an empty line inside an Update File hunk applies as an empty context line.
 - Patch safety: failed hunk does not partially modify earlier planned files.
 - Patch safety: traversal/absolute/backslash/tilde paths are rejected.
 - Patch safety: duplicate textual or resolved paths are rejected.
 - Runtime: `write_file`, `edit_file`, and `patch` preserve `structured_content` on `ToolCallRecord` and model replay content.
-- Prompt/filter: inline code-block requests remove `write_file` and `patch`, while save/edit intents keep them.
+- Prompt/filter: inline code-block requests remove `write_file`, `write_file_chunk`, and `patch`, while save/edit intents keep them.
 - Frontend type/build: `npm run typecheck` verifies file mutation structured content parsing and `ToolCallBlock` rendering.
 - Backend checks: run targeted native/MCP/agent prompt tests plus full `cargo test --manifest-path src-tauri/Cargo.toml` when practical.
 

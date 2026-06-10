@@ -165,6 +165,7 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
         "glob_files",
         "stat_path",
         "write_file",
+        "write_file_chunk",
         "edit_file",
         "patch",
         "create_dir",
