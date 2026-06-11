@@ -1,18 +1,22 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { Pencil, Trash2 } from 'lucide-react'
+import { FolderOpen, Pencil, Trash2 } from 'lucide-react'
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
 
 interface ProjectContextMenuProps {
   anchor: ConversationMenuAnchor
+  hasRootFolder: boolean
   onRename: () => void
+  onOpenFolder: () => void
   onDelete: () => void
   onClose: () => void
 }
 
 export function ProjectContextMenu({
   anchor,
+  hasRootFolder,
   onRename,
+  onOpenFolder,
   onDelete,
   onClose,
 }: ProjectContextMenuProps) {
@@ -53,6 +57,21 @@ export function ProjectContextMenu({
       >
         <Pencil size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
         重命名
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!hasRootFolder}
+        title={hasRootFolder ? undefined : '请先在项目设置中选择文件夹'}
+        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-neutral-800 transition-colors hover:bg-black/[0.04] disabled:cursor-default disabled:opacity-40 dark:text-neutral-100 dark:hover:bg-white/[0.06] dark:disabled:hover:bg-transparent"
+        onClick={() => {
+          if (!hasRootFolder) return
+          onOpenFolder()
+          onClose()
+        }}
+      >
+        <FolderOpen size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
+        打开项目文件夹
       </button>
       <div className="my-1 border-t border-neutral-200/80 dark:border-neutral-700" />
       <button

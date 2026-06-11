@@ -557,7 +557,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "run_command".to_string(),
-        description: "Run a host shell command (build, test, etc.). In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
+        description: "Run a host shell command (build, test, etc.). In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. Do not use `cd path && command` when the path contains spaces—pass `cwd` and run only the remaining command. Do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev servers such as `npm run dev`, `npm run tauri dev`, and `vite` are started in the background automatically and return immediately with a pid. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -565,7 +565,8 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Shell command" },
-                "cwd": { "type": "string", "description": "Working directory (optional)" },
+                "cwd": { "type": "string", "description": "Working directory (required when the path contains spaces; do not use `cd ... &&` for that)" },
+                "background": { "type": "boolean", "description": "Run in background and return immediately (auto-enabled for common dev servers)" },
                 "timeout_ms": { "type": "integer", "description": "Timeout in ms (optional)" },
                 "allow_host_python_package_install": { "type": "boolean", "description": "Only true when the user explicitly asked to modify the host Python environment; installs must use --user or a virtual environment." }
             },

@@ -418,6 +418,34 @@ pub(crate) fn chat_delete_project(
 }
 
 #[tauri::command]
+#[allow(deprecated)]
+pub(crate) fn chat_project_open_folder(
+    app: AppHandle,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    let project = find_project_by_id(&app, &project_id)?;
+    let Some(root_path) = project
+        .root_path
+        .as_ref()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+    else {
+        return Err("该项目尚未配置文件夹".to_string());
+    };
+    let path = Path::new(root_path);
+    if !path.is_dir() {
+        return Err("项目文件夹不存在或无法访问".to_string());
+    }
+    app.shell()
+        .open(root_path.to_string(), None)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "success": true,
+        "path": root_path,
+    }))
+}
+
+#[tauri::command]
 pub(crate) async fn chat_get_context_stats(
     app: AppHandle,
     state: State<'_, AppState>,

@@ -639,6 +639,14 @@ const mockChatApi = {
     return nextProject
   },
 
+  async openProjectFolder(projectId: string): Promise<void> {
+    const project = loadMockProjectsWithLegacyFolders().find((item) => item.id === projectId)
+    if (!project) throw new Error('项目不存在')
+    const rootPath = (project.root_path ?? project.rootPath ?? '').trim()
+    if (!rootPath) throw new Error('该项目尚未配置文件夹')
+    console.info('[mock] open project folder:', rootPath)
+  },
+
   async deleteProject(projectId: string): Promise<void> {
     const projects = loadMockProjectsWithLegacyFolders()
     const project = projects.find((item) => item.id === projectId)
@@ -1159,6 +1167,17 @@ export const chatApi = {
     const result = await invoke<{ success: boolean }>('chat_delete_project', { projectId })
     if (!result.success) {
       throw new Error('Failed to delete project')
+    }
+  },
+
+  async openProjectFolder(projectId: string): Promise<void> {
+    if (!isTauriRuntime()) return mockChatApi.openProjectFolder(projectId)
+    const result = await invoke<{ success: boolean; error?: string }>(
+      'chat_project_open_folder',
+      { projectId },
+    )
+    if (!result.success) {
+      throw new Error('打开项目文件夹失败')
     }
   },
 

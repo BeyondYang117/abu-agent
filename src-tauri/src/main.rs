@@ -293,6 +293,7 @@ fn main() {
             chat::commands::chat_create_project,
             chat::commands::chat_update_project,
             chat::commands::chat_delete_project,
+            chat::commands::chat_project_open_folder,
             chat::commands::chat_get_context_stats,
             chat::commands::chat_compress_context,
             chat::commands::chat_take_external_sends,

@@ -540,6 +540,14 @@ export const Sidebar = memo(function Sidebar({
     }
   }
 
+  const handleOpenProjectFolder = async (project: ChatProject) => {
+    try {
+      await chatApi.openProjectFolder(project.id)
+    } catch (err) {
+      window.alert(typeof err === 'string' ? err : (err as Error).message || '打开项目文件夹失败')
+    }
+  }
+
   const handleDeleteProject = async (project: ChatProject) => {
     if (!window.confirm(`确定删除项目「${project.name}」？项目内的聊天会移出项目，不会被删除。`)) {
       return
@@ -977,10 +985,12 @@ export const Sidebar = memo(function Sidebar({
       {projectMenuState && menuProject && (
         <ProjectContextMenu
           anchor={projectMenuState.anchor}
+          hasRootFolder={Boolean((menuProject.root_path ?? menuProject.rootPath ?? '').trim())}
           onRename={() => {
             setDialogProject(menuProject)
             setProjectError('')
           }}
+          onOpenFolder={() => void handleOpenProjectFolder(menuProject)}
           onDelete={() => void handleDeleteProject(menuProject)}
           onClose={() => setProjectMenuState(null)}
         />

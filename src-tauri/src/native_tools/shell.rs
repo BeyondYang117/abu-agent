@@ -28,6 +28,22 @@ const HOST_PYTHON_PACKAGE_INSTALL_PATTERNS: &[&str] = &[
     "uv pip install",
 ];
 
+/// Dev servers and other long-running processes are spawned in the background.
+const LONG_RUNNING_DEV_PATTERNS: &[&str] = &[
+    "tauri dev",
+    "npm run tauri dev",
+    "npm run dev",
+    "npm run dev:",
+    "next dev",
+    "nuxt dev",
+    "webpack serve",
+    "webpack-dev-server",
+    "cargo watch",
+    "flutter run",
+    "expo start",
+    "deno task dev",
+];
+
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -78,13 +94,33 @@ pub async fn run_command(
         }
     }
 
-    let cwd = resolve_command_cwd(arguments, workspace)?;
+    let explicit_cwd = arguments
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+
+    let (command, cd_extracted) = normalize_run_command(command, explicit_cwd)?;
+
+    let cwd = if let Some(cd_path) = cd_extracted.as_deref() {
+        resolve_tool_existing_dir(workspace, Some(cd_path))?
+    } else {
+        resolve_command_cwd(arguments, workspace)?
+    };
 
     if !cwd.is_dir() {
         return Err(format!(
             "Working directory is not a directory: {}",
             cwd.display()
         ));
+    }
+
+    let background = arguments
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(|| is_long_running_dev_command(&command));
+    if background {
+        return run_shell_command_background(&command, cwd).await;
     }
 
     let timeout_ms = arguments
@@ -94,7 +130,7 @@ pub async fn run_command(
         .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS)
         .max(default_timeout_ms);
 
-    let output = run_shell_command(command, cwd, timeout_ms).await?;
+    let output = run_shell_command(&command, cwd, timeout_ms).await?;
     let formatted = format_command_output(&output);
     if let Some(code) = output.status_code {
         if code != 0 {
@@ -109,6 +145,145 @@ fn resolve_command_cwd(
     workspace: &NativeToolWorkspace,
 ) -> Result<PathBuf, String> {
     resolve_tool_existing_dir(workspace, arguments.get("cwd").and_then(|v| v.as_str()))
+}
+
+/// Reject fragile `cd ... &&` prefixes; auto-strip simple `cd foo &&` forms.
+fn normalize_run_command(
+    command: &str,
+    explicit_cwd: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let Some((cd_path, rest)) = parse_leading_cd_prefix(command) else {
+        return Ok((command.to_string(), None));
+    };
+
+    if explicit_cwd.is_some() {
+        return Err(
+            "run_command: do not combine the `cwd` parameter with `cd ... &&` in `command`. \
+             Set `cwd` to the target directory and run only the remaining shell command."
+                .to_string(),
+        );
+    }
+
+    if cd_path.contains(' ') {
+        return Err(format!(
+            "run_command: paths with spaces must use the `cwd` parameter instead of `cd ... &&`.\n\
+             Suggested cwd: {cd_path}\n\
+             Suggested command: {rest}"
+        ));
+    }
+
+    Ok((rest, Some(cd_path)))
+}
+
+fn parse_leading_cd_prefix(command: &str) -> Option<(String, String)> {
+    let trimmed = command.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("cd ") {
+        return None;
+    }
+
+    let after_cd = trimmed.get(3..)?.trim_start();
+    let (path_part, rest) = find_cd_and_separator(after_cd)?;
+    let cd_path = strip_shell_quotes(path_part.trim());
+    let rest = rest.trim();
+    if cd_path.is_empty() || rest.is_empty() {
+        return None;
+    }
+    Some((cd_path, rest.to_string()))
+}
+
+fn find_cd_and_separator(command: &str) -> Option<(&str, &str)> {
+    for pattern in [" && ", "&&"] {
+        if let Some(idx) = command.find(pattern) {
+            let path = command.get(..idx)?.trim();
+            let rest = command.get(idx + pattern.len()..)?.trim();
+            if !path.is_empty() && !rest.is_empty() {
+                return Some((path, rest));
+            }
+        }
+    }
+    None
+}
+
+fn strip_shell_quotes(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2 {
+        if (value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\''))
+        {
+            return value[1..value.len() - 1].to_string();
+        }
+    }
+    value.to_string()
+}
+
+fn is_long_running_dev_command(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    if LONG_RUNNING_DEV_PATTERNS
+        .iter()
+        .any(|pattern| lowered.contains(pattern))
+    {
+        return true;
+    }
+
+    if lowered.contains("vite build") || lowered.contains("vite preview") {
+        return false;
+    }
+
+    lowered.starts_with("vite")
+        || lowered.starts_with("npx vite")
+        || lowered.contains(" npx vite")
+        || lowered.contains("&& vite")
+        || lowered.contains("; vite")
+}
+
+async fn run_shell_command_background(command: &str, cwd: PathBuf) -> Result<String, String> {
+    let mut cmd = {
+        #[cfg(target_os = "windows")]
+        {
+            let mut c = Command::new("cmd");
+            c.args(["/C", command]);
+            c
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut c = Command::new("sh");
+            c.args(["-c", command]);
+            c
+        }
+    };
+    cmd.current_dir(cwd.as_path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    cmd.kill_on_drop(false);
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = cmd
+        .spawn()
+        .map_err(|err| format!("Failed to start background command: {err}"))?;
+    let pid = child
+        .id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Ok(format!(
+        "background: true\npid: {pid}\ncwd: {}\ncommand: {command}\n\nLong-running dev server started in the background. It keeps running after this tool returns; check the app window or terminal output manually. Do not start the same dev server again unless you have stopped it first.\n",
+        cwd.display()
+    ))
 }
 
 #[derive(Debug)]
@@ -260,6 +435,43 @@ mod tests {
 
         assert!(formatted.contains("exit_code: 1"));
         assert!(formatted.contains("stderr:\nboom"));
+    }
+
+    #[test]
+    fn normalize_run_command_rejects_cd_with_spaces() {
+        let err = normalize_run_command(
+            "cd /Users/zmair/ZM database/foo && npm install",
+            None,
+        )
+        .expect_err("spaced cd path should require cwd");
+
+        assert!(err.contains("Suggested cwd: /Users/zmair/ZM database/foo"));
+        assert!(err.contains("Suggested command: npm install"));
+    }
+
+    #[test]
+    fn normalize_run_command_rejects_cd_when_cwd_is_set() {
+        let err = normalize_run_command("cd foo && npm install", Some("/tmp/project"))
+            .expect_err("cd and cwd should conflict");
+
+        assert!(err.contains("do not combine"));
+    }
+
+    #[test]
+    fn normalize_run_command_strips_simple_cd_prefix() {
+        let (command, cwd) =
+            normalize_run_command("cd focus-pomodoro && npm install", None).expect("normalize");
+
+        assert_eq!(command, "npm install");
+        assert_eq!(cwd.as_deref(), Some("focus-pomodoro"));
+    }
+
+    #[test]
+    fn is_long_running_dev_command_detects_common_dev_servers() {
+        assert!(is_long_running_dev_command("npm run tauri dev"));
+        assert!(is_long_running_dev_command("npx vite --port 5173"));
+        assert!(!is_long_running_dev_command("npm run build"));
+        assert!(!is_long_running_dev_command("vite build"));
     }
 
     #[tokio::test]
