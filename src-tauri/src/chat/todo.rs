@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use serde::Deserialize;
 use serde_json::Value;
+use tauri::{AppHandle, Emitter};
 
 use crate::chat::types::{AgentTodoItem, AgentTodoState, AgentTodoStatus};
 use crate::mcp::types::McpToolCallResult;
@@ -180,6 +181,35 @@ pub fn format_prompt(state: &AgentTodoState, language: &str, todo_tools_availabl
             "Agent todo list (internal working state): this list is owned by the assistant; the user cannot edit it manually. {tool_hint} For complex, multi-step, or continuing work, keep concise actionable items; mark one item in_progress when starting or switching work, mark items completed when done, and keep at most one in_progress item. Do not tell the user they can edit todos.\n\nCurrent todo state:\n{current}"
         )
     }
+}
+
+/// Conversation-scoped registry handler: load the conversation, apply the
+/// todo tool, persist, emit the `chat-todo` event, and return the tool
+/// result. Mirrors the legacy `RegistryToolExecutor` todo special case and
+/// deliberately does not resolve a native tool workspace.
+pub fn handle_conversation_tool_call(
+    app: &AppHandle,
+    conversation_id: &str,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<McpToolCallResult, String> {
+    let mut conversation = crate::chat::storage::load_conversation(app, conversation_id)?;
+    let next_state = apply_tool(&conversation.agent_todo_state, tool_name, arguments)?;
+    conversation.agent_todo_state = next_state.clone();
+    conversation.updated_at = chrono::Local::now().timestamp();
+    crate::chat::storage::save_conversation(app, &conversation)?;
+    emit_chat_todo_state(app, &conversation.id, &next_state);
+    Ok(tool_result(&next_state))
+}
+
+pub fn emit_chat_todo_state(app: &AppHandle, conversation_id: &str, todo_state: &AgentTodoState) {
+    let _ = app.emit(
+        "chat-todo",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "todoState": todo_state,
+        }),
+    );
 }
 
 pub fn tool_result(state: &AgentTodoState) -> McpToolCallResult {

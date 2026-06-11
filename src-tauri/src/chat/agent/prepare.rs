@@ -156,30 +156,12 @@ pub fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String>
 }
 
 pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
-    const BUILTIN_NAMES: &[&str] = &[
-        "web_search",
-        "web_fetch",
-        "read_file",
-        "list_dir",
-        "search_files",
-        "glob_files",
-        "stat_path",
-        "write_file",
-        "edit_file",
-        "create_dir",
-        "delete_path",
-        "move_path",
-        "copy_path",
-        "run_command",
-        "run_python",
-        "memory_read",
-        "memory_modify",
-        "mixer_generate_image",
-        "ask_user",
-        "todo_write",
-        "todo_update",
-    ];
-    if BUILTIN_NAMES.contains(&function_name) {
+    // Builtin name set = static native registry (17 native + todo/ask_user)
+    // plus the non-native builtin sources listed here.
+    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image"];
+    let is_builtin = crate::mcp::native_registry::find_entry(function_name).is_some()
+        || EXTRA_BUILTIN_NAMES.contains(&function_name);
+    if is_builtin {
         Some(format!(
             "Kivio tool `{function_name}` is not enabled for this chat. Do not call it again; answer using the available context and enabled tools only."
         ))
@@ -205,13 +187,9 @@ pub fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
     if tool.source == "skill" && is_native_skill_tool_name(&tool.name) {
         return true;
     }
-    if tool.source == "native" && crate::chat::todo::is_agent_todo_tool_name(&tool.name) {
-        return true;
-    }
-    if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
-        return true;
-    }
-    tool.source == "native" && matches!(tool.name.as_str(), "memory_read" | "memory_modify")
+    tool.source == "native"
+        && crate::mcp::native_registry::find_entry(&tool.name)
+            .is_some_and(|entry| entry.bypasses_approval)
 }
 
 pub fn build_chat_system_prompt(

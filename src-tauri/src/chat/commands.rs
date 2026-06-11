@@ -2877,16 +2877,6 @@ fn emit_chat_context_state(
     );
 }
 
-fn emit_chat_todo_state(app: &AppHandle, conversation_id: &str, todo_state: &AgentTodoState) {
-    let _ = app.emit(
-        "chat-todo",
-        serde_json::json!({
-            "conversationId": conversation_id,
-            "todoState": todo_state,
-        }),
-    );
-}
-
 fn emit_chat_plan_state(app: &AppHandle, conversation_id: &str, plan_state: &AgentPlanState) {
     let _ = app.emit(
         "chat-plan",
@@ -3428,19 +3418,6 @@ impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
         skill_cache: Option<&'a mut skills::SkillRunCache>,
     ) -> crate::chat::agent::ToolExecutorFuture<'a> {
         Box::pin(async move {
-            if tool.source == "native" && crate::chat::todo::is_agent_todo_tool_name(&tool.name) {
-                let mut conversation = load_conversation(&self.app, ctx.conversation_id)?;
-                let next_state = crate::chat::todo::apply_tool(
-                    &conversation.agent_todo_state,
-                    &tool.name,
-                    arguments,
-                )?;
-                conversation.agent_todo_state = next_state.clone();
-                conversation.updated_at = chrono::Local::now().timestamp();
-                save_conversation(&self.app, &conversation)?;
-                emit_chat_todo_state(&self.app, &conversation.id, &next_state);
-                return Ok(crate::chat::todo::tool_result(&next_state));
-            }
             let native_ctx = mcp::registry::NativeToolContext {
                 conversation_id: ctx.conversation_id.to_string(),
                 message_id: ctx.message_id.to_string(),

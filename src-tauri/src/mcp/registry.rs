@@ -7,13 +7,14 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 
 use crate::{
-    native_tools::{resolve_tool_read_path, FileMutationResult, NativeToolWorkspace, ReadFileResult},
+    native_tools::{
+        resolve_tool_read_path, FileMutationResult, NativeToolWorkspace, ReadFileResult,
+    },
     settings::{
         ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
         SKILL_SCRIPT_MIN_TIMEOUT_MS,
     },
     state::AppState,
-    web_search,
 };
 
 use super::{
@@ -513,6 +514,27 @@ async fn call_native_tool(
     arguments: Value,
     native_ctx: Option<NativeToolContext>,
 ) -> Result<McpToolCallResult, String> {
+    use super::native_registry::{find_entry, text_tool_result, NativeCallCtx, NativeToolCall};
+
+    let Some(entry) = find_entry(&tool.name) else {
+        return Err(format!("Unknown native tool: {}", tool.name));
+    };
+
+    // Conversation-scoped tools (todo) run before workspace resolution: they
+    // only need the conversation id and must not fail when the conversation
+    // project cannot be resolved.
+    if let NativeToolCall::Conversation(handler) = &entry.call {
+        let ctx = native_ctx
+            .as_ref()
+            .ok_or_else(|| format!("{} requires a conversation context", entry.name))?;
+        return handler(app, &ctx.conversation_id, &tool.name, arguments);
+    }
+    if matches!(entry.call, NativeToolCall::HostMediated) {
+        // ask_user is host-mediated in chat/agent/execute.rs and must never
+        // reach the registry dispatcher; keep the legacy fallback wording.
+        return Err(format!("Unknown native tool: {}", tool.name));
+    }
+
     let settings = state.settings_read().clone();
     let workspace = resolve_native_workspace(
         app,
@@ -520,111 +542,30 @@ async fn call_native_tool(
         native_ctx.as_ref(),
     )?;
 
-    if tool.name == "run_python" {
-        return run_python_via_pyodide(app, state, &settings, &workspace, &arguments, native_ctx)
-            .await;
+    match &entry.call {
+        NativeToolCall::SyncText(call) => Ok(text_tool_result(call(&workspace, &arguments)?)),
+        NativeToolCall::SyncResult(call) => call(&workspace, &arguments),
+        NativeToolCall::BlockingText(call) => {
+            let content = run_blocking_file_mutation(&workspace, &arguments, *call).await?;
+            Ok(text_tool_result(content))
+        }
+        NativeToolCall::BlockingMutation(call) => {
+            let result = run_blocking_file_mutation(&workspace, &arguments, *call).await?;
+            file_mutation_tool_result(result)
+        }
+        NativeToolCall::Async(call) => {
+            call(NativeCallCtx {
+                app,
+                state,
+                settings: &settings,
+                workspace: &workspace,
+                arguments: &arguments,
+                native_ctx: native_ctx.as_ref(),
+            })
+            .await
+        }
+        NativeToolCall::Conversation(_) | NativeToolCall::HostMediated => unreachable!(),
     }
-
-    if matches!(tool.name.as_str(), "write_file" | "edit_file") {
-        let tool_name = tool.name.clone();
-        let result = run_blocking_file_mutation(&workspace, &arguments, move |workspace,
-                                                                              arguments| {
-            match tool_name.as_str() {
-                "write_file" => crate::native_tools::write_file(workspace, arguments),
-                "edit_file" => crate::native_tools::edit_file(workspace, arguments),
-                _ => unreachable!(),
-            }
-        })
-        .await?;
-        return file_mutation_tool_result(result);
-    }
-
-    let content = match tool.name.as_str() {
-        "web_search" => {
-            let query = arguments
-                .get("query")
-                .and_then(|query| query.as_str())
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            if query.is_empty() {
-                return Err("web_search query is empty".to_string());
-            }
-            let retry_attempts = if settings.retry_enabled {
-                settings.retry_attempts as usize
-            } else {
-                1
-            };
-            let results =
-                web_search::search_web(state, &settings.lens.web_search, &query, retry_attempts)
-                    .await?;
-            let raw = serde_json::to_value(&results).unwrap_or(Value::Null);
-            return Ok(McpToolCallResult {
-                content: web_search::format_web_context(&results),
-                is_error: false,
-                raw,
-                artifacts: Vec::new(),
-                structured_content: None,
-            });
-        }
-        "web_fetch" => crate::native_tools::web_fetch(&state.http, &arguments).await?,
-        "memory_read" => {
-            if !settings.chat_memory.enabled {
-                return Err("Chat memory is disabled in Settings".to_string());
-            }
-            return crate::chat::memory::tool_read(app, &arguments);
-        }
-        "memory_modify" => {
-            if !settings.chat_memory.enabled {
-                return Err("Chat memory is disabled in Settings".to_string());
-            }
-            return crate::chat::memory::tool_modify(app, &arguments);
-        }
-        "read_file" => {
-            let result = crate::native_tools::read_file(&workspace, &arguments)?;
-            return read_file_tool_result(result);
-        }
-        "list_dir" => crate::native_tools::list_dir(&workspace, &arguments)?,
-        "search_files" => crate::native_tools::search_files(&workspace, &arguments)?,
-        "glob_files" => crate::native_tools::glob_files(&workspace, &arguments)?,
-        "stat_path" => crate::native_tools::stat_path(&workspace, &arguments)?,
-        "create_dir" => crate::native_tools::create_dir(&workspace, &arguments)?,
-        "delete_path" => {
-            run_blocking_file_mutation(&workspace, &arguments, |workspace, arguments| {
-                crate::native_tools::delete_path(workspace, arguments)
-            })
-            .await?
-        }
-        "move_path" => {
-            run_blocking_file_mutation(&workspace, &arguments, |workspace, arguments| {
-                crate::native_tools::move_path(workspace, arguments)
-            })
-            .await?
-        }
-        "copy_path" => {
-            run_blocking_file_mutation(&workspace, &arguments, |workspace, arguments| {
-                crate::native_tools::copy_path(workspace, arguments)
-            })
-            .await?
-        }
-        "run_command" => {
-            crate::native_tools::run_command(
-                &workspace,
-                settings.chat_tools.tool_timeout_ms,
-                &arguments,
-            )
-            .await?
-        }
-        other => return Err(format!("Unknown native tool: {other}")),
-    };
-
-    Ok(McpToolCallResult {
-        content,
-        is_error: false,
-        raw: Value::Null,
-        artifacts: Vec::new(),
-        structured_content: None,
-    })
 }
 
 /// Runs a file mutation tool on the blocking thread pool so in-process path
@@ -665,7 +606,7 @@ fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallRe
     })
 }
 
-fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCallResult, String> {
+pub(super) fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCallResult, String> {
     let structured = serde_json::to_value(&result)
         .map_err(|err| format!("Serialize read_file result failed: {err}"))?;
     let content = serde_json::to_string(&structured)
@@ -705,7 +646,7 @@ fn resolve_native_workspace(
     ))
 }
 
-async fn run_python_via_pyodide(
+pub(super) async fn run_python_via_pyodide(
     app: &AppHandle,
     state: &AppState,
     settings: &crate::settings::Settings,

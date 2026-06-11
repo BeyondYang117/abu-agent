@@ -689,16 +689,10 @@ pub(crate) fn tool_call_parallel_eligible(settings: &Settings, tool: &ChatToolDe
         return false;
     }
     if tool.source == "native" {
-        return matches!(
-            tool.name.as_str(),
-            "web_search"
-                | "web_fetch"
-                | "read_file"
-                | "list_dir"
-                | "search_files"
-                | "glob_files"
-                | "stat_path"
-        );
+        // The native parallel-safe set is intentionally narrow (see
+        // agent-runtime spec); it lives in the static registry.
+        return crate::mcp::native_registry::find_entry(&tool.name)
+            .is_some_and(|entry| entry.parallel_safe);
     }
     tool.source == "mcp" && tool.is_read_only_tool()
 }

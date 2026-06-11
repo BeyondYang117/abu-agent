@@ -58,18 +58,11 @@ impl ChatToolDefinition {
                 && self.destructive_hint() != Some(true)
                 && self.open_world_hint() != Some(true);
         }
+        // Native read-only metadata lives in the static registry
+        // (mcp/native_registry.rs). Note: this set includes memory_read,
+        // which is read-only but deliberately not parallel-safe.
         self.source == "native"
-            && matches!(
-                self.name.as_str(),
-                "web_search"
-                    | "web_fetch"
-                    | "read_file"
-                    | "list_dir"
-                    | "search_files"
-                    | "glob_files"
-                    | "stat_path"
-                    | "memory_read"
-            )
+            && super::native_registry::find_entry(&self.name).is_some_and(|entry| entry.read_only)
     }
 }
 
@@ -752,46 +745,18 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
     }
 }
 
+/// Builtin native tool exposure: iterates the static registry in
+/// `mcp/native_registry.rs` (declaration order = model-facing order).
 pub fn list_native_builtin_tool_defs(
     native: &ChatNativeToolsConfig,
     web_search_configured: bool,
     memory_enabled: bool,
 ) -> Vec<ChatToolDefinition> {
-    let mut tools = Vec::new();
-    if native.web_search && web_search_configured {
-        tools.push(native_web_search_tool());
-    }
-    if native.web_fetch {
-        tools.push(native_web_fetch_tool());
-    }
-    if native.read_file {
-        tools.push(native_read_file_tool());
-        tools.push(native_list_dir_tool());
-        tools.push(native_search_files_tool());
-        tools.push(native_glob_files_tool());
-        tools.push(native_stat_path_tool());
-    }
-    if native.write_file {
-        tools.push(native_write_file_tool());
-        tools.push(native_create_dir_tool());
-        tools.push(native_delete_path_tool());
-        tools.push(native_move_path_tool());
-        tools.push(native_copy_path_tool());
-    }
-    if native.edit_file {
-        tools.push(native_edit_file_tool());
-    }
-    if native.run_command {
-        tools.push(native_run_command_tool());
-    }
-    if native.run_python {
-        tools.push(native_run_python_tool());
-    }
-    if memory_enabled {
-        tools.push(native_memory_read_tool());
-        tools.push(native_memory_modify_tool());
-    }
-    tools
+    super::native_registry::NATIVE_TOOLS
+        .iter()
+        .filter(|entry| (entry.enabled)(native, web_search_configured, memory_enabled))
+        .map(|entry| (entry.def)())
+        .collect()
 }
 
 pub fn sanitize_openai_tool_name(name: &str) -> String {
