@@ -10,6 +10,7 @@
 | [File Tools](./file-tools.md) | Minimal native file tool surface (read/edit/write), runtime-side protection contracts | Active |
 | [HTTP Timeouts](./http-timeouts.md) | Provider HTTP client timeout contracts for normal requests, streaming SSE, downloads, and retries | Active |
 | [Lens Chat Handoff](./lens-chat-handoff.md) | Lens-to-Chat transfer command, screenshot attachment handoff, and navigation events | Active |
+| [Native Tool Registry](./native-tool-registry.md) | Static NATIVE_TOOLS table: single source for built-in tool exposure, parallel/approval metadata, and dispatch | Active |
 | [Window Lifecycle](./window-lifecycle.md) | Tauri window restore/open behavior for Chat, Lens, translator, and macOS Dock activation | Active |
 
 ## Pre-Development Checklist
@@ -18,6 +19,7 @@
 - Read [File Tools](./file-tools.md) before changing `src-tauri/src/native_tools/files.rs`, native file tool schemas in `src-tauri/src/mcp/types.rs`, file mutation dispatch in `src-tauri/src/mcp/registry.rs`, or Chat UI rendering of file tool results.
 - Read [HTTP Timeouts](./http-timeouts.md) before changing `src-tauri/src/api.rs`, provider adapters in `src-tauri/src/chat/model/**`, `send_with_retry`, `send_with_failover`, or any SSE streaming request/response loop.
 - Read [Lens Chat Handoff](./lens-chat-handoff.md) before changing `lens_send_to_chat`, Lens screenshot cleanup, Chat conversation routing, or Lens-to-Chat attachment transfer behavior.
+- Read [Native Tool Registry](./native-tool-registry.md) before adding a built-in tool or changing tool exposure gates, parallel/approval/read-only classification, or `call_native_tool` dispatch — the only edit point is `src-tauri/src/mcp/native_registry.rs`.
 - Read [Window Lifecycle](./window-lifecycle.md) before changing `src-tauri/src/main.rs` app reopen handling, `src-tauri/src/shortcuts.rs` Chat/window activation paths, or `src-tauri/src/windows.rs` window chrome/behavior helpers.
 
 ## Quality Check

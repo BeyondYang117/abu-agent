@@ -1,5 +1,7 @@
 # Chat Agent Runtime
 
+> Module layout (since 2026-06-12 split, zero behavior change): `loop_.rs` is a thin orchestration skeleton (`LoopEnv`/`RunState` + prepare → planning → tool rounds → synthesis → finalize). Planning + provider-call plumbing live in `planning.rs`, tool round scheduling in `rounds.rs`, synthesis paths in `synthesis.rs`, and `RunResultBuilder` + fallback copy + `SegmentBuilder` in `finalize.rs`. Loop tests live in `loop_tests.rs` (mounted via `#[path]` from `loop_.rs`). All contracts below are unchanged by the split; `run_agent_loop` remains the single public entry. Fallback behavior (synthesis failure/cancel/empty, planning draft failure) is pinned by regression tests in `loop_tests.rs` — keep them green and assertion-identical through refactors.
+
 ## Scenario: Per-Round Tool Scheduling
 
 ### 1. Scope / Trigger
