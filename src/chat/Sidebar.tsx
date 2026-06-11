@@ -277,7 +277,7 @@ function SearchDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[260] flex items-start justify-center bg-black/20 px-5 pt-[18vh] backdrop-blur-[1px] dark:bg-black/35"
+      className="fixed inset-0 z-[260] flex items-start justify-center bg-black/45 px-5 pt-[16vh] dark:bg-black/60"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
@@ -285,13 +285,13 @@ function SearchDialog({
     >
       <div
         ref={dialogRef}
-        className="chat-motion-popover flex max-h-[70vh] w-full max-w-[620px] flex-col rounded-3xl border border-black/[0.04] bg-white/95 p-2 shadow-2xl shadow-black/20 dark:border-white/[0.08] dark:bg-[#242426]/95"
+        className="chat-motion-popover flex max-h-[62vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-black/25 dark:border-neutral-700 dark:bg-[#242426]"
         role="dialog"
         aria-modal="true"
         aria-label="搜索对话"
       >
-        <div className="flex items-center gap-2 px-3 py-2.5">
-          <Search size={16} strokeWidth={1.75} className="shrink-0 text-neutral-400" />
+        <div className="flex items-center gap-2 border-b border-neutral-200/80 px-3 py-2 dark:border-neutral-700/80">
+          <Search size={15} strokeWidth={1.75} className="shrink-0 text-neutral-400" />
           <input
             ref={inputRef}
             type="text"
@@ -305,17 +305,17 @@ function SearchDialog({
               }
             }}
             placeholder="搜索对话"
-            className="min-w-0 flex-1 bg-transparent text-[16px] font-semibold text-neutral-900 outline-none placeholder:text-neutral-400 dark:text-neutral-100 dark:placeholder:text-neutral-500"
+            className="min-w-0 flex-1 bg-transparent text-[14px] font-medium text-neutral-900 outline-none placeholder:text-neutral-400 dark:text-neutral-100 dark:placeholder:text-neutral-500"
           />
         </div>
 
-        <div className="px-3 pb-2 pt-2 text-[13px] font-semibold text-neutral-400 dark:text-neutral-500">
+        <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
           {normalizedQuery ? '搜索结果' : '近期对话'}
         </div>
 
-        <div className="custom-scrollbar min-h-0 overflow-y-auto pb-1">
+        <div className="custom-scrollbar min-h-0 overflow-y-auto px-1.5 pb-1.5">
           {results.length > 0 ? (
-            results.map((conversation, index) => {
+            results.map((conversation) => {
               const active = conversation.id === currentConversationId
               const projectLabel = conversationProjectLabel(conversation, projects)
               return (
@@ -323,14 +323,14 @@ function SearchDialog({
                   key={conversation.id}
                   type="button"
                   onClick={() => onSelectConversation(conversation)}
-                  className={`group/search-result flex w-full min-w-0 items-center gap-3 rounded-2xl px-5 py-2.5 text-left transition-colors ${
+                  className={`group/search-result flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
                     active
                       ? 'bg-black/[0.07] dark:bg-white/[0.1]'
                       : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.07]'
                   }`}
                 >
                   <span
-                    className={`min-w-0 flex-1 truncate text-[15px] ${
+                    className={`min-w-0 flex-1 truncate text-[13px] ${
                       active
                         ? 'font-semibold text-neutral-950 dark:text-neutral-50'
                         : 'font-medium text-neutral-800 dark:text-neutral-200'
@@ -340,18 +340,15 @@ function SearchDialog({
                     {conversation.title}
                   </span>
                   {projectLabel && (
-                    <span className="max-w-[120px] shrink-0 truncate text-[13px] font-medium text-neutral-400 dark:text-neutral-500">
+                    <span className="max-w-[100px] shrink-0 truncate text-[12px] text-neutral-400 dark:text-neutral-500">
                       {projectLabel}
                     </span>
                   )}
-                  <span className="shrink-0 rounded-full bg-black/[0.06] px-2 py-0.5 text-[12px] font-medium leading-none text-neutral-500 dark:bg-white/[0.09] dark:text-neutral-400">
-                    {modLabel}{index + 1}
-                  </span>
                 </button>
               )
             })
           ) : (
-            <div className="px-5 py-8 text-center text-[13px] text-neutral-400 dark:text-neutral-500">
+            <div className="px-3 py-6 text-center text-[13px] text-neutral-400 dark:text-neutral-500">
               没有匹配的对话
             </div>
           )}
@@ -813,7 +810,7 @@ export const Sidebar = memo(function Sidebar({
                               e.stopPropagation()
                               openProjectMenu(project.id, e.currentTarget)
                             }}
-                            className={`mr-1 shrink-0 rounded-md p-0.5 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                            className={`shrink-0 rounded-md p-0.5 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
                               projectMenuState?.projectId === project.id
                                 ? 'opacity-100'
                                 : 'opacity-0 group-hover:opacity-100'
@@ -821,6 +818,23 @@ export const Sidebar = memo(function Sidebar({
                             aria-label="项目操作"
                           >
                             <MoreHorizontal size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setCollapsedProjectIds((previous) => {
+                                const next = new Set(previous)
+                                next.delete(project.id)
+                                return next
+                              })
+                              onSelectProject(project)
+                            }}
+                            className="mr-1 shrink-0 rounded-md p-0.5 text-neutral-400 opacity-0 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                            aria-label="新建聊天"
+                            title="新建聊天"
+                          >
+                            <SquarePen size={15} strokeWidth={1.75} />
                           </button>
                         </div>
 

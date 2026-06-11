@@ -193,9 +193,10 @@ function TimelineSegments({
   artifacts: ChatToolArtifact[]
   reasoningStreaming: boolean
 }) {
+  const ordered = orderedSegments(segments)
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
-      {orderedSegments(segments).map((segment) => {
+      {ordered.map((segment, index) => {
         if (segment.kind === 'tool') {
           return (
             <TimelineToolSegment
@@ -212,7 +213,7 @@ function TimelineSegments({
             <ReasoningBlock
               key={segment.id}
               reasoning={reasoning}
-              streaming={reasoningStreaming}
+              streaming={reasoningStreaming && index === ordered.length - 1}
             />
           )
         }

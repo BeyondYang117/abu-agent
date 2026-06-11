@@ -5,14 +5,7 @@ import { ChatMarkdown } from './ChatMarkdown'
 const COLLAPSE_LINE_LIMIT = 3
 const CHARS_PER_LINE = 60
 
-function reasoningExceedsLineLimit(text: string): boolean {
-  const trimmed = text.trim()
-  if (!trimmed) return false
-  if (trimmed.split(/\r?\n/).length > COLLAPSE_LINE_LIMIT) return true
-  return Math.ceil(trimmed.length / CHARS_PER_LINE) > COLLAPSE_LINE_LIMIT
-}
-
-/** 折叠时只展示末尾三行（或尾部字符），流式更新始终跟最新内容 */
+/** 流式折叠预览只展示末尾三行（或尾部字符），始终跟最新内容 */
 function collapsedReasoningPreview(text: string): { preview: string; truncated: boolean } {
   const trimmed = text.trimEnd()
   if (!trimmed) return { preview: '', truncated: false }
@@ -37,7 +30,7 @@ type ReasoningBlockProps = {
 }
 
 export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockProps) {
-  const collapsible = useMemo(() => reasoningExceedsLineLimit(reasoning), [reasoning])
+  const collapsible = reasoning.trim().length > 0
   const collapsedPreview = useMemo(
     () => collapsedReasoningPreview(reasoning),
     [reasoning],
@@ -49,6 +42,8 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
   const bodyRef = useRef<HTMLDivElement>(null)
 
   const showCollapsed = collapsible && !open
+  /** 生成完毕的折叠态只留标题行，正文完全隐藏 */
+  const hideBody = !streaming && showCollapsed
 
   useEffect(() => {
     if (!streaming) return
@@ -69,11 +64,11 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
       setBodyMaxHeight(null)
       return
     }
-    setBodyMaxHeight(body.scrollHeight)
-  }, [collapsible, open, reasoning, showCollapsed])
+    setBodyMaxHeight(hideBody ? 0 : body.scrollHeight)
+  }, [collapsible, open, reasoning, showCollapsed, hideBody])
 
   const titleClass =
-    'mb-1 flex w-full items-center gap-1 text-left text-[11px] font-medium text-neutral-400 transition-colors dark:text-neutral-500'
+    'mb-1 flex w-full items-center gap-1 text-left text-[12.5px] font-medium text-neutral-700 transition-colors dark:text-neutral-200'
   const streamingPreview = streaming && showCollapsed
   const bodyClass = [
     'chat-motion-reasoning-body',
@@ -91,7 +86,7 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
 
   return (
     <section
-      aria-label="思考过程"
+      aria-label="Thinking"
       className={`mb-3 border-l pl-3 transition-colors duration-300 ${
         streaming
           ? 'border-neutral-300 dark:border-neutral-600'
@@ -102,16 +97,14 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
         <button
           type="button"
           onClick={handleToggle}
-          className={`${titleClass} hover:text-neutral-600 dark:hover:text-neutral-300`}
+          className={`${titleClass} hover:text-neutral-900 dark:hover:text-neutral-50`}
           aria-expanded={open}
           data-tauri-drag-region="false"
         >
           {streaming ? (
-            <span className="reasoning-shimmer-text">
-              思考过程{showCollapsed ? ' · 生成中' : ''}
-            </span>
+            <span className="reasoning-shimmer-text">Thinking…</span>
           ) : (
-            <span>思考过程</span>
+            <span>Thinking</span>
           )}
           <ChevronDown
             size={12}
@@ -122,9 +115,9 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
       ) : (
         <div className={titleClass}>
           {streaming ? (
-            <span className="reasoning-shimmer-text">思考过程 · 生成中</span>
+            <span className="reasoning-shimmer-text">Thinking…</span>
           ) : (
-            <span>思考过程</span>
+            <span>Thinking</span>
           )}
         </div>
       )}
@@ -132,11 +125,9 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
       <div
         ref={bodyRef}
         className={bodyClass}
+        aria-hidden={hideBody}
         style={bodyMaxHeight == null ? undefined : { maxHeight: `${bodyMaxHeight}px` }}
       >
-        {showCollapsed && collapsedPreview.truncated && !streaming ? (
-          <span className="mr-0.5 opacity-50">…</span>
-        ) : null}
         <ChatMarkdown content={visibleReasoning} variant="reasoning" />
       </div>
     </section>

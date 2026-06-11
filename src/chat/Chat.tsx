@@ -1454,6 +1454,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [applyConversation, restoreStreamingPreview, syncConversationRoute])
 
   const handleNewConversation = useCallback(async () => {
+    setSelectedProject(null)
     setLastAssistantStreamStats(null)
     setDraftProviderId(activeProviderId)
     setDraftModel(activeModel)
