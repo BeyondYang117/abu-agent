@@ -1335,7 +1335,7 @@ export default function Lens() {
           setStage('ready')
           return
         }
-        await api.lensClose()
+        await closeAfterReset()
       } catch (err) {
         console.error('[lens-chat] handoff failed:', err)
         setStreaming(false)
