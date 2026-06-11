@@ -1,0 +1,498 @@
+use serde_json::Value;
+
+use crate::chat::model::PendingToolCall;
+use crate::chat::types::{
+    ChatMessageSegment, ChatMessageSegmentKind, ChatMessageSegmentPhase, ToolCallRecord,
+};
+
+use super::host::AgentHost;
+use super::loop_::{LoopEnv, RunIds, RunState};
+use super::stop::{
+    final_assistant_api_message, final_response_from_planning_message, merge_reasoning,
+};
+use super::stream::ToolCallDraftTracker;
+use super::synthesis::SynthesisCompleted;
+use super::types::{
+    AgentPhase, AgentRunConfig, AgentRunResult, AgentStepResult, AgentStopReason,
+};
+
+/// Converges the repeated "emit fallback + push api message + build AgentRunResult"
+/// blocks in the agent loop. Emit order is fixed: stream delta (with optional
+/// segment) -> stream done -> api message push (guarded or always) -> segment
+/// append -> result construction.
+pub(crate) struct RunResultBuilder<'a> {
+    host: &'a dyn AgentHost,
+    ids: RunIds<'a>,
+    content: String,
+    api_reasoning: Option<String>,
+    reasoning_tail: Option<String>,
+    emit_segment: Option<ChatMessageSegment>,
+    append_template: Option<ChatMessageSegment>,
+    emit_done_reason: Option<&'static str>,
+    push_api_always: bool,
+    outcome: &'static str,
+}
+
+impl<'a> RunResultBuilder<'a> {
+    pub(crate) fn new(host: &'a dyn AgentHost, ids: RunIds<'a>, content: String) -> Self {
+        Self {
+            host,
+            ids,
+            content,
+            api_reasoning: None,
+            reasoning_tail: None,
+            emit_segment: None,
+            append_template: None,
+            emit_done_reason: None,
+            push_api_always: false,
+            outcome: "completed",
+        }
+    }
+
+    /// Use `template` both as the segment attached to the emitted delta and as
+    /// the template appended to the segment builder during `finish`.
+    pub(crate) fn segment(mut self, template: &ChatMessageSegment) -> Self {
+        self.emit_segment = Some(template.clone());
+        self.append_template = Some(template.clone());
+        self
+    }
+
+    /// Attach an already-appended segment to the emitted delta without
+    /// re-appending it during `finish`.
+    pub(crate) fn emit_segment_opt(mut self, segment: Option<ChatMessageSegment>) -> Self {
+        self.emit_segment = segment;
+        self
+    }
+
+    pub(crate) fn api_reasoning(mut self, reasoning: Option<String>) -> Self {
+        self.api_reasoning = reasoning;
+        self
+    }
+
+    pub(crate) fn reasoning_tail(mut self, reasoning: Option<String>) -> Self {
+        self.reasoning_tail = reasoning;
+        self
+    }
+
+    pub(crate) fn emit_done(mut self, reason: &'static str) -> Self {
+        self.emit_done_reason = Some(reason);
+        self
+    }
+
+    pub(crate) fn push_api_always(mut self) -> Self {
+        self.push_api_always = true;
+        self
+    }
+
+    pub(crate) fn outcome(mut self, outcome: &'static str) -> Self {
+        self.outcome = outcome;
+        self
+    }
+
+    fn emit(&self) {
+        if let Some(reason) = self.emit_done_reason {
+            self.host.emit_stream_delta(
+                self.ids.conversation_id,
+                self.ids.run_id,
+                self.ids.message_id,
+                &self.content,
+                None,
+                self.emit_segment.as_ref(),
+            );
+            self.host.emit_stream_done(
+                self.ids.conversation_id,
+                self.ids.run_id,
+                self.ids.message_id,
+                reason,
+                &self.content,
+            );
+        }
+    }
+
+    fn push_api_message(&self, generated_api_messages: &mut Vec<Value>) {
+        if self.push_api_always || !generated_api_messages.is_empty() {
+            generated_api_messages.push(final_assistant_api_message(
+                &self.content,
+                self.api_reasoning.as_deref(),
+            ));
+        }
+    }
+
+    /// Emit + api push only, for fallbacks that flow into the common loop tail
+    /// (segment append and result construction happen there). Returns the
+    /// fallback content.
+    pub(crate) fn emit_and_record(self, generated_api_messages: &mut Vec<Value>) -> String {
+        self.emit();
+        self.push_api_message(generated_api_messages);
+        self.content
+    }
+
+    /// Emit + api push + segment append + AgentRunResult construction, for
+    /// fallbacks that end the run immediately.
+    pub(crate) fn finish(
+        self,
+        mut segment_builder: SegmentBuilder,
+        planning_reasoning_parts: &[String],
+        tool_records: Vec<ToolCallRecord>,
+        mut generated_api_messages: Vec<Value>,
+        steps: Vec<AgentStepResult>,
+    ) -> AgentRunResult {
+        self.emit();
+        self.push_api_message(&mut generated_api_messages);
+        if let Some(template) = &self.append_template {
+            segment_builder.append_text_from_template(template, self.content.clone());
+        }
+        AgentRunResult {
+            content: self.content,
+            reasoning: merge_reasoning(planning_reasoning_parts, self.reasoning_tail),
+            tool_records,
+            segments: segment_builder.all(),
+            api_messages: generated_api_messages,
+            steps,
+            stream_outcome: self.outcome.to_string(),
+        }
+    }
+}
+
+pub(crate) struct SegmentBuilder {
+    next_order: u32,
+    segments: Vec<ChatMessageSegment>,
+}
+
+impl Default for SegmentBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SegmentBuilder {
+    pub(crate) fn new() -> Self {
+        Self {
+            next_order: 1000,
+            segments: Vec::new(),
+        }
+    }
+
+    pub(crate) fn reserve(
+        &mut self,
+        kind: ChatMessageSegmentKind,
+        phase: ChatMessageSegmentPhase,
+        step_number: Option<u8>,
+        round: Option<u32>,
+        suffix: &str,
+    ) -> ChatMessageSegment {
+        let segment = ChatMessageSegment {
+            id: format!("seg_{}_{}", self.next_order, suffix),
+            kind,
+            phase,
+            order: self.next_order,
+            step_number,
+            round,
+            text: None,
+            tool_call_id: None,
+        };
+        self.next_order = self.next_order.saturating_add(1);
+        segment
+    }
+
+    pub(crate) fn append_text_from_template(
+        &mut self,
+        template: &ChatMessageSegment,
+        text: impl Into<String>,
+    ) -> Option<ChatMessageSegment> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return None;
+        }
+        let mut segment = template.clone();
+        segment.text = Some(text);
+        self.segments.push(segment.clone());
+        Some(segment)
+    }
+
+    pub(crate) fn append_tool_calls(
+        &mut self,
+        phase: ChatMessageSegmentPhase,
+        step_number: Option<u8>,
+        round: u32,
+        calls: &[PendingToolCall],
+    ) -> Vec<ChatMessageSegment> {
+        let mut segments = Vec::new();
+        for call in calls {
+            let segment = ChatMessageSegment {
+                id: format!("seg_{}_tool_{}", self.next_order, call.id),
+                kind: ChatMessageSegmentKind::Tool,
+                phase: phase.clone(),
+                order: self.next_order,
+                step_number,
+                round: Some(round),
+                text: None,
+                tool_call_id: Some(call.id.clone()),
+            };
+            self.next_order = self.next_order.saturating_add(1);
+            self.segments.push(segment.clone());
+            segments.push(segment);
+        }
+        segments
+    }
+
+    pub(crate) fn append_existing_segments(
+        &mut self,
+        mut segments: Vec<ChatMessageSegment>,
+    ) -> Vec<ChatMessageSegment> {
+        for segment in &segments {
+            self.next_order = self.next_order.max(segment.order.saturating_add(1));
+        }
+        self.segments.extend(segments.iter().cloned());
+        segments.sort_by_key(|segment| segment.order);
+        segments
+    }
+
+    pub(crate) fn next_order(&self) -> u32 {
+        self.next_order
+    }
+
+    pub(crate) fn all(self) -> Vec<ChatMessageSegment> {
+        self.segments
+    }
+}
+
+pub(crate) fn segment_phase_for_agent_phase(phase: AgentPhase) -> ChatMessageSegmentPhase {
+    match phase {
+        AgentPhase::Plain => ChatMessageSegmentPhase::Plain,
+        AgentPhase::Synthesis => ChatMessageSegmentPhase::Synthesis,
+        AgentPhase::ToolLoop => ChatMessageSegmentPhase::ToolLoop,
+    }
+}
+
+/// Final result when planning ended with a natural answer (no tool calls left).
+pub(crate) fn finalize_planning_final(
+    env: &LoopEnv<'_>,
+    state: &mut RunState,
+    message: Value,
+) -> Result<AgentRunResult, String> {
+    let config = env.config;
+    let (response, reasoning) =
+        final_response_from_planning_message(&message, &state.planning_reasoning_parts)?;
+    if !state.planning_final_streamed {
+        env.host.emit_stream_delta(
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            &response,
+            None,
+            None,
+        );
+        env.host.emit_stream_done(
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            "done",
+            &response,
+        );
+    }
+    if !state.generated_api_messages.is_empty() {
+        state.generated_api_messages.push(message);
+    }
+    Ok(AgentRunResult {
+        content: response,
+        reasoning,
+        tool_records: std::mem::take(&mut state.tool_records),
+        segments: std::mem::take(&mut state.segment_builder).all(),
+        api_messages: std::mem::take(&mut state.generated_api_messages),
+        steps: std::mem::take(&mut state.steps),
+        stream_outcome: "completed".to_string(),
+    })
+}
+
+/// Common loop tail: append final segments, push the closing step and build the
+/// completed run result.
+pub(crate) fn finalize_completed(
+    env: &LoopEnv<'_>,
+    state: &mut RunState,
+    completed: SynthesisCompleted,
+) -> AgentRunResult {
+    let SynthesisCompleted {
+        response,
+        reasoning,
+        response_reasoning,
+        phase,
+        response_segment,
+        response_reasoning_segment,
+    } = completed;
+    let mut final_step_segments = Vec::new();
+    if !response.trim().is_empty() {
+        if let Some(segment) = state
+            .segment_builder
+            .append_text_from_template(&response_segment, response.clone())
+        {
+            final_step_segments.push(segment);
+        }
+    }
+    if let Some(reasoning_part) = response_reasoning
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(segment) = state
+            .segment_builder
+            .append_text_from_template(&response_reasoning_segment, reasoning_part)
+        {
+            final_step_segments.push(segment);
+        }
+    }
+
+    state.steps.push(AgentStepResult {
+        step_number: state.step_number,
+        phase,
+        response_messages: Vec::new(),
+        tool_records: Vec::new(),
+        segments: final_step_segments,
+        streamed: env.config.stream_enabled,
+        stop_reason: Some(AgentStopReason::Natural),
+    });
+
+    AgentRunResult {
+        content: response,
+        reasoning,
+        tool_records: std::mem::take(&mut state.tool_records),
+        segments: std::mem::take(&mut state.segment_builder).all(),
+        api_messages: std::mem::take(&mut state.generated_api_messages),
+        steps: std::mem::take(&mut state.steps),
+        stream_outcome: "completed".to_string(),
+    }
+}
+
+pub(crate) fn empty_synthesis_fallback_response(language: &str) -> String {
+    if language.starts_with("zh") {
+        "工具调用已经完成，但模型没有返回最终总结。上方工具结果已保存在本轮回复中，你可以继续追问，或让我重新生成总结。".to_string()
+    } else {
+        "The tool calls completed, but the model did not return a final summary. The tool results above were saved with this reply; you can continue from them or regenerate the summary.".to_string()
+    }
+}
+
+pub(crate) fn synthesis_failed_fallback_response(language: &str) -> String {
+    if language.starts_with("zh") {
+        "工具调用已经完成，但最终总结生成失败。上方工具结果已保存在本轮回复中，你可以继续追问，或让我重新生成总结。".to_string()
+    } else {
+        "The tool calls completed, but final summary generation failed. The tool results above were saved with this reply; you can continue from them or regenerate the summary.".to_string()
+    }
+}
+
+pub(crate) fn tool_planning_failed_fallback_response(language: &str) -> String {
+    if language.starts_with("zh") {
+        "工具调用参数生成失败，这一步还没有真正执行写入。主对话已保留，你可以让我缩小范围、改用补丁，或重新生成。".to_string()
+    } else {
+        "Tool-call argument generation failed before the write actually ran. This conversation was preserved; you can ask me to narrow the scope, use a patch, or regenerate.".to_string()
+    }
+}
+
+pub(crate) fn stopped_generation_content(language: &str) -> String {
+    if language.starts_with("zh") {
+        "已停止生成。".to_string()
+    } else {
+        "Generation stopped.".to_string()
+    }
+}
+
+pub(crate) fn tool_planning_failed_run_result(
+    host: &dyn AgentHost,
+    config: &AgentRunConfig<'_>,
+    mut segment_builder: SegmentBuilder,
+    planning_text_segment: ChatMessageSegment,
+    tool_draft_tracker: ToolCallDraftTracker,
+    planning_reasoning_parts: &[String],
+    generated_api_messages: Vec<Value>,
+    mut steps: Vec<AgentStepResult>,
+    error: String,
+) -> AgentRunResult {
+    let failed_records = tool_draft_tracker.mark_error(&error);
+    for record in &failed_records {
+        host.emit_tool_record(
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            record,
+        );
+    }
+
+    let mut step_segments = segment_builder.append_existing_segments(tool_draft_tracker.segments());
+    let content = tool_planning_failed_fallback_response(&config.language);
+    let mut final_segment = planning_text_segment;
+    final_segment.phase = ChatMessageSegmentPhase::Synthesis;
+    final_segment.round = None;
+    let appended_segment =
+        segment_builder.append_text_from_template(&final_segment, content.clone());
+    if let Some(segment) = &appended_segment {
+        step_segments.push(segment.clone());
+    }
+    steps.push(AgentStepResult {
+        step_number: final_segment.step_number.unwrap_or_default(),
+        phase: AgentPhase::ToolLoop,
+        response_messages: Vec::new(),
+        tool_records: failed_records.clone(),
+        segments: step_segments,
+        streamed: config.stream_enabled,
+        stop_reason: Some(AgentStopReason::Natural),
+    });
+
+    RunResultBuilder::new(
+        host,
+        RunIds {
+            conversation_id: &config.conversation_id,
+            run_id: &config.run_id,
+            message_id: &config.message_id,
+        },
+        content,
+    )
+    .emit_segment_opt(appended_segment)
+    .emit_done("done")
+    .push_api_always()
+    .outcome("error")
+    .finish(
+        segment_builder,
+        planning_reasoning_parts,
+        failed_records,
+        generated_api_messages,
+        steps,
+    )
+}
+
+pub(crate) fn cancelled_tool_round_run_result(
+    language: &str,
+    planning_reasoning_parts: &[String],
+    tool_records: Vec<ToolCallRecord>,
+    mut segments: Vec<ChatMessageSegment>,
+    mut generated_api_messages: Vec<Value>,
+    steps: Vec<AgentStepResult>,
+) -> AgentRunResult {
+    let stopped_content = stopped_generation_content(language);
+    let next_order = segments
+        .iter()
+        .map(|segment| segment.order)
+        .max()
+        .unwrap_or(999)
+        .saturating_add(1);
+    segments.push(ChatMessageSegment {
+        id: format!("seg_{}_cancelled_synthesis", next_order),
+        kind: ChatMessageSegmentKind::Text,
+        phase: ChatMessageSegmentPhase::Synthesis,
+        order: next_order,
+        step_number: None,
+        round: None,
+        text: Some(stopped_content.clone()),
+        tool_call_id: None,
+    });
+    if !generated_api_messages.is_empty() {
+        generated_api_messages.push(final_assistant_api_message(&stopped_content, None));
+    }
+    AgentRunResult {
+        content: stopped_content,
+        reasoning: merge_reasoning(planning_reasoning_parts, None),
+        tool_records,
+        segments,
+        api_messages: generated_api_messages,
+        steps,
+        stream_outcome: "cancelled".to_string(),
+    }
+}

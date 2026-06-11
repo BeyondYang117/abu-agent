@@ -1,9 +1,13 @@
 pub mod execute;
+pub(crate) mod finalize;
 pub mod host;
 pub mod loop_;
+pub(crate) mod planning;
 pub mod prepare;
+pub(crate) mod rounds;
 pub mod stop;
 pub mod stream;
+pub(crate) mod synthesis;
 pub mod types;
 
 pub use execute::{ToolExecutionContext, ToolExecutor, ToolExecutorFuture};
