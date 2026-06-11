@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::atomic::Ordering, time::Duration};
 
 use arboard::Clipboard;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::commands::apply_launch_at_startup;
@@ -766,6 +766,22 @@ pub(crate) fn send_paste_shortcut() {
     }
 }
 
+/// 恢复并聚焦已有 Chat 窗口。
+fn reveal_chat_window(app: &AppHandle, window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+    if window.is_minimized().ok().unwrap_or(false) {
+        let _ = window.unminimize();
+    }
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    #[cfg(target_os = "macos")]
+    apply_macos_traffic_light_position(window);
+}
+
 /// 打开独立 AI 客户端窗口。
 pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
     let existing_window = app.get_webview_window("chat");
@@ -784,12 +800,7 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
              }",
         );
         let _ = app.emit_to("chat", "chat-open-request", ());
-        #[cfg(target_os = "macos")]
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        let _ = window.show();
-        let _ = window.set_focus();
-        #[cfg(target_os = "macos")]
-        apply_macos_traffic_light_position(&window);
+        reveal_chat_window(app, &window);
     } else {
         // 首次创建保持 hidden：前端在 useLayoutEffect 里恢复几何后再 show，避免默认尺寸闪一下。
         #[cfg(target_os = "macos")]
@@ -820,12 +831,7 @@ pub(crate) fn open_chat_settings_window(app: &AppHandle) -> Result<(), String> {
              window.dispatchEvent(new HashChangeEvent('hashchange'));",
         );
         let _ = app.emit_to("chat", "open-settings", ());
-        #[cfg(target_os = "macos")]
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        let _ = window.show();
-        let _ = window.set_focus();
-        #[cfg(target_os = "macos")]
-        apply_macos_traffic_light_position(&window);
+        reveal_chat_window(app, &window);
     } else {
         // 首次创建保持 hidden：前端在 useLayoutEffect 里恢复几何后再 show，避免默认尺寸闪一下。
         #[cfg(target_os = "macos")]

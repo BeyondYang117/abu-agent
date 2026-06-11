@@ -343,8 +343,14 @@ fn main() {
                         eprintln!("Failed to open chat on dock reopen: {err}");
                     }
                 } else if let Some(window) = first_visible_user_window(app_handle) {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    if window.label() == "chat" {
+                        if let Err(err) = open_chat_window(app_handle) {
+                            eprintln!("Failed to restore chat on dock reopen: {err}");
+                        }
+                    } else {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
                 } else if let Err(err) = open_chat_window(app_handle) {
                     eprintln!("Failed to open chat on dock reopen: {err}");
                 }
