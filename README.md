@@ -160,6 +160,7 @@ If you used v2.4.4 or earlier under the old **KeyLingo** name, Kivio migrates yo
 
 ## Changelog
 
+- **v2.6.9** — Agent file-editing and Chat polish release: simplified native file tools to `write_file` + `edit_file` with safer large-file writes and clearer write-progress UI, split streaming HTTP timeouts for more reliable long tool runs, improved sidebar/search modal/reasoning-block display, added project folder open plus better `run_command` background/cwd handling, stabilized Windows chat window frame persistence, and fixed Lens flashing the previous screenshot frame when handing off to the AI client.
 - **v2.6.8** — Agent and workspace polish release: added theme color presets, project workspace filesystem support, better Agent planning/todo/clarification flows, Mermaid and reasoning/timeline rendering improvements, usage statistics, Windows frameless-window polish, a slimmer bundled Python sandbox with common document/data packages, and a release flow that builds macOS locally while GitHub Actions publishes only the Windows NSIS `.exe`.
 - **v2.6.7** — General polish release: restored the native-feeling Windows chat window frame with rounded corners and border, simplified Assistant Center so toolbar controls no longer collide with Windows window controls, and refreshed release packaging so macOS Apple Silicon DMG is built locally while GitHub Actions publishes Windows MSI/NSIS installers.
 - **v2.6.6** — Major Kivio Agent refresh: added local memory, expanded Assistant Center behavior, improved projects/sidebar polish, image/file attachment handling, image preview/viewer support, and a stronger Agent runtime for tool planning and image-generation side tasks. Document workflows now ship with bundled Pyodide, common data/document packages, and looser readable-file mounting for PDF/Word/Excel analysis. Provider tool support is assumed by default.
@@ -359,6 +360,7 @@ Lens 仍然是从屏幕内容到答案的最快路径：
 
 ## 更新日志
 
+- **v2.6.9** —— Agent 文件编辑与 Chat 体验优化版本：原生文件工具精简为 `write_file` + `edit_file`，加强大文件写入安全与写入进度展示；拆分流式 HTTP 超时以提升长工具调用稳定性；优化侧边栏、搜索弹窗与推理块展示；项目支持打开文件夹，并改进 `run_command` 后台执行与 cwd 处理；稳定 Windows Chat 窗口边框持久化；修复 Lens 发送到 AI 客户端后下次打开闪一下上次截图框的问题。
 - **v2.6.8** —— Agent 与工作区体验优化版本：新增主题色预设、项目工作区文件系统、Agent 计划/待办/追问流程，改进 Mermaid、推理/时间线渲染和用量统计，优化 Windows 无边框窗口效果；同时精简随包 Python 沙箱并保留常用文档/数据分析库，发布流程改为本机构建 macOS，GitHub Actions 只发布 Windows NSIS `.exe`。
 - **v2.6.7** —— 通用体验优化：恢复 Windows Chat 窗口接近原生应用的圆角、描边和边界效果；精简助手中心顶部工具栏，避免搜索、创建等控件和 Windows 右上角窗口按钮重叠；同步发布流程，macOS Apple Silicon DMG 改为本机构建上传，GitHub Actions 只发布 Windows MSI / NSIS 安装包。
 - **v2.6.6** —— Kivio Agent 大更新：新增本地记忆，扩展助手中心能力，优化项目/侧边栏体验，改进图片与文件附件、图片查看器，以及面向工具规划和图片生成副任务的 Agent 运行时。文档工作流随包带 Pyodide、常用数据/文档库，并放宽可读取本地文件挂载，PDF / Word / Excel 分析更稳。模型供应商默认支持工具调用。
