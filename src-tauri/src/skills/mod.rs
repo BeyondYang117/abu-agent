@@ -12,8 +12,8 @@ pub use runtime::{
     read_skill_file, run_skill_script, substitute_arguments, SkillRunCache,
 };
 pub use types::{
-    normalize_trigger, record_triggers, slugify, SkillDetail, SkillImportResult, SkillListResult,
-    SkillMeta, SkillOpenFolderResult, SkillReadResult, SkillRecord, SkillRegistry,
+    slugify, SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,
+    SkillReadResult, SkillRecord, SkillRegistry,
 };
 
 use std::{
