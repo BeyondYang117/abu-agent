@@ -21,6 +21,7 @@ import {
   Settings,
   ShieldAlert,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Wrench,
 } from 'lucide-react'
@@ -28,6 +29,12 @@ import { ChatAttachments } from './ChatAttachments'
 import { api, type ChatToolDefinition } from '../api/tauri'
 import { chatApi } from './api'
 import type { AgentPlanMode, AgentPlanState, ChatProject, PendingAttachment } from './types'
+import {
+  buildSlashCommands,
+  commandMatches,
+  type SlashCommandDefinition,
+  type SlashSkill,
+} from './slashCommands'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -132,14 +139,7 @@ type SlashCommandId =
   | 'tools'
   | 'attach'
 
-interface SlashCommandDefinition {
-  id: SlashCommandId
-  slash: `/${string}`
-  title: string
-  description: string
-  category: string
-  keywords: string[]
-}
+type LocalSlashCommand = SlashCommandDefinition & { id: SlashCommandId; kind: 'action' }
 
 interface ActiveSlashToken {
   start: number
@@ -147,13 +147,14 @@ interface ActiveSlashToken {
   query: string
 }
 
-const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
+const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
   {
     id: 'help',
     slash: '/help',
     title: '/help',
     description: 'Show commands',
     category: 'Local',
+    kind: 'action',
     keywords: ['help', 'commands', '帮助', '命令'],
   },
   {
@@ -162,6 +163,7 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/plan',
     description: 'Enter plan mode',
     category: 'Local',
+    kind: 'action',
     keywords: ['plan', 'act', 'mode', '计划', '模式', '切换'],
   },
   {
@@ -170,6 +172,7 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/new',
     description: 'Start a new chat',
     category: 'Local',
+    kind: 'action',
     keywords: ['new', 'chat', 'conversation', '新建', '新对话'],
   },
   {
@@ -178,6 +181,7 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/compact',
     description: 'Compress context',
     category: 'Local',
+    kind: 'action',
     keywords: ['compact', 'compress', 'context', '压缩', '上下文'],
   },
   {
@@ -186,6 +190,7 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/clear',
     description: 'Clear current chat',
     category: 'Local',
+    kind: 'action',
     keywords: ['clear', 'delete', 'reset', '清空', '删除', '重置'],
   },
   {
@@ -194,6 +199,7 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/settings',
     description: 'Open chat settings',
     category: 'Local',
+    kind: 'action',
     keywords: ['settings', 'config', '设置', '配置'],
   },
   {
@@ -202,6 +208,7 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/tools',
     description: 'Show tool status',
     category: 'Local',
+    kind: 'action',
     keywords: ['tools', 'mcp', 'skill', '工具', '技能'],
   },
   {
@@ -210,12 +217,16 @@ const LOCAL_SLASH_COMMANDS: SlashCommandDefinition[] = [
     title: '/attach',
     description: 'Add files or images',
     category: 'Local',
+    kind: 'action',
     keywords: ['attach', 'file', 'image', '附件', '文件', '图片'],
   },
 ]
 
-function slashCommandIcon(commandId: SlashCommandId) {
-  switch (commandId) {
+function slashCommandIcon(command: SlashCommandDefinition) {
+  if (command.kind === 'skill') {
+    return Sparkles
+  }
+  switch (command.id as SlashCommandId) {
     case 'help':
       return CircleHelp
     case 'plan':
@@ -232,6 +243,8 @@ function slashCommandIcon(commandId: SlashCommandId) {
       return Wrench
     case 'attach':
       return Paperclip
+    default:
+      return Sparkles
   }
 }
 
@@ -253,21 +266,6 @@ function findActiveSlashToken(value: string, cursor: number): ActiveSlashToken |
     end: cursor,
     query: token.slice(1),
   }
-}
-
-function commandMatches(command: SlashCommandDefinition, query: string): boolean {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return true
-
-  const searchable = [
-    command.slash.slice(1),
-    command.title,
-    command.description,
-    command.category,
-    ...command.keywords,
-  ].map((item) => item.toLowerCase())
-
-  return searchable.some((item) => item.includes(normalized))
 }
 
 function approvalPolicyOption(policy?: string) {
@@ -329,7 +327,7 @@ interface InputBarProps {
   agentPlanState?: AgentPlanState | null
   onAgentPlanModeChange?: (mode: AgentPlanMode) => void | Promise<void>
   onExecuteAgentPlan?: () => void | Promise<void>
-  enabledSkills?: { id: string; name: string }[]
+  enabledSkills?: SlashSkill[]
   onOpenSkillSettings?: () => void
   selectedProject?: ChatProject | null
   onSelectProject?: (project: ChatProject | null) => void | Promise<void>
@@ -516,11 +514,15 @@ export function InputBar({
     }
   }, [closeProjectMenu])
 
+  const allSlashCommands = useMemo(
+    () => buildSlashCommands(LOCAL_SLASH_COMMANDS, enabledSkills),
+    [enabledSkills],
+  )
   const filteredSlashCommands = useMemo(
-    () => LOCAL_SLASH_COMMANDS.filter((command) => (
+    () => allSlashCommands.filter((command) => (
       commandMatches(command, activeSlashToken?.query ?? '')
     )),
-    [activeSlashToken?.query],
+    [allSlashCommands, activeSlashToken?.query],
   )
   const visibleProjectOptions = useMemo(() => {
     const query = projectSearchQuery.trim().toLowerCase()
@@ -578,6 +580,31 @@ export function InputBar({
       query: command.slash.slice(1),
     })
     setSlashPanelOpen(true)
+  }, [activeSlashToken, updateTextareaHeight])
+
+  // Skill commands complete to `/name ` (trailing space) and close the popover
+  // so the user types arguments; the whole string is sent on Enter and parsed
+  // by the backend slash-trigger preprocessing.
+  const completeSkillSlashToken = useCallback((command: SlashCommandDefinition) => {
+    const token = activeSlashToken
+    if (!token) return
+
+    const insertion = `${command.slash} `
+    const cursor = token.start + insertion.length
+    setInput((prev) => {
+      const next = `${prev.slice(0, token.start)}${insertion}${prev.slice(token.end)}`
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        textarea.focus({ preventScroll: true })
+        textarea.selectionStart = cursor
+        textarea.selectionEnd = cursor
+        updateTextareaHeight()
+      })
+      return next
+    })
+    setActiveSlashToken(null)
+    setSlashPanelOpen(false)
   }, [activeSlashToken, updateTextareaHeight])
 
   const selectedSlashCommand = filteredSlashCommands[slashSelectedIndex]
@@ -655,6 +682,13 @@ export function InputBar({
   const handleSlashCommandSelect = useCallback(async (command: SlashCommandDefinition) => {
     if (disabled) return
 
+    if (command.kind === 'skill') {
+      // Skill commands are messages: complete the token and let the user type
+      // arguments, then send the whole string with Enter.
+      completeSkillSlashToken(command)
+      return
+    }
+
     if (command.id === 'help') {
       setInput('/')
       setActiveSlashToken({ start: 0, end: 1, query: '' })
@@ -713,6 +747,7 @@ export function InputBar({
     }
   }, [
     disabled,
+    completeSkillSlashToken,
     onClearChat,
     onCompactContext,
     onNewChat,
@@ -769,7 +804,11 @@ export function InputBar({
       if (e.key === 'Tab') {
         e.preventDefault()
         if (selectedSlashCommand) {
-          completeActiveSlashToken(selectedSlashCommand)
+          if (selectedSlashCommand.kind === 'skill') {
+            completeSkillSlashToken(selectedSlashCommand)
+          } else {
+            completeActiveSlashToken(selectedSlashCommand)
+          }
         }
         return
       }
@@ -1209,7 +1248,7 @@ export function InputBar({
             <div className="max-h-[min(184px,34vh)] overflow-y-auto">
               {filteredSlashCommands.length > 0 ? (
                 filteredSlashCommands.map((command, index) => {
-                  const Icon = slashCommandIcon(command.id)
+                  const Icon = slashCommandIcon(command)
                   const selected = index === slashSelectedIndex
                   return (
                     <button
@@ -1232,6 +1271,11 @@ export function InputBar({
                       />
                       <span className="min-w-0 flex-1 truncate text-[12px] leading-none">
                         <span className="font-semibold">{command.title}</span>
+                        {command.argumentHint && (
+                          <span className="ml-1 text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
+                            {command.argumentHint}
+                          </span>
+                        )}
                         <span className="ml-1.5 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
                           {command.description}
                         </span>

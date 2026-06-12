@@ -422,6 +422,9 @@ export type SkillMeta = {
   recommendedTools: string[]
   disableModelInvocation?: boolean
   files?: SkillFileEntry[]
+  triggers?: string[]
+  argumentHint?: string | null
+  arguments?: string[]
 }
 
 export type SkillDetail = SkillMeta & {

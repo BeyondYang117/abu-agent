@@ -690,6 +690,16 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     () => skills.filter((skill) => !disabledSkillIds.includes(skill.id)),
     [disabledSkillIds, skills],
   )
+  const slashSkills = useMemo(
+    () => enabledSkills.map((skill) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      argumentHint: skill.argumentHint ?? skill.argument_hint ?? undefined,
+      disableModelInvocation: skill.disableModelInvocation ?? skill.disable_model_invocation,
+    })),
+    [enabledSkills],
+  )
   const effectiveSkillId = useMemo(() => {
     if (
       storedActiveSkillId
@@ -2533,7 +2543,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
                       onAgentPlanModeChange={handleAgentPlanModeChange}
                       onExecuteAgentPlan={handleExecuteAgentPlan}
-                      enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
+                      enabledSkills={slashSkills}
                       onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                       selectedProject={selectedProject}
                       onSelectProject={handleSidebarSelectProject}
@@ -2585,7 +2595,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
                     onAgentPlanModeChange={handleAgentPlanModeChange}
                     onExecuteAgentPlan={handleExecuteAgentPlan}
-                    enabledSkills={enabledSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
+                    enabledSkills={slashSkills}
                     onOpenSkillSettings={() => openEmbeddedSettings('skill')}
                     autoFocus
                   />
