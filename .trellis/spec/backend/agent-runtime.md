@@ -256,6 +256,72 @@ if (segment) {
 
 Backend-owned segments define the timeline; legacy fields are deterministic projections of that same timeline.
 
+## Scenario: Generated Artifact Delivery Cards
+
+### 1. Scope / Trigger
+
+- Trigger: changes that alter `ChatToolArtifact`, sandbox artifact export, `run_python` artifact handling, generated file opening commands, or Chat UI rendering of tool artifacts.
+- Generated files are model/tool outputs, not user attachments. They travel through tool records and assistant message `artifacts`, then render as assistant-side file delivery cards.
+
+### 2. Signatures
+
+- `ChatToolArtifact { name, mime_type, data_url, size_bytes?, path? }`
+- TypeScript compatibility aliases: `mimeType`, `dataUrl`, `sizeBytes`, plus optional `path` / `filePath` / `localPath` for frontend tolerance.
+- `export_sandbox_artifacts(ctx, artifacts) -> Vec<SandboxExportedArtifact { artifact_index, path }>`
+- `chat_open_generated_artifact(path: String) -> Result<(), String>`
+
+### 3. Contracts
+
+- Python/Pyodide outputs continue to return inline `data_url` artifacts for persistence and preview.
+- Backend export writes supported artifacts under `~/Kivio/runs/{conversation}/{message}/`, then uses `artifact_index` to copy the exported absolute path back onto the same persisted artifact.
+- Frontend image artifacts stay on the image preview path. Non-image artifacts render as file cards with type, filename, preview, and open action.
+- File-card previews may decode text-like `data_url` content. Binary/table artifacts should show metadata rather than parsing in the UI.
+- Generated artifact paths are local cache paths with retention semantics; durable user-requested files still require explicit file tools such as `write_file`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+|---|---|
+| Artifact lacks `path` but has `data_url` | Frontend may open an inline data/preview fallback. |
+| Artifact has `path` outside `~/Kivio/runs` | `chat_open_generated_artifact` rejects it. |
+| Artifact path is relative, empty, missing, or not a file | `chat_open_generated_artifact` returns an error and does not call shell open. |
+| Export fails | Tool content includes an export warning; inline artifacts remain persisted for preview. |
+| Existing conversation lacks `path` | Deserializes and renders from old artifact fields. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `run_python` creates `report.md`; backend exports it, persists `artifact.path`, and Chat renders a Markdown file card that opens the exported file.
+- Good: `run_python` creates `chart.png`; Chat keeps rendering it as an image preview, not as a file card.
+- Base: old artifacts with only `dataUrl` still show a card/preview where possible.
+- Bad: frontend opens arbitrary absolute paths from persisted JSON without backend validation.
+- Bad: long assistant text is automatically saved as a file without an explicit tool/output artifact.
+
+### 6. Tests Required
+
+- Rust: sandbox export returns `artifact_index` + path and writes under the runs tree.
+- Rust: generated artifact path resolver rejects files outside `~/Kivio/runs`.
+- Frontend: non-image artifacts render as file cards.
+- Frontend: image artifacts do not render as file cards.
+- Project checks: `npm run lint`, `npm run typecheck`, relevant Vitest tests, and Rust tests for sandbox export/open validation.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+window.open(artifact.path)
+```
+
+This trusts persisted local paths in the webview and can open files outside Kivio's generated-artifact cache.
+
+#### Correct
+
+```typescript
+await invoke('chat_open_generated_artifact', { path: artifact.path })
+```
+
+The backend canonicalizes the path and allows only files under `~/Kivio/runs`.
+
 ## Scenario: Agent Todo Runtime State
 
 ### 1. Scope / Trigger

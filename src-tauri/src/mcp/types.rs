@@ -87,6 +87,8 @@ pub struct ChatToolArtifact {
     pub data_url: String,
     #[serde(default, alias = "sizeBytes")]
     pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

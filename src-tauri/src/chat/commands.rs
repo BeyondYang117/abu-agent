@@ -831,6 +831,27 @@ pub(crate) fn chat_open_attachment(
     app.shell().open(path_str, None).map_err(|e| e.to_string())
 }
 
+/// 用系统默认应用打开生成产物文件。仅允许打开 Kivio sandbox export 目录下的文件。
+#[tauri::command]
+#[allow(deprecated)]
+pub(crate) fn chat_open_generated_artifact(app: AppHandle, path: String) -> Result<(), String> {
+    let full = crate::native_tools::resolve_sandbox_export_file_path(&path)?;
+    let path_str = full.to_string_lossy().into_owned();
+    app.shell().open(path_str, None).map_err(|e| e.to_string())
+}
+
+/// 在文件系统中打开生成产物所在目录。仅允许 Kivio sandbox export 目录下的文件。
+#[tauri::command]
+#[allow(deprecated)]
+pub(crate) fn chat_reveal_generated_artifact(app: AppHandle, path: String) -> Result<(), String> {
+    let full = crate::native_tools::resolve_sandbox_export_file_path(&path)?;
+    let parent = full
+        .parent()
+        .ok_or_else(|| "Generated file has no parent directory".to_string())?;
+    let path_str = parent.to_string_lossy().into_owned();
+    app.shell().open(path_str, None).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub(crate) fn chat_save_pasted_image(
     name: String,

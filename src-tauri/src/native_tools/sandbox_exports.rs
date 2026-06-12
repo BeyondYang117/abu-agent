@@ -40,6 +40,12 @@ struct SandboxExportMeta {
     files: Vec<SandboxExportMetaFile>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxExportedArtifact {
+    pub artifact_index: usize,
+    pub path: PathBuf,
+}
+
 fn sanitize_path_segment(raw: &str) -> String {
     let sanitized = raw
         .chars()
@@ -65,6 +71,32 @@ pub fn sandbox_run_export_dir(ctx: &SandboxExportContext) -> Result<PathBuf, Str
         .join(RUNS_ROOT)
         .join(sanitize_path_segment(&ctx.conversation_id))
         .join(sanitize_path_segment(&ctx.message_id)))
+}
+
+fn sandbox_exports_root() -> Result<PathBuf, String> {
+    Ok(user_home_dir()?.join(RUNS_ROOT))
+}
+
+pub fn resolve_sandbox_export_file_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Generated file path is empty".to_string());
+    }
+    let full = Path::new(trimmed);
+    if !full.is_absolute() {
+        return Err("Generated file path must be absolute".to_string());
+    }
+    if !full.is_file() {
+        return Err("Generated file does not exist".to_string());
+    }
+    let canonical_path = fs::canonicalize(full)
+        .map_err(|err| format!("Resolve generated file path failed: {err}"))?;
+    let canonical_root = fs::canonicalize(sandbox_exports_root()?)
+        .map_err(|err| format!("Resolve generated file root failed: {err}"))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err("Generated file is outside the Kivio runs directory".to_string());
+    }
+    Ok(canonical_path)
 }
 
 fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
@@ -165,7 +197,7 @@ fn merged_export_meta(
 pub fn export_sandbox_artifacts(
     ctx: &SandboxExportContext,
     artifacts: &[ChatToolArtifact],
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<SandboxExportedArtifact>, String> {
     if artifacts.is_empty() {
         return Ok(Vec::new());
     }
@@ -177,7 +209,7 @@ pub fn export_sandbox_artifacts(
     let mut exported = Vec::new();
     let mut meta_files = Vec::new();
 
-    for artifact in artifacts.iter().take(MAX_EXPORT_FILES_PER_RUN) {
+    for (artifact_index, artifact) in artifacts.iter().enumerate().take(MAX_EXPORT_FILES_PER_RUN) {
         if artifact.data_url.trim().is_empty() {
             continue;
         }
@@ -197,7 +229,10 @@ pub fn export_sandbox_artifacts(
             mime_type: artifact.mime_type.clone(),
             size_bytes: bytes.len() as u64,
         });
-        exported.push(path);
+        exported.push(SandboxExportedArtifact {
+            artifact_index,
+            path,
+        });
     }
 
     if !meta_files.is_empty() {
@@ -208,15 +243,15 @@ pub fn export_sandbox_artifacts(
     Ok(exported)
 }
 
-pub fn format_exported_paths(paths: &[PathBuf]) -> String {
-    if paths.is_empty() {
+pub fn format_exported_paths(exports: &[SandboxExportedArtifact]) -> String {
+    if exports.is_empty() {
         return String::new();
     }
     let mut lines = vec![
         "exported files (~/Kivio/runs/<conversation>/<message>/; retained ~7 days):".to_string(),
     ];
-    for path in paths {
-        lines.push(format!("- {}", path.display()));
+    for export in exports {
+        lines.push(format!("- {}", export.path.display()));
     }
     lines.join("\n")
 }
@@ -367,6 +402,7 @@ mod tests {
             mime_type: "image/png".to_string(),
             data_url: format!("data:image/png;base64,{png}"),
             size_bytes: Some(8),
+            path: None,
         }];
         let ctx = SandboxExportContext {
             conversation_id: "conv_test".to_string(),
@@ -375,11 +411,13 @@ mod tests {
         };
         let paths = export_sandbox_artifacts(&ctx, &artifacts).expect("export");
         assert_eq!(paths.len(), 1);
-        assert!(paths[0].exists());
+        assert!(paths[0].path.exists());
+        assert_eq!(paths[0].artifact_index, 0);
         assert!(paths[0]
+            .path
             .to_string_lossy()
             .contains("Kivio/runs/conv_test/msg_test/chart.png"));
-        let meta_path = paths[0].parent().expect("parent").join("meta.json");
+        let meta_path = paths[0].path.parent().expect("parent").join("meta.json");
         assert!(meta_path.exists());
         let _ = fs::remove_dir_all(
             sandbox_run_export_dir(&ctx)
@@ -397,6 +435,7 @@ mod tests {
             mime_type: "text/csv".to_string(),
             data_url: format!("data:text/csv;base64,{csv}"),
             size_bytes: Some(10),
+            path: None,
         }];
         let ctx = SandboxExportContext {
             conversation_id: "conv_csv".to_string(),
@@ -405,8 +444,20 @@ mod tests {
         };
         let paths = export_sandbox_artifacts(&ctx, &artifacts).expect("export csv");
         assert_eq!(paths.len(), 1);
-        assert!(paths[0].to_string_lossy().ends_with("summary.csv"));
+        assert!(paths[0].path.to_string_lossy().ends_with("summary.csv"));
         let _ = fs::remove_dir_all(sandbox_run_export_dir(&ctx).expect("dir"));
+    }
+
+    #[test]
+    fn resolve_sandbox_export_file_path_rejects_outside_paths() {
+        let outside = std::env::temp_dir().join("kivio-outside-artifact.txt");
+        fs::write(&outside, "outside").expect("write outside file");
+
+        let err = resolve_sandbox_export_file_path(&outside.to_string_lossy())
+            .expect_err("outside files must be rejected");
+        assert!(err.contains("outside the Kivio runs directory"));
+
+        let _ = fs::remove_file(outside);
     }
 
     #[test]
@@ -426,6 +477,7 @@ mod tests {
                 mime_type: "text/csv".to_string(),
                 data_url: format!("data:text/csv;base64,{first}"),
                 size_bytes: Some(8),
+                path: None,
             }],
         )
         .expect("first export");
@@ -436,6 +488,7 @@ mod tests {
                 mime_type: "text/markdown".to_string(),
                 data_url: format!("data:text/markdown;base64,{second}"),
                 size_bytes: Some(16),
+                path: None,
             }],
         )
         .expect("second export");
@@ -447,8 +500,8 @@ mod tests {
         assert_eq!(first_paths.len(), 1);
         assert_eq!(second_paths.len(), 1);
         assert_eq!(meta.files.len(), 2);
-        assert!(meta_paths.contains(&&first_paths[0].display().to_string()));
-        assert!(meta_paths.contains(&&second_paths[0].display().to_string()));
+        assert!(meta_paths.contains(&&first_paths[0].path.display().to_string()));
+        assert!(meta_paths.contains(&&second_paths[0].path.display().to_string()));
 
         let _ = fs::remove_dir_all(export_dir.parent().expect("conv"));
     }

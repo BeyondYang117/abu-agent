@@ -771,11 +771,17 @@ pub(super) async fn run_python_via_pyodide(
                 Err(result.content)
             } else {
                 let mut content = result.content;
-                match crate::native_tools::export_sandbox_artifacts(&export_ctx, &result.artifacts)
+                let mut artifacts = result.artifacts;
+                match crate::native_tools::export_sandbox_artifacts(&export_ctx, &artifacts)
                 {
-                    Ok(exported_paths) => {
+                    Ok(exported_artifacts) => {
+                        for exported in &exported_artifacts {
+                            if let Some(artifact) = artifacts.get_mut(exported.artifact_index) {
+                                artifact.path = Some(exported.path.display().to_string());
+                            }
+                        }
                         let export_note =
-                            crate::native_tools::format_exported_paths(&exported_paths);
+                            crate::native_tools::format_exported_paths(&exported_artifacts);
                         if !export_note.is_empty() {
                             if !content.trim().is_empty() {
                                 content.push_str("\n\n");
@@ -794,7 +800,7 @@ pub(super) async fn run_python_via_pyodide(
                     content,
                     is_error: false,
                     raw: Value::Null,
-                    artifacts: result.artifacts,
+                    artifacts,
                     structured_content: None,
                 })
             }

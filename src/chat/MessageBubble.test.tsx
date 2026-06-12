@@ -24,6 +24,51 @@ function assistantMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe('MessageBubble reasoning durations', () => {
+  it('renders non-image artifacts as generated file cards', () => {
+    render(
+      <MessageBubble
+        message={assistantMessage({
+          content: '报告已整理完毕。',
+          segments: [],
+          artifacts: [
+            {
+              name: 'AI 行业近期资讯总结报告.md',
+              mimeType: 'text/markdown',
+              dataUrl: 'data:text/markdown;base64,IyBSZXBvcnQKCkRvbmUu',
+              sizeBytes: 28,
+              path: '/Users/test/Kivio/runs/conv_1/msg_1/report.md',
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /打开文件 AI 行业近期资讯总结报告\.md/ })).toBeInTheDocument()
+    expect(screen.getByText('Markdown · 28 B')).toBeInTheDocument()
+  })
+
+  it('keeps image artifacts out of generated file cards', () => {
+    render(
+      <MessageBubble
+        message={assistantMessage({
+          content: '',
+          segments: [],
+          artifacts: [
+            {
+              name: 'chart.png',
+              mimeType: 'image/png',
+              dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+              sizeBytes: 8,
+            },
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: /打开文件 chart\.png/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '预览图片' })).toBeInTheDocument()
+  })
+
   it('scopes Thinking duration to each reasoning segment in one assistant message', () => {
     render(
       <MessageBubble

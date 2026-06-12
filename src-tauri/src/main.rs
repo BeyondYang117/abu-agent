@@ -292,6 +292,8 @@ fn main() {
             chat::commands::chat_python_complete,
             chat::commands::chat_read_attachment,
             chat::commands::chat_open_attachment,
+            chat::commands::chat_open_generated_artifact,
+            chat::commands::chat_reveal_generated_artifact,
             chat::commands::chat_save_pasted_image,
             chat::commands::chat_save_pasted_attachment,
             chat::commands::chat_read_clipboard_files,

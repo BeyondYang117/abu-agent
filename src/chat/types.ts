@@ -136,6 +136,9 @@ export interface ChatToolArtifact {
   dataUrl?: string
   size_bytes?: number | null
   sizeBytes?: number | null
+  path?: string | null
+  filePath?: string | null
+  localPath?: string | null
 }
 
 export type ChatMessageSegmentKind = 'text' | 'reasoning' | 'tool'

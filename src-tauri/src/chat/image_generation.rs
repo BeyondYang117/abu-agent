@@ -88,6 +88,7 @@ pub async fn generate_image_with_provider(
                 mime_type: image.mime_type.clone(),
                 data_url: format!("data:{};base64,{}", image.mime_type, image.base64),
                 size_bytes,
+                path: None,
             }
         })
         .collect::<Vec<_>>();

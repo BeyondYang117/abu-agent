@@ -5,6 +5,8 @@ import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
 import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { ChatMarkdown } from './ChatMarkdown'
+import { GeneratedFileArtifacts } from './GeneratedFileArtifacts'
+import { isImageArtifact } from './artifacts'
 import { openChatImageViewer } from './imageViewer'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
@@ -70,10 +72,7 @@ function GeneratedImageArtifacts({
   artifacts: ChatToolArtifact[]
   onImageClick?: (src: string, alt: string, name?: string) => void
 }) {
-  const imageArtifacts = artifacts.filter((artifact) => {
-    const dataUrl = artifactDataUrl(artifact)
-    return dataUrl.startsWith('data:image/')
-  })
+  const imageArtifacts = artifacts.filter(isImageArtifact)
   if (imageArtifacts.length === 0) return null
 
   return (
@@ -268,10 +267,12 @@ function MessageBubbleComponent({
     ...timelineSegments.map((segment) => segmentText(segment)),
   ].join('\n\n')
   const unreferencedImageArtifacts = renderArtifacts.filter(
-    (artifact) => !artifactIsReferenced(artifactReferenceContent, artifact),
+    (artifact) => isImageArtifact(artifact) && !artifactIsReferenced(artifactReferenceContent, artifact),
   )
+  const generatedFileArtifacts = renderArtifacts.filter((artifact) => !isImageArtifact(artifact))
   const hasAnswerContent = !isDirectImageGenerationPending && message.content.trim().length > 0
   const hasGeneratedImages = unreferencedImageArtifacts.length > 0
+  const hasGeneratedFiles = generatedFileArtifacts.length > 0
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -461,9 +462,10 @@ function MessageBubbleComponent({
                 onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
               />
             )}
+            {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
           </>
         ) : (
-          (hasAnswerContent || hasGeneratedImages) && (
+          (hasAnswerContent || hasGeneratedImages || hasGeneratedFiles) && (
             <section aria-label="回答">
               {(toolCalls.length > 0 || message.reasoning) && (
                 <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
@@ -483,6 +485,7 @@ function MessageBubbleComponent({
                   onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
                 />
               )}
+              {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
             </section>
           )
         )}
