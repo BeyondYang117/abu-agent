@@ -1,27 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { ChatMarkdown } from './ChatMarkdown'
-
-const COLLAPSE_LINE_LIMIT = 3
-const CHARS_PER_LINE = 60
-
-/** 流式折叠预览只展示末尾三行（或尾部字符），始终跟最新内容 */
-function collapsedReasoningPreview(text: string): { preview: string; truncated: boolean } {
-  const trimmed = text.trimEnd()
-  if (!trimmed) return { preview: '', truncated: false }
-  const lines = trimmed.split(/\r?\n/)
-  if (lines.length > COLLAPSE_LINE_LIMIT) {
-    return {
-      preview: lines.slice(-COLLAPSE_LINE_LIMIT).join('\n'),
-      truncated: true,
-    }
-  }
-  const maxChars = COLLAPSE_LINE_LIMIT * CHARS_PER_LINE
-  if (trimmed.length > maxChars) {
-    return { preview: trimmed.slice(-maxChars), truncated: true }
-  }
-  return { preview: trimmed, truncated: false }
-}
 
 type ReasoningBlockProps = {
   reasoning: string
@@ -31,15 +9,12 @@ type ReasoningBlockProps = {
 
 export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockProps) {
   const collapsible = reasoning.trim().length > 0
-  const collapsedPreview = useMemo(
-    () => collapsedReasoningPreview(reasoning),
-    [reasoning],
-  )
   const [open, setOpen] = useState(false)
   const [contentPulse, setContentPulse] = useState(false)
   const [bodyMaxHeight, setBodyMaxHeight] = useState<number | null>(null)
   const userExpandedRef = useRef(false)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const showCollapsed = collapsible && !open
   /** 生成完毕的折叠态只留标题行，正文完全隐藏 */
@@ -65,24 +40,33 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
       return
     }
     setBodyMaxHeight(hideBody ? 0 : body.scrollHeight)
-  }, [collapsible, open, reasoning, showCollapsed, hideBody])
+  }, [collapsible, open, reasoning, hideBody, streaming])
+
+  useEffect(() => {
+    if (!streaming || hideBody) return
+    const scrollBox = scrollRef.current
+    if (!scrollBox) return
+    scrollBox.scrollTop = scrollBox.scrollHeight
+  }, [reasoning, streaming, hideBody, open])
 
   const titleClass =
     'mb-1 flex w-full items-center gap-1 text-left text-[12.5px] font-medium text-neutral-700 transition-colors dark:text-neutral-200'
-  const streamingPreview = streaming && showCollapsed
   const bodyClass = [
     'chat-motion-reasoning-body',
     streaming ? 'opacity-95' : 'opacity-90',
     showCollapsed ? 'is-collapsed' : 'is-open',
+  ].join(' ')
+  const scrollClass = [
+    'reasoning-scroll-box custom-scrollbar',
+    streaming ? 'is-streaming' : 'is-expanded',
     contentPulse ? 'reasoning-stream-tail' : '',
-    streamingPreview ? 'reasoning-rolling' : '',
   ].join(' ')
 
   const handleToggle = () => {
     userExpandedRef.current = true
     setOpen((value) => !value)
   }
-  const visibleReasoning = showCollapsed ? collapsedPreview.preview : reasoning
+  const visibleReasoning = reasoning.trimEnd()
 
   return (
     <section
@@ -98,7 +82,7 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
           type="button"
           onClick={handleToggle}
           className={`${titleClass} hover:text-neutral-900 dark:hover:text-neutral-50`}
-          aria-expanded={open}
+          aria-expanded={!hideBody}
           data-tauri-drag-region="false"
         >
           {streaming ? (
@@ -128,7 +112,19 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
         aria-hidden={hideBody}
         style={bodyMaxHeight == null ? undefined : { maxHeight: `${bodyMaxHeight}px` }}
       >
-        <ChatMarkdown content={visibleReasoning} variant="reasoning" />
+        {collapsible && (
+          <div data-testid="reasoning-frame" className="reasoning-scroll-frame">
+            <div
+              ref={scrollRef}
+              data-testid="reasoning-scroll"
+              className={scrollClass}
+            >
+              <div data-testid="reasoning-text" className="reasoning-plain-text">
+                {visibleReasoning}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   )

@@ -38,7 +38,7 @@ Questions to answer:
 - Prefer applying those classes from Chat components over adding component-local keyframes or animation libraries.
 - Always include a `prefers-reduced-motion` fallback when adding a new Chat animation utility.
 - Use small entrance/reveal motions for state continuity; do not change Chat routing, persistence, or streaming data flow to support cosmetic motion.
-- Streaming Chat scroll-follow must account for real content size changes, not only React data changes. When the user is still pinned to the bottom, observe the message-list inner content size and scroll again after late layout changes from reasoning Markdown, collapse animations, images, or tool blocks.
+- Streaming Chat scroll-follow must account for real content size changes, not only React data changes. When the user is still pinned to the bottom, observe the message-list inner content size and scroll again after late layout changes from Thinking scroll boxes, collapse animations, images, or tool blocks.
 - User intent wins over scroll-follow: upward wheel/scroll must disable auto-follow until the user returns near the bottom.
 
 ### Chat Markdown rendering
@@ -46,7 +46,7 @@ Questions to answer:
 - Keep Chat message Markdown rendering on the eager Chat load path. `MessageBubble` should statically import `ChatMarkdown` so conversation history and first assistant content render with Markdown immediately.
 - Do not lazy-load `ChatMarkdown` at the individual message boundary just to reduce the Chat chunk size. A plain-text fallback flash is worse for the Chat client than the bundle-size win.
 - Markdown parser optimizations should target memoization, normalized input stability, and avoiding unnecessary historical-message rerenders.
-- Render assistant reasoning text through `ChatMarkdown` too, using a compact reasoning variant instead of raw `whitespace-pre-wrap` text. Model reasoning often includes Markdown lists, paths, and inline code, and it must not expose raw backticks in the UI.
+- Render assistant answer text through `ChatMarkdown`, but keep `ReasoningBlock` / Thinking content out of Markdown rendering. Thinking text must use a fixed-height plain-text scroll area that preserves raw newlines and characters; fenced code and inline backticks stay literal text instead of becoming code cards. This keeps streaming layout height stable and prevents malformed model reasoning from reshaping the message.
 - Tailwind Typography adds visual backticks around inline `code` via pseudo-elements by default. Chat Markdown containers must disable `code::before` and `code::after` content and use explicit inline-code styling instead.
 - Render fenced code blocks with a Chat-specific `not-prose` component instead of Tailwind Typography's default dark `pre`. Code blocks should use a light card surface, compact inline language label, copy action, horizontal overflow, and lightweight syntax coloring without adding a large highlighting dependency unless the product explicitly accepts the bundle cost.
 
