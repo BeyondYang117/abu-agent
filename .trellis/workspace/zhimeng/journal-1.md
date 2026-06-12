@@ -92,3 +92,36 @@ Fixed Select dropdown appearing at top of window when flipping upward. Root caus
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Fix Thinking duration scoping
+
+**Date**: 2026-06-12
+**Task**: Fix Thinking duration scoping
+**Branch**: `main`
+
+### Summary
+
+Scoped chat Thinking duration display to individual reasoning segments, kept per-message stream stats in one conversation, and added regression coverage for duplicate/shared durations.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9869625` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
