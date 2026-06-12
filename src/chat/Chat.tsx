@@ -600,9 +600,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const cancelCurrentRunLocally = useCallback(() => {
     locallyCancelledConversationIdRef.current = currentConversationIdRef.current
     locallyCancelledRunIdRef.current = activeRunIdRef.current
-    clearStreamSnapshot(currentConversationIdRef.current)
-    clearStreamingPreview()
-  }, [clearStreamSnapshot, clearStreamingPreview])
+    // 不清空预览：保留已生成文本直到 send invoke 返回持久化结果（finally 中
+    // finishStreamingRunWithConversation 会无缝替换；出错路径 clearStreamSnapshot 兜底）。
+    // 后续流事件已被 isLocallyCancelledPayload 过滤，预览自然冻结，不会继续追加。
+    const conversationId = currentConversationIdRef.current
+    if (conversationId) {
+      delete pendingToolConfirmsRef.current[conversationId]
+    }
+    setPendingToolConfirm(null)
+  }, [])
 
   const resetLocalCancellation = useCallback(() => {
     locallyCancelledConversationIdRef.current = null
