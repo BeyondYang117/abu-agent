@@ -1,5 +1,6 @@
 use std::{collections::HashMap, process::Stdio, time::Duration};
 
+use base64::{engine::general_purpose, Engine as _};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE},
     Client,
@@ -13,7 +14,7 @@ use tokio::{
 
 use crate::settings::ChatMcpServer;
 
-use super::types::{McpTool, McpToolCallResult};
+use super::types::{ChatToolArtifact, McpTool, McpToolCallResult};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -540,40 +541,90 @@ fn json_rpc_id_matches(value: &Value, expected_id: &str) -> bool {
             .unwrap_or(false)
 }
 
-fn parse_tool_result(value: Value) -> McpToolCallResult {
+pub(crate) fn parse_tool_result(value: Value) -> McpToolCallResult {
     let is_error = value
         .get("isError")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let structured_content = value.get("structuredContent").cloned();
+
+    let mut artifacts: Vec<ChatToolArtifact> = Vec::new();
     let content = value
         .get("content")
         .and_then(|content| content.as_array())
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| {
-                    item.get("text")
-                        .and_then(|text| text.as_str())
-                        .map(|text| text.to_string())
-                        .or_else(|| {
-                            item.get("resource")
-                                .map(|resource| compact_json(resource, 4000))
-                        })
-                })
+                .filter_map(|item| content_block_text(item, &mut artifacts))
                 .collect::<Vec<_>>()
                 .join("\n")
         })
         .filter(|text| !text.trim().is_empty())
-        .unwrap_or_else(|| compact_json(&value, 4000));
+        .unwrap_or_else(|| {
+            if artifacts.is_empty() {
+                compact_json(&value, 4000)
+            } else {
+                String::new()
+            }
+        });
 
     McpToolCallResult {
         content,
         is_error,
         raw: value,
-        artifacts: Vec::new(),
+        artifacts,
         structured_content,
     }
+}
+
+/// Maps a single MCP content block to its model-facing text. Image blocks are
+/// pushed onto `artifacts` and represented in text by a `[image: <mime>]`
+/// placeholder so the model knows an image was produced without inlining bytes.
+fn content_block_text(item: &Value, artifacts: &mut Vec<ChatToolArtifact>) -> Option<String> {
+    let block_type = item.get("type").and_then(|value| value.as_str());
+    if block_type == Some("image") {
+        if let Some(artifact) = image_block_to_artifact(item, artifacts.len()) {
+            let placeholder = format!("[image: {}]", artifact.mime_type);
+            artifacts.push(artifact);
+            return Some(placeholder);
+        }
+        return None;
+    }
+    item.get("text")
+        .and_then(|text| text.as_str())
+        .map(|text| text.to_string())
+        .or_else(|| item.get("resource").map(|resource| compact_json(resource, 4000)))
+}
+
+/// Builds a `ChatToolArtifact` from an MCP `image` content block
+/// (`{ "type": "image", "data": "<base64>", "mimeType": "image/png" }`).
+fn image_block_to_artifact(item: &Value, index: usize) -> Option<ChatToolArtifact> {
+    let data = item.get("data").and_then(|value| value.as_str())?;
+    if data.trim().is_empty() {
+        return None;
+    }
+    let mime_type = item
+        .get("mimeType")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("image/png")
+        .to_string();
+    let size_bytes = general_purpose::STANDARD
+        .decode(data.trim())
+        .ok()
+        .map(|bytes| bytes.len() as u64);
+    let extension = mime_type
+        .rsplit('/')
+        .next()
+        .filter(|ext| !ext.is_empty())
+        .unwrap_or("png");
+    Some(ChatToolArtifact {
+        name: format!("mcp-image-{}.{}", index + 1, extension),
+        mime_type: mime_type.clone(),
+        data_url: format!("data:{};base64,{}", mime_type, data.trim()),
+        size_bytes,
+        path: None,
+    })
 }
 
 fn compact_json(value: &Value, max_chars: usize) -> String {
@@ -659,6 +710,42 @@ data: {"jsonrpc":"2.0","id":7,"result":{"ok":true}}
             Some(&serde_json::json!({ "items": [{ "title": "A" }] }))
         );
         assert!(!result.is_error);
+    }
+
+    #[test]
+    fn parse_tool_result_maps_image_to_artifact() {
+        // "hello" base64 → aGVsbG8=
+        let result = parse_tool_result(serde_json::json!({
+            "content": [
+                { "type": "text", "text": "here is a chart" },
+                { "type": "image", "data": "aGVsbG8=", "mimeType": "image/png" }
+            ],
+            "isError": false
+        }));
+
+        assert_eq!(result.artifacts.len(), 1);
+        let artifact = &result.artifacts[0];
+        assert_eq!(artifact.mime_type, "image/png");
+        assert_eq!(artifact.data_url, "data:image/png;base64,aGVsbG8=");
+        assert_eq!(artifact.size_bytes, Some(5));
+        assert!(artifact.name.ends_with(".png"));
+        // Text content keeps the prose and inserts a placeholder for the image.
+        assert_eq!(result.content, "here is a chart\n[image: image/png]");
+        assert!(!result.is_error);
+    }
+
+    #[test]
+    fn parse_tool_result_image_only_has_empty_content() {
+        let result = parse_tool_result(serde_json::json!({
+            "content": [
+                { "type": "image", "data": "aGVsbG8=", "mimeType": "image/jpeg" }
+            ]
+        }));
+
+        assert_eq!(result.artifacts.len(), 1);
+        assert_eq!(result.artifacts[0].mime_type, "image/jpeg");
+        assert!(result.artifacts[0].name.ends_with(".jpeg"));
+        assert_eq!(result.content, "[image: image/jpeg]");
     }
 
     #[tokio::test]
