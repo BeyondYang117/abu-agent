@@ -354,7 +354,8 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Text to search for. Literal substring by default; a regular expression when regex=true." },
+                "query": { "type": "string", "description": "Text to search for (alias: pattern). Literal substring by default; a regular expression when regex=true." },
+                "pattern": { "type": "string", "description": "Alias for query." },
                 "path": { "type": "string", "description": "Directory path, defaults to project root/current workspace" },
                 "regex": { "type": "boolean", "description": "Treat query as a regular expression, default false (literal substring)" },
                 "case_sensitive": { "type": "boolean", "description": "Case-sensitive matching, default false" },
@@ -363,7 +364,7 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
                 "output_mode": { "type": "string", "enum": ["content", "files_with_matches", "count"], "description": "content: matching lines (default); files_with_matches: list of matching file paths; count: per-file match counts" },
                 "max_results": { "type": "integer", "description": "Maximum results to return, default 100, max 1000" }
             },
-            "required": ["query"]
+            "required": []
         }),
         sensitive: false,
         annotations: None,

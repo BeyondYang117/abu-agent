@@ -1100,7 +1100,14 @@ pub fn glob_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<
 }
 
 pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
-    let query = required_string(arguments, "query")?;
+    // `query` 为主名；接受 `pattern` 作为别名——模型常受 grep/Claude Code 的 Grep 习惯影响
+    // 传 `pattern`，否则要白白浪费一轮重试（和已有的 caseSensitive/maxResults 别名一致）。
+    let query = arguments
+        .get("query")
+        .or_else(|| arguments.get("pattern"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "search_files requires query (or its alias pattern)".to_string())?;
     let root = resolve_tool_read_path(
         workspace,
         arguments
@@ -1810,6 +1817,14 @@ mod tests {
 
         // 非法 regex 报错。
         assert!(search_files(&workspace, &json!({ "query": "(", "regex": true })).is_err());
+
+        // pattern 作为 query 的别名（模型受 grep 习惯传 pattern 时不再白白失败一轮）。
+        let out = parse(
+            search_files(&workspace, &json!({ "pattern": "alpha" })).expect("pattern alias"),
+        );
+        assert_eq!(out["matches"].as_array().unwrap().len(), 3);
+        // 两者都缺则报错。
+        assert!(search_files(&workspace, &json!({ "path": "." })).is_err());
 
         let _ = fs::remove_dir_all(&root);
     }
