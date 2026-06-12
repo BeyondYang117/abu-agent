@@ -1898,7 +1898,7 @@ export default function Lens() {
         >
           {/* 输入栏卡片 */}
           <div
-            className="flex w-full min-w-0 items-center gap-2.5 pl-4 pr-2 py-2 rounded-[18px] bg-white dark:bg-neutral-900 border border-black/[0.07] dark:border-white/[0.08] lens-floating-surface cursor-default overflow-hidden"
+            className="flex w-full min-w-0 items-center gap-2.5 pl-4 pr-2 py-2 rounded-[18px] bg-white dark:bg-neutral-900 border border-black/[0.07] dark:border-white/[0.08] lens-floating-surface cursor-default overflow-visible"
             data-tauri-drag-region="false"
           >
             <div className="flex min-w-0 shrink items-center gap-2">
