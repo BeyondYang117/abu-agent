@@ -82,4 +82,7 @@ pub struct AgentRunResult {
     pub api_messages: Vec<Value>,
     pub steps: Vec<AgentStepResult>,
     pub stream_outcome: String,
+    /// 本轮全部模型调用（规划/合成/压缩摘要）累计的 provider 真实 usage；
+    /// provider 不报告时为 None（前端回落到 chars 估算）。
+    pub usage: Option<crate::chat::model::ModelUsage>,
 }

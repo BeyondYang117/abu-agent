@@ -3,6 +3,7 @@ import { Check, Copy, Gauge, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import { copyToClipboard } from '../utils/clipboard'
 import { estimateTokens } from '../utils/tokens'
 import { formatAssistantMessageTime } from './messageFormat'
+import type { MessageUsage } from './types'
 
 interface AssistantMessageMetaProps {
   content: string
@@ -11,9 +12,24 @@ interface AssistantMessageMetaProps {
   tokensPerSec?: number
   runEntry?: string | null
   streamOutcome?: string | null
+  usage?: MessageUsage | null
   onEdit?: () => void
   onRegenerate?: () => void
   onDelete?: () => void
+}
+
+/** Provider 报告的真实 token 数（输入+输出聚合的 total，或输出 token）；没有则 null。 */
+function realUsageTokens(usage?: MessageUsage | null): { total: number; label: string } | null {
+  if (!usage) return null
+  const output = usage.output_tokens ?? usage.outputTokens
+  const input = usage.input_tokens ?? usage.inputTokens
+  const total = usage.total_tokens ?? usage.totalTokens
+  if (output != null && input != null) {
+    return { total: input + output, label: `${input} in + ${output} out tokens` }
+  }
+  if (total != null) return { total, label: `${total} tokens` }
+  if (output != null) return { total: output, label: `${output} out tokens` }
+  return null
 }
 
 export function AssistantMessageMeta({
@@ -23,12 +39,17 @@ export function AssistantMessageMeta({
   tokensPerSec,
   runEntry,
   streamOutcome,
+  usage,
   onEdit,
   onRegenerate,
   onDelete,
 }: AssistantMessageMetaProps) {
   const [copied, setCopied] = useState(false)
-  const tokenCount = estimateTokens(`${content}${reasoning ? `\n${reasoning}` : ''}`)
+  // 优先显示 provider 报告的真实用量；provider 不报时回落到 chars 估算（带 ~ 前缀）。
+  const realUsage = realUsageTokens(usage)
+  const tokenLabel = realUsage
+    ? realUsage.label
+    : `~${estimateTokens(`${content}${reasoning ? `\n${reasoning}` : ''}`)} tokens`
   const speed =
     tokensPerSec != null && Number.isFinite(tokensPerSec)
       ? Math.max(1, Math.round(tokensPerSec))
@@ -107,7 +128,7 @@ export function AssistantMessageMeta({
         </span>
       )}
 
-      <span className="text-neutral-400 dark:text-neutral-500">({tokenCount} tokens)</span>
+      <span className="text-neutral-400 dark:text-neutral-500">({tokenLabel})</span>
     </div>
   )
 }

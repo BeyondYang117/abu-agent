@@ -587,6 +587,7 @@ pub(crate) async fn chat_send_message(
         active_skill_id: None,
         run_entry: None,
         stream_outcome: None,
+        usage: None,
         timestamp: chrono::Local::now().timestamp(),
     };
 
@@ -1266,6 +1267,7 @@ async fn complete_assistant_reply(
         title_from_first_user,
         Some(run_entry),
         Some(result.stream_outcome.as_str()),
+        result.usage,
     )
     .await?;
     Ok(())
@@ -1371,6 +1373,7 @@ async fn complete_direct_image_generation_reply(
                 title_from_first_user,
                 Some(agent_run_entry_label(entry)),
                 Some("completed"),
+                None,
             )
             .await?;
             Ok(())
@@ -1444,6 +1447,7 @@ async fn push_assistant_message(
     title_from_first_user: Option<&str>,
     run_entry: Option<&str>,
     stream_outcome: Option<&str>,
+    usage: Option<crate::chat::model::ModelUsage>,
 ) -> Result<(), String> {
     let segments =
         normalize_assistant_segments(&content, reasoning.as_deref(), &tool_calls, segments);
@@ -1494,6 +1498,7 @@ async fn push_assistant_message(
         active_skill_id: active_skill_id.map(|id| id.to_string()),
         run_entry: run_entry.map(str::to_string),
         stream_outcome: stream_outcome.map(str::to_string),
+        usage,
         timestamp: chrono::Local::now().timestamp(),
     });
 
@@ -4786,6 +4791,7 @@ mod tests {
             active_skill_id: None,
             run_entry: None,
             stream_outcome: None,
+            usage: None,
             timestamp: 1,
         };
 
@@ -4882,6 +4888,7 @@ mod tests {
             active_skill_id: None,
             run_entry: None,
             stream_outcome: None,
+            usage: None,
             timestamp: 1,
         };
 
@@ -4912,6 +4919,7 @@ mod tests {
             active_skill_id: None,
             run_entry: None,
             stream_outcome: None,
+            usage: None,
             timestamp,
         }
     }
@@ -5080,6 +5088,7 @@ mod tests {
                     active_skill_id: None,
                     run_entry: None,
                     stream_outcome: None,
+                    usage: None,
                     timestamp: 1,
                 },
                 ChatMessage {
@@ -5120,6 +5129,7 @@ mod tests {
                     active_skill_id: Some("doc".to_string()),
                     run_entry: None,
                     stream_outcome: None,
+                    usage: None,
                     timestamp: 2,
                 },
             ],
@@ -5233,6 +5243,7 @@ mod tests {
                     active_skill_id: None,
                     run_entry: None,
                     stream_outcome: None,
+                    usage: None,
                     timestamp: 2,
                 },
             ],

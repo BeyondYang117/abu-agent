@@ -53,6 +53,30 @@ pub(crate) struct RunState {
     pub(crate) planning_final_message: Option<Value>,
     pub(crate) planning_final_streamed: bool,
     pub(crate) skill_cache: skills::SkillRunCache,
+    /// 本轮全部模型调用（规划/合成/压缩摘要）的 usage 累计；provider 不报则保持 None。
+    pub(crate) usage: Option<crate::chat::model::ModelUsage>,
+}
+
+impl RunState {
+    /// 把单次模型调用的 usage 累加进本轮总账（None 入参不改变现状）。
+    pub(crate) fn merge_usage(&mut self, next: Option<crate::chat::model::ModelUsage>) {
+        let Some(next) = next else { return };
+        let total = self.usage.get_or_insert_with(Default::default);
+        let add = |slot: &mut Option<u64>, value: Option<u64>| {
+            if let Some(value) = value {
+                *slot = Some(slot.unwrap_or(0).saturating_add(value));
+            }
+        };
+        add(&mut total.input_tokens, next.input_tokens);
+        add(&mut total.output_tokens, next.output_tokens);
+        add(&mut total.total_tokens, next.total_tokens);
+        add(&mut total.cached_input_tokens, next.cached_input_tokens);
+        add(
+            &mut total.cache_creation_input_tokens,
+            next.cache_creation_input_tokens,
+        );
+        add(&mut total.reasoning_tokens, next.reasoning_tokens);
+    }
 }
 
 pub async fn run_agent_loop(
@@ -75,6 +99,7 @@ pub async fn run_agent_loop(
         planning_final_message: None,
         planning_final_streamed: false,
         skill_cache: skills::SkillRunCache::default(),
+        usage: None,
     };
     let env = LoopEnv {
         config: &config,
@@ -102,15 +127,21 @@ pub async fn run_agent_loop(
                 PlanningStepOutcome::FinalAnswer => break,
                 PlanningStepOutcome::ToolsUnsupported => break,
                 PlanningStepOutcome::RetryWithSkillTools => continue,
-                PlanningStepOutcome::DraftFailed(result) => return Ok(result),
-                PlanningStepOutcome::Cancelled(result) => return Ok(result),
+                PlanningStepOutcome::DraftFailed(result) => {
+                    return Ok(attach_usage(result, &mut state))
+                }
+                PlanningStepOutcome::Cancelled(result) => {
+                    return Ok(attach_usage(result, &mut state))
+                }
                 PlanningStepOutcome::ToolCalls(planned) => planned,
             };
 
             match run_tool_round(&env, &mut state, round, planned).await {
                 ToolRoundOutcome::Continue => {}
                 ToolRoundOutcome::RoundLimit => break,
-                ToolRoundOutcome::Cancelled(result) => return Ok(result),
+                ToolRoundOutcome::Cancelled(result) => {
+                    return Ok(attach_usage(result, &mut state))
+                }
             }
         }
     }
@@ -123,13 +154,23 @@ pub async fn run_agent_loop(
     }
 
     if let Some(message) = state.planning_final_message.take() {
-        return finalize_planning_final(&env, &mut state, message);
+        return finalize_planning_final(&env, &mut state, message)
+            .map(|result| attach_usage(result, &mut state));
     }
 
     match synthesis_step(&env, &mut state).await? {
-        SynthesisFlow::Early(result) => Ok(result),
-        SynthesisFlow::Completed(completed) => Ok(finalize_completed(&env, &mut state, completed)),
+        SynthesisFlow::Early(result) => Ok(attach_usage(result, &mut state)),
+        SynthesisFlow::Completed(completed) => {
+            let result = finalize_completed(&env, &mut state, completed);
+            Ok(attach_usage(result, &mut state))
+        }
     }
+}
+
+/// 把本轮累计的 provider usage 挂到运行结果上（finalize 构造器们不感知 usage）。
+fn attach_usage(mut result: AgentRunResult, state: &mut RunState) -> AgentRunResult {
+    result.usage = state.usage.take();
+    result
 }
 
 #[cfg(test)]

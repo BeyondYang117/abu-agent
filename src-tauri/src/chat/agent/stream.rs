@@ -493,6 +493,9 @@ pub struct ChatStreamOutput {
     pub tool_calls: Vec<PendingToolCall>,
     pub finish_reason: Option<String>,
     pub cancelled: bool,
+    /// Provider-reported usage for this single model call (None when the
+    /// provider does not report usage or the stream was cancelled mid-flight).
+    pub usage: Option<crate::chat::model::ModelUsage>,
 }
 
 impl ChatStreamOutput {
@@ -526,6 +529,7 @@ impl ChatStreamOutput {
             tool_calls,
             finish_reason,
             cancelled,
+            usage: None,
         }
     }
 
@@ -541,14 +545,16 @@ impl ChatStreamOutput {
         };
         let cleaned = sanitize_assistant_text_response(raw_content.trim());
         let reasoning = output.reasoning.unwrap_or(snapshot_reasoning);
-        Self::from_generate_output(
+        let mut result = Self::from_generate_output(
             cleaned,
             raw_content,
             reasoning,
             output.tool_calls,
             output.finish_reason,
             false,
-        )
+        );
+        result.usage = output.usage;
+        result
     }
 
     pub fn to_openai_compatible_message(&self) -> Value {

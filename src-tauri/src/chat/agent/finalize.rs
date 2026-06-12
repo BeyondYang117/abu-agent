@@ -150,6 +150,7 @@ impl<'a> RunResultBuilder<'a> {
             api_messages: generated_api_messages,
             steps,
             stream_outcome: self.outcome.to_string(),
+            usage: None,
         }
     }
 }
@@ -302,6 +303,7 @@ pub(crate) fn finalize_planning_final(
         api_messages: std::mem::take(&mut state.generated_api_messages),
         steps: std::mem::take(&mut state.steps),
         stream_outcome: "completed".to_string(),
+        usage: None,
     })
 }
 
@@ -360,6 +362,7 @@ pub(crate) fn finalize_completed(
         api_messages: std::mem::take(&mut state.generated_api_messages),
         steps: std::mem::take(&mut state.steps),
         stream_outcome: "completed".to_string(),
+        usage: None,
     }
 }
 
@@ -494,5 +497,6 @@ pub(crate) fn cancelled_tool_round_run_result(
         api_messages: generated_api_messages,
         steps,
         stream_outcome: "cancelled".to_string(),
+        usage: None,
     }
 }

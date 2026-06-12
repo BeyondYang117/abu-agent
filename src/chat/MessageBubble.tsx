@@ -476,6 +476,7 @@ function MessageBubbleComponent({
             tokensPerSec={tokensPerSec}
             runEntry={message.run_entry ?? message.runEntry}
             streamOutcome={message.stream_outcome ?? message.streamOutcome}
+            usage={message.usage}
             onEdit={canMutate ? () => setIsEditing(true) : undefined}
             onRegenerate={
               canMutate

@@ -158,6 +158,7 @@ pub(crate) async fn planning_step(
                             ),
                     ));
                 }
+                state.merge_usage(stream.usage.clone());
                 Ok(ChatPlanningStep {
                     message: stream.to_openai_compatible_message(),
                     streamed: true,
@@ -187,7 +188,7 @@ pub(crate) async fn planning_step(
                     "Chat tools planning stream interrupted; retrying once without streaming: {}",
                     err
                 );
-                call_chat_completion_message(
+                call_chat_completion_message_with_usage(
                     config.state,
                     &config.provider,
                     &config.model,
@@ -201,16 +202,19 @@ pub(crate) async fn planning_step(
                     "Chat tools planning",
                 )
                 .await
-                .map(|message| ChatPlanningStep {
-                    message,
-                    streamed: false,
+                .map(|(message, usage)| {
+                    state.merge_usage(usage);
+                    ChatPlanningStep {
+                        message,
+                        streamed: false,
+                    }
                 })
             }
             Err(err) => Err(err.to_string()),
         }
     } else {
         tokio::select! {
-            result = call_chat_completion_message(
+            result = call_chat_completion_message_with_usage(
                 config.state,
                 &config.provider,
                 &config.model,
@@ -222,9 +226,12 @@ pub(crate) async fn planning_step(
                 &config.conversation_id,
                 &config.message_id,
                 "Chat tools planning",
-            ) => result.map(|message| ChatPlanningStep {
-                message,
-                streamed: false,
+            ) => result.map(|(message, usage)| {
+                state.merge_usage(usage);
+                ChatPlanningStep {
+                    message,
+                    streamed: false,
+                }
             }),
             _ = host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
                 host.emit_stream_done(
@@ -416,6 +423,39 @@ pub(crate) async fn call_chat_completion_message(
     message_id: &str,
     label: &str,
 ) -> Result<Value, String> {
+    call_chat_completion_message_with_usage(
+        state,
+        provider,
+        model,
+        messages,
+        tools,
+        retry_attempts,
+        thinking_enabled,
+        max_output_tokens,
+        conversation_id,
+        message_id,
+        label,
+    )
+    .await
+    .map(|(message, _usage)| message)
+}
+
+/// 与 `call_chat_completion_message` 相同，但同时返回 provider 报告的 usage，
+/// 供循环把每次模型调用的 token 消耗累计进 AgentRunResult。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn call_chat_completion_message_with_usage(
+    state: &crate::state::AppState,
+    provider: &crate::settings::ModelProvider,
+    model: &str,
+    messages: Vec<Value>,
+    tools: Option<&[ChatToolDefinition]>,
+    retry_attempts: usize,
+    thinking_enabled: bool,
+    max_output_tokens: u32,
+    conversation_id: &str,
+    message_id: &str,
+    label: &str,
+) -> Result<(Value, Option<crate::chat::model::ModelUsage>), String> {
     let request = generate_request_from_openai_messages(
         model,
         messages,
@@ -431,7 +471,8 @@ pub(crate) async fn call_chat_completion_message(
     let output = generate_with_chat_provider(state, provider, retry_attempts, request)
         .await
         .map_err(|err| err.to_string())?;
-    Ok(output.to_openai_compatible_message())
+    let usage = output.usage.clone();
+    Ok((output.to_openai_compatible_message(), usage))
 }
 
 #[allow(clippy::too_many_arguments)]

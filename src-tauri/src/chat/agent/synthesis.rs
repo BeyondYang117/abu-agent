@@ -5,7 +5,7 @@ use super::finalize::{
     synthesis_failed_fallback_response, RunResultBuilder,
 };
 use super::loop_::{LoopEnv, RunState};
-use super::planning::{call_chat_completion_message, stream_scoped_chat_completion_inner};
+use super::planning::{call_chat_completion_message_with_usage, stream_scoped_chat_completion_inner};
 use super::prepare::{prepare_agent_step, PrepareStepInput};
 use super::stop::{
     empty_assistant_response_error, extract_reasoning_content, final_assistant_api_message,
@@ -168,6 +168,7 @@ pub(crate) async fn synthesis_step(
                     ),
             ));
         }
+        state.merge_usage(stream.usage.clone());
         let final_reasoning_for_api = stream.reasoning.clone();
         let reasoning = merge_reasoning(&state.planning_reasoning_parts, stream.reasoning.clone());
         let response = sanitize_assistant_text_response(&stream.content);
@@ -202,7 +203,7 @@ pub(crate) async fn synthesis_step(
         // 的 send_messages），保证两条合成路径在超限场景行为一致。
         let runtime_messages = prepared.runtime_messages.clone();
         let message_result = tokio::select! {
-            result = call_chat_completion_message(
+            result = call_chat_completion_message_with_usage(
                 config.state,
                 &config.provider,
                 &config.model,
@@ -227,7 +228,10 @@ pub(crate) async fn synthesis_step(
             }
         };
         let message = match message_result {
-            Ok(message) => message,
+            Ok((message, usage)) => {
+                state.merge_usage(usage);
+                message
+            }
             Err(err) if !state.tool_records.is_empty() => {
                 eprintln!(
                     "Chat synthesis request failed after tool records; preserving tool results with fallback: {}",

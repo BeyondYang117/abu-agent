@@ -248,6 +248,10 @@ pub struct ChatMessage {
     /// Final stream outcome for this assistant message: `completed`, `cancelled`, or `error`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_outcome: Option<String>,
+    /// Provider-reported usage accumulated across all model calls of this reply
+    /// (planning/synthesis/compaction). None when the provider reports no usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::chat::model::ModelUsage>,
     pub timestamp: i64,
 }
 

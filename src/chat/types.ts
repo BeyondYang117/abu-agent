@@ -175,7 +175,24 @@ export interface ChatMessage {
   runEntry?: 'send' | 'regenerate' | string | null
   stream_outcome?: 'completed' | 'cancelled' | 'error' | string | null
   streamOutcome?: 'completed' | 'cancelled' | 'error' | string | null
+  /** Provider 报告的本条回复真实 token 用量（规划/合成/压缩累计）；不报告时缺省。 */
+  usage?: MessageUsage | null
   timestamp: number
+}
+
+export interface MessageUsage {
+  input_tokens?: number | null
+  inputTokens?: number | null
+  output_tokens?: number | null
+  outputTokens?: number | null
+  total_tokens?: number | null
+  totalTokens?: number | null
+  cached_input_tokens?: number | null
+  cachedInputTokens?: number | null
+  cache_creation_input_tokens?: number | null
+  cacheCreationInputTokens?: number | null
+  reasoning_tokens?: number | null
+  reasoningTokens?: number | null
 }
 
 export interface Attachment {
