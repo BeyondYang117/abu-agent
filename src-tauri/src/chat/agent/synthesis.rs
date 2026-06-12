@@ -41,10 +41,12 @@ pub(crate) async fn synthesis_step(
     } else {
         AgentPhase::Synthesis
     };
+    // 循环内上下文治理：超限时先 snip / 摘要（与 planning_step 相同的发送视图）。
+    let send_messages = super::compaction::maybe_compact_send_view(env, state).await;
     let prepared = prepare_agent_step(PrepareStepInput {
         step_number,
         previous_steps: &state.steps,
-        runtime_messages: &state.runtime_messages,
+        runtime_messages: &send_messages,
         tools: &[],
         phase,
     });
@@ -195,7 +197,10 @@ pub(crate) async fn synthesis_step(
             (response, reasoning, final_reasoning_for_api)
         }
     } else {
-        let runtime_messages = std::mem::take(&mut state.runtime_messages);
+        // 有意行为统一：此前非流式分支发送原始 state.runtime_messages（历史 quirk），
+        // 接入压缩后改为与流式分支相同的发送视图（prepared.runtime_messages 即压缩后
+        // 的 send_messages），保证两条合成路径在超限场景行为一致。
+        let runtime_messages = prepared.runtime_messages.clone();
         let message_result = tokio::select! {
             result = call_chat_completion_message(
                 config.state,

@@ -64,10 +64,12 @@ pub(crate) async fn planning_step(
     let config = env.config;
     let host = env.host;
     let step_number = state.step_number;
+    // 循环内上下文治理：超限时先 snip / 摘要，得到本步发送视图（未超限时为原样 clone）。
+    let send_messages = super::compaction::maybe_compact_send_view(env, state).await;
     let prepared = prepare_agent_step(PrepareStepInput {
         step_number,
         previous_steps: &state.steps,
-        runtime_messages: &state.runtime_messages,
+        runtime_messages: &send_messages,
         tools: &state.tools,
         phase: AgentPhase::ToolLoop,
     });

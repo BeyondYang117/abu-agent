@@ -280,12 +280,15 @@
 
     struct MockModelServer {
         base_url: String,
+        captured_bodies: Arc<Mutex<Vec<String>>>,
     }
 
     impl MockModelServer {
         fn start(responses: Vec<MockResponse>) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock model server");
             let addr = listener.local_addr().expect("mock model server addr");
+            let captured_bodies = Arc::new(Mutex::new(Vec::new()));
+            let captured_for_thread = Arc::clone(&captured_bodies);
             std::thread::spawn(move || {
                 for response in responses {
                     let Ok((mut stream, _)) = listener.accept() else {
@@ -294,19 +297,34 @@
                     stream
                         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                         .ok();
-                    if read_http_request(&mut stream).is_err() {
-                        continue;
+                    match read_http_request(&mut stream) {
+                        Ok(body) => {
+                            captured_for_thread
+                                .lock()
+                                .unwrap_or_else(|err| err.into_inner())
+                                .push(body);
+                        }
+                        Err(_) => continue,
                     }
                     serve_mock_response(stream, response);
                 }
             });
             Self {
                 base_url: format!("http://{addr}/v1"),
+                captured_bodies,
             }
+        }
+
+        fn captured_bodies(&self) -> Vec<String> {
+            self.captured_bodies
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .clone()
         }
     }
 
-    fn read_http_request(stream: &mut TcpStream) -> std::io::Result<()> {
+    /// 读完整 HTTP 请求并返回 body 文本（供测试断言请求内容）。
+    fn read_http_request(stream: &mut TcpStream) -> std::io::Result<String> {
         let mut buf = Vec::new();
         let mut chunk = [0u8; 1024];
         let header_end = loop {
@@ -335,7 +353,7 @@
             }
             buf.extend_from_slice(&chunk[..n]);
         }
-        Ok(())
+        Ok(String::from_utf8_lossy(&buf[header_end..]).into_owned())
     }
 
     fn sse_body(events: &[String]) -> String {
@@ -1672,6 +1690,202 @@
                 && segment.phase == ChatMessageSegmentPhase::Plain
                 && segment.text.as_deref() == Some("部分回答")
         }));
+    }
+
+    /// Tool executor returning a huge text result, to push the loop over a tiny
+    /// context window and exercise in-loop compaction.
+    struct HugeResultExecutor {
+        chars: usize,
+    }
+
+    impl ToolExecutor for HugeResultExecutor {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _tool: &'a ChatToolDefinition,
+            _arguments: Value,
+            _skill_cache: Option<&'a mut skills::SkillRunCache>,
+        ) -> super::super::execute::ToolExecutorFuture<'a> {
+            Box::pin(async move {
+                Ok(McpToolCallResult {
+                    content: "A".repeat(self.chars),
+                    is_error: false,
+                    raw: Value::Null,
+                    artifacts: Vec::new(),
+                    structured_content: None,
+                })
+            })
+        }
+    }
+
+    /// In-loop compaction: an oversized tool output from an EARLIER round (outside
+    /// the keep-recent tail) must be snipped in the request sent to the provider,
+    /// while nothing persisted ever carries the snip marker.
+    #[tokio::test]
+    async fn run_loop_compacts_send_view_but_keeps_persisted_messages_raw() {
+        let server = MockModelServer::start(vec![
+            MockResponse::Sse(planning_tool_call_sse_events()),
+            MockResponse::Sse(vec![
+                r#"{"choices":[{"delta":{"content":"总结完成，工具输出已分析。"}}]}"#.to_string(),
+                "[DONE]".to_string(),
+            ]),
+        ]);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url, true);
+        // 2400 token 窗口（预算 2040）：9000 字符旧工具输出（est ~2353）触发压缩，
+        // L1 snip 后（est ~1798）回到预算内——只走 Layer1，不触发 Layer2 模型摘要。
+        config.provider.model_overrides.insert(
+            "test-model".to_string(),
+            crate::settings::ModelInfo {
+                context_window: Some(2_400),
+                ..Default::default()
+            },
+        );
+        // 预填早前轮次历史：一条超大 tool 输出 + 8 条近期小消息把它推出保护尾巴。
+        // 设计契约：snip 只动 keep-recent(8) 之外的旧 tool 消息，当前轮结果保持原文。
+        let huge = "A".repeat(9_000);
+        config.runtime_messages.push(serde_json::json!({
+            "role": "assistant", "content": "", "tool_calls": [
+                {"id": "old_call", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+            ]
+        }));
+        config.runtime_messages.push(serde_json::json!({
+            "role": "tool", "tool_call_id": "old_call", "content": huge
+        }));
+        for i in 0..8 {
+            config.runtime_messages.push(serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": format!("history {i}")
+            }));
+        }
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("compacted run completes");
+
+        assert_eq!(result.stream_outcome, "completed");
+        assert_eq!(result.content, "总结完成，工具输出已分析。");
+
+        // 发送视图：两次请求（规划 + 合成）的 body 中旧工具消息都已被 snip。
+        let bodies = server.captured_bodies();
+        assert_eq!(bodies.len(), 2, "planning + synthesis requests");
+        for (idx, body) in bodies.iter().enumerate() {
+            assert!(
+                body.contains("chars snipped"),
+                "request #{idx} must carry the snipped old tool output"
+            );
+            assert!(
+                !body.contains(&"A".repeat(8_000)),
+                "request #{idx} must not carry the full 9000-char tool output"
+            );
+        }
+
+        // 持久化：本轮产生的 api_messages 不含任何 snip 标记（snip 只作用于发送视图）。
+        assert!(result
+            .api_messages
+            .iter()
+            .all(|message| !message.to_string().contains("chars snipped")));
+        // 本轮工具结果原文留存。
+        let persisted_tool = result
+            .api_messages
+            .iter()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
+            .expect("persisted tool message from this round");
+        assert_eq!(persisted_tool["content"], "result:read_file");
+    }
+
+    /// Layer2 escalation: when snip alone cannot fit the window, a summary request
+    /// fires first and the next provider request carries the summary instead of
+    /// the old history; the summary itself stays out of persisted api_messages.
+    #[tokio::test]
+    async fn run_loop_layer2_replaces_old_history_with_summary() {
+        let server = MockModelServer::start(vec![
+            // 1) Layer2 摘要请求（非流式 JSON）。
+            MockResponse::Json(
+                r#"{"choices":[{"message":{"role":"assistant","content":"SUMMARY_MARKER: 早前轮次已读取大文件"}}]}"#
+                    .to_string(),
+            ),
+            // 2) 压缩后的规划请求 → 直接给出最终回答（无工具调用）。
+            MockResponse::Sse(vec![
+                r#"{"choices":[{"delta":{"content":"基于摘要继续完成任务。"}}]}"#.to_string(),
+                "[DONE]".to_string(),
+            ]),
+        ]);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url, true);
+        // 600 token 窗口（预算 510）：snip 后仍超 → 必然升级 Layer2。
+        config.provider.model_overrides.insert(
+            "test-model".to_string(),
+            crate::settings::ModelInfo {
+                context_window: Some(600),
+                ..Default::default()
+            },
+        );
+        let huge = "B".repeat(9_000);
+        config.runtime_messages.push(serde_json::json!({
+            "role": "tool", "tool_call_id": "old_call", "content": huge
+        }));
+        for i in 0..8 {
+            config.runtime_messages.push(serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": format!("recent history {i}")
+            }));
+        }
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("layer2-compacted run completes");
+        assert_eq!(result.stream_outcome, "completed");
+        assert_eq!(result.content, "基于摘要继续完成任务。");
+
+        let bodies = server.captured_bodies();
+        assert_eq!(bodies.len(), 2, "summary request + planning request");
+        // 摘要请求带着压缩指令与旧段样本。
+        assert!(bodies[0].contains("compress conversation history"));
+        // 压缩后的规划请求：携带摘要，不再携带旧原文，保留最近历史。
+        assert!(bodies[1].contains("SUMMARY_MARKER"));
+        assert!(!bodies[1].contains(&"B".repeat(1_000)));
+        assert!(bodies[1].contains("recent history 7"));
+        // 摘要只存在于发送视图/工作副本，不进持久化 api_messages。
+        assert!(result
+            .api_messages
+            .iter()
+            .all(|message| !message.to_string().contains("SUMMARY_MARKER")));
+    }
+
+    /// Under-budget runs must not be touched by compaction: the request body
+    /// carries the tool output verbatim.
+    #[tokio::test]
+    async fn run_loop_under_budget_sends_messages_untouched() {
+        let server = MockModelServer::start(vec![
+            MockResponse::Sse(planning_tool_call_sse_events()),
+            MockResponse::Sse(vec![
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#.to_string(),
+                "[DONE]".to_string(),
+            ]),
+        ]);
+        let state = test_app_state();
+        let config = test_run_config(&state, &server.base_url, true);
+        let host = TestHost::default();
+        // 默认窗口（test-model 无覆盖 → 200k fallback），小输出远不达 0.85。
+        let executor = HugeResultExecutor { chars: 600 };
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("run completes");
+        assert_eq!(result.stream_outcome, "completed");
+
+        let bodies = server.captured_bodies();
+        assert_eq!(bodies.len(), 2);
+        assert!(
+            !bodies[1].contains("chars snipped"),
+            "under-budget send view must be untouched"
+        );
+        assert!(bodies[1].contains(&"A".repeat(600)));
     }
 
     /// Fallback D: streamed synthesis returns an empty answer after tool results;

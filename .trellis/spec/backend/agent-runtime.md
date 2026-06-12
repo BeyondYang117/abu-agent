@@ -2,6 +2,43 @@
 
 > Module layout (since 2026-06-12 split, zero behavior change): `loop_.rs` is a thin orchestration skeleton (`LoopEnv`/`RunState` + prepare → planning → tool rounds → synthesis → finalize). Planning + provider-call plumbing live in `planning.rs`, tool round scheduling in `rounds.rs`, synthesis paths in `synthesis.rs`, and `RunResultBuilder` + fallback copy + `SegmentBuilder` in `finalize.rs`. Loop tests live in `loop_tests.rs` (mounted via `#[path]` from `loop_.rs`). All contracts below are unchanged by the split; `run_agent_loop` remains the single public entry. Fallback behavior (synthesis failure/cancel/empty, planning draft failure) is pinned by regression tests in `loop_tests.rs` — keep them green and assertion-identical through refactors.
 
+## Scenario: In-Loop Context Compaction
+
+### 1. Scope / Trigger
+
+- Trigger: changes to `chat/agent/compaction.rs`, the `maybe_compact_send_view` call sites in `planning.rs` / `synthesis.rs`, or anything that alters what the provider receives vs. what is persisted on long tool-loop runs.
+- Long tool chains grow `state.runtime_messages` unboundedly; without in-loop governance the run eventually exceeds the model window and errors instead of self-healing.
+
+### 2. Signatures
+
+- `compaction::maybe_compact_send_view(env: &LoopEnv, state: &mut RunState) -> Vec<Value>` — async; returns the message view to SEND for this step.
+- `compaction::snip_old_tool_results(messages, keep_recent, snip_threshold) -> Vec<Value>` — pure, borrow-only Layer 1.
+- Constants: `KEEP_RECENT_RAW_MESSAGES = 8`, `SNIP_THRESHOLD_CHARS = 4000`, `COMPACT_TRIGGER_RATIO = 0.85`.
+
+### 3. Contracts
+
+- Both `planning_step` and `synthesis_step` build their request from `maybe_compact_send_view`, not from `state.runtime_messages` directly. (This also unified a historical quirk where non-stream synthesis sent the raw runtime messages.)
+- Under budget (`estimate_messages_tokens ≤ window × ratio`, window from `context_window_for_model`): return a verbatim clone — zero behavior change. `window == 0` disables compaction.
+- **Layer 1 (free)**: outside the last `KEEP_RECENT_RAW_MESSAGES` messages, `role == "tool"` contents over `SNIP_THRESHOLD_CHARS` chars are replaced by head-half + `[... N chars snipped ...]` + tail-quarter (char-boundary safe). Affects the send view only; `state.runtime_messages` is NOT written.
+- **Layer 2 (one model call)**: only if still over budget after snip. Old segment (between the leading system prefix and the protected tail) is clipped to 500 chars/message and summarized via `call_chat_completion_message` (no tools), raced against `wait_for_generation_inactive` — cancellation abandons compaction and returns the snip view. On success the summary replaces the old segment as a `user`(summary)/`assistant`(ack) pair (keeps role alternation legal) and **is written back to `state.runtime_messages`** so later rounds don't re-summarize. On any failure: log + degrade to the snip view; compaction must never fail the run.
+- `state.generated_api_messages` (the persistence mirror for replay/tool cards) is NEVER touched by either layer. Snip markers and summaries must not appear in persisted messages.
+- No `AgentHost` trait or frontend event changes; the context bar refreshes from the existing post-reply `compute_context_state`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+|---|---|
+| Window unknown (0) | No compaction; verbatim send view. |
+| Under trigger ratio | Verbatim send view (byte-identical messages). |
+| Over ratio, snip suffices | Snipped send view; runtime/persisted state untouched. |
+| Still over after snip | Layer 2 summary; on success rewrite `runtime_messages` (work copy only). |
+| Summary call fails / empty / cancelled | Degrade to snip view; the run continues. |
+
+### 5. Tests Required
+
+- Pure: snip truncates only old oversized tool messages (marker + char count), protects recent/non-tool/under-threshold, multibyte-safe; summary split protects system prefix and recent tail; summary replacement keeps `system,user,assistant,…` role legality.
+- Integration (MockModelServer body capture): over-budget run sends snipped bodies while `result.api_messages` keep raw content; Layer-2 run fires the summary request first, the next request carries the summary and recent history but not the old raw text, and the summary never appears in `api_messages`; under-budget run sends bodies verbatim.
+
 ## Scenario: Per-Round Tool Scheduling
 
 ### 1. Scope / Trigger
