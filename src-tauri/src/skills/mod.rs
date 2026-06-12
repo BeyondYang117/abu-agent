@@ -9,11 +9,11 @@ pub use discover::{build_registry, build_registry_metadata, user_skills_dir};
 pub use parse::parse_skill_markdown;
 pub use runtime::{
     activate_skill, extract_relative_path, extract_script_args, extract_skill_name, lookup_skill,
-    read_skill_file, run_skill_script, SkillRunCache,
+    read_skill_file, run_skill_script, substitute_arguments, SkillRunCache,
 };
 pub use types::{
-    slugify, SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,
-    SkillReadResult, SkillRecord, SkillRegistry,
+    normalize_trigger, record_triggers, slugify, SkillDetail, SkillImportResult, SkillListResult,
+    SkillMeta, SkillOpenFolderResult, SkillReadResult, SkillRecord, SkillRegistry,
 };
 
 use std::{

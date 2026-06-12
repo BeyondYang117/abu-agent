@@ -137,6 +137,33 @@ pub fn resolve_skill_path(base_dir: &Path, relative_path: &str) -> Result<PathBu
     Ok(canonical_joined)
 }
 
+/// Substitute argument placeholders in a skill body.
+///
+/// - `$ARGUMENTS` → the full trailing argument string (everything after the
+///   slash command), verbatim.
+/// - `$ARG_NAME` → the positional word at the index of `ARG_NAME` in
+///   `arg_names`. Words are whitespace-split from `args_raw`. A declared name
+///   with no corresponding word substitutes to empty (never panics).
+///
+/// Unknown `$NAME` placeholders (not `ARGUMENTS`, not a declared arg) are left
+/// untouched so skill bodies can mention literal `$` text safely.
+pub fn substitute_arguments(body: &str, args_raw: &str, arg_names: &[String]) -> String {
+    let trimmed = args_raw.trim();
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+
+    let mut out = body.replace("$ARGUMENTS", trimmed);
+    for (index, name) in arg_names.iter().enumerate() {
+        let key = name.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let placeholder = format!("${}", key.to_ascii_uppercase());
+        let value = words.get(index).copied().unwrap_or("");
+        out = out.replace(&placeholder, value);
+    }
+    out
+}
+
 pub fn activate_skill(record: &SkillRecord) -> String {
     let mut out = format!(
         "<skill_content name=\"{}\">\n",
@@ -364,6 +391,9 @@ mod tests {
             recommended_tools: vec![],
             disable_model_invocation: false,
             files: vec![],
+            triggers: vec![],
+            argument_hint: None,
+            arguments: vec![],
         }
     }
 
@@ -391,16 +421,7 @@ mod tests {
     #[test]
     fn skill_run_cache_deduplicates_activate() {
         let record = SkillRecord {
-            meta: SkillMeta {
-                id: "demo".to_string(),
-                name: "demo".to_string(),
-                description: "Demo".to_string(),
-                source: "user".to_string(),
-                path: None,
-                recommended_tools: vec![],
-                disable_model_invocation: false,
-                files: vec![],
-            },
+            meta: demo_meta(),
             location: PathBuf::from("/skills/demo/SKILL.md"),
             base_dir: PathBuf::from("/skills/demo"),
             body: "Skill body".to_string(),
@@ -421,16 +442,7 @@ mod tests {
         let file = dir.join("guide.md");
         fs::write(&file, "cached content").unwrap();
         let record = SkillRecord {
-            meta: SkillMeta {
-                id: "demo".to_string(),
-                name: "demo".to_string(),
-                description: "Demo".to_string(),
-                source: "user".to_string(),
-                path: None,
-                recommended_tools: vec![],
-                disable_model_invocation: false,
-                files: vec![],
-            },
+            meta: demo_meta(),
             location: dir.join("SKILL.md"),
             base_dir: dir.clone(),
             body: String::new(),
@@ -450,16 +462,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kivio-skill-script-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let record = SkillRecord {
-            meta: SkillMeta {
-                id: "demo".to_string(),
-                name: "demo".to_string(),
-                description: "Demo".to_string(),
-                source: "user".to_string(),
-                path: None,
-                recommended_tools: vec![],
-                disable_model_invocation: false,
-                files: vec![],
-            },
+            meta: demo_meta(),
             location: dir.join("SKILL.md"),
             base_dir: dir.clone(),
             body: String::new(),
@@ -487,16 +490,7 @@ mod tests {
         fs::create_dir_all(&scripts_dir).unwrap();
         fs::write(scripts_dir.join("slow.py"), "import time\ntime.sleep(2)\n").unwrap();
         let record = SkillRecord {
-            meta: SkillMeta {
-                id: "demo".to_string(),
-                name: "demo".to_string(),
-                description: "Demo".to_string(),
-                source: "user".to_string(),
-                path: None,
-                recommended_tools: vec![],
-                disable_model_invocation: false,
-                files: vec![],
-            },
+            meta: demo_meta(),
             location: dir.join("SKILL.md"),
             base_dir: dir.clone(),
             body: String::new(),
@@ -580,5 +574,24 @@ mod tests {
             cache.activated_allowed_tools(),
             ["read_file", "web_search", "run_python"]
         );
+    }
+
+    #[test]
+    fn substitute_arguments_replaces_full_and_positional() {
+        let body = "Commit with message: $ARGUMENTS\nFirst: $TITLE Second: $SCOPE";
+        let out = substitute_arguments(
+            body,
+            "  fix login regression  ",
+            &["title".to_string(), "scope".to_string()],
+        );
+        assert!(out.contains("Commit with message: fix login regression"));
+        assert!(out.contains("First: fix Second: login"));
+    }
+
+    #[test]
+    fn substitute_arguments_missing_positional_is_empty() {
+        let body = "A=$FIRST B=$SECOND end";
+        let out = substitute_arguments(body, "only", &["first".to_string(), "second".to_string()]);
+        assert_eq!(out, "A=only B= end");
     }
 }
