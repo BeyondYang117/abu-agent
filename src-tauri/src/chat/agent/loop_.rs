@@ -53,11 +53,29 @@ pub(crate) struct RunState {
     pub(crate) planning_final_message: Option<Value>,
     pub(crate) planning_final_streamed: bool,
     pub(crate) skill_cache: skills::SkillRunCache,
+    /// Count of `activated_allowed_tools` already folded into `tools` (T3). The
+    /// loop only re-narrows when this grows, so the filter is applied at most
+    /// once per new model-activated skill.
+    pub(crate) applied_allowed_tools_len: usize,
     /// 本轮全部模型调用（规划/合成/压缩摘要）的 usage 累计；provider 不报则保持 None。
     pub(crate) usage: Option<crate::chat::model::ModelUsage>,
 }
 
 impl RunState {
+    /// T3: narrow `tools` to the union of allowed-tools across skills the model
+    /// has activated mid-run. No-op unless a new activation arrived since the
+    /// last application (tracked by `applied_allowed_tools_len`). Monotonic:
+    /// only retains, never re-expands.
+    pub(crate) fn apply_activated_tool_filter(&mut self) {
+        let allowed = self.skill_cache.activated_allowed_tools();
+        if allowed.len() <= self.applied_allowed_tools_len {
+            return;
+        }
+        let snapshot = allowed.to_vec();
+        self.applied_allowed_tools_len = snapshot.len();
+        super::prepare::retain_tools_for_allowed(&mut self.tools, &snapshot);
+    }
+
     /// 把单次模型调用的 usage 累加进本轮总账（None 入参不改变现状）。
     pub(crate) fn merge_usage(&mut self, next: Option<crate::chat::model::ModelUsage>) {
         let Some(next) = next else { return };
@@ -99,6 +117,7 @@ pub async fn run_agent_loop(
         planning_final_message: None,
         planning_final_streamed: false,
         skill_cache: skills::SkillRunCache::default(),
+        applied_allowed_tools_len: 0,
         usage: None,
     };
     let env = LoopEnv {
@@ -143,6 +162,11 @@ pub async fn run_agent_loop(
                     return Ok(attach_usage(result, &mut state))
                 }
             }
+
+            // T3: a skill the model activated this round narrows the tool set for
+            // the next planning round. Apply only when a new activation arrived
+            // (monotonic — retain only, never re-expand).
+            state.apply_activated_tool_filter();
         }
     }
 
