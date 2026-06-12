@@ -260,7 +260,7 @@ Backend-owned segments define the timeline; legacy fields are deterministic proj
 
 ### 1. Scope / Trigger
 
-- Trigger: changes that alter `ChatToolArtifact`, sandbox artifact export, `run_python` artifact handling, generated file opening commands, or Chat UI rendering of tool artifacts.
+- Trigger: changes that alter `ChatToolArtifact`, sandbox artifact export, `run_python` artifact handling, generated-file prompt/tool descriptions, generated file opening commands, or Chat UI rendering of tool artifacts.
 - Generated files are model/tool outputs, not user attachments. They travel through tool records and assistant message `artifacts`, then render as assistant-side file delivery cards.
 
 ### 2. Signatures
@@ -269,6 +269,9 @@ Backend-owned segments define the timeline; legacy fields are deterministic proj
 - TypeScript compatibility aliases: `mimeType`, `dataUrl`, `sizeBytes`, plus optional `path` / `filePath` / `localPath` for frontend tolerance.
 - `export_sandbox_artifacts(ctx, artifacts) -> Vec<SandboxExportedArtifact { artifact_index, path }>`
 - `chat_open_generated_artifact(path: String) -> Result<(), String>`
+- Model-facing prompt surfaces:
+  - `chat/agent/prepare.rs::native_tools_prompt(...)`
+  - `mcp/types.rs::native_run_python_tool()`
 
 ### 3. Contracts
 
@@ -277,6 +280,8 @@ Backend-owned segments define the timeline; legacy fields are deterministic proj
 - Frontend image artifacts stay on the image preview path. Non-image artifacts render as file cards with type, filename, preview, and open action.
 - File-card previews may decode text-like `data_url` content. Binary/table artifacts should show metadata rather than parsing in the UI.
 - Generated artifact paths are local cache paths with retention semantics; durable user-requested files still require explicit file tools such as `write_file`.
+- `run_python` is the default model-facing tool for transient chat deliverables when it is enabled. If the user naturally asks to generate, export, send, package, or provide a report, summary, table, dataset, chart, Markdown, CSV, JSON, TXT, HTML, or XLSX file, prompts/tool descriptions must instruct the model to create a relative Pyodide output artifact without requiring the user to mention Python or `run_python`.
+- If the user gives an explicit durable host path such as `~/Desktop/report.md` or asks to save into a local project path, the model should use file tools such as `write_file` instead of relying on the sandbox artifact cache.
 
 ### 4. Validation & Error Matrix
 
@@ -287,19 +292,25 @@ Backend-owned segments define the timeline; legacy fields are deterministic proj
 | Artifact path is relative, empty, missing, or not a file | `chat_open_generated_artifact` returns an error and does not call shell open. |
 | Export fails | Tool content includes an export warning; inline artifacts remain persisted for preview. |
 | Existing conversation lacks `path` | Deserializes and renders from old artifact fields. |
+| `run_python` is not enabled | Do not inject generated-file instructions that claim sandbox artifact generation is available. |
+| User asks for inline code / no file | Answer inline; do not call `run_python` merely to generate code text. |
+| User asks for a durable host path | Use `write_file` or another explicit file tool, not the transient sandbox artifact cache. |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: `run_python` creates `report.md`; backend exports it, persists `artifact.path`, and Chat renders a Markdown file card that opens the exported file.
+- Good: user says "整理成报告发我" and `run_python` is enabled; the model calls `run_python`, writes `report.md`, and final text only briefly says the file was generated.
 - Good: `run_python` creates `chart.png`; Chat keeps rendering it as an image preview, not as a file card.
 - Base: old artifacts with only `dataUrl` still show a card/preview where possible.
 - Bad: frontend opens arbitrary absolute paths from persisted JSON without backend validation.
 - Bad: long assistant text is automatically saved as a file without an explicit tool/output artifact.
+- Bad: assistant tells the user to ask for Python or type `run_python` before it can generate a report file.
 
 ### 6. Tests Required
 
 - Rust: sandbox export returns `artifact_index` + path and writes under the runs tree.
 - Rust: generated artifact path resolver rejects files outside `~/Kivio/runs`.
+- Rust: prompt/tool definition tests assert that `run_python` is described as the proactive generated-artifact tool and that users need not mention Python/`run_python`.
 - Frontend: non-image artifacts render as file cards.
 - Frontend: image artifacts do not render as file cards.
 - Project checks: `npm run lint`, `npm run typecheck`, relevant Vitest tests, and Rust tests for sandbox export/open validation.

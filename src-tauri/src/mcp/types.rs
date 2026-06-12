@@ -581,7 +581,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, chart/data code, document analysis, and sandbox-compatible package installs. Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as read_file; in project conversations these are project-relative and cannot escape the project root. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. chart.png, summary.csv, report.xlsx); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts and caches them under ~/Kivio/runs/<conversation>/<message>/ for ~7 days; use write_file when the user explicitly wants a durable deliverable at a specific host path (e.g. ~/Desktop). stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for calculation, statistics, chart/data code, document analysis, sandbox-compatible package installs, and user-requested chat deliverable files. If the user naturally asks to generate, export, send, package, or provide a report, summary, table, dataset, chart, Markdown, CSV, JSON, TXT, HTML, or XLSX file, proactively create it here; the user does not need to mention Python or run_python. Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as read_file; in project conversations these are project-relative and cannot escape the project root. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. report.md, summary.csv, data.json, page.html, report.xlsx, chart.png); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts and caches them under ~/Kivio/runs/<conversation>/<message>/ for ~7 days; use write_file when the user explicitly wants a durable deliverable at a specific host path (e.g. ~/Desktop). stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -851,6 +851,22 @@ mod tests {
         assert!(tool
             .description
             .contains("structured file mutation metadata"));
+    }
+
+    #[test]
+    fn run_python_tool_description_invites_generated_artifacts() {
+        let tool = native_run_python_tool();
+
+        assert!(tool
+            .description
+            .contains("user-requested chat deliverable files"));
+        assert!(tool
+            .description
+            .contains("does not need to mention Python or run_python"));
+        assert!(tool.description.contains("report.md"));
+        assert!(tool.description.contains("page.html"));
+        assert!(tool.description.contains("report.xlsx"));
+        assert!(tool.description.contains("Kivio auto-captures"));
     }
 
     #[test]
