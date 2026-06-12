@@ -395,12 +395,16 @@ export interface ConversationContextState {
   warningMessage?: string | null
 }
 
-export type AgentTodoStatus = 'pending' | 'in_progress' | 'completed'
+export type AgentTodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
 
 export interface AgentTodoItem {
   id: string
   content: string
+  description?: string | null
   status: AgentTodoStatus
+  blocks?: string[]
+  blocked_by?: string[]
+  owner?: string | null
 }
 
 export interface AgentTodoState {

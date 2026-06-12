@@ -14,6 +14,8 @@ function statusLabel(status: AgentTodoItem['status']): string {
       return 'Done'
     case 'in_progress':
       return 'Now'
+    case 'cancelled':
+      return 'Skip'
     default:
       return 'Next'
   }
@@ -25,6 +27,8 @@ function dotClass(status: AgentTodoItem['status']): string {
       return 'bg-emerald-500'
     case 'in_progress':
       return 'bg-amber-500 shadow-[0_0_0_3px_rgba(245,158,11,0.16)]'
+    case 'cancelled':
+      return 'bg-neutral-300 ring-1 ring-inset ring-neutral-400 dark:bg-neutral-700'
     default:
       return 'bg-neutral-300 dark:bg-neutral-600'
   }
@@ -36,6 +40,8 @@ function textClass(status: AgentTodoItem['status']): string {
       return 'text-neutral-400 line-through decoration-neutral-300 dark:text-neutral-500 dark:decoration-neutral-600'
     case 'in_progress':
       return 'font-medium text-neutral-900 dark:text-neutral-100'
+    case 'cancelled':
+      return 'text-neutral-400 line-through decoration-neutral-300 dark:text-neutral-500 dark:decoration-neutral-600'
     default:
       return 'text-neutral-600 dark:text-neutral-300'
   }
@@ -62,7 +68,8 @@ export function AgentTodoIndicator({ todoState }: AgentTodoIndicatorProps) {
     [items],
   )
   const updatedAt = formatUpdatedAt(todoState)
-  const allDone = items.length > 0 && completedCount === items.length
+  // 全部解决 = 没有 pending / in_progress（cancelled 视为已解决，不算未完成）。
+  const allDone = items.length > 0 && !items.some((item) => item.status === 'pending' || item.status === 'in_progress')
 
   if (items.length === 0) return null
 
@@ -133,6 +140,16 @@ export function AgentTodoIndicator({ todoState }: AgentTodoIndicatorProps) {
                   <div className={textClass(item.status)}>
                     {item.content}
                   </div>
+                  {item.description && (
+                    <div className="mt-0.5 text-[11px] leading-snug text-neutral-400 dark:text-neutral-500">
+                      {item.description}
+                    </div>
+                  )}
+                  {item.blocked_by && item.blocked_by.length > 0 && (
+                    <div className="mt-0.5 text-[10.5px] leading-none text-neutral-400 dark:text-neutral-500">
+                      blocked by: {item.blocked_by.join(', ')}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
