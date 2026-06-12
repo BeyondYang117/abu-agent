@@ -70,13 +70,6 @@ fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWin
     })
 }
 
-#[cfg(target_os = "macos")]
-fn has_user_window_except(app: &tauri::AppHandle, excluded_label: &str) -> bool {
-    USER_WINDOW_LABELS
-        .iter()
-        .any(|label| *label != excluded_label && app.get_webview_window(label).is_some())
-}
-
 /// 应用入口函数
 /// 初始化 Tauri Builder，加载插件，配置窗口事件处理，设置全局状态、热键和托盘
 fn main() {
@@ -115,16 +108,6 @@ fn main() {
                     let _ = window.hide();
                     return;
                 }
-                #[cfg(target_os = "macos")]
-                if USER_WINDOW_LABELS
-                    .iter()
-                    .any(|label| *label == window.label())
-                    && !has_user_window_except(&window.app_handle(), window.label())
-                {
-                    let _ = window
-                        .app_handle()
-                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
-                }
             }
             tauri::WindowEvent::Focused(true) =>
             {
@@ -138,12 +121,16 @@ fn main() {
             _ => {}
         })
         .setup(|app| {
+            let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
+
             #[cfg(target_os = "macos")]
             {
-                // 启动瞬间先 Accessory，open_chat_window 会切到 Regular
-                let _ = app
-                    .handle()
-                    .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                let activation_policy = if launched_from_autostart {
+                    tauri::ActivationPolicy::Accessory
+                } else {
+                    tauri::ActivationPolicy::Regular
+                };
+                let _ = app.handle().set_activation_policy(activation_policy);
             }
 
             // 清理上次崩溃 / 强杀 / 旧版本遗留的截图 PNG（24h 之前的，避免误删并发实例的活文件）
@@ -228,7 +215,6 @@ fn main() {
             });
 
             // 如果不是通过自启动启动的，则默认打开 AI 客户端。
-            let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
             if !launched_from_autostart {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {

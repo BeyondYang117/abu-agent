@@ -71,10 +71,8 @@ pub fn list_windows() -> Vec<WindowInfo> {
             reason = Some("layer!=0");
         } else if alpha < 0.05 {
             reason = Some("alpha~0");
-        } else if owner == "Kivio" || owner == "kivio" || owner == "KeyLingo" || owner == "keylingo"
-        {
-            // 同时匹配新名 Kivio 和旧名 KeyLingo —— 旧版本仍在运行的 macOS 实例可能 owner 是 KeyLingo
-            reason = Some("self");
+        } else if is_kivio_auxiliary_window(&owner, &title, bw, bh) {
+            reason = Some("self-helper");
         } else if bw < 60.0 || bh < 40.0 {
             reason = Some("too-small");
         }
@@ -93,6 +91,34 @@ pub fn list_windows() -> Vec<WindowInfo> {
         });
     }
     out
+}
+
+#[cfg(target_os = "macos")]
+const KIVIO_SELECTABLE_MIN_WIDTH: f64 = 360.0;
+#[cfg(target_os = "macos")]
+const KIVIO_SELECTABLE_MIN_HEIGHT: f64 = 360.0;
+
+#[cfg(target_os = "macos")]
+fn is_kivio_owner(owner: &str) -> bool {
+    matches!(owner, "Kivio" | "kivio" | "KeyLingo" | "keylingo")
+}
+
+#[cfg(target_os = "macos")]
+fn is_kivio_primary_window(title: &str, width: f64, height: f64) -> bool {
+    matches!(title.trim(), "Kivio" | "KeyLingo")
+        && width >= KIVIO_SELECTABLE_MIN_WIDTH
+        && height >= KIVIO_SELECTABLE_MIN_HEIGHT
+}
+
+#[cfg(target_os = "macos")]
+fn is_kivio_auxiliary_window(owner: &str, title: &str, width: f64, height: f64) -> bool {
+    if !is_kivio_owner(owner) {
+        return false;
+    }
+
+    // Chat is now Kivio's primary desktop window, so Lens must be able to
+    // select it. Keep filtering Lens/translator helper surfaces owned by us.
+    !is_kivio_primary_window(title, width, height)
 }
 
 #[cfg(target_os = "macos")]
@@ -163,4 +189,27 @@ pub fn capture_window(window_id: u32) -> Result<std::path::PathBuf, String> {
 #[cfg(not(target_os = "macos"))]
 pub fn capture_window(_window_id: u32) -> Result<std::path::PathBuf, String> {
     Err("Window capture not supported on this platform".to_string())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kivio_chat_window_is_selectable() {
+        assert!(!is_kivio_auxiliary_window("kivio", "Kivio", 1060.0, 746.0));
+        assert!(!is_kivio_auxiliary_window("Kivio", "Kivio", 400.0, 400.0));
+    }
+
+    #[test]
+    fn kivio_helper_windows_are_filtered() {
+        assert!(is_kivio_auxiliary_window("kivio", "Lens", 1728.0, 1117.0));
+        assert!(is_kivio_auxiliary_window("kivio", "Kivio", 392.0, 152.0));
+        assert!(is_kivio_auxiliary_window("KeyLingo", "", 600.0, 72.0));
+    }
+
+    #[test]
+    fn other_apps_are_not_self_filtered() {
+        assert!(!is_kivio_auxiliary_window("Safari", "Kivio", 392.0, 152.0));
+    }
 }

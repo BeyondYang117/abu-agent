@@ -6,6 +6,13 @@
 
 Chat is a normal desktop window, unlike Lens and translator floating windows.
 
+On macOS, packaged builds must preserve that normal desktop identity: do not
+declare `LSUIElement=true` for the app bundle just to support tray behavior.
+Tray and global shortcuts may remain as auxiliary entry points, but Chat should
+stay visible to Dock, Cmd+Tab, and window-capture tools during normal launches.
+Only the explicit autostart path may temporarily use `ActivationPolicy::Accessory`
+to stay quiet before the user opens Chat.
+
 When reusing an existing Chat window from any activation entry point, the path must:
 
 1. Reapply Chat chrome with `apply_chat_window_chrome`.
@@ -38,6 +45,39 @@ That bypasses Chat normalization and can leave a packaged macOS build restoring 
 Route Chat activations through `open_chat_window` / `open_chat_settings_window`, or a shared helper that includes the full restore contract above.
 
 Lens and translator windows are intentionally different: they may be frameless, transparent, always-on-top, or skipped from the taskbar. Do not copy their restore behavior into Chat.
+
+## Lens Window Selection Contract
+
+Lens window selection must treat Chat as a selectable app window. On macOS,
+`CGWindowListCopyWindowInfo` reports Chat, Lens, and legacy translator helper
+surfaces with the same Kivio / KeyLingo owner name, so do not filter all
+Kivio-owned windows as "self".
+
+Correct filtering is:
+
+- Keep the general filters for invalid ids, non-zero layers, near-transparent windows, and tiny windows.
+- Filter Kivio-owned auxiliary surfaces such as Lens (`title == "Lens"`), legacy empty-title floating bars, and the small translator window.
+- Allow the Kivio / KeyLingo primary Chat window when its title is `Kivio` / `KeyLingo` and its bounds are large enough to be a desktop window.
+
+### Wrong
+
+```rust
+if owner == "Kivio" || owner == "KeyLingo" {
+    continue;
+}
+```
+
+That made Lens unable to hover/select Chat after Chat became the primary
+desktop window.
+
+### Correct
+
+Route self-filtering through a helper such as `is_kivio_auxiliary_window`, and
+cover the boundary with tests:
+
+- Chat-sized `owner=kivio title=Kivio` is selectable.
+- Lens-sized/title `owner=kivio title=Lens` is filtered.
+- Small translator-sized Kivio windows are filtered.
 
 ## Lens Overlay Close Contract
 
