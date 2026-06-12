@@ -1542,6 +1542,101 @@
         );
     }
 
+    /// Bug fix regression: a plain-text planning stream (no tool calls started)
+    /// cancelled after partial text must keep the generated text as an
+    /// Ok("cancelled") run result instead of bubbling Err and dropping the turn.
+    #[tokio::test]
+    async fn run_loop_stream_planning_cancelled_keeps_partial_text() {
+        let server = MockModelServer::start(vec![MockResponse::SseThenHang(vec![
+            r#"{"choices":[{"delta":{"content":"这是已经生成的部分回答内容"}}]}"#.to_string(),
+        ])]);
+        let state = test_app_state();
+        let config = test_run_config(&state, &server.base_url, true);
+        let host = TestHost::cancelling_on_first_text_delta();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("cancelled plain-text planning with partial content must not bubble Err");
+
+        assert_eq!(result.stream_outcome, "cancelled");
+        assert_eq!(result.content, "这是已经生成的部分回答内容");
+        assert!(result.tool_records.is_empty());
+        assert!(
+            executor.events().is_empty(),
+            "no tools may execute in a cancelled plain-text turn"
+        );
+
+        let dones = host.recorded_dones();
+        assert_eq!(dones.len(), 1, "exactly one done event");
+        assert_eq!(
+            dones[0],
+            (
+                "cancelled".to_string(),
+                "这是已经生成的部分回答内容".to_string()
+            )
+        );
+
+        assert!(result.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Text
+                && segment.phase == ChatMessageSegmentPhase::Plain
+                && segment.text.as_deref() == Some("这是已经生成的部分回答内容")
+        }));
+    }
+
+    /// Pins the unchanged path: a plain-text stream cancelled before any text was
+    /// generated still bubbles Err("cancelled") (commands.rs handles it as a
+    /// successful no-message cancellation).
+    #[tokio::test]
+    async fn run_loop_stream_planning_cancelled_with_no_text_returns_err() {
+        let server = MockModelServer::start(vec![MockResponse::SseThenHang(Vec::new())]);
+        let state = test_app_state();
+        let config = test_run_config(&state, &server.base_url, true);
+        let host = TestHost::cancelling_after(Duration::from_millis(20));
+        let executor = RecordingExecutor::default();
+
+        let err = run_agent_loop(config, &host, &executor)
+            .await
+            .expect_err("cancelled stream with zero generated text keeps returning Err");
+
+        assert_eq!(err, "cancelled");
+        let dones = host.recorded_dones();
+        assert_eq!(dones.len(), 1, "exactly one done event");
+        assert_eq!(dones[0], ("cancelled".to_string(), String::new()));
+    }
+
+    /// Bug fix regression: when no tools are configured, the plain synthesis path
+    /// cancelled after partial text must also preserve the generated text.
+    #[tokio::test]
+    async fn run_loop_stream_plain_synthesis_cancelled_keeps_partial_text() {
+        let server = MockModelServer::start(vec![MockResponse::SseThenHang(vec![
+            r#"{"choices":[{"delta":{"content":"部分回答"}}]}"#.to_string(),
+        ])]);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url, true);
+        config.tools = Vec::new();
+        let host = TestHost::cancelling_on_first_text_delta();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("cancelled plain synthesis with partial content must not bubble Err");
+
+        assert_eq!(result.stream_outcome, "cancelled");
+        assert_eq!(result.content, "部分回答");
+        assert!(result.tool_records.is_empty());
+
+        let dones = host.recorded_dones();
+        assert_eq!(dones.len(), 1, "exactly one done event");
+        assert_eq!(dones[0], ("cancelled".to_string(), "部分回答".to_string()));
+
+        assert!(result.segments.iter().any(|segment| {
+            segment.kind == ChatMessageSegmentKind::Text
+                && segment.phase == ChatMessageSegmentPhase::Plain
+                && segment.text.as_deref() == Some("部分回答")
+        }));
+    }
+
     /// Fallback D: streamed synthesis returns an empty answer after tool results;
     /// the loop substitutes the bilingual fallback and completes normally
     /// (stream_outcome "completed", not "error").

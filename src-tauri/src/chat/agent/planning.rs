@@ -9,7 +9,7 @@ use crate::chat::types::{ChatMessageSegment, ChatMessageSegmentKind, ChatMessage
 use crate::mcp::ChatToolDefinition;
 use crate::settings::ProviderApiFormat;
 
-use super::finalize::tool_planning_failed_run_result;
+use super::finalize::{tool_planning_failed_run_result, RunResultBuilder};
 use super::host::AgentHost;
 use super::loop_::{LoopEnv, RunState};
 use super::prepare::{prepare_agent_step, PrepareStepInput};
@@ -50,6 +50,10 @@ pub(crate) enum PlanningStepOutcome {
     ToolsUnsupported,
     /// Tool-call argument drafting failed mid-stream; the run ends immediately.
     DraftFailed(AgentRunResult),
+    /// Streaming was cancelled after partial plain-text output (no tool drafts
+    /// started); the run ends immediately preserving the generated text. The
+    /// stream layer already emitted the single done("cancelled") event.
+    Cancelled(AgentRunResult),
 }
 
 pub(crate) async fn planning_step(
@@ -112,7 +116,29 @@ pub(crate) async fn planning_step(
         {
             Ok(stream) => {
                 if stream.cancelled {
-                    return Err("cancelled".to_string());
+                    let partial = sanitize_assistant_text_response(&stream.content);
+                    if partial.trim().is_empty() || planning_tool_drafts.has_started() {
+                        return Err("cancelled".to_string());
+                    }
+                    // Partial plain text was already streamed to the frontend and the
+                    // stream layer already emitted the single done("cancelled") event;
+                    // preserve the generated text instead of dropping the whole turn.
+                    let mut segment = planning_text_segment.clone();
+                    segment.phase = ChatMessageSegmentPhase::Plain;
+                    return Ok(PlanningStepOutcome::Cancelled(
+                        RunResultBuilder::new(host, env.ids(), partial)
+                            .segment(&segment)
+                            .api_reasoning(stream.reasoning.clone())
+                            .reasoning_tail(stream.reasoning)
+                            .outcome("cancelled")
+                            .finish(
+                                std::mem::take(&mut state.segment_builder),
+                                &state.planning_reasoning_parts,
+                                std::mem::take(&mut state.tool_records),
+                                std::mem::take(&mut state.generated_api_messages),
+                                std::mem::take(&mut state.steps),
+                            ),
+                    ));
                 }
                 Ok(ChatPlanningStep {
                     message: stream.to_openai_compatible_message(),

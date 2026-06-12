@@ -103,6 +103,7 @@ pub async fn run_agent_loop(
                 PlanningStepOutcome::ToolsUnsupported => break,
                 PlanningStepOutcome::RetryWithSkillTools => continue,
                 PlanningStepOutcome::DraftFailed(result) => return Ok(result),
+                PlanningStepOutcome::Cancelled(result) => return Ok(result),
                 PlanningStepOutcome::ToolCalls(planned) => planned,
             };
 

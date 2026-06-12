@@ -144,7 +144,27 @@ pub(crate) async fn synthesis_step(
                         ),
                 ));
             }
-            return Err("cancelled".to_string());
+            let partial = sanitize_assistant_text_response(&stream.content);
+            if partial.trim().is_empty() {
+                return Err("cancelled".to_string());
+            }
+            // Plain-text streaming was cancelled after partial output; the stream
+            // layer already emitted the single done("cancelled") event. Preserve
+            // the generated text instead of dropping the whole turn.
+            return Ok(SynthesisFlow::Early(
+                RunResultBuilder::new(host, env.ids(), partial)
+                    .segment(&response_segment)
+                    .api_reasoning(stream.reasoning.clone())
+                    .reasoning_tail(stream.reasoning)
+                    .outcome("cancelled")
+                    .finish(
+                        std::mem::take(&mut state.segment_builder),
+                        &state.planning_reasoning_parts,
+                        std::mem::take(&mut state.tool_records),
+                        std::mem::take(&mut state.generated_api_messages),
+                        std::mem::take(&mut state.steps),
+                    ),
+            ));
         }
         let final_reasoning_for_api = stream.reasoning.clone();
         let reasoning = merge_reasoning(&state.planning_reasoning_parts, stream.reasoning.clone());
