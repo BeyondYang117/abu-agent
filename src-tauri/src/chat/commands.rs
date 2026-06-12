@@ -1451,16 +1451,23 @@ async fn push_assistant_message(
     let stored_reasoning = reasoning_from_segments(&segments).or(reasoning);
     let generated_title = if let Some(user_content) = title_from_first_user {
         if conversation.messages.len() == 1 && conversation.title == "新对话" {
-            Some(
-                resolve_conversation_title(
-                    settings,
-                    state,
-                    &conversation.id,
-                    user_content,
-                    &stored_content,
+            // 被取消的首条回复不值得花一次模型调用生成标题（标题生成是一次
+            // 带 8s 超时的 LLM 请求，会显著拖慢"停止"后 invoke 的返回 / 输入框解锁）。
+            // 用本地启发式标题兜底；下一条正常回复或重命名仍可得到更好的标题。
+            if stream_outcome == Some("cancelled") {
+                Some(generate_title(user_content))
+            } else {
+                Some(
+                    resolve_conversation_title(
+                        settings,
+                        state,
+                        &conversation.id,
+                        user_content,
+                        &stored_content,
+                    )
+                    .await,
                 )
-                .await,
-            )
+            }
         } else {
             None
         }
