@@ -443,28 +443,44 @@ async fn call_skill_tool(
     skill_cache: Option<&mut crate::skills::SkillRunCache>,
 ) -> Result<McpToolCallResult, String> {
     let settings = state.settings_read().clone();
-    let registry = crate::skills::build_registry(app, &settings.chat_tools.skill_scan_paths)?;
     let skill_name = crate::skills::extract_skill_name(&arguments)?;
-    let record = crate::skills::lookup_skill(&registry, &skill_name)
-        .ok_or_else(|| format!("Skill not found: {skill_name}"))?;
+
+    // Resolve the SkillRecord, preferring the run-scoped cached registry (T1).
+    // Clone it out so we drop the immutable borrow on the cache before we need a
+    // mutable borrow for activate/read dispatch and T3 allowed-tools recording.
+    let mut skill_cache = skill_cache;
+    let record = if let Some(cache) = skill_cache.as_deref_mut() {
+        let registry = cache.registry_for(app, &settings.chat_tools.skill_scan_paths)?;
+        crate::skills::lookup_skill(registry, &skill_name)
+            .cloned()
+            .ok_or_else(|| format!("Skill not found: {skill_name}"))?
+    } else {
+        let registry =
+            crate::skills::build_registry(app, &settings.chat_tools.skill_scan_paths)?;
+        crate::skills::lookup_skill(&registry, &skill_name)
+            .cloned()
+            .ok_or_else(|| format!("Skill not found: {skill_name}"))?
+    };
     if !crate::settings::is_skill_enabled(&settings.chat_tools, &record.meta.id) {
         return Err(format!("Skill is disabled in Settings: {skill_name}"));
     }
 
     let content = match tool.name.as_str() {
         "skill_activate" => {
-            if let Some(cache) = skill_cache {
-                cache.activate_with_cache(record)
+            if let Some(cache) = skill_cache.as_deref_mut() {
+                // T3: a model-activated skill narrows the tool set on later rounds.
+                cache.record_activated_allowed_tools(&record.allowed_tools);
+                cache.activate_with_cache(&record)
             } else {
-                crate::skills::activate_skill(record)
+                crate::skills::activate_skill(&record)
             }
         }
         "skill_read_file" => {
             let relative_path = crate::skills::extract_relative_path(&arguments)?;
-            if let Some(cache) = skill_cache {
-                cache.read_file_with_cache(record, &relative_path)?
+            if let Some(cache) = skill_cache.as_deref_mut() {
+                cache.read_file_with_cache(&record, &relative_path)?
             } else {
-                crate::skills::read_skill_file(record, &relative_path)?
+                crate::skills::read_skill_file(&record, &relative_path)?
             }
         }
         "skill_run_script" => {
@@ -475,7 +491,7 @@ async fn call_skill_tool(
                 arguments.get("timeout_ms").and_then(|value| value.as_u64()),
             );
             crate::skills::run_skill_script(
-                record,
+                &record,
                 &relative_path,
                 &args,
                 timeout_ms,

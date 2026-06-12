@@ -19,9 +19,54 @@ use tauri::AppHandle;
 pub struct SkillRunCache {
     activated: HashSet<String>,
     read_files: HashMap<(String, String), String>,
+    /// Registry scanned at most once per run (T1). `None` until the first skill
+    /// tool call builds it; reused for every subsequent call in the same run.
+    registry: Option<SkillRegistry>,
+    /// Union of `allowed_tools` across every skill activated mid-run via
+    /// `skill_activate` (T3). The loop reads this to monotonically narrow the
+    /// tool set on subsequent planning rounds.
+    activated_allowed_tools: Vec<String>,
 }
 
 impl SkillRunCache {
+    /// Lazily build (once) and return the run-scoped skill registry. Subsequent
+    /// calls reuse the cached registry instead of re-scanning the skill dirs.
+    pub fn registry_for(
+        &mut self,
+        app: &AppHandle,
+        scan_paths: &[String],
+    ) -> Result<&SkillRegistry, String> {
+        self.registry_or_build(|| build_registry(app, scan_paths))
+    }
+
+    /// Build-once core of `registry_for`, factored out so the caching invariant
+    /// is testable without an `AppHandle`. The builder runs only on cache miss.
+    fn registry_or_build<F>(&mut self, build: F) -> Result<&SkillRegistry, String>
+    where
+        F: FnOnce() -> Result<SkillRegistry, String>,
+    {
+        if self.registry.is_none() {
+            self.registry = Some(build()?);
+        }
+        Ok(self
+            .registry
+            .as_ref()
+            .expect("registry was just populated"))
+    }
+
+    /// Accumulate a skill's allowed-tools into the run-wide set, de-duplicated.
+    pub fn record_activated_allowed_tools(&mut self, allowed_tools: &[String]) {
+        for tool in allowed_tools {
+            if !self.activated_allowed_tools.iter().any(|item| item == tool) {
+                self.activated_allowed_tools.push(tool.clone());
+            }
+        }
+    }
+
+    pub fn activated_allowed_tools(&self) -> &[String] {
+        &self.activated_allowed_tools
+    }
+
     pub fn activate_with_cache(&mut self, record: &SkillRecord) -> String {
         let key = record.meta.name.clone();
         if self.activated.contains(&key) {
@@ -507,5 +552,33 @@ mod tests {
         assert!(content.contains("skill_run_script"));
         assert!(content.len() < big.len());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skill_run_cache_builds_registry_once() {
+        use std::cell::Cell;
+        let mut cache = SkillRunCache::default();
+        let builds = Cell::new(0u32);
+        let build = || {
+            builds.set(builds.get() + 1);
+            Ok(SkillRegistry::default())
+        };
+
+        cache.registry_or_build(build).unwrap();
+        cache.registry_or_build(build).unwrap();
+        cache.registry_or_build(build).unwrap();
+
+        assert_eq!(builds.get(), 1, "registry must be built at most once per run");
+    }
+
+    #[test]
+    fn record_activated_allowed_tools_dedupes() {
+        let mut cache = SkillRunCache::default();
+        cache.record_activated_allowed_tools(&["read_file".to_string(), "web_search".to_string()]);
+        cache.record_activated_allowed_tools(&["web_search".to_string(), "run_python".to_string()]);
+        assert_eq!(
+            cache.activated_allowed_tools(),
+            ["read_file", "web_search", "run_python"]
+        );
     }
 }
