@@ -179,6 +179,10 @@ export default function Lens() {
   const floatingRebaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const focusReqIdRef = useRef(0)
   const motionSeqRef = useRef(0)
+  // 只在真正"打开/重入 Lens 会话"（enterSelect）时自增，与动画用的 motionSeqRef 区分开。
+  // closeAfterReset 用它判断"等待隐藏期间是否有新会话开启"，避免被关闭自身的
+  // setStage('select') 副作用（会再次 bump motionSeqRef）误判而跳过 lensClose。
+  const lensOpenSeqRef = useRef(0)
   const selectRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const selectRevealedRef = useRef(false)
   const captureHintEnabledRef = useRef(true)
@@ -300,6 +304,8 @@ export default function Lens() {
     const resetFrame = resetPayload.frame
     const resetFreezeFrameImageId = resetPayload.freezeFrameImageId ?? ''
     cancelPendingMotion()
+    // 标记一次真正的会话开启/重入：pending 的 closeAfterReset 看到它变化即放弃隐藏。
+    lensOpenSeqRef.current++
     const motionSeq = motionSeqRef.current
     fullscreenMetricsRef.current = null
     // 防御：reset 流程会 setMessages([]) + setStreaming(false)，理论上 messages.length===0 effect 不会进
@@ -732,10 +738,13 @@ export default function Lens() {
   }, [cancelPendingMotion, viewport, metrics])
 
   const closeAfterReset = useCallback(async () => {
+    // 记下关闭开始时的"会话代次"。resetBeforeHide 会 setStage('select') 进而触发动画
+    // effect 再次 bump motionSeqRef，所以不能用 motionSeqRef 当守卫（会被自身副作用误判）。
+    // 只有 enterSelect（真正的新会话开启/重入）才会改 lensOpenSeqRef——这才是该放弃隐藏的信号。
+    const closeOpenSeq = lensOpenSeqRef.current
     resetBeforeHide()
-    const closeMotionSeq = motionSeqRef.current
     await waitForFrames(2)
-    if (closeMotionSeq !== motionSeqRef.current) return
+    if (closeOpenSeq !== lensOpenSeqRef.current) return
     try { await api.lensClose() } catch (err) { console.error(err) }
   }, [resetBeforeHide])
 
