@@ -587,13 +587,31 @@ where
         .map_err(|err| format!("File mutation task failed: {err}"))?
 }
 
+/// 文件变更结果给模型的 diff 最多带多少行（对齐 clawspring 的 80 行裁剪）。
+const FILE_MUTATION_DIFF_MAX_LINES: usize = 80;
+
 fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallResult, String> {
     let summary = result.summary();
-    let content = if result.ok || result.warnings.is_empty() {
-        summary
-    } else {
-        format!("{}\n{}", summary, result.warnings.join("\n"))
-    };
+    let mut content = summary;
+    if !result.warnings.is_empty() {
+        content = format!("{}\n{}", content, result.warnings.join("\n"));
+    }
+    // 把裁剪后的 unified diff 直接回显给模型：模型在结果里"看到"自己实际改了什么，
+    // 能立即发现写歪。完整 diff 始终在 structured_content 里给前端渲染。
+    if !result.diff.trim().is_empty() {
+        let lines: Vec<&str> = result.diff.lines().collect();
+        if lines.len() > FILE_MUTATION_DIFF_MAX_LINES {
+            let clipped = lines[..FILE_MUTATION_DIFF_MAX_LINES].join("\n");
+            content = format!(
+                "{}\n\n{}\n[... diff clipped: showing first {FILE_MUTATION_DIFF_MAX_LINES} of {} lines ...]",
+                content,
+                clipped,
+                lines.len()
+            );
+        } else {
+            content = format!("{}\n\n{}", content, result.diff);
+        }
+    }
     let is_error = !result.ok;
     let structured = serde_json::to_value(&result)
         .map_err(|err| format!("Serialize file mutation result failed: {err}"))?;

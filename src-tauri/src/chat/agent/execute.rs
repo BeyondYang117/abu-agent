@@ -187,11 +187,14 @@ pub async fn execute_tool_call(
             record.artifacts = output.artifacts.clone();
             record.structured_content = output.structured_content.clone();
             record.result_preview = Some(limit_tool_text_for_model(
-                &format_tool_result_preview(&tool_content_with_structured_output(&output)),
+                &format_tool_result_preview(&tool_content_with_structured_output(
+                    &output,
+                    &tool.source,
+                )),
                 max_tool_output_chars,
             ));
             limit_tool_text_for_model(
-                &tool_content_with_structured_output(&output),
+                &tool_content_with_structured_output(&output, &tool.source),
                 max_tool_output_chars,
             )
         }
@@ -200,7 +203,7 @@ pub async fn execute_tool_call(
             record.structured_content = output.structured_content.clone();
             record.error = Some(truncate_chars(&output.content, 1000));
             limit_tool_text_for_model(
-                &tool_content_with_structured_output(&output),
+                &tool_content_with_structured_output(&output, &tool.source),
                 max_tool_output_chars,
             )
         }
@@ -464,7 +467,14 @@ fn validate_numeric_range(schema: &Value, value: &Value, path: &str) -> Result<(
     Ok(())
 }
 
-fn tool_content_with_structured_output(output: &McpToolCallResult) -> String {
+/// MCP 契约要求 structuredContent 进入模型可见文本（除非 text 已含同样 JSON）。
+/// native 工具不受此约束：它们的 content 都是为模型精心格式化的文本（read_file 的
+/// cat -n、文件变更的 summary+diff、todo/memory 的排版文本），再拼整包 JSON 只会
+/// 让 token 翻倍（read_file 行号化后 content 不再等于 JSON，旧逻辑会整包重复追加）。
+fn tool_content_with_structured_output(output: &McpToolCallResult, source: &str) -> String {
+    if source == "native" {
+        return output.content.clone();
+    }
     let Some(structured_content) = output.structured_content.as_ref() else {
         return output.content.clone();
     };
@@ -522,16 +532,24 @@ fn limit_tool_text_for_model(value: &str, max_chars: Option<usize>) -> String {
     }
 }
 
+/// 头+尾保留式截断：前 1/2 预算 + 后 1/4 预算，中间替换为截断说明。
+/// 尾部保留是关键——编译错误、测试失败摘要通常在长输出的末尾。
 fn truncate_tool_content_for_model(value: &str, max_chars: usize) -> String {
     let char_count = value.chars().count();
     if char_count <= max_chars {
         return value.to_string();
     }
-    let mut truncated = value.chars().take(max_chars).collect::<String>();
-    truncated.push_str(&format!(
-        "\n\n[Tool output truncated: original {char_count} chars, showing first {max_chars}.]"
-    ));
-    truncated
+    let head_chars = max_chars / 2;
+    let tail_chars = max_chars / 4;
+    let head: String = value.chars().take(head_chars).collect();
+    let tail: String = value
+        .chars()
+        .skip(char_count.saturating_sub(tail_chars))
+        .collect();
+    let omitted = char_count - head_chars - tail_chars;
+    format!(
+        "{head}\n\n[Tool output truncated: original {char_count} chars, showing first {head_chars} and last {tail_chars}; {omitted} chars omitted.]\n\n{tail}"
+    )
 }
 
 fn format_tool_result_preview(content: &str) -> String {
@@ -845,8 +863,46 @@ mod tests {
             record.structured_content.as_ref(),
             Some(&serde_json::json!({ "answer": 42 }))
         );
-        assert!(content.contains("structuredContent"));
+        // native 工具的 content 是为模型格式化的文本，不再追加整包 structuredContent
+        // JSON（record/前端仍持有完整 structured_content）。MCP 契约见下一个测试。
+        assert!(!content.contains("structuredContent"));
         assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// MCP structured-content 契约（agent-runtime spec）：MCP 结果的 structuredContent
+    /// 必须进入模型可见文本（除非文本已含同样 JSON）。
+    #[tokio::test]
+    async fn mcp_tool_content_still_carries_structured_content() {
+        let host = ExecuteTestHost::default();
+        let executor = ExecuteTestExecutor {
+            calls: AtomicUsize::new(0),
+            structured_content: Some(serde_json::json!({ "answer": 42 })),
+        };
+        let settings = Settings::default();
+        let mut tool = sensitive_test_tool();
+        tool.sensitive = false;
+        tool.source = "mcp".to_string();
+        tool.server_id = Some("server-1".to_string());
+        let call = test_pending_call(
+            "call_mcp",
+            "write_file",
+            serde_json::json!({ "path": "/tmp/out.txt", "content": "hello" }),
+        );
+
+        let (record, content) = execute_tool_call(
+            &host,
+            &executor,
+            &settings,
+            &test_execution_context(),
+            &tool,
+            call,
+            None,
+        )
+        .await;
+
+        assert!(matches!(record.status, ToolCallStatus::Success));
+        assert!(content.contains("structuredContent"));
+        assert!(content.contains("\"answer\":42"));
     }
 
     #[test]
@@ -877,13 +933,16 @@ mod tests {
 
     #[test]
     fn truncate_tool_content_for_model_marks_truncated_output() {
-        let content = "abcdef";
-        let truncated = truncate_tool_content_for_model(content, 3);
+        // 头+尾保留：12 字符预算 → 头 6 + 尾 3，中间替换为截断说明。
+        let content = "HEADxxOMITTEDyyTAIL_abc";
+        let truncated = truncate_tool_content_for_model(content, 12);
 
-        assert!(truncated.starts_with("abc"));
+        assert!(truncated.starts_with("HEADxx"));
+        assert!(truncated.ends_with("abc"));
         assert!(truncated.contains("Tool output truncated"));
-        assert!(truncated.contains("original 6 chars"));
-        assert!(truncated.contains("first 3"));
+        assert!(truncated.contains("original 23 chars"));
+        assert!(truncated.contains("first 6 and last 3"));
+        assert!(!truncated.contains("OMITTEDyy"));
     }
 
     #[test]
