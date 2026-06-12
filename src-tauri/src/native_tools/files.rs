@@ -509,10 +509,46 @@ fn is_code_like_path(path: &Path) -> bool {
     };
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "rb" | "go" | "java" | "kt"
-            | "swift" | "c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "php" | "sh" | "bash" | "zsh"
-            | "fish" | "ps1" | "sql" | "html" | "css" | "scss" | "less" | "vue" | "svelte"
-            | "json" | "yaml" | "yml" | "toml" | "xml" | "lua" | "zig" | "dart" | "scala"
+        "rs" | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "py"
+            | "rb"
+            | "go"
+            | "java"
+            | "kt"
+            | "swift"
+            | "c"
+            | "h"
+            | "cpp"
+            | "hpp"
+            | "cc"
+            | "cs"
+            | "php"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+            | "ps1"
+            | "sql"
+            | "html"
+            | "css"
+            | "scss"
+            | "less"
+            | "vue"
+            | "svelte"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "xml"
+            | "lua"
+            | "zig"
+            | "dart"
+            | "scala"
     )
 }
 
@@ -554,7 +590,10 @@ fn atomic_write_bytes(
     if target.exists() {
         use std::os::unix::fs::PermissionsExt;
         if let Ok(metadata) = fs::metadata(target) {
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(metadata.permissions().mode()));
+            let _ = fs::set_permissions(
+                &tmp,
+                fs::Permissions::from_mode(metadata.permissions().mode()),
+            );
         }
     }
     let _ = existing_text;
@@ -1388,7 +1427,10 @@ mod tests {
 
         let workspace = NativeToolWorkspace::global(&[]);
         let err = read_file(&workspace, &json!({ "path": file.to_string_lossy() })).unwrap_err();
-        assert!(err.contains("offset/limit"), "error should hint at windowed reads: {err}");
+        assert!(
+            err.contains("offset/limit"),
+            "error should hint at windowed reads: {err}"
+        );
 
         let result = read_file(
             &workspace,
@@ -1820,10 +1862,12 @@ mod tests {
         let moved = root.join("moved-link.txt");
         let metadata = fs::symlink_metadata(&moved).expect("moved metadata");
         assert!(metadata.file_type().is_symlink());
-        assert_eq!(fs::read_to_string(&outside).expect("read outside"), "outside");
+        assert_eq!(
+            fs::read_to_string(&outside).expect("read outside"),
+            "outside"
+        );
 
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
-
 }

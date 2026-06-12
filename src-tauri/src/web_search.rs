@@ -268,3 +268,71 @@ pub fn format_web_context(results: &[WebSearchResult]) -> String {
 
     lines.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{format_web_context, ExaSearchResponse, TavilySearchResponse, WebSearchResult};
+
+    #[test]
+    fn tavily_response_deserializes_results_and_answer() {
+        let raw = r#"{
+            "answer": "Sample answer",
+            "results": [
+                {
+                    "title": "Example",
+                    "url": "https://example.com",
+                    "content": "Snippet",
+                    "score": 0.91,
+                    "published_date": "2026-01-01"
+                }
+            ]
+        }"#;
+        let parsed: TavilySearchResponse = serde_json::from_str(raw).expect("tavily json");
+        assert_eq!(parsed.answer.as_deref(), Some("Sample answer"));
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.results[0].title, "Example");
+        assert_eq!(
+            parsed.results[0].published_date.as_deref(),
+            Some("2026-01-01")
+        );
+    }
+
+    #[test]
+    fn exa_response_deserializes_camel_case_fields() {
+        let raw = r#"{
+            "results": [
+                {
+                    "title": "Exa Result",
+                    "url": "https://exa.ai/article",
+                    "text": "Body text",
+                    "summary": "Summary text",
+                    "highlights": ["highlight one"],
+                    "score": 0.75,
+                    "publishedDate": "2026-02-02"
+                }
+            ]
+        }"#;
+        let parsed: ExaSearchResponse = serde_json::from_str(raw).expect("exa json");
+        assert_eq!(parsed.results.len(), 1);
+        let result = &parsed.results[0];
+        assert_eq!(result.title, "Exa Result");
+        assert_eq!(result.highlights, vec!["highlight one".to_string()]);
+        assert_eq!(result.published_date.as_deref(), Some("2026-02-02"));
+    }
+
+    #[test]
+    fn format_web_context_includes_numbered_sources_and_snippets() {
+        let context = format_web_context(&[WebSearchResult {
+            title: "Docs".to_string(),
+            url: "https://docs.example.com".to_string(),
+            content: "Helpful snippet".to_string(),
+            published_date: Some("2026-03-03".to_string()),
+            score: Some(0.5),
+        }]);
+        assert!(context.contains("Web search context:"));
+        assert!(context.contains("[1] Docs"));
+        assert!(context.contains("URL: https://docs.example.com"));
+        assert!(context.contains("Published: 2026-03-03"));
+        assert!(context.contains("Snippet: Helpful snippet"));
+    }
+}

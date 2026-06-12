@@ -163,3 +163,71 @@ pub fn parse_skill_record(
         allowed_tools,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_allowed_tools, parse_list_value, split_frontmatter};
+    use std::collections::HashMap;
+
+    #[test]
+    fn split_frontmatter_returns_raw_when_missing_delimiters() {
+        let raw = "# Title\n\nBody";
+        let (fm, body) = split_frontmatter(raw);
+        assert!(fm.is_empty());
+        assert_eq!(body, raw);
+    }
+
+    #[test]
+    fn split_frontmatter_parses_scalar_fields_and_body() {
+        let raw = "---\nname: PDF Skill\ndescription: Parse PDF files\n---\n\n# Instructions\n";
+        let (fm, body) = split_frontmatter(raw);
+        assert_eq!(fm.get("name").map(String::as_str), Some("PDF Skill"));
+        assert_eq!(
+            fm.get("description").map(String::as_str),
+            Some("Parse PDF files")
+        );
+        assert!(body.contains("# Instructions"));
+    }
+
+    #[test]
+    fn split_frontmatter_parses_list_style_recommended_tools() {
+        let raw = "---\nrecommended-tools:\n  - read_file\n  - write_file\n---\n\nBody\n";
+        let (fm, _) = split_frontmatter(raw);
+        assert_eq!(
+            fm.get("recommended-tools").map(String::as_str),
+            Some("read_file,write_file")
+        );
+    }
+
+    #[test]
+    fn parse_list_value_handles_bracketed_csv() {
+        assert_eq!(
+            parse_list_value(Some(&" [\"read_file\", 'write_file'] ".to_string())),
+            vec!["read_file".to_string(), "write_file".to_string()]
+        );
+        assert!(parse_list_value(None).is_empty());
+    }
+
+    #[test]
+    fn parse_allowed_tools_merges_recommended_mcp_and_allowed_tools() {
+        let mut frontmatter = HashMap::new();
+        frontmatter.insert(
+            "recommended-tools".to_string(),
+            "read_file,write_file".to_string(),
+        );
+        frontmatter.insert("mcp-tools".to_string(), "web_fetch".to_string());
+        frontmatter.insert(
+            "allowed-tools".to_string(),
+            "edit_file read_file".to_string(),
+        );
+        assert_eq!(
+            parse_allowed_tools(&frontmatter),
+            vec![
+                "edit_file".to_string(),
+                "read_file".to_string(),
+                "web_fetch".to_string(),
+                "write_file".to_string(),
+            ]
+        );
+    }
+}

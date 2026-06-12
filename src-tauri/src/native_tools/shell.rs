@@ -439,11 +439,8 @@ mod tests {
 
     #[test]
     fn normalize_run_command_rejects_cd_with_spaces() {
-        let err = normalize_run_command(
-            "cd /Users/zmair/ZM database/foo && npm install",
-            None,
-        )
-        .expect_err("spaced cd path should require cwd");
+        let err = normalize_run_command("cd /Users/zmair/ZM database/foo && npm install", None)
+            .expect_err("spaced cd path should require cwd");
 
         assert!(err.contains("Suggested cwd: /Users/zmair/ZM database/foo"));
         assert!(err.contains("Suggested command: npm install"));
