@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -98,5 +99,13 @@ export default defineConfig({
   plugins: [react(), pyodideAssetsPlugin()],
   build: {
     target: 'esnext',
+  },
+  test: {
+    environment: 'node',
+    environmentMatchGlobs: [
+      ['src/**/*.test.tsx', 'jsdom'],
+    ],
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

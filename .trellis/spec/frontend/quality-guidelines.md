@@ -95,9 +95,13 @@ Questions to answer:
 
 ## Testing Requirements
 
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
+- Pure utility modules under `src/**` must ship Vitest unit tests alongside the source file (`*.test.ts`).
+- React components with non-trivial UI state (Chat tool blocks, reasoning collapse, settings controls) should ship colocated `*.test.tsx` files using `@testing-library/react` with `jsdom`.
+- Shared test setup lives in [`src/test/setup.ts`](../../src/test/setup.ts); mock heavy dependencies (Tauri bridge, `ChatMarkdown`) at the test boundary instead of booting the full desktop shell.
+- Bug fixes in shared frontend utilities or UI regressions should include a targeted regression test when behavior is deterministic.
+- Every PR must pass CI: `npm run lint`, `npm run typecheck`, `npm run test`, and `cargo test --manifest-path src-tauri/Cargo.toml`.
+- Full Tauri window/hotkey/capture E2E remains manual smoke testing until a dedicated WebDriver job is added.
+- Backend-only changes should add or update targeted Rust unit tests in the touched module before merge when practical.
 
 ---
 
