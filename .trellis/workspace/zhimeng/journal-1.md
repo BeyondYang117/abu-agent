@@ -125,3 +125,39 @@ Scoped chat Thinking duration display to individual reasoning segments, kept per
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: P2-C：对话级 task 系统增强（四态/依赖边/owner/删除）
+
+**Date**: 2026-06-13
+**Task**: P2-C：对话级 task 系统增强（四态/依赖边/owner/删除）
+**Branch**: `main`
+
+### Summary
+
+P2 三线之一（task 系统）。原计划做 project 级共享持久化，实测后用户推翻——todo 是对话/任务的 agent 工作状态，跨同 project 对话共享会串扰，正确模型是 per-conversation 隔离（用 git reset 干净撤掉 project 路由层，不留 add+revert 噪音）。最终交付对话级增强：AgentTodoStatus 加 cancelled（不参与单 in_progress 不变量）、AgentTodoItem 加 description/blocks/blocked_by/owner、todo_update 支持 delete、normalized_state 写侧自动同步反向依赖边（A.blocks∋B⇔B.blocked_by∋A）+ 丢弃自指/无效/重复边、工具结果带 changed 字段级回执；前端 AgentTodoIndicator 渲染 cancelled(Skip/划线)/description/blocked-by。全部新字段 serde default 向后兼容。手工验证：对话隔离成立、反向边自动同步落盘正确。cargo 341 + vitest 72 全绿。spec agent-runtime.md 标注 per-conversation 隔离。P2 剩 MCP 持久连接、skill slash 触发两线待后续。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a1dcaacc` | (see git log) |
+| `93461155` | (see git log) |
+| `9b9d1f14` | (see git log) |
+| `48cbd409` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
