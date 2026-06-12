@@ -20,6 +20,8 @@ import {
   type ChatNativeToolsConfig,
   type ChatMemoryConfig,
   type ChatToolDefinition,
+  type McpServerState,
+  type McpServerStatePayload,
   defaultNativeTools,
   normalizeProviderApiFormat,
   type SkillMeta,
@@ -564,6 +566,11 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [selectedProviderId, setSelectedProviderId] = useState('')
   const [testingMcpServerId, setTestingMcpServerId] = useState<string | null>(null)
   const [mcpTestFeedback, setMcpTestFeedback] = useState<Record<string, { ok: boolean; message: string; tools: ChatToolDefinition[] }>>({})
+  // 持久连接状态：serverId → 最近一次 mcp-server-state 事件的状态。
+  const [mcpServerStates, setMcpServerStates] = useState<Record<string, McpServerState>>({})
+  const [reloadingMcpServerId, setReloadingMcpServerId] = useState<string | null>(null)
+  const [expandedMcpStderrIds, setExpandedMcpStderrIds] = useState<string[]>([])
+  const [mcpStderrTails, setMcpStderrTails] = useState<Record<string, string>>({})
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skills, setSkills] = useState<SkillMeta[]>([])
   const [expandedSkillIds, setExpandedSkillIds] = useState<string[]>([])
@@ -1243,6 +1250,69 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       setTestingMcpServerId(null)
     }
   }, [lang, settings?.chatTools?.toolTimeoutMs])
+
+  const handleReloadMcpServer = useCallback(async (server: ChatMcpServer) => {
+    setReloadingMcpServerId(server.id)
+    try {
+      await api.chatMcpReloadServer(server.id)
+      // 重连后立即拉一次状态快照（Disconnected → 下次调用透明重连）。
+      const status = await api.chatMcpServerStatus(server.id)
+      setMcpServerStates((prev) => ({ ...prev, [server.id]: status.state }))
+      setMcpStderrTails((prev) => ({ ...prev, [server.id]: status.stderrTail }))
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setReloadingMcpServerId(null)
+    }
+  }, [])
+
+  // 订阅持久连接状态事件（连接/断开/错误），实时更新状态点。
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | null = null
+    void api.onMcpServerState((payload: McpServerStatePayload) => {
+      if (cancelled) return
+      setMcpServerStates((prev) => ({ ...prev, [payload.serverId]: payload.state }))
+    }).then((fn) => {
+      if (cancelled) fn()
+      else unlisten = fn
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
+  // 进入 MCP 标签页时拉一次各 server 的状态快照（含 stderr 尾巴）。
+  useEffect(() => {
+    if (activeTab !== 'mcp' || !settings) return
+    let cancelled = false
+    const servers = settings.chatTools?.servers || []
+    void Promise.all(
+      servers.map(async (server) => {
+        try {
+          const status = await api.chatMcpServerStatus(server.id)
+          return { id: server.id, status }
+        } catch {
+          return null
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return
+      const states: Record<string, McpServerState> = {}
+      const tails: Record<string, string> = {}
+      for (const entry of results) {
+        if (!entry) continue
+        states[entry.id] = entry.status.state
+        tails[entry.id] = entry.status.stderrTail
+      }
+      setMcpServerStates((prev) => ({ ...prev, ...states }))
+      setMcpStderrTails((prev) => ({ ...prev, ...tails }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, settings])
 
   const handleImportMcpJson = useCallback(async () => {
     if (!settings) return
@@ -3233,6 +3303,27 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                           } satisfies ChatToolDefinition)),
                       ]
                       const isHttpTransport = server.transport === 'streamable_http'
+                      const liveState = mcpServerStates[server.id]
+                      const stateKind = liveState?.kind
+                      const stateDotClass =
+                        stateKind === 'connected'
+                          ? 'on'
+                          : stateKind === 'connecting'
+                            ? 'warn'
+                            : stateKind === 'error'
+                              ? 'err'
+                              : 'off'
+                      const stateLabel =
+                        stateKind === 'connected'
+                          ? (lang === 'zh' ? '已连接' : 'Connected')
+                          : stateKind === 'connecting'
+                            ? (lang === 'zh' ? '连接中' : 'Connecting')
+                            : stateKind === 'error'
+                              ? (lang === 'zh' ? '错误' : 'Error')
+                              : (lang === 'zh' ? '未连接' : 'Disconnected')
+                      const stateError = liveState?.kind === 'error' ? liveState.message : ''
+                      const stderrTail = mcpStderrTails[server.id] || ''
+                      const stderrExpanded = expandedMcpStderrIds.includes(server.id)
                       return (
                         <div key={server.id} className="kv-panel">
                           <div className="mb-2 flex items-center gap-2">
@@ -3357,6 +3448,49 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                               <span className="kv-row-desc">{lang === 'zh' ? '当前暴露全部工具。' : 'All tools are exposed.'}</span>
                             )}
                           </div>
+                          {/* 持久连接状态面板：状态点 / lastError / 折叠 stderr / 重连按钮 */}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 kv-row-desc">
+                              <span className={`kv-provider-dot ${stateDotClass}`} />
+                              {stateLabel}
+                            </span>
+                            <button
+                              type="button"
+                              className="kv-btn sm"
+                              disabled={reloadingMcpServerId === server.id}
+                              onClick={() => void handleReloadMcpServer(server)}
+                              data-tauri-drag-region="false"
+                            >
+                              <RefreshCw size={10} className={reloadingMcpServerId === server.id ? 'animate-spin' : ''} />
+                              {lang === 'zh' ? '重连' : 'Reconnect'}
+                            </button>
+                            {stderrTail.trim() && (
+                              <button
+                                type="button"
+                                className="kv-btn sm ghost"
+                                onClick={() => setExpandedMcpStderrIds((prev) => (
+                                  prev.includes(server.id)
+                                    ? prev.filter((id) => id !== server.id)
+                                    : [...prev, server.id]
+                                ))}
+                                data-tauri-drag-region="false"
+                              >
+                                {stderrExpanded
+                                  ? (lang === 'zh' ? '隐藏日志' : 'Hide log')
+                                  : (lang === 'zh' ? '查看 stderr' : 'View stderr')}
+                              </button>
+                            )}
+                          </div>
+                          {stateError && (
+                            <p className="mt-1 kv-row-desc break-words whitespace-pre-wrap" style={{ color: 'var(--danger)' }}>
+                              {stateError}
+                            </p>
+                          )}
+                          {stderrExpanded && stderrTail.trim() && (
+                            <pre className="mt-1 max-h-40 overflow-auto rounded bg-black/5 dark:bg-white/5 p-2 text-[11px] leading-snug whitespace-pre-wrap break-words">
+                              {stderrTail}
+                            </pre>
+                          )}
                           {knownTools.length > 0 && (
                             <div className="mt-2 flex flex-wrap gap-1.5">
                               {knownTools.map((tool) => {

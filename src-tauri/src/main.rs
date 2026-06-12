@@ -362,6 +362,8 @@ fn main() {
             mcp::registry::chat_mcp_list_tools,
             mcp::registry::chat_mcp_test_server,
             mcp::registry::chat_mcp_import_json,
+            mcp::registry::chat_mcp_server_status,
+            mcp::registry::chat_mcp_reload_server,
             skills::chat_skills_list,
             skills::chat_skills_read,
             skills::chat_skills_import,
