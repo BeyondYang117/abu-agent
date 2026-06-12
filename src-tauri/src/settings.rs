@@ -714,9 +714,17 @@ pub const CHAT_TOOL_DEFAULT_ROUNDS: u32 = 20;
 pub const CHAT_TOOL_MIN_ROUNDS: u32 = 1;
 pub const CHAT_TOOL_MAX_ROUNDS: u32 = 100;
 pub const SKILL_SCRIPT_MIN_TIMEOUT_MS: u64 = 120_000;
+/// MCP 持久连接空闲超时下限：太小会让长连接频繁回收失去意义。
+pub const MCP_IDLE_TIMEOUT_MIN_MS: u64 = 60_000;
+/// MCP 持久连接空闲超时上限：避免死连接长期占用子进程。
+pub const MCP_IDLE_TIMEOUT_MAX_MS: u64 = 24 * 60 * 60 * 1_000;
 
 fn default_chat_tool_timeout_ms() -> u64 {
     60_000
+}
+
+fn default_mcp_idle_timeout_ms() -> u64 {
+    600_000
 }
 
 fn default_chat_max_tool_rounds() -> Option<u32> {
@@ -749,6 +757,9 @@ pub struct ChatToolsConfig {
     pub max_tool_rounds: Option<u32>,
     #[serde(default = "default_chat_tool_timeout_ms")]
     pub tool_timeout_ms: u64,
+    /// MCP 持久连接空闲超时（ms）：会话 last_used 超过此值后被 reaper 回收，下次调用透明重连。
+    #[serde(default = "default_mcp_idle_timeout_ms")]
+    pub mcp_idle_timeout_ms: u64,
     #[serde(default)]
     pub max_tool_output_chars: Option<usize>,
     #[serde(default = "default_chat_approval_policy")]
@@ -768,6 +779,7 @@ impl Default for ChatToolsConfig {
             disabled_skill_ids: Vec::new(),
             max_tool_rounds: default_chat_max_tool_rounds(),
             tool_timeout_ms: default_chat_tool_timeout_ms(),
+            mcp_idle_timeout_ms: default_mcp_idle_timeout_ms(),
             max_tool_output_chars: None,
             approval_policy: default_chat_approval_policy(),
             native_tools: ChatNativeToolsConfig::default(),
@@ -1334,6 +1346,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .chat_tools
         .tool_timeout_ms
         .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS);
+    settings.chat_tools.mcp_idle_timeout_ms = settings
+        .chat_tools
+        .mcp_idle_timeout_ms
+        .clamp(MCP_IDLE_TIMEOUT_MIN_MS, MCP_IDLE_TIMEOUT_MAX_MS);
     settings.chat_tools.max_tool_output_chars = None;
     if !matches!(
         settings.chat_tools.approval_policy.trim(),

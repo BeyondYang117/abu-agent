@@ -18,6 +18,21 @@ use super::types::{ChatToolArtifact, McpTool, McpToolCallResult};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// JSON-RPC `initialize` params shared by every transport and the persistent
+/// session manager so handshake fields stay in one place.
+pub(crate) fn initialize_params() -> Value {
+    serde_json::json!({
+        "protocolVersion": MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {
+            "name": "Kivio",
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+    })
+}
+
+pub(crate) const MCP_PROTOCOL_VERSION_HEADER: &str = MCP_PROTOCOL_VERSION;
+
 pub struct StdioMcpClient {
     server: ChatMcpServer,
     timeout: Duration,
@@ -329,7 +344,7 @@ struct HttpMcpResponse {
     session_id: Option<String>,
 }
 
-async fn read_sse_json_rpc_response(
+pub(crate) async fn read_sse_json_rpc_response(
     mut response: reqwest::Response,
     expected_id: &str,
 ) -> Result<Value, String> {
@@ -437,7 +452,7 @@ impl StdioSession {
     }
 }
 
-fn clean_env(env: &HashMap<String, String>) -> Vec<(String, String)> {
+pub(crate) fn clean_env(env: &HashMap<String, String>) -> Vec<(String, String)> {
     env.iter()
         .filter_map(|(key, value)| {
             let key = key.trim();
@@ -450,7 +465,7 @@ fn clean_env(env: &HashMap<String, String>) -> Vec<(String, String)> {
         .collect()
 }
 
-fn http_headers(headers: &HashMap<String, String>) -> Result<HeaderMap, String> {
+pub(crate) fn http_headers(headers: &HashMap<String, String>) -> Result<HeaderMap, String> {
     let mut out = HeaderMap::new();
     for (key, value) in headers {
         let key = key.trim();
@@ -486,7 +501,7 @@ fn handle_sse_line(
     Ok(None)
 }
 
-fn parse_sse_json_rpc(text: &str, expected_id: &str) -> Result<Value, String> {
+pub(crate) fn parse_sse_json_rpc(text: &str, expected_id: &str) -> Result<Value, String> {
     let mut data_lines = Vec::new();
     for line in text.lines() {
         if let Some(value) = handle_sse_line(line, &mut data_lines, expected_id)? {
@@ -627,7 +642,7 @@ fn image_block_to_artifact(item: &Value, index: usize) -> Option<ChatToolArtifac
     })
 }
 
-fn compact_json(value: &Value, max_chars: usize) -> String {
+pub(crate) fn compact_json(value: &Value, max_chars: usize) -> String {
     let raw = serde_json::to_string(value).unwrap_or_else(|_| String::new());
     raw.chars().take(max_chars).collect()
 }

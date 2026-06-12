@@ -164,6 +164,7 @@ fn main() {
                 lens_freeze_frame_image_id: Mutex::new(None),
                 key_cooldowns: Mutex::new(HashMap::new()),
                 active_key_idx: Mutex::new(HashMap::new()),
+                mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),
                 usage_dir,
                 http: build_http_client(),
                 #[cfg(target_os = "macos")]
@@ -213,6 +214,59 @@ fn main() {
                     }
                 }
             });
+
+            // MCP 持久连接空闲回收 reaper：每 60s 扫描连接池，回收 last_used 超过
+            // 设置 mcp_idle_timeout_ms 的会话（Drop 杀子进程），发 Disconnected 事件。
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut ticker = tokio::time::interval(Duration::from_secs(60));
+                    loop {
+                        ticker.tick().await;
+                        let state: State<AppState> = app_handle.state();
+                        let idle_timeout = state.mcp_idle_timeout();
+                        let evicted = state.mcp_reap_idle(idle_timeout).await;
+                        for (server_id, _) in evicted {
+                            let _ = app_handle.emit(
+                                "mcp-server-state",
+                                serde_json::json!({
+                                    "serverId": server_id,
+                                    "state": { "kind": "disconnected" },
+                                }),
+                            );
+                        }
+                    }
+                });
+            }
+
+            // 启动期并行预热：对每个已启用的 MCP server 建立持久连接（非阻塞）。
+            // 失败仅置 Error 态（mcp_get_or_connect 内部已发事件），不影响启动。
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state: State<AppState> = app_handle.state();
+                    let settings = state.settings_read().clone();
+                    if !settings.chat_tools.enabled {
+                        return;
+                    }
+                    let servers: Vec<_> = settings
+                        .chat_tools
+                        .servers
+                        .iter()
+                        .filter(|server| server.enabled)
+                        .cloned()
+                        .collect();
+                    let mut warmups = tokio::task::JoinSet::new();
+                    for server in servers {
+                        let app_handle = app_handle.clone();
+                        warmups.spawn(async move {
+                            let state: State<AppState> = app_handle.state();
+                            let _ = state.mcp_get_or_connect(&app_handle, &server).await;
+                        });
+                    }
+                    while warmups.join_next().await.is_some() {}
+                });
+            }
 
             // 如果不是通过自启动启动的，则默认打开 AI 客户端。
             if !launched_from_autostart {
@@ -319,6 +373,10 @@ fn main() {
             tauri::RunEvent::ExitRequested { api, code, .. } => {
                 if code.is_none() {
                     api.prevent_exit();
+                } else {
+                    // 真正退出：同步排干 MCP 连接池，杀掉所有持久子进程，避免孤儿进程。
+                    let state: State<AppState> = app_handle.state();
+                    tauri::async_runtime::block_on(state.mcp_disconnect_all());
                 }
             }
             #[cfg(target_os = "macos")]
