@@ -368,13 +368,6 @@ pub fn lookup_skill<'a>(registry: &'a SkillRegistry, name: &str) -> Option<&'a S
     registry.find(name)
 }
 
-pub fn build_registry_for_app(
-    app: &AppHandle,
-    scan_paths: &[String],
-) -> Result<SkillRegistry, String> {
-    build_registry(app, scan_paths)
-}
-
 pub fn extract_skill_name(arguments: &Value) -> Result<String, String> {
     arguments
         .get("name")
