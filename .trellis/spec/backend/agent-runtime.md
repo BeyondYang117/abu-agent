@@ -342,20 +342,22 @@ The backend canonicalizes the path and allows only files under `~/Kivio/runs`.
 
 ### 2. Signatures
 
-- Persistent model: `Conversation.agent_todo_state: AgentTodoState` with `#[serde(default)]` for old conversation JSON.
+- Persistent model: `Conversation.agent_todo_state: AgentTodoState` with `#[serde(default)]` for old conversation JSON. **Task state is per-conversation (isolated)** — it is never shared across conversations, including conversations in the same project.
 - State shape: `AgentTodoState { items: Vec<AgentTodoItem>, updated_at: i64 }`.
-- Item shape: `AgentTodoItem { id: String, content: String, status: AgentTodoStatus }`.
-- Status enum: `pending | in_progress | completed`.
-- Native tools: `todo_write({ todos })` replaces the full list; `todo_update({ id, content?, status? })` updates one existing item.
+- Item shape: `AgentTodoItem { id, content, description?, status, blocks: Vec<String>, blocked_by: Vec<String>, owner? }` — `content` is the one-line subject (name kept for back-compat); `description`/`owner`/edges are optional, all serde-default.
+- Status enum: `pending | in_progress | completed | cancelled`. `cancelled` does not participate in the single-`in_progress` invariant.
+- Native tools: `todo_write({ todos })` replaces the full list; `todo_update({ id, content?, description?, status?, blocks?, blocked_by?, owner?, delete? })` updates or (with `delete: true`) removes one item.
 - Tauri event: `chat-todo` payload `{ conversationId, todoState }`.
 
 ### 3. Contracts
 
-- Canonical todo state lives on `Conversation`, not only in tool records or message metadata.
+- Canonical todo state lives on `Conversation`, not only in tool records or message metadata. It is conversation-scoped: switching conversations shows that conversation's own list (an unrelated conversation must not inherit another's tasks).
+- **Dependency edges**: `normalized_state` auto-syncs reverse edges (`A.blocks ∋ B ⇔ B.blocked_by ∋ A`), drops self/invalid/duplicate edges, and cleans edges pointing at deleted items. Edges are data-model only this phase — they do NOT block marking a `blocked_by` item `in_progress` (execution constraints + the subagent consumer of `owner` land in P3).
+- Tool results carry `structured_content { todoState, changed }`; `changed` is a field-level receipt of what this call modified.
 - Current todo state must be injected into the model system/runtime prompt before `build_chat_api_messages`, and `compute_context_state` must include the same prompt segment for token estimates.
 - Todo tools are appended by the Chat runtime when the provider supports tool calls; they are not governed by user MCP/native-tool settings, assistant tool presets, or data connector filters.
 - Todo tools are serial state writes. They bypass approval but must not be added to the native parallel-safe set.
-- Tool results must include `structured_content` with the latest `todoState`.
+- Task state remains agent-owned and user-read-only this phase (a user edit entry point is deferred to P4).
 - The frontend treats todo state as read-only conversation data and updates it from `chat-todo`.
 - If a tool writes conversation state during `run_agent_loop`, `complete_assistant_reply` must reload/merge the latest todo state before saving the assistant message, otherwise the older in-memory `Conversation` can overwrite the tool update.
 
