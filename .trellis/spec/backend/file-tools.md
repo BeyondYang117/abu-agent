@@ -48,6 +48,7 @@ Mutation tools (`write_file` + path tools gated by `native_tools.write_file`; `e
 - `read_file` without `offset`/`limit` reads whole files up to `MAX_READ_FILE_BYTES` (2 MiB); larger files return an error that tells the model to pass `offset`/`limit`.
 - With `offset`/`limit`, files of any size are read as a line window via streaming (`read_file_window_streaming`); the window itself is capped at 2 MiB and reports a warning plus `next_offset` when capped. Oversized reads with `offset` but no `limit` default to 2000 lines.
 - Results report `total_lines`, `start_line`, `end_line`, `truncated`, `next_offset`, and `read_state.scope` (`full`/`partial`) so the model can continue reading.
+- **Model-facing content is `cat -n` text, not JSON.** `read_file_tool_result` builds the tool result `content` as a one-line metadata header (`path — lines A-B of N[ (truncated; continue with offset=K)]`) followed by `right-aligned-line-number<TAB>line`, numbered from `start_line`. The full `ReadFileResult` stays in `structured_content` for the frontend `ToolCallBlock` (unchanged — the frontend never parses the text `content` as JSON). The line numbers are display-only; the `read_file` and `edit_file` tool descriptions instruct the model not to include the line-number prefix in `edit_file` `old_string`.
 
 #### Edit
 
@@ -78,7 +79,7 @@ Mutation tools (`write_file` + path tools gated by `native_tools.write_file`; `e
 
 ### 6. Tests Required
 
-- `read_file`: whole-file read, partial window metadata, oversized-file rejection without window, oversized-file windowed read.
+- `read_file`: whole-file read, partial window metadata, oversized-file rejection without window, oversized-file windowed read, and `read_file_tool_result` rendering line-numbered `cat -n` text (numbered from `start_line`, truncation/next-offset in the header) while preserving the full `structured_content`.
 - `edit_file`: unique-match enforcement, `replace_all` stats, no-op warning, and line-ending normalization (LF `old_string` matches a CRLF file and the write keeps CRLF; a CRLF/LF-only change is a no-op; an LF file stays LF).
 - `write_file`: structured diff metadata, non-UTF-8 overwrite warning, placeholder rejection on existing code files, placeholder acceptance for new files and prose files.
 - Tool exposure: `list_native_builtin_tool_defs` write gate exposes exactly `write_file` + path tools; edit gate exposes exactly `edit_file`; none of the removed names appear.

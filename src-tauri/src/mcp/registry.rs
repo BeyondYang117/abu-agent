@@ -607,10 +607,13 @@ fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallRe
 }
 
 pub(super) fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCallResult, String> {
+    // structured_content 保留完整 ReadFileResult 给前端 ToolCallBlock 渲染（不变）。
     let structured = serde_json::to_value(&result)
         .map_err(|err| format!("Serialize read_file result failed: {err}"))?;
-    let content = serde_json::to_string(&structured)
-        .map_err(|err| format!("Serialize read_file content failed: {err}"))?;
+    // 模型看到的 content 改成 cat -n 风格（`行号\t内容` + 精简头），行号便于模型引用并构造
+    // 后续 edit_file。行号仅供参考、不属于文件内容；read_file/edit_file 描述里已说明
+    // old_string 不要带行号前缀。
+    let content = format_read_file_for_model(&result);
     Ok(McpToolCallResult {
         content,
         is_error: false,
@@ -618,6 +621,36 @@ pub(super) fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCal
         artifacts: Vec::new(),
         structured_content: Some(structured),
     })
+}
+
+/// 把 ReadFileResult 渲染成模型友好的 `cat -n` 文本：一行精简元数据头 + `右对齐行号\t原文`。
+fn format_read_file_for_model(result: &ReadFileResult) -> String {
+    let mut out = format!(
+        "{} — lines {}-{} of {}",
+        result.path, result.start_line, result.end_line, result.total_lines
+    );
+    if result.truncated {
+        match result.next_offset {
+            Some(next) => out.push_str(&format!(" (truncated; continue with offset={next})")),
+            None => out.push_str(" (truncated)"),
+        }
+    }
+    for warning in &result.warnings {
+        out.push_str("\n! ");
+        out.push_str(warning);
+    }
+    if !result.content.is_empty() {
+        let start = result.start_line.max(1);
+        out.push('\n');
+        let numbered: Vec<String> = result
+            .content
+            .lines()
+            .enumerate()
+            .map(|(i, line)| format!("{:>6}\t{}", start + i, line))
+            .collect();
+        out.push_str(&numbered.join("\n"));
+    }
+    out
 }
 
 fn resolve_native_workspace(
@@ -802,9 +835,36 @@ mod tests {
         assert_eq!(structured["truncated"], false);
         assert_eq!(structured["file_size"], 10);
         assert_eq!(structured["read_state"]["scope"], "full");
+        // 模型看到的 content 是 cat -n 文本（不再是 JSON），结构化内容仍完整保留给前端。
         assert_eq!(
-            serde_json::from_str::<Value>(&output.content).expect("content JSON"),
-            *structured
+            output.content,
+            "src/App.tsx — lines 1-2 of 2\n     1\talpha\n     2\tbeta"
+        );
+    }
+
+    #[test]
+    fn read_file_tool_result_numbers_from_offset_and_flags_truncation() {
+        let result = ReadFileResult {
+            path: "src/big.txt".to_string(),
+            resolved_path: "/tmp/project/src/big.txt".to_string(),
+            content: "line ten\nline eleven".to_string(),
+            total_lines: 100,
+            start_line: 10,
+            end_line: 11,
+            truncated: true,
+            file_size: 4096,
+            next_offset: Some(12),
+            read_state: ReadFileState {
+                scope: "partial".to_string(),
+                mtime: Some(1),
+                already_read: false,
+            },
+            warnings: Vec::new(),
+        };
+        let output = read_file_tool_result(result).expect("tool result");
+        assert_eq!(
+            output.content,
+            "src/big.txt — lines 10-11 of 100 (truncated; continue with offset=12)\n    10\tline ten\n    11\tline eleven"
         );
     }
 }

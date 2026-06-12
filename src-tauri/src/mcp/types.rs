@@ -302,7 +302,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__read_file".to_string(),
         name: "read_file".to_string(),
-        description: "Read a local text file. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading.".to_string(),
+        description: "Read a local text file. Output is line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit_file old_string. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -439,7 +439,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__edit_file".to_string(),
         name: "edit_file".to_string(),
-        description: "Replace old_string with new_string in one file. old_string must match the current file content exactly and uniquely; set replace_all=true to replace every occurrence. Prefer this over write_file for small edits. Returns structured file mutation metadata including diff stats.".to_string(),
+        description: "Replace old_string with new_string in one file. old_string must match the current file content exactly and uniquely (copy it from read_file output WITHOUT the leading line-number prefix); set replace_all=true to replace every occurrence. Prefer this over write_file for small edits. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
