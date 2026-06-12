@@ -58,6 +58,10 @@ const CHAT_TOOL_MIN_ROUNDS = 1
 const CHAT_TOOL_MAX_ROUNDS = 100
 const CHAT_TOOL_ROUND_PRESETS = [5, 10, 20, 50, 100]
 const CHAT_TOOL_TIMEOUT_PRESETS_MS = [30_000, 60_000, 120_000, 300_000]
+// MCP 持久连接空闲超时预设（ms）。后端钳制范围 60s..24h，默认 10 分钟。
+const MCP_IDLE_TIMEOUT_PRESETS_MS = [60_000, 300_000, 600_000, 1_800_000, 3_600_000]
+const MCP_IDLE_TIMEOUT_MIN_MS = 60_000
+const MCP_IDLE_TIMEOUT_MAX_MS = 24 * 60 * 60 * 1_000
 const textEncoder = new TextEncoder()
 
 function utf8ByteLength(value: string): number {
@@ -74,6 +78,12 @@ function clampToolTimeoutMs(value: string | number | null | undefined): number {
   const parsed = Number(value ?? 60_000)
   if (!Number.isFinite(parsed)) return 60_000
   return Math.min(300_000, Math.max(1_000, Math.round(parsed)))
+}
+
+function clampMcpIdleTimeoutMs(value: string | number | null | undefined): number {
+  const parsed = Number(value ?? 600_000)
+  if (!Number.isFinite(parsed)) return 600_000
+  return Math.min(MCP_IDLE_TIMEOUT_MAX_MS, Math.max(MCP_IDLE_TIMEOUT_MIN_MS, Math.round(parsed)))
 }
 
 function formatToolRoundsLabel(rounds: number, lang: string): string {
@@ -278,6 +288,7 @@ function defaultChatTools(): ChatToolsConfig {
     disabledSkillIds: [],
     maxToolRounds: CHAT_TOOL_DEFAULT_ROUNDS,
     toolTimeoutMs: 60_000,
+    mcpIdleTimeoutMs: 600_000,
     maxToolOutputChars: null,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
     nativeTools: defaultNativeTools(),
@@ -3239,6 +3250,32 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                               }]
                             : []),
                           ...CHAT_TOOL_TIMEOUT_PRESETS_MS.map((ms) => ({
+                            value: String(ms),
+                            label: formatToolTimeoutLabel(ms, lang),
+                          })),
+                        ]}
+                      />
+                    </FieldBlock>
+                    <FieldBlock
+                      label={lang === 'zh' ? 'MCP 空闲超时' : 'MCP idle timeout'}
+                      description={lang === 'zh'
+                        ? 'MCP 持久连接空闲超过此值后回收子进程，下次调用透明重连。'
+                        : 'Persistent MCP connections idle beyond this are recycled; the next call reconnects transparently.'}
+                    >
+                      <Select
+                        className="w-full"
+                        value={String(clampMcpIdleTimeoutMs(chatTools.mcpIdleTimeoutMs))}
+                        onChange={(value) => updateChatTools({ mcpIdleTimeoutMs: clampMcpIdleTimeoutMs(value) })}
+                        options={[
+                          ...(!MCP_IDLE_TIMEOUT_PRESETS_MS.includes(clampMcpIdleTimeoutMs(chatTools.mcpIdleTimeoutMs))
+                            ? [{
+                                value: String(clampMcpIdleTimeoutMs(chatTools.mcpIdleTimeoutMs)),
+                                label: lang === 'zh'
+                                  ? `当前 ${formatToolTimeoutLabel(clampMcpIdleTimeoutMs(chatTools.mcpIdleTimeoutMs), lang)}`
+                                  : `Current ${formatToolTimeoutLabel(clampMcpIdleTimeoutMs(chatTools.mcpIdleTimeoutMs), lang)}`,
+                              }]
+                            : []),
+                          ...MCP_IDLE_TIMEOUT_PRESETS_MS.map((ms) => ({
                             value: String(ms),
                             label: formatToolTimeoutLabel(ms, lang),
                           })),

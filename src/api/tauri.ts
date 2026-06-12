@@ -430,6 +430,8 @@ export type ChatToolsConfig = {
   disabledSkillIds?: string[]
   maxToolRounds: number | null
   toolTimeoutMs: number
+  /** MCP 持久连接空闲超时（ms）：会话空闲超过此值后被回收，下次调用透明重连。 */
+  mcpIdleTimeoutMs?: number
   maxToolOutputChars: number | null
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
   nativeTools: ChatNativeToolsConfig
@@ -789,6 +791,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     disabledSkillIds: Array.isArray(current.disabledSkillIds) ? current.disabledSkillIds : [],
     maxToolRounds: normalizeMaxToolRounds(current.maxToolRounds),
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
+    mcpIdleTimeoutMs: current.mcpIdleTimeoutMs ?? 600_000,
     maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     nativeTools: {

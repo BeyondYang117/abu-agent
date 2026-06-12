@@ -2247,6 +2247,38 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_settings_clamps_mcp_idle_timeout_and_keeps_default() {
+        // 默认值保持不变（在范围内）。
+        assert_eq!(
+            ChatToolsConfig::default().mcp_idle_timeout_ms,
+            600_000
+        );
+
+        // 太小钳到下限 60s。
+        let mut settings = Settings::default();
+        settings.chat_tools.mcp_idle_timeout_ms = 1_000;
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.mcp_idle_timeout_ms,
+            MCP_IDLE_TIMEOUT_MIN_MS
+        );
+
+        // 太大钳到上限 24h。
+        let mut settings = Settings::default();
+        settings.chat_tools.mcp_idle_timeout_ms = u64::MAX;
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.mcp_idle_timeout_ms,
+            MCP_IDLE_TIMEOUT_MAX_MS
+        );
+
+        // 缺省（旧 settings.json 无此字段）走 serde default 600000。
+        let cfg: ChatToolsConfig =
+            serde_json::from_str("{}").expect("ChatToolsConfig defaults from empty object");
+        assert_eq!(cfg.mcp_idle_timeout_ms, 600_000);
+    }
+
+    #[test]
     fn sanitize_settings_keeps_empty_models_for_unfetched_provider() {
         let mut s = Settings::default();
         s.providers.push(ModelProvider {
