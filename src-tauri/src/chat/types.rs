@@ -67,6 +67,7 @@ pub enum AgentTodoStatus {
     Pending,
     InProgress,
     Completed,
+    Cancelled,
 }
 
 impl Default for AgentTodoStatus {
@@ -78,9 +79,22 @@ impl Default for AgentTodoStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentTodoItem {
     pub id: String,
+    /// 一行 subject（保留字段名 `content` 向后兼容；概念上是任务标题）。
     pub content: String,
+    /// 可选的详细描述（subject/description 分离）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default)]
     pub status: AgentTodoStatus,
+    /// 本条完成后才能开始的任务 id（正向依赖边）。写侧自动同步对端 blocked_by。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<String>,
+    /// 必须先完成才能开始本条的任务 id（反向依赖边）。写侧自动同步对端 blocks。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
+    /// 认领者（P3 subagent 预留，本期不接消费方）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
