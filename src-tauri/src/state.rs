@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64},
-        Mutex, RwLock,
+        Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
 };
@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 
 #[cfg(target_os = "macos")]
 use crate::macos_ocr::MacOcrClient;
+use crate::mcp::manager::McpSession;
 use crate::mcp::types::PythonRunResult;
 use crate::mcp::ChatToolDefinition;
 use crate::native_tools::SandboxExportContext;
@@ -82,6 +83,10 @@ pub struct AppState {
     pub key_cooldowns: Mutex<HashMap<(String, usize), Instant>>,
     /// 每个 provider 当前活跃 key idx：上一次成功的 key 优先继续用。
     pub active_key_idx: Mutex<HashMap<String, usize>>,
+    /// MCP 持久连接池：server_id → 该 server 的长连接会话。
+    /// 每会话独立 `Arc<Mutex>`，A 服务器握手不阻塞 B；外层 `tokio::sync::Mutex`
+    /// 只在命中判断 / 插入 / 移除时短暂持有，绝不跨握手 await。
+    pub mcp_sessions: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<McpSession>>>>,
     /// Token usage ledger directory under app data. Model providers can append records
     /// without needing an AppHandle threaded through every call path.
     pub usage_dir: PathBuf,
@@ -279,37 +284,42 @@ impl AppState {
 }
 
 #[cfg(test)]
+/// 构造一个最小可用的 AppState 用于单测（cooldown / MCP 连接池等）。
+/// 不涉及网络，Client::new() 即可（不会发请求）。供 state / mcp::manager 测试复用。
+pub(crate) fn test_app_state() -> AppState {
+    AppState {
+        settings: RwLock::new(Settings::default()),
+        explain_images: Mutex::new(HashMap::new()),
+        current_explain_image_id: Mutex::new(None),
+        lens_busy: AtomicBool::new(false),
+        explain_stream_generation: AtomicU64::new(0),
+        chat_stream_generations: Mutex::new(HashMap::new()),
+        chat_active_replies: Mutex::new(HashSet::new()),
+        pending_chat_tool_approvals: Mutex::new(HashMap::new()),
+        pending_chat_user_prompts: Mutex::new(HashMap::new()),
+        pending_python_runs: Mutex::new(HashMap::new()),
+        chat_create_conversation_lock: Mutex::new(()),
+        chat_tool_list_cache: Mutex::new(HashMap::new()),
+        pending_chat_external_sends: Mutex::new(Vec::new()),
+        pending_selection: Mutex::new(None),
+        lens_freeze_frame_image_id: Mutex::new(None),
+        key_cooldowns: Mutex::new(HashMap::new()),
+        active_key_idx: Mutex::new(HashMap::new()),
+        mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),
+        usage_dir: std::env::temp_dir().join("kivio-test-usage"),
+        http: Client::new(),
+        #[cfg(target_os = "macos")]
+        macos_ocr: MacOcrClient::disabled(),
+        rapidocr: RapidOcrClient::disabled(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::Client;
 
-    /// 构造一个最小可用的 AppState 用于测试 cooldown / pick_active_key 逻辑。
-    /// 不涉及网络，Client::new() 即可（不会发请求）。
     fn test_state() -> AppState {
-        AppState {
-            settings: RwLock::new(Settings::default()),
-            explain_images: Mutex::new(HashMap::new()),
-            current_explain_image_id: Mutex::new(None),
-            lens_busy: AtomicBool::new(false),
-            explain_stream_generation: AtomicU64::new(0),
-            chat_stream_generations: Mutex::new(HashMap::new()),
-            chat_active_replies: Mutex::new(HashSet::new()),
-            pending_chat_tool_approvals: Mutex::new(HashMap::new()),
-            pending_chat_user_prompts: Mutex::new(HashMap::new()),
-            pending_python_runs: Mutex::new(HashMap::new()),
-            chat_create_conversation_lock: Mutex::new(()),
-            chat_tool_list_cache: Mutex::new(HashMap::new()),
-            pending_chat_external_sends: Mutex::new(Vec::new()),
-            pending_selection: Mutex::new(None),
-            lens_freeze_frame_image_id: Mutex::new(None),
-            key_cooldowns: Mutex::new(HashMap::new()),
-            active_key_idx: Mutex::new(HashMap::new()),
-            usage_dir: std::env::temp_dir().join("kivio-test-usage"),
-            http: Client::new(),
-            #[cfg(target_os = "macos")]
-            macos_ocr: MacOcrClient::disabled(),
-            rapidocr: RapidOcrClient::disabled(),
-        }
+        test_app_state()
     }
 
     #[test]

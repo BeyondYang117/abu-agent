@@ -2580,6 +2580,7 @@ body {
 }
 .kv-provider-dot.on { background: var(--success); }
 .kv-provider-dot.warn { background: var(--warn); }
+.kv-provider-dot.err { background: var(--danger); }
 .kv-provider-dot.off { background: var(--text-tertiary); opacity: 0.45; }
 .kv-provider-add {
   font-size: 11.5px;

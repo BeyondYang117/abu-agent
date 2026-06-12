@@ -560,6 +560,20 @@ pub(crate) async fn chat_send_message(
     let _reply_guard = ChatReplyGuard::new(state.inner(), &conversation_id);
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
+
+    // Backend slash-trigger preprocessing (承重路径): plain text `/commit msg`
+    // pins the skill and rewrites the body even without the front-end popover
+    // (also covers paste / external API / mobile entry points).
+    let (content, active_skill_id) = {
+        let settings = state.settings_read().clone();
+        let registry =
+            skills::build_registry(&app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
+        match try_apply_skill_slash_trigger(&registry, &settings.chat_tools, &content) {
+            Some((skill_id, rewritten)) => (rewritten, Some(skill_id)),
+            None => (content, active_skill_id),
+        }
+    };
+
     let message_attachments = save_message_attachments(&app, &conversation_id, attachments)?;
     let attachments_dir = if message_attachments.is_empty() {
         None
@@ -1131,7 +1145,7 @@ async fn complete_assistant_reply(
         settings.chat_memory.enabled,
         crate::settings::chat_image_generation_enabled(&settings),
     );
-    let mut tools = list_tools_for_chat(state.inner(), &settings, provider.supports_tools).await;
+    let mut tools = list_tools_for_chat(app, state.inner(), &settings, provider.supports_tools).await;
     agent_prepare::apply_assistant_tool_preset(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -2067,6 +2081,51 @@ fn sanitize_generated_title(raw: &str) -> Option<String> {
     Some(generate_title(&title))
 }
 
+/// Detect a leading `/skill <args>` slash trigger in a user message and, when it
+/// matches an enabled skill, rewrite the message body to pin that skill.
+///
+/// Returns `(skill_id, rewritten_content)` on a match. The rewrite is
+/// `"[Skill: name]\n\n{body}"` where `body` is the skill body with `$ARGUMENTS`
+/// / `$ARG_NAME` substituted from the trailing words. The resolved id then flows
+/// through the existing pin chain (resolve_forced_skill_id → active_skill_record
+/// → apply_active_skill_tool_filter + catalog/pin injection).
+///
+/// `disable_model_invocation` only gates *model* auto-invocation, so it is
+/// intentionally ignored here — an explicit user slash command may still trigger
+/// such a skill. The single gate is `is_skill_enabled`.
+fn try_apply_skill_slash_trigger(
+    registry: &skills::SkillRegistry,
+    chat_tools: &crate::settings::ChatToolsConfig,
+    content: &str,
+) -> Option<(String, String)> {
+    let trimmed = content.trim_start();
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let first_word = parts.next().unwrap_or_default();
+    if !first_word.starts_with('/') {
+        return None;
+    }
+    let args_raw = parts.next().unwrap_or_default();
+
+    let record = registry.find_by_trigger(first_word)?;
+    if !crate::settings::is_skill_enabled(chat_tools, &record.meta.id) {
+        // A disabled skill's slash command is left as ordinary text.
+        return None;
+    }
+    if crate::mcp::native_registry::find_entry(first_word.trim_start_matches('/')).is_some() {
+        // A skill id colliding with a built-in tool name would shadow it on the
+        // backend trigger path. The front-end intercepts built-in slash commands
+        // before send, so this is low risk — just note it.
+        eprintln!(
+            "[skill-slash] trigger {first_word} matches a built-in tool name; pinning skill {}",
+            record.meta.id
+        );
+    }
+
+    let rendered = skills::substitute_arguments(&record.body, args_raw, &record.meta.arguments);
+    let rewritten = format!("[Skill: {}]\n\n{}", record.meta.name, rendered);
+    Some((record.meta.id.clone(), rewritten))
+}
+
 fn resolve_forced_skill_id(
     chat_tools: &crate::settings::ChatToolsConfig,
     registry: &skills::SkillRegistry,
@@ -2541,7 +2600,7 @@ async fn compute_context_state(
             )
         })
         .unwrap_or(false);
-    let mut tools = list_tools_for_chat(state.inner(), &settings, provider_supports_tools).await;
+    let mut tools = list_tools_for_chat(app, state.inner(), &settings, provider_supports_tools).await;
     agent_prepare::apply_assistant_tool_preset(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -2943,6 +3002,7 @@ fn context_status(
 }
 
 async fn list_tools_for_chat(
+    app: &AppHandle,
     state: &AppState,
     settings: &Settings,
     provider_supports_tools: bool,
@@ -2955,7 +3015,7 @@ async fn list_tools_for_chat(
     {
         return Vec::new();
     }
-    mcp::registry::list_enabled_tool_defs(state)
+    mcp::registry::list_enabled_tool_defs(app, state)
         .await
         .unwrap_or_default()
 }
@@ -4220,6 +4280,69 @@ mod tests {
     use super::*;
     use crate::chat::Attachment;
     use std::collections::HashMap;
+
+    fn slash_skill_record(id: &str, name: &str, triggers: Vec<&str>) -> skills::SkillRecord {
+        skills::SkillRecord {
+            meta: skills::SkillMeta {
+                id: id.to_string(),
+                name: name.to_string(),
+                description: "desc".to_string(),
+                source: "user".to_string(),
+                path: None,
+                recommended_tools: vec![],
+                disable_model_invocation: false,
+                files: vec![],
+                triggers: triggers.into_iter().map(str::to_string).collect(),
+                argument_hint: Some("<message>".to_string()),
+                arguments: vec!["message".to_string()],
+            },
+            location: std::path::PathBuf::from(format!("/skills/{id}/SKILL.md")),
+            base_dir: std::path::PathBuf::from(format!("/skills/{id}")),
+            body: "Write a commit for: $ARGUMENTS (subject $MESSAGE)".to_string(),
+            allowed_tools: vec![],
+        }
+    }
+
+    fn slash_skill_registry(record: skills::SkillRecord) -> skills::SkillRegistry {
+        skills::SkillRegistry {
+            records: vec![record],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn slash_trigger_rewrites_body_and_pins_skill() {
+        let registry = slash_skill_registry(slash_skill_record("commit", "Commit", vec!["/commit"]));
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+
+        let (skill_id, rewritten) =
+            try_apply_skill_slash_trigger(&registry, &chat_tools, "/commit fix login")
+                .expect("slash trigger should match");
+
+        assert_eq!(skill_id, "commit");
+        assert!(rewritten.starts_with("[Skill: Commit]\n\n"));
+        assert!(rewritten.contains("Write a commit for: fix login"));
+        // first positional arg ($MESSAGE) → "fix"
+        assert!(rewritten.contains("subject fix"));
+    }
+
+    #[test]
+    fn slash_trigger_ignores_non_slash_and_unknown() {
+        let registry = slash_skill_registry(slash_skill_record("commit", "Commit", vec!["/commit"]));
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+
+        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, "commit fix").is_none());
+        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, "/unknown x").is_none());
+    }
+
+    #[test]
+    fn slash_trigger_skips_disabled_skill() {
+        let registry = slash_skill_registry(slash_skill_record("commit", "Commit", vec!["/commit"]));
+        let mut chat_tools = crate::settings::ChatToolsConfig::default();
+        chat_tools.disabled_skill_ids = vec!["commit".to_string()];
+
+        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, "/commit fix").is_none());
+    }
 
     fn test_provider(id: &str, name: &str, enabled_models: Vec<&str>) -> ModelProvider {
         ModelProvider {

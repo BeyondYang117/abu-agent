@@ -59,15 +59,27 @@ pub fn apply_active_skill_tool_filter(
     tools: &mut Vec<ChatToolDefinition>,
     skill: &skills::SkillRecord,
 ) {
-    if skill.allowed_tools.is_empty() {
+    retain_tools_for_allowed(tools, &skill.allowed_tools);
+}
+
+/// Narrow `tools` to those a skill's `allowed_tools` permits, while always
+/// keeping the skill-runtime tools and Kivio built-ins (so the model can still
+/// read skill files, run skill scripts, and use core tools). An empty `allowed`
+/// list is a no-op (skill declares no restriction).
+///
+/// This is intentionally **monotonic** (retain only, never re-expand): once a
+/// model-activated skill scopes the tool set, a later activation cannot widen it
+/// back. That matches the "scope tightening" semantics in the P2-B blueprint and
+/// composes order-independently with Plan-mode filtering.
+pub fn retain_tools_for_allowed(tools: &mut Vec<ChatToolDefinition>, allowed: &[String]) {
+    if allowed.is_empty() {
         return;
     }
     tools.retain(|tool| {
         tool.source == "skill"
             || is_native_skill_tool_name(&tool.name)
             || is_kivio_builtin_tool(tool)
-            || skill
-                .allowed_tools
+            || allowed
                 .iter()
                 .any(|recommended| tool_matches_recommended_name(tool, recommended))
     });
@@ -920,6 +932,38 @@ mod tests {
         assert!(is_native_skill_tool_name("skill_activate"));
         assert!(is_native_skill_tool_name("skill_run_script"));
         assert!(!is_native_skill_tool_name("web_search"));
+    }
+
+    #[test]
+    fn retain_tools_for_allowed_keeps_skill_and_builtins() {
+        let mut tools = vec![
+            crate::mcp::types::native_skill_activate_tool(),
+            crate::mcp::types::native_run_python_tool(),
+            crate::mcp::types::native_web_fetch_tool(),
+            test_mcp_tool(),
+        ];
+
+        // Allow only web_fetch among non-builtin/skill tools.
+        retain_tools_for_allowed(&mut tools, &["web_fetch".to_string()]);
+
+        // skill_activate (skill runtime) and run_python / web_fetch (Kivio
+        // built-ins) are always kept; the MCP "search" tool is dropped because
+        // it is not skill/builtin and not in the allowed list.
+        assert!(tools.iter().any(|tool| tool.name == "skill_activate"));
+        assert!(tools.iter().any(|tool| tool.name == "run_python"));
+        assert!(tools.iter().any(|tool| tool.name == "web_fetch"));
+        assert!(!tools.iter().any(|tool| tool.name == "search"));
+    }
+
+    #[test]
+    fn retain_tools_for_allowed_noop_when_empty() {
+        let mut tools = vec![
+            crate::mcp::types::native_skill_activate_tool(),
+            test_mcp_tool(),
+        ];
+        let before = tools.len();
+        retain_tools_for_allowed(&mut tools, &[]);
+        assert_eq!(tools.len(), before);
     }
 
     #[test]

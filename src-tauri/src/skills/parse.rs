@@ -108,6 +108,16 @@ pub fn parse_skill_markdown(
             .map(String::as_str),
     );
     let id = slugify(frontmatter.get("id").map(String::as_str).unwrap_or(&name));
+    let triggers = parse_list_value(frontmatter.get("triggers"))
+        .iter()
+        .map(|t| super::types::normalize_trigger(t))
+        .filter(|t| t.len() > 1)
+        .collect();
+    let argument_hint = frontmatter
+        .get("argument-hint")
+        .map(|hint| hint.trim().to_string())
+        .filter(|hint| !hint.is_empty());
+    let arguments = parse_list_value(frontmatter.get("arguments"));
     let _ = fallback_id;
     Ok(SkillDetail {
         meta: SkillMeta {
@@ -119,6 +129,9 @@ pub fn parse_skill_markdown(
             recommended_tools,
             disable_model_invocation,
             files,
+            triggers,
+            argument_hint,
+            arguments,
         },
         body: body.trim().to_string(),
     })
@@ -229,5 +242,26 @@ mod tests {
                 "write_file".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn parse_skill_markdown_reads_triggers_and_arguments() {
+        let raw = r#"---
+name: Commit Helper
+description: Build a commit message.
+triggers:
+  - /commit
+  - "ci"
+argument-hint: <message>
+arguments:
+  - title
+  - scope
+---
+# Body with $ARGUMENTS
+"#;
+        let parsed = super::parse_skill_markdown("commit", raw, "user", None, Vec::new()).unwrap();
+        assert_eq!(parsed.meta.triggers, vec!["/commit", "/ci"]);
+        assert_eq!(parsed.meta.argument_hint.as_deref(), Some("<message>"));
+        assert_eq!(parsed.meta.arguments, vec!["title", "scope"]);
     }
 }

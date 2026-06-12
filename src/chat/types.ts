@@ -24,6 +24,10 @@ export interface SkillMeta {
   disableModelInvocation?: boolean
   files?: SkillFileEntry[]
   enabled?: boolean
+  triggers?: string[]
+  argument_hint?: string | null
+  argumentHint?: string | null
+  arguments?: string[]
 }
 
 export interface SkillFileEntry {

@@ -33,6 +33,16 @@ pub struct SkillMeta {
     pub disable_model_invocation: bool,
     #[serde(default)]
     pub files: Vec<SkillFileEntry>,
+    /// Explicit slash triggers (e.g. `/commit`). Normalized to a leading `/` and
+    /// lowercased at parse time. Empty ⇒ default `/{id}` / `/{slug(name)}`.
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    /// Free-form hint shown next to the slash command (e.g. `<message>`).
+    #[serde(default)]
+    pub argument_hint: Option<String>,
+    /// Declared positional argument names for `$ARG_NAME` substitution.
+    #[serde(default)]
+    pub arguments: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +123,46 @@ impl SkillRegistry {
             .map(|record| record.meta.clone())
             .collect()
     }
+
+    /// Match a leading slash word (e.g. `/commit`) against skill triggers.
+    /// A skill matches when `first_word` equals one of its explicit `triggers`
+    /// or its default `/{id}` / `/{slug(name)}` trigger (exact match only — no
+    /// prefix matching, to avoid shadowing built-in slash commands).
+    pub fn find_by_trigger(&self, first_word: &str) -> Option<&SkillRecord> {
+        let needle = normalize_trigger(first_word);
+        if needle.len() <= 1 {
+            return None;
+        }
+        self.records
+            .iter()
+            .find(|record| record_triggers(&record.meta).iter().any(|t| t == &needle))
+    }
+}
+
+/// Normalize a slash trigger: trim, ensure a single leading `/`, lowercase.
+pub fn normalize_trigger(value: &str) -> String {
+    let trimmed = value.trim().trim_start_matches('/').trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    format!("/{}", trimmed.to_ascii_lowercase())
+}
+
+/// The full set of slash triggers a skill answers to: explicit `triggers` plus
+/// the default `/{id}` and `/{slug(name)}` (deduped, normalized).
+pub fn record_triggers(meta: &SkillMeta) -> Vec<String> {
+    let mut out: Vec<String> = meta
+        .triggers
+        .iter()
+        .map(|t| normalize_trigger(t))
+        .filter(|t| t.len() > 1)
+        .collect();
+    for default in [normalize_trigger(&meta.id), normalize_trigger(&slugify(&meta.name))] {
+        if default.len() > 1 && !out.contains(&default) {
+            out.push(default);
+        }
+    }
+    out
 }
 
 pub fn slugify(value: &str) -> String {
@@ -144,3 +194,70 @@ pub fn parse_bool(value: Option<&str>) -> bool {
         "true" | "1" | "yes"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn record_with(id: &str, name: &str, triggers: Vec<String>) -> SkillRecord {
+        SkillRecord {
+            meta: SkillMeta {
+                id: id.to_string(),
+                name: name.to_string(),
+                description: "desc".to_string(),
+                source: "user".to_string(),
+                path: None,
+                recommended_tools: vec![],
+                disable_model_invocation: false,
+                files: vec![],
+                triggers,
+                argument_hint: None,
+                arguments: vec![],
+            },
+            location: PathBuf::from(format!("/skills/{id}/SKILL.md")),
+            base_dir: PathBuf::from(format!("/skills/{id}")),
+            body: String::new(),
+            allowed_tools: vec![],
+        }
+    }
+
+    fn registry(records: Vec<SkillRecord>) -> SkillRegistry {
+        SkillRegistry {
+            records,
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn find_by_trigger_matches_explicit() {
+        let reg = registry(vec![record_with(
+            "git-helper",
+            "Git Helper",
+            vec!["/commit".to_string()],
+        )]);
+        let found = reg.find_by_trigger("/commit").expect("explicit trigger");
+        assert_eq!(found.meta.id, "git-helper");
+        // case-insensitive
+        assert!(reg.find_by_trigger("/COMMIT").is_some());
+    }
+
+    #[test]
+    fn find_by_trigger_default_is_slash_id() {
+        let reg = registry(vec![record_with("commit", "Commit Skill", vec![])]);
+        assert!(reg.find_by_trigger("/commit").is_some());
+        // default also matches the slugified name
+        let reg2 = registry(vec![record_with("xyz", "Commit Skill", vec![])]);
+        assert!(reg2.find_by_trigger("/commit-skill").is_some());
+    }
+
+    #[test]
+    fn find_by_trigger_requires_leading_slash() {
+        let reg = registry(vec![record_with("commit", "Commit", vec![])]);
+        assert!(reg.find_by_trigger("commit").is_some()); // normalized adds slash
+        assert!(reg.find_by_trigger("/other").is_none());
+        // exact only — no prefix matching
+        assert!(reg.find_by_trigger("/comm").is_none());
+    }
+}
+

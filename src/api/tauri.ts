@@ -312,6 +312,28 @@ export type ChatMcpServer = {
   enabledTools: string[]
 }
 
+/** MCP 持久连接状态，与后端 McpServerState（serde tag="kind"）一一对应。 */
+export type McpServerState =
+  | { kind: 'connecting' }
+  | { kind: 'connected' }
+  | { kind: 'error'; message: string }
+  | { kind: 'disconnected' }
+
+/** chat_mcp_server_status 命令返回的状态快照。 */
+export type McpServerStatus = {
+  serverId: string
+  state: McpServerState
+  handshakeCount: number
+  stderrTail: string
+}
+
+/** mcp-server-state 事件载荷。serverName 在 reload/reap 路径可能缺省。 */
+export type McpServerStatePayload = {
+  serverId: string
+  serverName?: string | null
+  state: McpServerState
+}
+
 export type ChatNativeToolsConfig = {
   webSearch: boolean
   webFetch?: boolean
@@ -408,6 +430,8 @@ export type ChatToolsConfig = {
   disabledSkillIds?: string[]
   maxToolRounds: number | null
   toolTimeoutMs: number
+  /** MCP 持久连接空闲超时（ms）：会话空闲超过此值后被回收，下次调用透明重连。 */
+  mcpIdleTimeoutMs?: number
   maxToolOutputChars: number | null
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
   nativeTools: ChatNativeToolsConfig
@@ -422,6 +446,9 @@ export type SkillMeta = {
   recommendedTools: string[]
   disableModelInvocation?: boolean
   files?: SkillFileEntry[]
+  triggers?: string[]
+  argumentHint?: string | null
+  arguments?: string[]
 }
 
 export type SkillDetail = SkillMeta & {
@@ -767,6 +794,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     disabledSkillIds: Array.isArray(current.disabledSkillIds) ? current.disabledSkillIds : [],
     maxToolRounds: normalizeMaxToolRounds(current.maxToolRounds),
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
+    mcpIdleTimeoutMs: current.mcpIdleTimeoutMs ?? 600_000,
     maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     nativeTools: {
@@ -1075,6 +1103,10 @@ export const api = {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<unknown>('chat-external-send-ready', () => listener())
   },
+  onMcpServerState: (listener: (payload: McpServerStatePayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<McpServerStatePayload>('mcp-server-state', (payload) => listener(payload))
+  },
   chatTakeExternalSends: () => {
     if (!isTauriRuntime()) {
       return Promise.resolve({ success: true, requests: [] as ChatExternalSendRequest[] })
@@ -1093,6 +1125,10 @@ export const api = {
       'chat_mcp_import_json',
       { path },
     ),
+  chatMcpServerStatus: (serverId: string) =>
+    invoke<McpServerStatus>('chat_mcp_server_status', { serverId }),
+  chatMcpReloadServer: (serverId: string) =>
+    invoke<void>('chat_mcp_reload_server', { serverId }),
   chatSkillsList: (skillScanPaths?: string[]) =>
     invoke<{ success: boolean; skills: SkillMeta[]; warnings?: string[]; error?: string | null }>(
       'chat_skills_list',
