@@ -28,6 +28,13 @@ describe('ReasoningBlock', () => {
     expect(within(section).getByTestId('reasoning-text')).toHaveTextContent('```ts')
   })
 
+  it('shows thinking duration beside the title when provided', () => {
+    render(<ReasoningBlock reasoning="alpha" durationMs={65000} />)
+    const section = screen.getByLabelText('Thinking')
+    expect(within(section).getByRole('button', { name: /Thinking/i })).toHaveTextContent('Thinking')
+    expect(within(section).getByRole('button', { name: /Thinking/i })).toHaveTextContent('1m 5s')
+  })
+
   it('expands full reasoning after toggle', async () => {
     const user = userEvent.setup()
     const reasoning = 'alpha\nbeta\ngamma'

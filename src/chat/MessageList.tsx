@@ -8,6 +8,7 @@ const LOAD_MORE_MESSAGES = 60
 export interface AssistantStreamStats {
   messageId: string
   tokensPerSec: number
+  reasoningDurationMs?: number | null
 }
 
 interface MessageListProps {
@@ -17,6 +18,7 @@ interface MessageListProps {
   streamFrozen?: boolean
   streamingContent?: string
   streamingReasoning?: string
+  streamingReasoningDurationMs?: number | null
   reasoningStreaming?: boolean
   streamingToolCalls?: ToolCallRecord[]
   streamingSegments?: ChatMessageSegment[]
@@ -35,6 +37,7 @@ export function MessageList({
   streamFrozen = false,
   streamingContent = '',
   streamingReasoning = '',
+  streamingReasoningDurationMs = null,
   reasoningStreaming = false,
   streamingToolCalls = [],
   streamingSegments = [],
@@ -202,6 +205,13 @@ export function MessageList({
                 ? lastAssistantStreamStats.tokensPerSec
                 : undefined
             }
+            reasoningDurationMs={
+              msg.role === 'assistant' &&
+              msg.id === lastAssistantId &&
+              lastAssistantStreamStats?.messageId === msg.id
+                ? lastAssistantStreamStats.reasoningDurationMs
+                : undefined
+            }
             onUpdateMessage={msg.role === 'assistant' ? onUpdateMessage : undefined}
             onRegenerateMessage={msg.role === 'assistant' ? onRegenerateMessage : undefined}
             onDeleteMessage={onDeleteMessage}
@@ -222,6 +232,7 @@ export function MessageList({
             }}
             conversationId={conversationId}
             reasoningStreaming={reasoningStreaming && !streamFrozen}
+            reasoningDurationMs={streamingReasoningDurationMs}
           />
         )}
 

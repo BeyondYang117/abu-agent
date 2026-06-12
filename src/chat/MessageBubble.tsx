@@ -18,6 +18,7 @@ interface MessageBubbleProps {
   message: ChatMessage
   conversationId?: string | null
   tokensPerSec?: number
+  reasoningDurationMs?: number | null
   /** 思维链正在流式写入 */
   reasoningStreaming?: boolean
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
@@ -187,11 +188,13 @@ function TimelineSegments({
   toolCalls,
   artifacts,
   reasoningStreaming,
+  reasoningDurationMs,
 }: {
   segments: ChatMessageSegment[]
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
   reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
 }) {
   const ordered = orderedSegments(segments)
   return (
@@ -214,6 +217,7 @@ function TimelineSegments({
               key={segment.id}
               reasoning={reasoning}
               streaming={reasoningStreaming && index === ordered.length - 1}
+              durationMs={reasoningDurationMs}
             />
           )
         }
@@ -233,6 +237,7 @@ function MessageBubbleComponent({
   message,
   conversationId,
   tokensPerSec,
+  reasoningDurationMs,
   reasoningStreaming = false,
   onUpdateMessage,
   onRegenerateMessage,
@@ -392,7 +397,11 @@ function MessageBubbleComponent({
         )}
 
         {message.reasoning && !isEditing && !hasTimelineSegments && (
-          <ReasoningBlock reasoning={message.reasoning} streaming={reasoningStreaming} />
+          <ReasoningBlock
+            reasoning={message.reasoning}
+            streaming={reasoningStreaming}
+            durationMs={reasoningDurationMs}
+          />
         )}
 
         {isEditing ? (
@@ -435,6 +444,7 @@ function MessageBubbleComponent({
               toolCalls={toolCalls}
               artifacts={renderArtifacts}
               reasoningStreaming={reasoningStreaming}
+              reasoningDurationMs={reasoningDurationMs}
             />
             {hasGeneratedImages && (
               <GeneratedImageArtifacts

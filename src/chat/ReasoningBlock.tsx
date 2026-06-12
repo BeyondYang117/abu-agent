@@ -5,14 +5,27 @@ type ReasoningBlockProps = {
   reasoning: string
   /** 思维链正在流式写入 */
   streaming?: boolean
+  /** 已知思考耗时，用于流式完成后继续展示 */
+  durationMs?: number | null
 }
 
-export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockProps) {
+function formatThinkingDuration(durationMs: number | null | undefined): string {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs <= 0) return ''
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000))
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
+}
+
+export function ReasoningBlock({ reasoning, streaming = false, durationMs = null }: ReasoningBlockProps) {
   const collapsible = reasoning.trim().length > 0
   const [open, setOpen] = useState(false)
   const [contentPulse, setContentPulse] = useState(false)
   const [bodyMaxHeight, setBodyMaxHeight] = useState<number | null>(null)
+  const [liveDurationMs, setLiveDurationMs] = useState(0)
   const userExpandedRef = useRef(false)
+  const durationStartedAtRef = useRef<number | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -26,6 +39,27 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
     const timer = window.setTimeout(() => setContentPulse(false), 220)
     return () => window.clearTimeout(timer)
   }, [reasoning, streaming])
+
+  useEffect(() => {
+    if (!streaming || !collapsible) {
+      durationStartedAtRef.current = null
+      setLiveDurationMs(0)
+      return
+    }
+
+    if (durationStartedAtRef.current == null) {
+      durationStartedAtRef.current = Date.now() - (durationMs ?? 0)
+    }
+
+    const updateDuration = () => {
+      const startedAt = durationStartedAtRef.current
+      if (startedAt == null) return
+      setLiveDurationMs(Date.now() - startedAt)
+    }
+    updateDuration()
+    const interval = window.setInterval(updateDuration, 1000)
+    return () => window.clearInterval(interval)
+  }, [collapsible, durationMs, streaming])
 
   useEffect(() => {
     if (!streaming && collapsible && !userExpandedRef.current) {
@@ -67,6 +101,8 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
     setOpen((value) => !value)
   }
   const visibleReasoning = reasoning.trimEnd()
+  const thinkingDuration = formatThinkingDuration(streaming ? (durationMs ?? liveDurationMs) : durationMs)
+  const titleText = streaming ? 'Thinking…' : 'Thinking'
 
   return (
     <section
@@ -85,11 +121,18 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
           aria-expanded={!hideBody}
           data-tauri-drag-region="false"
         >
-          {streaming ? (
-            <span className="reasoning-shimmer-text">Thinking…</span>
-          ) : (
-            <span>Thinking</span>
-          )}
+          <span className="inline-flex min-w-0 items-baseline gap-1.5">
+            {streaming ? (
+              <span className="reasoning-shimmer-text">{titleText}</span>
+            ) : (
+              <span>{titleText}</span>
+            )}
+            {thinkingDuration && (
+              <span className="shrink-0 text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
+                {thinkingDuration}
+              </span>
+            )}
+          </span>
           <ChevronDown
             size={12}
             strokeWidth={2}
@@ -98,11 +141,18 @@ export function ReasoningBlock({ reasoning, streaming = false }: ReasoningBlockP
         </button>
       ) : (
         <div className={titleClass}>
-          {streaming ? (
-            <span className="reasoning-shimmer-text">Thinking…</span>
-          ) : (
-            <span>Thinking</span>
-          )}
+          <span className="inline-flex min-w-0 items-baseline gap-1.5">
+            {streaming ? (
+              <span className="reasoning-shimmer-text">{titleText}</span>
+            ) : (
+              <span>{titleText}</span>
+            )}
+            {thinkingDuration && (
+              <span className="shrink-0 text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
+                {thinkingDuration}
+              </span>
+            )}
+          </span>
         </div>
       )}
 

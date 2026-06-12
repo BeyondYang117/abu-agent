@@ -7,6 +7,8 @@ export interface ConversationStreamSnapshot {
   toolCalls: import('./types').ToolCallRecord[]
   segments: import('./types').ChatMessageSegment[]
   startedAt: number | null
+  reasoningStartedAt: number | null
+  reasoningDurationMs: number | null
 }
 
 export function isConversationInFlight(
@@ -51,5 +53,7 @@ export function createEmptyStreamSnapshot(): ConversationStreamSnapshot {
     toolCalls: [],
     segments: [],
     startedAt: Date.now(),
+    reasoningStartedAt: null,
+    reasoningDurationMs: null,
   }
 }

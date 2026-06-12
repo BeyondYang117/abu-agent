@@ -406,6 +406,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [cancellingStream, setCancellingStream] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingReasoning, setStreamingReasoning] = useState('')
+  const [streamingReasoningDurationMs, setStreamingReasoningDurationMs] = useState<number | null>(null)
   const [reasoningStreaming, setReasoningStreaming] = useState(false)
   const [streamError, setStreamError] = useState('')
   const [streamingSegments, setStreamingSegments] = useState<ChatMessageSegment[]>([])
@@ -526,6 +527,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setCancellingStream(false)
     setStreamingContent('')
     setStreamingReasoning('')
+    setStreamingReasoningDurationMs(null)
     setReasoningStreaming(false)
     setStreamingToolCalls([])
     setStreamingSegments([])
@@ -560,6 +562,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setCancellingStream(false)
       setStreamingContent(snapshot.content)
       setStreamingReasoning(snapshot.reasoning)
+      setStreamingReasoningDurationMs(snapshot.reasoningDurationMs)
       setReasoningStreaming(snapshot.reasoningStreaming)
       setStreamingToolCalls(snapshot.toolCalls)
       setStreamingSegments(snapshot.segments)
@@ -581,6 +584,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setCancellingStream(false)
     setStreamingContent(snapshot.content)
     setStreamingReasoning(snapshot.reasoning)
+    setStreamingReasoningDurationMs(snapshot.reasoningDurationMs)
     setReasoningStreaming(snapshot.reasoningStreaming)
     setStreamingToolCalls(snapshot.toolCalls)
     setStreamingSegments(snapshot.segments)
@@ -1101,11 +1105,25 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           )
         }
         if (payload.reasoningDelta) {
+          const now = Date.now()
+          if (snapshot.reasoningStartedAt == null) {
+            snapshot.reasoningStartedAt = now
+          }
           snapshot.streaming = true
           snapshot.reasoningStreaming = true
           snapshot.reasoning += payload.reasoningDelta
+          snapshot.reasoningDurationMs = Math.max(
+            snapshot.reasoningDurationMs ?? 0,
+            now - snapshot.reasoningStartedAt,
+          )
         }
         if (payload.delta) {
+          if (snapshot.reasoningStreaming && snapshot.reasoningStartedAt != null) {
+            snapshot.reasoningDurationMs = Math.max(
+              snapshot.reasoningDurationMs ?? 0,
+              Date.now() - snapshot.reasoningStartedAt,
+            )
+          }
           snapshot.streaming = true
           snapshot.reasoningStreaming = false
           snapshot.content += payload.delta
@@ -1113,6 +1131,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         syncGeneratingConversationIds()
         showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
         if (payload.done) {
+          if (snapshot.reasoningStartedAt != null && snapshot.reasoningStreaming) {
+            snapshot.reasoningDurationMs = Math.max(
+              snapshot.reasoningDurationMs ?? 0,
+              Date.now() - snapshot.reasoningStartedAt,
+            )
+            showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
+          }
           // invoke 未完成前不要 reload；延后到 flushPendingStreamDone，避免与 send 写盘竞态。
           if (isConversationInFlight(inFlightConversationsRef.current, payload.conversationId)) {
             pendingStreamDoneRef.current[payload.conversationId] = () => finishStreamingRun(payload)
@@ -1654,6 +1679,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setLastAssistantStreamStats({
       messageId: lastAssistant.id,
       tokensPerSec: tokenEstimate / elapsedSec,
+      reasoningDurationMs: streamSnapshotsRef.current[updatedConv.id]?.reasoningDurationMs ?? null,
     })
   }, [])
 
@@ -1736,6 +1762,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     snapshot.toolCalls = []
     snapshot.segments = []
     snapshot.startedAt = startedAt
+    snapshot.reasoningStartedAt = null
+    snapshot.reasoningDurationMs = null
     snapshot.runId = null
     syncGeneratingConversationIds()
 
@@ -1745,6 +1773,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setCancellingStream(false)
       setStreamingContent('')
       setStreamingReasoning('')
+      setStreamingReasoningDurationMs(null)
       setReasoningStreaming(false)
       setStreamingToolCalls([])
       setStreamingSegments([])
@@ -2006,6 +2035,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       snapshot.toolCalls = []
       snapshot.segments = []
       snapshot.startedAt = startedAt
+      snapshot.reasoningStartedAt = null
+      snapshot.reasoningDurationMs = null
       snapshot.runId = null
       syncGeneratingConversationIds()
 
@@ -2015,6 +2046,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setCancellingStream(false)
         setStreamingContent('')
         setStreamingReasoning('')
+        setStreamingReasoningDurationMs(null)
         setReasoningStreaming(false)
         setStreamingToolCalls([])
         setStreamingSegments([])
@@ -2437,6 +2469,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       streamFrozen={streamFrozen}
                       streamingContent={streamingContent}
                       streamingReasoning={streamingReasoning}
+                      streamingReasoningDurationMs={streamingReasoningDurationMs}
                       reasoningStreaming={reasoningStreaming}
                       streamingToolCalls={streamingToolCalls}
                       streamingSegments={streamingSegments}
