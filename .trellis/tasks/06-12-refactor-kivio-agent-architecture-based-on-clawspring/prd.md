@@ -1,7 +1,19 @@
 # Refactor Kivio Agent Architecture (based on clawspring)
 
-> 状态：已定稿（2026-06-12 用户拍板全部开放问题）
+> 状态：**P0 + P1 已交付**（2026-06-12）；P2-P4 待后续会话推进
 > 关联文档：`research/00-architecture-proposal.md`（总体架构方案）、`research/01-07`（子系统研究）
+
+## 交付记录（2026-06-12）
+
+**P0（全部完成）**：`40d08f50` 回归测试先行（9 个 fallback 测试 + MockModelServer）→ `0cccb5ef` run_agent_loop 拆分（骨架 162 行 + planning/rounds/synthesis/finalize，RunResultBuilder 收敛 6 处 fallback）→ `2fc1b5c6` 统一工具注册表（native_registry.rs 收敛 7 份硬编码名单，7 个守护测试经变异验证）。
+
+**P1（全部完成）**：`f182ddb8` edit_file CRLF 归一匹配；`ee6252f9` read_file cat -n 行号输出（手测✅）；`4d451975`+`d527a833` search_files regex/output_mode/glob + pattern 别名（手测✅）；`dbb46e0c` 循环内上下文压缩（snip + 摘要降级，持久化镜像零触碰）；`04114816` diff 回显 + 头尾截断；`e99a2a3f` 真实 token usage 贯通到消息 meta。
+
+**顺带修复**（冒烟中发现）：取消丢部分文本（`0038addc`）、取消预览闪空白（`6d50288d`）、停止即时性 + 生成中可打字（`1ec26b8c`）、取消首条跳过标题生成（`88d4da22`）、取消后 Thinking 错位（`cd9eb3fe`）、Lens 残留窗口竞态根治（`63bdf848`）。
+
+**新增 spec**：`backend/native-tool-registry.md`、agent-runtime.md 的 In-Loop Context Compaction 段、file-tools.md 的 Edit/Read/Search 契约更新、window-lifecycle.md 的 Lens Overlay Close Contract。
+
+**未做（移交 P2-P4）**：MCP 持久连接管理器、skill slash 触发 + `$ARGUMENTS`、全量 task 系统（四态/依赖边/owner/project 级，用户已拍板一步到位）、multi-agent（tool card 嵌套实时进度，用户已拍板）、memory 进阶、watch 取消原语替换轮询（P1 范围内未做，并入 P2）。
 
 ## 背景
 
