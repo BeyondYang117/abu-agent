@@ -399,9 +399,18 @@ function pythonStringLiteral(value: string): string {
   return JSON.stringify(value)
 }
 
-function wrapPythonUserCode(code: string): string {
+export function wrapPythonUserCode(code: string): string {
   return `
 import traceback as _kivio_traceback
+import warnings as _kivio_warnings
+
+for _kivio_warning_category in (
+    DeprecationWarning,
+    PendingDeprecationWarning,
+    FutureWarning,
+    ResourceWarning,
+):
+    _kivio_warnings.filterwarnings("ignore", category=_kivio_warning_category)
 
 try:
     exec(${pythonStringLiteral(code)}, globals(), globals())

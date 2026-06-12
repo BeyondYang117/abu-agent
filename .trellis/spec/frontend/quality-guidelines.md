@@ -72,6 +72,7 @@ Questions to answer:
 - Warm up `matplotlib.pyplot` once before the real execution so first-run backend initialization errors do not leak into the visible tool log.
 - If the initial `matplotlib` execution still fails with a Pyodide/wasm/backend-style error, retry once inside the sandbox before surfacing a user-visible failure.
 - Save generated images to relative filenames inside the Pyodide filesystem and let Kivio capture them as artifacts; do not require the model to print base64.
+- Suppress non-fatal dependency warnings (`DeprecationWarning`, `PendingDeprecationWarning`, `FutureWarning`, `ResourceWarning`) in the user-code wrapper before executing sandbox code. These warnings, such as pandas/PyArrow deprecation notices, must not turn a successful artifact generation into a red failed tool call.
 
 ### Pyodide sandbox package boundary
 
