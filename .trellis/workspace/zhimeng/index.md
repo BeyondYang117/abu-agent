@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~300 | Active |
+| `journal-1.md` | ~333 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-06-13 | Orchestrate mode | `b371865f` | `orchestrate-mode` |
 | 8 | 2026-06-13 | Sub-agent running indicator (Claude-Code sparkle) | `010926b1` | `fix-subagent-indicator` |
 | 7 | 2026-06-13 | P4 memory_search | `5a9f6172` | `p4-memory-search` |
 | 6 | 2026-06-13 | P3 multi-agent / sub-agent runtime | `23edf8f8`, `9f13b039` | `p3-multi-agent-subagent` |
