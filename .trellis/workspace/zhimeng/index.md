@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~267 | Active |
+| `journal-1.md` | ~300 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-06-13 | Sub-agent running indicator (Claude-Code sparkle) | `010926b1` | `fix-subagent-indicator` |
 | 7 | 2026-06-13 | P4 memory_search | `5a9f6172` | `p4-memory-search` |
 | 6 | 2026-06-13 | P3 multi-agent / sub-agent runtime | `23edf8f8`, `9f13b039` | `p3-multi-agent-subagent` |
 | 5 | 2026-06-13 | P2-A MCP 持久连接管理器 + P2-B skill slash/$ARGUMENTS（ultracode 并行实现） | `6c460a16`, `685251a1`, `1244c315`, `6bd2e1ab`, `172c70d3` | `main` |
