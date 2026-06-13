@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~333 | Active |
+| `journal-1.md` | ~368 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-06-13 | Chat UI: mode pill + sub-agent progress/timeout + stability | `47b58bfb`, `b0e21074`, `21297626` | `chat-stability-resilience` |
 | 9 | 2026-06-13 | Orchestrate mode | `b371865f` | `orchestrate-mode` |
 | 8 | 2026-06-13 | Sub-agent running indicator (Claude-Code sparkle) | `010926b1` | `fix-subagent-indicator` |
 | 7 | 2026-06-13 | P4 memory_search | `5a9f6172` | `p4-memory-search` |
