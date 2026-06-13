@@ -32,6 +32,17 @@ pub struct NativeToolContext {
     pub conversation_id: String,
     pub message_id: String,
     pub tool_call_id: Option<String>,
+    /// Parent run id of the agent loop issuing this call. Used by sub-agent
+    /// management tools to address the parent tool card and cascade
+    /// cancellation. Empty when not running under an agent loop.
+    #[allow(dead_code)]
+    pub run_id: String,
+    /// Generation of the issuing agent loop (for cancellation cascade).
+    #[allow(dead_code)]
+    pub generation: u64,
+    /// Sub-agent nesting depth of the issuing agent loop (0 = top-level).
+    #[allow(dead_code)]
+    pub depth: u8,
 }
 const MAX_PYTHON_INPUT_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_PYTHON_INPUT_FILES: usize = 8;
@@ -577,6 +588,20 @@ async fn call_native_tool(
             .ok_or_else(|| format!("{} requires a conversation context", entry.name))?;
         return handler(app, &ctx.conversation_id, &tool.name, arguments);
     }
+    if let NativeToolCall::SubAgent(handler) = &entry.call {
+        // Sub-agent management tools manage agents, not files: dispatch before
+        // workspace resolution with the parent run context.
+        let ctx = native_ctx
+            .as_ref()
+            .ok_or_else(|| format!("{} requires an agent context", entry.name))?;
+        return handler(crate::chat::sub_agent::SubAgentCallCtx {
+            app,
+            state,
+            native_ctx: ctx,
+            arguments: &arguments,
+        })
+        .await;
+    }
     if matches!(entry.call, NativeToolCall::HostMediated) {
         // ask_user is host-mediated in chat/agent/execute.rs and must never
         // reach the registry dispatcher; keep the legacy fallback wording.
@@ -612,7 +637,9 @@ async fn call_native_tool(
             })
             .await
         }
-        NativeToolCall::Conversation(_) | NativeToolCall::HostMediated => unreachable!(),
+        NativeToolCall::Conversation(_)
+        | NativeToolCall::HostMediated
+        | NativeToolCall::SubAgent(_) => unreachable!(),
     }
 }
 

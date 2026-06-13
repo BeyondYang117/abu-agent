@@ -1,5 +1,6 @@
 pub mod execute;
 pub(crate) mod compaction;
+pub mod filter;
 pub(crate) mod finalize;
 pub mod host;
 pub mod loop_;

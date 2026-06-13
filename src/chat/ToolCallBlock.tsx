@@ -205,6 +205,68 @@ function stringArrayValue(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+interface SubagentView {
+  name: string
+  agentType?: string
+  depth: number
+  status: string
+  result?: string
+  error?: string
+  preview?: string
+  steps: string[]
+}
+
+/** Parse sub-agent state (P3) from a tool record's structured content: either
+ *  the final `{ type: "subagent", ... }` result or the live `subagentProgress`
+ *  merged in from `chat-subagent` events. */
+function structuredSubagent(toolCall: ToolCallRecord): SubagentView | null {
+  const structured = objectValue(toolCall.structured_content ?? toolCall.structuredContent)
+  if (!structured) return null
+  const isFinal = structured.type === 'subagent'
+  const progress = objectValue(structured.subagentProgress)
+  if (!isFinal && !progress) return null
+  return {
+    name: stringValue(progress?.name) || stringValue(structured.name) || 'sub-agent',
+    agentType: stringValue(structured.agentType) || undefined,
+    depth: numberValue(progress?.depth ?? structured.depth),
+    status: stringValue(progress?.status) || stringValue(structured.status) || 'running',
+    result: stringValue(structured.result) || undefined,
+    error: stringValue(structured.error) || undefined,
+    preview: stringValue(progress?.preview) || undefined,
+    steps: stringArrayValue(progress?.steps),
+  }
+}
+
+function SubagentDetails({ view }: { view: SubagentView }) {
+  const finalText = view.error || view.result
+  return (
+    <div>
+      <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
+        子 agent · {view.name}
+        {view.agentType ? ` (${view.agentType})` : ''} · {view.status}
+      </div>
+      {view.steps.length > 0 && (
+        <div className="mt-0.5 space-y-0.5 text-[10px] text-neutral-500 dark:text-neutral-400">
+          {view.steps.map((step, i) => (
+            <div key={`${i}-${step}`} className="truncate">
+              · {step}
+            </div>
+          ))}
+        </div>
+      )}
+      {(finalText || view.preview) && (
+        <div className="mt-0.5 whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
+          {finalText || view.preview}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
@@ -818,6 +880,7 @@ function DefaultToolCallBlock({
   const source = getSource(toolCall)
   const duration = formatDuration(getDuration(toolCall))
   const fileMutation = useMemo(() => structuredFileMutation(toolCall), [toolCall])
+  const subagent = useMemo(() => structuredSubagent(toolCall), [toolCall])
   const argumentPreview = useMemo(() => getArgumentPreview(toolCall), [toolCall])
   const resultPreview = useMemo(() => getResultPreview(toolCall), [toolCall])
   const error = toolCall.error ? compactToolError(toolCall.error) : ''
@@ -830,7 +893,11 @@ function DefaultToolCallBlock({
       fileMutation.diagnostics?.length
     ),
   )
-  const hasDetails = Boolean(argumentPreview || resultPreview || error || hasFileMutationDetails)
+  const hasSubagentDetails = Boolean(
+    subagent &&
+      (subagent.steps.length || subagent.preview || subagent.result || subagent.error),
+  )
+  const hasDetails = Boolean(argumentPreview || resultPreview || error || hasFileMutationDetails || hasSubagentDetails)
 
   return (
     <div className="not-prose mb-2 text-[11.5px] leading-5 text-neutral-500 dark:text-neutral-400">
@@ -909,6 +976,7 @@ function DefaultToolCallBlock({
             {fileMutation && hasFileMutationDetails && (
               <FileMutationDetails mutation={fileMutation} />
             )}
+            {subagent && hasSubagentDetails && <SubagentDetails view={subagent} />}
             {error && (
               <div className="whitespace-pre-wrap break-words text-red-500">
                 {error}

@@ -38,6 +38,12 @@ pub struct AgentRunConfig<'a> {
     pub entry: AgentRunEntry,
     pub state: &'a AppState,
     pub conversation_id: String,
+    /// Conversation that conversation-scoped tools (todo / native workspace)
+    /// target. Equals `conversation_id` for a normal chat run; for a sub-agent
+    /// run it is the parent conversation (see `ToolExecutionContext`).
+    pub tool_conversation_id: String,
+    /// Sub-agent nesting depth (0 = top-level chat run).
+    pub depth: u8,
     pub run_id: String,
     pub message_id: String,
     pub generation: u64,

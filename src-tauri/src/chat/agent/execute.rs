@@ -37,6 +37,20 @@ pub struct ToolExecutionContext<'a> {
     pub message_id: &'a str,
     pub generation: u64,
     pub round: u32,
+    /// Sub-agent nesting depth: 0 for a top-level chat run, +1 per spawned
+    /// sub-agent. Used to gate `agent` spawns (`MAX_SUB_AGENT_DEPTH`) and to
+    /// reject sensitive tools inside sub-agents.
+    pub depth: u8,
+    /// Conversation that conversation-scoped tools (todo, native file
+    /// workspace) operate on. Equals `conversation_id` for a top-level run; for
+    /// a sub-agent it is the PARENT conversation so the sub-agent can claim the
+    /// parent's todos and resolve the parent's project workspace, while
+    /// `conversation_id` stays a synthetic id used only for generation/streaming
+    /// isolation.
+    pub tool_conversation_id: &'a str,
+    /// The model-issued tool_call id of the call currently executing. Sub-agent
+    /// progress is reported back onto the parent tool card addressed by this id.
+    pub tool_call_id: &'a str,
 }
 
 pub fn match_tool_call<'a>(
@@ -730,6 +744,9 @@ mod tests {
             message_id: "message",
             generation: 1,
             round: 2,
+            depth: 0,
+            tool_conversation_id: "conversation",
+            tool_call_id: "call",
         }
     }
 

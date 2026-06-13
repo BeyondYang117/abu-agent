@@ -1167,6 +1167,12 @@ async fn complete_assistant_reply(
     );
     let ask_user_tools_available = append_agent_ask_user_tools(&mut tools, provider.supports_tools);
     let todo_tools_available = append_agent_todo_tools(&mut tools, provider.supports_tools);
+    // Multi-agent spawn tools (P3): top-level chat may spawn sub-agents when the
+    // opt-in toggle is on and tools are supported. Excluded in Plan mode (spawn
+    // is a side-effecting, non-read-only capability).
+    if settings.chat_tools.sub_agents && provider.supports_tools && !plan_mode {
+        crate::chat::sub_agent::append_tool_definitions(&mut tools, true);
+    }
     let runtime_tools_available = provider.supports_tools && !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let agent_todo_prompt = crate::chat::todo::format_prompt(
@@ -1250,6 +1256,8 @@ async fn complete_assistant_reply(
             entry,
             state: state.inner(),
             conversation_id: conversation.id.clone(),
+            tool_conversation_id: conversation.id.clone(),
+            depth: 0,
             run_id: run_id.clone(),
             message_id: assistant_message_id.clone(),
             generation: run_generation,
@@ -3512,9 +3520,15 @@ impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
     ) -> crate::chat::agent::ToolExecutorFuture<'a> {
         Box::pin(async move {
             let native_ctx = mcp::registry::NativeToolContext {
-                conversation_id: ctx.conversation_id.to_string(),
+                // Conversation-scoped tools (todo / native workspace) target the
+                // tool conversation, which equals the run conversation for a
+                // top-level run and the PARENT conversation for a sub-agent run.
+                conversation_id: ctx.tool_conversation_id.to_string(),
                 message_id: ctx.message_id.to_string(),
-                tool_call_id: None,
+                tool_call_id: Some(ctx.tool_call_id.to_string()),
+                run_id: ctx.run_id.to_string(),
+                generation: ctx.generation,
+                depth: ctx.depth,
             };
             mcp::registry::call_tool(
                 &self.app,

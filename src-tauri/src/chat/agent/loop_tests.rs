@@ -451,6 +451,7 @@
             #[cfg(target_os = "macos")]
             macos_ocr: crate::macos_ocr::MacOcrClient::disabled(),
             rapidocr: crate::rapidocr::RapidOcrClient::disabled(),
+            sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
         }
     }
 
@@ -479,6 +480,8 @@
             entry: AgentRunEntry::Send,
             state,
             conversation_id: "conversation".to_string(),
+            tool_conversation_id: "conversation".to_string(),
+            depth: 0,
             run_id: "run".to_string(),
             message_id: "message".to_string(),
             generation: 1,
@@ -549,6 +552,8 @@
             message_id: "message",
             generation: 1,
             round: 1,
+            depth: 0,
+            tool_conversation_id: "conversation",
         }
     }
 

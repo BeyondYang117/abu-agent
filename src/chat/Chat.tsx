@@ -1353,6 +1353,50 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }, [ensureStreamSnapshot, showStreamSnapshotIfCurrent, syncGeneratingConversationIds])
 
+  // Live nested sub-agent progress (P3): merge onto the parent tool card's
+  // structuredContent.subagentProgress, addressed by parentToolCallId.
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
+      unlisten = await api.onChatSubagent((payload) => {
+        if (cancelled) return
+        if (!isConversationInFlight(inFlightConversationsRef.current, payload.parentConversationId)) return
+        const snapshot = ensureStreamSnapshot(payload.parentConversationId)
+        if (payload.parentRunId && snapshot.runId && snapshot.runId !== payload.parentRunId) return
+        const index = snapshot.toolCalls.findIndex((item) => item.id === payload.parentToolCallId)
+        if (index < 0) return
+        const progress = {
+          taskId: payload.taskId,
+          name: payload.name,
+          depth: payload.depth,
+          status: payload.status,
+          preview: payload.preview ?? '',
+          steps: payload.steps ?? [],
+        }
+        snapshot.toolCalls = snapshot.toolCalls.map((item, i) => {
+          if (i !== index) return item
+          const existing =
+            item.structuredContent && typeof item.structuredContent === 'object'
+              ? (item.structuredContent as Record<string, unknown>)
+              : {}
+          return { ...item, structuredContent: { ...existing, subagentProgress: progress } }
+        })
+        showStreamSnapshotIfCurrent(payload.parentConversationId, snapshot)
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [ensureStreamSnapshot, showStreamSnapshotIfCurrent])
+
   useEffect(() => {
     let cancelled = false
     let unlisten: (() => void) | undefined
