@@ -198,3 +198,37 @@ ultracode 编排完成 P2 剩余两线并合入 main：调研蓝图(8 agent)→w
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: P3 multi-agent / sub-agent runtime
+
+**Date**: 2026-06-13
+**Task**: P3 multi-agent / sub-agent runtime
+**Branch**: `p3-multi-agent-subagent`
+
+### Summary
+
+实现 P3 多 agent/子 agent 运行时：复用 run_agent_loop 的无 UI runner + SubAgentManager(Semaphore3) + SubAgentHost(降采样进度/depth>0拒敏感工具/级联取消) + agent/check_agent_result/list_agent_tasks 原生工具(NativeToolCall::SubAgent) + AgentDefinition 三层加载 + filter_tools_for_agent(剔除agent自身) + depth/tool_conversation_id 全链路透传。前端专属 SubAgentCard(星芒twinkle动效+流光状态行+markdown结果+每agent token)。迭代修正：agent 标 parallel_safe 支持并行(Semaphore3封顶)、空响应有界重试、模型感知 max_output_tokens、generation 全路径回收。方向修正为 orchestrator-worker 纯 worker 模型(子 agent 不碰 todo,父自上而下委派)。设置加多 agent opt-in 开关。391 cargo 测试通过+typecheck+lint。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `23edf8f8` | (see git log) |
+| `9f13b039` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
