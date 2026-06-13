@@ -528,6 +528,16 @@ fn effective_tool_timeout_ms(
             .clamp(1_000, 300_000)
             .max(default_timeout_ms);
     }
+    // The `agent` spawn tool runs a whole sub-agent loop whose own budget
+    // (SUB_AGENT_SYNC_TIMEOUT_SECS × SUB_AGENT_MAX_ATTEMPTS) is far longer than the
+    // default generic tool timeout (120s). Without a longer outer timeout, the
+    // generic 120s would fire first and mis-kill a still-running sub-agent. Give
+    // the outer call a large backstop and let the sub-agent's inner timeout +
+    // cascade cancel govern its lifecycle. check_agent_result / list_agent_tasks
+    // are instant queries, so they intentionally keep the default timeout.
+    if tool.source == "native" && tool.name == crate::chat::sub_agent::AGENT_TOOL_NAME {
+        return crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS.max(default_timeout_ms);
+    }
     default_timeout_ms
 }
 
@@ -1003,6 +1013,39 @@ mod tests {
         assert_eq!(
             effective_tool_timeout_ms(&settings, &tool, &arguments),
             crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS
+        );
+    }
+
+    #[test]
+    fn agent_spawn_uses_sub_agent_backstop_timeout() {
+        // The `agent` spawn tool must outlast the sub-agent's own run budget so the
+        // outer 120s default does not mis-kill a long sub-agent run.
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = 120_000;
+        let tool = crate::chat::sub_agent::agent_tool();
+        let arguments = serde_json::json!({ "prompt": "do a focused sub-task" });
+
+        assert_eq!(
+            effective_tool_timeout_ms(&settings, &tool, &arguments),
+            crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS
+        );
+        assert!(
+            crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS > 120_000,
+            "agent timeout must exceed the default generic tool timeout"
+        );
+    }
+
+    #[test]
+    fn agent_spawn_respects_larger_user_default_timeout() {
+        // If the user configured an even larger generic timeout, honor it.
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS + 1;
+        let tool = crate::chat::sub_agent::agent_tool();
+        let arguments = serde_json::json!({ "prompt": "do a focused sub-task" });
+
+        assert_eq!(
+            effective_tool_timeout_ms(&settings, &tool, &arguments),
+            crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS + 1
         );
     }
 }

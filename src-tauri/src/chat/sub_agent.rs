@@ -39,7 +39,7 @@ use crate::chat::agent::{
     ToolExecutor, ToolExecutorFuture,
 };
 use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
-use crate::chat::types::{ChatMessageSegment, ToolCallRecord};
+use crate::chat::types::{ChatMessageSegment, ToolCallRecord, ToolCallStatus};
 use crate::mcp::native_registry::NativeToolFuture;
 use crate::mcp::types::McpToolCallResult;
 use crate::mcp::ChatToolDefinition;
@@ -58,6 +58,16 @@ const SUB_AGENT_SYNC_TIMEOUT_SECS: u64 = 300;
 /// `run_agent_loop` surfaces as `Err`. Top-level chat recovers via user resend;
 /// a sub-agent has no resend loop, so we retry the run once before giving up.
 const SUB_AGENT_MAX_ATTEMPTS: usize = 2;
+/// Outer per-tool-call timeout for the `agent` spawn tool. It must NOT fire before
+/// the sub-agent's own run budget: a single run is capped at
+/// `SUB_AGENT_SYNC_TIMEOUT_SECS` and may be attempted up to `SUB_AGENT_MAX_ATTEMPTS`
+/// times, so the worst-case run length is `300 × 2 = 600s`, plus a 60s margin.
+/// The default generic tool timeout (120s) is far shorter and would mis-kill a
+/// long-running sub-agent; this lets the inner 300s timeout + cascade cancel
+/// actually govern the lifecycle, with the outer timeout only as a big backstop.
+/// `(300 * 2 + 60) * 1000 = 660_000ms`.
+pub const SUB_AGENT_TOOL_TIMEOUT_MS: u64 =
+    (SUB_AGENT_SYNC_TIMEOUT_SECS * SUB_AGENT_MAX_ATTEMPTS as u64 + 60) * 1000;
 const PROGRESS_EMIT_INTERVAL_MS: u128 = 350;
 const RESULT_PREVIEW_MAX: usize = 4000;
 
@@ -81,14 +91,16 @@ pub fn depth_allows_spawn(depth: u8) -> bool {
 }
 
 /// Whether a failed sub-agent run should be retried. Retry only when the outcome
-/// is an error that is NOT a cancellation, there are attempts remaining, and the
-/// parent generation is still active (so we never retry after a cascade cancel).
+/// is an error that is NOT a cancellation and NOT a timeout, there are attempts
+/// remaining, and the parent generation is still active (so we never retry after
+/// a cascade cancel). A timeout means the run was already too slow (not an instant
+/// empty response), so retrying would only waste another full 300s budget.
 fn should_retry_sub_agent(
     outcome: &Result<AgentRunResult, String>,
     attempt: usize,
     parent_active: bool,
 ) -> bool {
-    matches!(outcome, Err(err) if err != "cancelled")
+    matches!(outcome, Err(err) if err != "cancelled" && !err.contains("timed out"))
         && attempt + 1 < SUB_AGENT_MAX_ATTEMPTS
         && parent_active
 }
@@ -238,7 +250,71 @@ impl SubAgentManager {
 struct ProgressState {
     text: String,
     last_emit: Option<Instant>,
-    steps: Vec<String>,
+    /// Per-tool-call tracking, ordered by first sight, keyed by `record.id`.
+    /// Status is updated in place (Pending→Running→Success/Error) instead of
+    /// appending an event line per transition, so the same call never produces
+    /// multiple step rows.
+    tools: Vec<ToolProgress>,
+}
+
+/// One tracked tool call inside a sub-agent run.
+struct ToolProgress {
+    id: String,
+    name: String,
+    status: ToolCallStatus,
+}
+
+impl ProgressState {
+    /// Insert or update a tool call by `id`. Existing call ⇒ refresh its status;
+    /// new call ⇒ append (preserving first-seen order).
+    fn upsert_tool(&mut self, id: &str, name: &str, status: ToolCallStatus) {
+        if let Some(existing) = self.tools.iter_mut().find(|t| t.id == id) {
+            existing.status = status;
+        } else {
+            self.tools.push(ToolProgress {
+                id: id.to_string(),
+                name: name.to_string(),
+                status,
+            });
+        }
+    }
+
+    /// Aggregate tracked tool calls into a compact per-tool-name summary, one
+    /// line per distinct tool name with status counts, e.g.
+    /// `web_search · 6 done · 2 running`. Zero-count states are omitted.
+    fn aggregate_steps(&self) -> Vec<String> {
+        // Preserve first-seen order of tool names.
+        let mut order: Vec<&str> = Vec::new();
+        let mut counts: HashMap<&str, [usize; 3]> = HashMap::new(); // [done, running, failed]
+        for tool in &self.tools {
+            let entry = counts.entry(tool.name.as_str()).or_insert_with(|| {
+                order.push(tool.name.as_str());
+                [0, 0, 0]
+            });
+            match tool.status {
+                ToolCallStatus::Success | ToolCallStatus::Skipped => entry[0] += 1,
+                ToolCallStatus::Pending | ToolCallStatus::Running => entry[1] += 1,
+                ToolCallStatus::Error | ToolCallStatus::Cancelled => entry[2] += 1,
+            }
+        }
+        order
+            .into_iter()
+            .map(|name| {
+                let [done, running, failed] = counts[name];
+                let mut line = name.to_string();
+                if done > 0 {
+                    line.push_str(&format!(" · {done} done"));
+                }
+                if running > 0 {
+                    line.push_str(&format!(" · {running} running"));
+                }
+                if failed > 0 {
+                    line.push_str(&format!(" · {failed} failed"));
+                }
+                line
+            })
+            .collect()
+    }
 }
 
 struct SubAgentHost<'a> {
@@ -280,7 +356,7 @@ impl SubAgentHost<'_> {
                 }
             }
             guard.last_emit = Some(now);
-            (clip(&guard.text, 1200), guard.steps.clone())
+            (clip(&guard.text, 1200), guard.aggregate_steps())
         };
         let _ = self.app.emit(
             "chat-subagent",
@@ -335,17 +411,13 @@ impl AgentHost for SubAgentHost<'_> {
         _message_id: &str,
         record: &ToolCallRecord,
     ) {
-        // Surface which tool the sub-agent is using as a nested step line.
-        let label = format!("{} ({:?})", record.name, record.status);
+        // Surface which tools the sub-agent is using as compact nested step
+        // lines. Track each call by id and update its status in place, so a
+        // single call (Pending→Running→Success) never spams multiple rows;
+        // `emit_progress` aggregates them into per-tool-name count lines.
         {
             let mut guard = self.progress.lock().unwrap_or_else(|e| e.into_inner());
-            if guard.steps.last().map(|s| s.as_str()) != Some(label.as_str()) {
-                guard.steps.push(label);
-                if guard.steps.len() > 40 {
-                    let overflow = guard.steps.len() - 40;
-                    guard.steps.drain(0..overflow);
-                }
-            }
+            guard.upsert_tool(&record.id, &record.name, record.status.clone());
         }
         self.emit_progress("running", true);
     }
@@ -1067,6 +1139,48 @@ mod tests {
     }
 
     #[test]
+    fn progress_upsert_dedups_by_id_and_updates_status() {
+        let mut p = ProgressState::default();
+        // Same call id transitions Pending→Running→Success: one slot, not three.
+        p.upsert_tool("call-1", "web_search", ToolCallStatus::Pending);
+        p.upsert_tool("call-1", "web_search", ToolCallStatus::Running);
+        p.upsert_tool("call-1", "web_search", ToolCallStatus::Success);
+        assert_eq!(p.tools.len(), 1);
+        assert!(matches!(p.tools[0].status, ToolCallStatus::Success));
+    }
+
+    #[test]
+    fn progress_aggregate_counts_per_tool_name() {
+        let mut p = ProgressState::default();
+        // 6 distinct web_search calls done, 2 still running.
+        for i in 0..6 {
+            p.upsert_tool(&format!("ws-done-{i}"), "web_search", ToolCallStatus::Success);
+        }
+        for i in 0..2 {
+            p.upsert_tool(&format!("ws-run-{i}"), "web_search", ToolCallStatus::Running);
+        }
+        // 3 read_file done, 1 failed.
+        for i in 0..3 {
+            p.upsert_tool(&format!("rf-done-{i}"), "read_file", ToolCallStatus::Success);
+        }
+        p.upsert_tool("rf-fail", "read_file", ToolCallStatus::Error);
+
+        let steps = p.aggregate_steps();
+        // One line per distinct tool name, first-seen order preserved.
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0], "web_search · 6 done · 2 running");
+        assert_eq!(steps[1], "read_file · 3 done · 1 failed");
+    }
+
+    #[test]
+    fn progress_aggregate_omits_zero_count_states() {
+        let mut p = ProgressState::default();
+        p.upsert_tool("g-1", "grep", ToolCallStatus::Running);
+        let steps = p.aggregate_steps();
+        assert_eq!(steps, vec!["grep · 1 running".to_string()]);
+    }
+
+    #[test]
     fn append_tools_strips_spawn_when_not_allowed() {
         let mut tools = Vec::new();
         append_tool_definitions(&mut tools, false);
@@ -1181,6 +1295,12 @@ mod tests {
         // Cancellation is not a recoverable error → never retry.
         let cancelled: Result<AgentRunResult, String> = Err("cancelled".to_string());
         assert!(!should_retry_sub_agent(&cancelled, 0, true));
+
+        // Timeout is too-slow, not an instant empty response → never retry.
+        let timed_out: Result<AgentRunResult, String> = Err(format!(
+            "Sub-agent timed out after {SUB_AGENT_SYNC_TIMEOUT_SECS}s"
+        ));
+        assert!(!should_retry_sub_agent(&timed_out, 0, true));
 
         // Success → never retry.
         assert!(!should_retry_sub_agent(&ok_run_result(), 0, true));
