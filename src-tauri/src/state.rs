@@ -97,6 +97,8 @@ pub struct AppState {
     /// RapidOCR 离线 OCR 客户端。模型 + onnxruntime dylib 都由用户在设置页面下载到 app data 目录,
     /// 安装包不带任何 ONNX Runtime 二进制。`status()` 检查 4 个文件齐不齐, 不齐让前端引导下载。
     pub rapidocr: std::sync::Arc<RapidOcrClient>,
+    /// 多 agent / 子 agent 任务表（P3）：spawn 的子 agent 状态、按名寻址、并发上限。
+    pub sub_agents: crate::chat::sub_agent::SubAgentManager,
 }
 
 /// 单个 key 触发 failover 后的冷却时长。
@@ -311,6 +313,7 @@ pub(crate) fn test_app_state() -> AppState {
         #[cfg(target_os = "macos")]
         macos_ocr: MacOcrClient::disabled(),
         rapidocr: RapidOcrClient::disabled(),
+        sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
     }
 }
 

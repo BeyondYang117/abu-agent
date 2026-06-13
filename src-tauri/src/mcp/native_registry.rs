@@ -15,7 +15,9 @@
 //!   read_file plus the read-side project tools (list_dir/search_files/
 //!   glob_files/stat_path), and only when approval-free. Do not widen or
 //!   narrow it here without a spec change. memory_read is read-only and
-//!   approval-free but deliberately NOT parallel-safe.
+//!   approval-free but deliberately NOT parallel-safe. `agent` is also
+//!   parallel-safe (multi-agent fan-out): each spawn runs isolated and is
+//!   Semaphore(3)-capped.
 //! - Table order is the model-facing tool list order; keep it stable.
 
 use std::future::Future;
@@ -79,6 +81,11 @@ pub enum NativeToolCall {
     /// `chat/agent/execute.rs::execute_ask_user_call` and must never reach
     /// the registry dispatcher.
     HostMediated,
+    /// Sub-agent management tools (agent / check_agent_result /
+    /// list_agent_tasks): dispatched before workspace resolution (they manage
+    /// agents, not files) with the parent run context from `NativeToolContext`
+    /// (depth, run_id, generation, parent conversation/tool-call id).
+    SubAgent(for<'a> fn(crate::chat::sub_agent::SubAgentCallCtx<'a>) -> NativeToolFuture<'a>),
 }
 
 pub struct NativeToolEntry {
@@ -284,6 +291,43 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         read_only: false,
         call: NativeToolCall::HostMediated,
     },
+    // Sub-agent management tools (P3). Appended in chat/commands.rs
+    // (`append_agent_subagent_tools`) when the multi-agent toggle is on, so
+    // enabled = false here. bypasses_approval = true: spawning/inspecting
+    // sub-agents is governed by depth + concurrency caps, not per-call
+    // approval prompts.
+    NativeToolEntry {
+        name: crate::chat::sub_agent::AGENT_TOOL_NAME,
+        def: crate::chat::sub_agent::agent_tool,
+        enabled: |_, _, _| false,
+        // parallel_safe = true: each `agent` spawn runs in isolation (its own
+        // synthetic conversation/generation/message history), bypasses approval,
+        // and is capped by the SubAgentManager `Semaphore(3)`. Concurrent fan-out
+        // is the core value of multi-agent, so a single round may dispatch
+        // several spawns in parallel (scheduler caps at 4, semaphore at 3).
+        parallel_safe: true,
+        bypasses_approval: true,
+        read_only: false,
+        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_agent_spawn),
+    },
+    NativeToolEntry {
+        name: crate::chat::sub_agent::CHECK_AGENT_RESULT_TOOL_NAME,
+        def: crate::chat::sub_agent::check_agent_result_tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: true,
+        read_only: true,
+        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_check_agent_result),
+    },
+    NativeToolEntry {
+        name: crate::chat::sub_agent::LIST_AGENT_TASKS_TOOL_NAME,
+        def: crate::chat::sub_agent::list_agent_tasks_tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: true,
+        read_only: true,
+        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_list_agent_tasks),
+    },
 ];
 
 pub fn find_entry(name: &str) -> Option<&'static NativeToolEntry> {
@@ -421,6 +465,9 @@ mod tests {
         "todo_write",
         "todo_update",
         "ask_user",
+        "agent",
+        "check_agent_result",
+        "list_agent_tasks",
     ];
 
     #[test]
@@ -455,8 +502,12 @@ mod tests {
                 "search_files",
                 "glob_files",
                 "stat_path",
+                "agent",
             ],
-            "parallel-safe set is intentionally narrow per agent-runtime spec"
+            "parallel-safe set is intentionally narrow per agent-runtime spec; \
+             `agent` joins it because each spawn runs in isolation (own \
+             conversation/generation/message history), bypasses approval, and is \
+             Semaphore(3)-capped, making concurrent fan-out the core multi-agent value"
         );
     }
 
@@ -475,6 +526,9 @@ mod tests {
                 "todo_write",
                 "todo_update",
                 "ask_user",
+                "agent",
+                "check_agent_result",
+                "list_agent_tasks",
             ]
         );
     }
@@ -497,6 +551,8 @@ mod tests {
                 "glob_files",
                 "stat_path",
                 "memory_read",
+                "check_agent_result",
+                "list_agent_tasks",
             ],
             "memory_read is read-only but deliberately not parallel-safe"
         );
@@ -518,7 +574,9 @@ mod tests {
         for entry in NATIVE_TOOLS {
             if matches!(
                 entry.call,
-                NativeToolCall::Conversation(_) | NativeToolCall::HostMediated
+                NativeToolCall::Conversation(_)
+                    | NativeToolCall::HostMediated
+                    | NativeToolCall::SubAgent(_)
             ) {
                 assert!(
                     !(entry.enabled)(&native, true, true),

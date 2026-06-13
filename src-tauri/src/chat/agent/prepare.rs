@@ -769,7 +769,7 @@ pub fn estimate_tokens(text: &str) -> usize {
     ascii.div_ceil(4) + non_ascii
 }
 
-fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommended: &str) -> bool {
+pub(crate) fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommended: &str) -> bool {
     let recommended = recommended.trim();
     if recommended.is_empty() {
         return false;

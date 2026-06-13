@@ -10,6 +10,7 @@ pub mod model;
 pub mod model_metadata;
 pub mod plan;
 pub mod storage;
+pub mod sub_agent;
 pub mod todo;
 pub mod types;
 

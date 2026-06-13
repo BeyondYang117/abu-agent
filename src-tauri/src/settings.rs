@@ -764,6 +764,12 @@ pub struct ChatToolsConfig {
     pub max_tool_output_chars: Option<usize>,
     #[serde(default = "default_chat_approval_policy")]
     pub approval_policy: String,
+    /// Multi-agent / sub-agent system (P3). When on, the `agent` /
+    /// `check_agent_result` / `list_agent_tasks` tools are exposed to the
+    /// model. Off by default (opt-in, like MCP): spawning sub-agents
+    /// multiplies API usage and key/quota pressure.
+    #[serde(default)]
+    pub sub_agents: bool,
     pub native_tools: ChatNativeToolsConfig,
 }
 
@@ -782,6 +788,7 @@ impl Default for ChatToolsConfig {
             mcp_idle_timeout_ms: default_mcp_idle_timeout_ms(),
             max_tool_output_chars: None,
             approval_policy: default_chat_approval_policy(),
+            sub_agents: false,
             native_tools: ChatNativeToolsConfig::default(),
         }
     }

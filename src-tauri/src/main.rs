@@ -2,6 +2,7 @@
 #![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
 
 mod api;
+mod agents;
 mod capture_geometry;
 mod chat;
 mod commands;
@@ -170,6 +171,7 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 macos_ocr: macos_ocr::MacOcrClient::new(&app.handle()),
                 rapidocr: rapidocr::RapidOcrClient::new(&app.handle(), build_http_client()),
+                sub_agents: chat::sub_agent::SubAgentManager::default(),
             });
 
             if let Err(err) = register_hotkeys(&app.handle()) {

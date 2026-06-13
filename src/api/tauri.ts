@@ -231,6 +231,20 @@ export type ChatToolProgressPayload = {
   structuredContent?: unknown
 }
 
+/** Live nested progress of a spawned sub-agent (P3), addressed to the parent
+ *  tool card via `parentToolCallId`. */
+export type ChatSubagentPayload = {
+  parentConversationId: string
+  parentRunId: string
+  parentToolCallId: string
+  taskId: string
+  name: string
+  depth: number
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  preview?: string
+  steps?: string[]
+}
+
 export type AskUserPhase = 'awaiting' | 'answered' | 'skipped' | 'timeout' | 'cancelled'
 
 export type AskUserOption = {
@@ -434,6 +448,8 @@ export type ChatToolsConfig = {
   mcpIdleTimeoutMs?: number
   maxToolOutputChars: number | null
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
+  /** Multi-agent / sub-agent system (P3). Off by default (opt-in). */
+  subAgents?: boolean
   nativeTools: ChatNativeToolsConfig
 }
 
@@ -797,6 +813,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     mcpIdleTimeoutMs: current.mcpIdleTimeoutMs ?? 600_000,
     maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
+    subAgents: current.subAgents ?? false,
     nativeTools: {
       ...defaultNativeTools(),
       ...current.nativeTools,
@@ -1086,6 +1103,10 @@ export const api = {
   onChatTool: (listener: (payload: ChatToolProgressPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatToolProgressPayload>('chat-tool', (payload) => listener(payload))
+  },
+  onChatSubagent: (listener: (payload: ChatSubagentPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatSubagentPayload>('chat-subagent', (payload) => listener(payload))
   },
   onChatUserPrompt: (listener: (payload: ChatUserPromptPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})

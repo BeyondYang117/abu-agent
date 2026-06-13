@@ -56,6 +56,8 @@ pub(crate) async fn run_tool_round(
             message_id: &config.message_id,
             generation: config.generation,
             round,
+            depth: config.depth,
+            tool_conversation_id: &config.tool_conversation_id,
         },
         &state.tools,
         &state.blocked_tool_calls,
@@ -119,6 +121,8 @@ pub(crate) struct ToolRoundContext<'a> {
     pub(crate) message_id: &'a str,
     pub(crate) generation: u64,
     pub(crate) round: u32,
+    pub(crate) depth: u8,
+    pub(crate) tool_conversation_id: &'a str,
 }
 
 pub(crate) struct ToolRoundResult {
@@ -496,6 +500,9 @@ async fn execute_tool_call_result(
         message_id: round_ctx.message_id,
         generation: round_ctx.generation,
         round: round_ctx.round,
+        depth: round_ctx.depth,
+        tool_conversation_id: round_ctx.tool_conversation_id,
+        tool_call_id: &tool_call_id,
     };
     let (record, tool_content) = execute_tool_call(
         host,

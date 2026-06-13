@@ -69,7 +69,7 @@
 - Every executable tool still emits lifecycle records through `AgentHost::emit_tool_record`: pending, running, then final success/error/skipped/cancelled.
 - Validate every executable tool call against `ChatToolDefinition.input_schema` before approval and before `ToolExecutor::call`. Validation failure returns an error tool result and must not ask for approval or invoke the executor.
 - Approval-gated tools must be serial. Do not start execution before `AgentHost::request_tool_approval` resolves.
-- The native parallel-safe set is intentionally narrow: `native:web_search`, `native:web_fetch`, and `native:read_file`, and only when `tool_requires_approval` returns false.
+- The native parallel-safe set is intentionally narrow: `native:web_search`, `native:web_fetch`, `native:read_file` (plus the read-side project tools `list_dir`/`search_files`/`glob_files`/`stat_path`), and `native:agent`, and only when `tool_requires_approval` returns false. `agent` qualifies because each spawn runs in isolation (its own synthetic conversation/generation/message history), bypasses approval, and is capped by the SubAgentManager `Semaphore(3)` — so concurrent fan-out is the core multi-agent value.
 - MCP tools are serial by default. A MCP tool may join a parallel batch only when it has explicit `annotations.readOnlyHint == true`, no `destructiveHint == true`, and `tool_requires_approval` returns false.
 - MCP approval/sensitivity must prefer tool metadata over name guessing: `destructiveHint == true`, `openWorldHint == true`, or `readOnlyHint == false` imply sensitive/confirmation behavior under confirm policies; `readOnlyHint == true` allows auto-approval for trusted non-sensitive tools. User-selected `approval_policy == "auto"` still bypasses approval prompts but must not make non-read-only MCP tools parallel.
 - Preserve MCP metadata across all backend/frontend boundaries: `annotations`, `outputSchema`, and tool result `structuredContent` must not be dropped. When a MCP result includes `structuredContent`, persist it on `ToolCallRecord` and include it in the model-facing tool content unless the text result already contains the same JSON.
@@ -344,7 +344,7 @@ The backend canonicalizes the path and allows only files under `~/Kivio/runs`.
 
 - Persistent model: `Conversation.agent_todo_state: AgentTodoState` with `#[serde(default)]` for old conversation JSON. **Task state is per-conversation (isolated)** — it is never shared across conversations, including conversations in the same project.
 - State shape: `AgentTodoState { items: Vec<AgentTodoItem>, updated_at: i64 }`.
-- Item shape: `AgentTodoItem { id, content, description?, status, blocks: Vec<String>, blocked_by: Vec<String>, owner? }` — `content` is the one-line subject (name kept for back-compat); `description`/`owner`/edges are optional, all serde-default.
+- Item shape: `AgentTodoItem { id, content, description?, status, blocks: Vec<String>, blocked_by: Vec<String>, owner? }` — `content` is the one-line subject (name kept for back-compat); `description`/`owner`/edges are optional, all serde-default. `owner` marks who a todo is delegated to in the orchestrator-worker model: it is set top-down BY THE PARENT (e.g. `owner = sub-agent name`) when delegating work; it is NOT a flag a sub-agent claims for itself (sub-agents have no todo access).
 - Status enum: `pending | in_progress | completed | cancelled`. `cancelled` does not participate in the single-`in_progress` invariant.
 - Native tools: `todo_write({ todos })` replaces the full list; `todo_update({ id, content?, description?, status?, blocks?, blocked_by?, owner?, delete? })` updates or (with `delete: true`) removes one item.
 - Tauri event: `chat-todo` payload `{ conversationId, todoState }`.
@@ -352,7 +352,7 @@ The backend canonicalizes the path and allows only files under `~/Kivio/runs`.
 ### 3. Contracts
 
 - Canonical todo state lives on `Conversation`, not only in tool records or message metadata. It is conversation-scoped: switching conversations shows that conversation's own list (an unrelated conversation must not inherit another's tasks).
-- **Dependency edges**: `normalized_state` auto-syncs reverse edges (`A.blocks ∋ B ⇔ B.blocked_by ∋ A`), drops self/invalid/duplicate edges, and cleans edges pointing at deleted items. Edges are data-model only this phase — they do NOT block marking a `blocked_by` item `in_progress` (execution constraints + the subagent consumer of `owner` land in P3).
+- **Dependency edges**: `normalized_state` auto-syncs reverse edges (`A.blocks ∋ B ⇔ B.blocked_by ∋ A`), drops self/invalid/duplicate edges, and cleans edges pointing at deleted items. Edges are data-model only this phase — they do NOT block marking a `blocked_by` item `in_progress` (execution constraints are deferred). `owner` is consumed in P3 as a top-down delegation marker set by the parent orchestrator (= sub-agent name); sub-agents never read or write todos themselves.
 - Tool results carry `structured_content { todoState, changed }`; `changed` is a field-level receipt of what this call modified.
 - Current todo state must be injected into the model system/runtime prompt before `build_chat_api_messages`, and `compute_context_state` must include the same prompt segment for token estimates.
 - Todo tools are appended by the Chat runtime when the provider supports tool calls; they are not governed by user MCP/native-tool settings, assistant tool presets, or data connector filters.
@@ -795,3 +795,42 @@ return mutation ? <FileMutationDetails mutation={mutation} /> : <GenericToolDeta
 ```
 
 Build and validate all mutation plans first, lock resolved target paths before reading/applying, persist structured metadata, and render file changes from that structured contract.
+
+## Scenario: Multi-Agent / Sub-Agent Runtime
+
+### 1. Scope / Trigger
+
+- Trigger: changes to `chat/sub_agent.rs`, `agents/**`, `chat/agent/filter.rs`, the `NativeToolCall::SubAgent` dispatch, or the `depth` / `tool_conversation_id` threading through `AgentRunConfig` → `ToolRoundContext` → `ToolExecutionContext` → `NativeToolContext`.
+- A sub-agent is NOT a second engine: it is a fresh isolated message history (`system + user` only) run through the same `run_agent_loop`, wrapped in a `SubAgentHost`. Landed in P3 (clawspring-refactor roadmap).
+
+### 2. Signatures
+
+- `chat::sub_agent::{agent_tool, check_agent_result_tool, list_agent_tasks_tool}` — the three native tool defs, registered in `NATIVE_TOOLS` with `enabled=false` (appended in `complete_assistant_reply` via `append_tool_definitions(&mut tools, allow_spawn)` only when `chat_tools.sub_agents && supports_tools && !plan_mode`).
+- `NativeToolCall::SubAgent(for<'a> fn(SubAgentCallCtx<'a>) -> NativeToolFuture<'a>)` — dispatched in `call_native_tool` BEFORE workspace resolution (like `Conversation`), carrying `NativeToolContext { conversation_id (=parent), run_id, generation, depth, tool_call_id }`.
+- `run_sub_agent(app, state, SubAgentRequest) -> Result<AgentRunResult, String>` — builds the isolated config and reuses `run_agent_loop`.
+- `SubAgentManager` on `AppState.sub_agents`: `tasks` map + `by_name` + `Semaphore(3)`.
+- `agents::{load_agent_definitions(app, project_root), find_definition}`; built-ins: `general-purpose` (empty/unrestricted), `researcher`/`reviewer` (read-only sets), `coder`. 3-layer load: built-in → `<app_data>/agents/*.md` → `<project>/.kivio/agents/*.md`.
+- `chat::agent::filter::filter_tools_for_agent(&mut tools, &AgentDefinition) -> Vec<removed>`.
+- `MAX_SUB_AGENT_DEPTH = 3`; `depth_allows_spawn(depth) = depth < MAX_SUB_AGENT_DEPTH`.
+
+### 3. Contracts
+
+- **Conversation decoupling.** A sub-agent run uses a synthetic `conversation_id = "subagent-{task_id}"` for generation/streaming isolation, but `tool_conversation_id = parent conversation id` so its `todo_update` claims the PARENT's todos and its native file tools resolve the PARENT's project workspace. For a top-level run the two are equal — zero behavior change (`RegistryToolExecutor` builds `NativeToolContext.conversation_id` from `ctx.tool_conversation_id`).
+- **Provider/model inheritance.** The spawn handler loads the parent conversation to inherit `provider_id` + `model`; `AgentDefinition.model` overrides the model when set.
+- **Depth guard (acceptance #2).** The `agent` handler soft-fails (returns `is_error` result, never `Err`) when `!depth_allows_spawn(ctx.native_ctx.depth)`. Children run at `depth + 1`.
+- **No recursion (acceptance #4).** Children never receive the `agent` tool: it is `enabled=false` in the registry (never in `list_enabled_tool_defs`), and `filter_tools_for_agent` strips any `native:agent` as a second guard.
+- **Cascade cancel (acceptance #3).** `SubAgentHost::is_generation_active` = `generation_cascade_active(state, sub_conv, sub_gen, parent_conv, parent_gen)` — active only while BOTH the sub generation and the parent generation are live. `run_sub_agent` retires its own generation (`cancel_chat_generation(sub_conv)`) on EVERY exit path (success/failure/timeout) so a dead run never reads active and entries don't pile up "active".
+- **Sensitive tools denied at depth > 0.** `SubAgentHost::request_tool_approval` returns `false` unconditionally (a sub-agent cannot escalate to the user); approval-bypass/read-only tools still run. `request_user_response` resolves as a `cancelled` ask_user.
+- **Live nested progress (acceptance #1).** `SubAgentHost` forwards down-sampled (`PROGRESS_EMIT_INTERVAL_MS=350`) stream deltas + per-tool step lines as a `chat-subagent` event keyed by `parentToolCallId`; the frontend merges them into the parent tool record's `structured_content.subagentProgress` without clobbering the final `{type:"subagent",...}` result. `Semaphore(3)` caps concurrent sub-agents; `300s` sync timeout.
+- **Pure worker, no todo access (acceptance #5).** A sub-agent is a pure worker in the orchestrator-worker model: it is exposed NO todo tools, gets NO todo prompt, and cannot read or mutate any todo list. Task delegation is strictly top-down — the parent conversation uses its OWN todo tools to set a todo's `owner` (= sub-agent name) and mark it `in_progress` before the spawn, then marks it `completed` after the sub-agent returns. Each sub-agent "task" is carried by a global `SubAgentTaskRecord` (id/status/result/usage); the parent creates it on spawn and finishes it on completion. `tool_conversation_id` still points at the parent conversation so the worker's native file tools resolve the parent's project workspace, but with todo tools removed the worker has no way to touch parent todos.
+- **Parallel spawn.** The `agent` tool has `parallel_safe = true` in `NATIVE_TOOLS`: a single tool round may dispatch multiple `agent` spawns concurrently (the per-round scheduler caps at `MAX_PARALLEL_TOOL_CALLS_PER_ROUND = 4`; the `SubAgentManager` `Semaphore(3)` is the real ceiling, so a 4th spawn waits for a permit). Each spawn is isolated (own conversation/generation/message history) and bypasses approval, so concurrent runs do not race shared engine state. `check_agent_result`/`list_agent_tasks` stay serial. A sub-agent writes no shared conversation state (no todo access), so parallel spawns have no shared-write contention.
+- **Per-agent token usage.** On successful completion the spawn handler reads `AgentRunResult.usage` (the sub-agent's own provider usage, not overlapping the parent conversation) and emits it on the final tool record's `structured_content.usage` as `{ inputTokens, outputTokens, totalTokens }` (each optional/None-omitted), alongside the existing `type/taskId/name/agentType/status/result` fields. `SubAgentTaskRecord.usage` mirrors it for `check_agent_result`/`list_agent_tasks`. Live `subagentProgress` carries no usage; the frontend `SubAgentCard` renders a compact `↑in ↓out · total tokens` line (k-abbreviated) only in the completed state.
+- **Opt-in.** `chat_tools.sub_agents` defaults `false` (serde default). Background `wait=false` execution and the `SendMessage` inbox are intentionally deferred (research doc 05 P2 split); v1 spawn is synchronous.
+
+### 4. Tests Required
+
+- `sub_agent`: `depth_guard_rejects_at_max_depth`, `host_cancels_when_parent_generation_cancelled`, `append_tools_strips_spawn_when_not_allowed`/`_includes_spawn_when_allowed`, manager register/lookup/finish.
+- `filter`: `always_strips_agent_tool_even_with_empty_allow_list`, `narrows_to_allow_list_and_strips_agent`, `filtering_is_idempotent`.
+- `agents`: built-in uniqueness, read-only researcher set, frontmatter + bracket-list parse, file-stem fallback.
+- `native_registry`: `EXPECTED_ORDER` includes `agent`/`check_agent_result`/`list_agent_tasks`; bypass-approval and read-only sets updated; sub-agent tools never exposed via `list_native_builtin_tool_defs`.
+- Frontend: `npm run typecheck` covers `ChatSubagentPayload`, the merge in `Chat.tsx`, and `SubagentDetails` in `ToolCallBlock.tsx`.
