@@ -927,39 +927,55 @@ body {
   );
 }
 
-/* 子 Agent 头部星芒指示器：非运行态静止暗淡，运行中缓慢旋转 + 明灭 twinkle（agent 在思考） */
-.subagent-twinkle {
-  transform-origin: center;
-  opacity: 0.55;
+/* 子 Agent 头部星芒指示器：字符摩点星芒。非运行态静止暗淡，运行中逐帧循环摩变（Claude Code 风格） */
+.subagent-sparkle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.15em;
+  height: 1.2em;
+  overflow: hidden;
+  text-align: center;
+  line-height: 1;
+  vertical-align: -0.1em;
+  font-variant-emoji: text;
 }
 
-.dark .subagent-twinkle {
+.subagent-sparkle::before {
+  content: '✶';
+  opacity: 0.55;
+  line-height: 1;
+}
+
+.dark .subagent-sparkle::before {
   opacity: 0.6;
 }
 
-@keyframes subagent-twinkle-spin {
-  to {
-    transform: rotate(360deg);
+@keyframes subagent-sparkle-cycle {
+  0% {
+    content: '·';
   }
-}
-
-@keyframes subagent-twinkle-pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-    scale: 0.85;
+  16.66% {
+    content: '✱';
+  }
+  33.33% {
+    content: '✷';
   }
   50% {
-    opacity: 1;
-    scale: 1;
+    content: '✶';
+  }
+  66.66% {
+    content: '✳';
+  }
+  83.33% {
+    content: '✢';
   }
 }
 
-.subagent-twinkle.is-running {
+.subagent-sparkle.is-running::before {
   opacity: 1;
-  animation:
-    subagent-twinkle-spin 3s linear infinite,
-    subagent-twinkle-pulse 1.6s ease-in-out infinite;
+  animation: subagent-sparkle-cycle 1.4s steps(1, end) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -985,10 +1001,9 @@ body {
     color: inherit;
   }
 
-  .subagent-twinkle.is-running {
+  .subagent-sparkle.is-running::before {
     animation: none;
-    transform: none;
-    scale: 1;
+    content: '✶';
     opacity: 0.55;
   }
 
