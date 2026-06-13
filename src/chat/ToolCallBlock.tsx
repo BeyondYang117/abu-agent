@@ -359,18 +359,12 @@ function SubAgentCard({ toolCall, defaultOpen = false }: ToolCallBlockProps) {
             : 'cursor-default'
         }`}
       >
-        <svg
-          className={`shrink-0 text-violet-500 dark:text-violet-300 ${
-            status === 'running' ? 'subagent-twinkle is-running' : 'subagent-twinkle'
+        <span
+          className={`shrink-0 text-[13px] leading-none text-violet-500 dark:text-violet-300 ${
+            status === 'running' ? 'subagent-sparkle is-running' : 'subagent-sparkle'
           }`}
-          width={13}
-          height={13}
-          viewBox="0 0 24 24"
-          fill="currentColor"
           aria-hidden="true"
-        >
-          <path d="M12 0c.7 5.6 5.7 10.6 11.3 11.3v1.4C17.7 13.4 12.7 18.4 12 24h-1.4c-.7-5.6-5.7-10.6-11.3-11.3v-1.4C5.6 10.6 10.6 5.6 11.3 0H12z" />
-        </svg>
+        />
         <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
           {title}
         </span>
