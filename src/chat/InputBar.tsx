@@ -25,6 +25,7 @@ import {
   Sparkles,
   Square,
   Wrench,
+  Zap,
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
 import { api, type ChatToolDefinition } from '../api/tauri'
@@ -261,6 +262,48 @@ function slashCommandIcon(command: SlashCommandDefinition) {
   }
 }
 
+const AGENT_MODE_OPTIONS: {
+  mode: AgentPlanMode
+  label: string
+  description: string
+  icon: typeof Zap
+}[] = [
+  {
+    mode: 'act',
+    label: 'Act',
+    description: '普通模式 · Normal',
+    icon: Zap,
+  },
+  {
+    mode: 'plan',
+    label: 'Plan',
+    description: '计划模式 · Enter plan mode',
+    icon: ListChecks,
+  },
+  {
+    mode: 'orchestrate',
+    label: 'Orchestrate',
+    description: '主动派子 agent · Proactive sub-agents',
+    icon: Network,
+  },
+]
+
+// pill 颜色呼应输入框边框：Act=neutral、Plan=emerald、Orchestrate=violet
+const AGENT_MODE_PILL_CLASS: Record<AgentPlanMode, { idle: string; iconColor: string }> = {
+  act: {
+    idle: 'text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/55',
+    iconColor: 'text-neutral-500 dark:text-neutral-300',
+  },
+  plan: {
+    idle: 'text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400 dark:hover:bg-emerald-400/10',
+    iconColor: 'text-emerald-500 dark:text-emerald-400',
+  },
+  orchestrate: {
+    idle: 'text-violet-600 hover:bg-violet-500/10 dark:text-violet-400 dark:hover:bg-violet-400/10',
+    iconColor: 'text-violet-500 dark:text-violet-400',
+  },
+}
+
 function findActiveSlashToken(value: string, cursor: number): ActiveSlashToken | null {
   if (cursor < 0 || cursor > value.length) return null
 
@@ -383,6 +426,7 @@ export function InputBar({
   const [attachmentError, setAttachmentError] = useState('')
   const [dragActive, setDragActive] = useState(false)
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
   const [projectOptions, setProjectOptions] = useState<ChatProject[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
@@ -401,10 +445,18 @@ export function InputBar({
   const agentPlanActive = agentPlanMode === 'plan'
   const agentOrchestrateActive = agentPlanMode === 'orchestrate'
   const projectEntryEnabled = Boolean(showProjectEntry && onSelectProject)
+  const modeEntryEnabled = Boolean(onAgentPlanModeChange)
+  const activeModeOption = AGENT_MODE_OPTIONS.find((option) => option.mode === agentPlanMode)
+    ?? AGENT_MODE_OPTIONS[0]
+  const activeModePillClass = AGENT_MODE_PILL_CLASS[agentPlanMode]
 
   const closeProjectMenu = useCallback(() => {
     setProjectMenuOpen(false)
     setProjectCreateMenuOpen(false)
+  }, [])
+
+  const closeModeMenu = useCallback(() => {
+    setModeMenuOpen(false)
   }, [])
 
   const attachmentsFromPaths = useCallback(
@@ -442,6 +494,7 @@ export function InputBar({
     if (!projectEntryEnabled || disabled) return
     setSlashPanelOpen(false)
     setToolPanelOpen(false)
+    setModeMenuOpen(false)
     setProjectMenuOpen((open) => {
       const nextOpen = !open
       setProjectCreateMenuOpen(false)
@@ -658,13 +711,22 @@ export function InputBar({
     setSlashPanelOpen(false)
     setToolPanelOpen(false)
     closeProjectMenu()
+    closeModeMenu()
     if (agentPlanMode !== mode) {
       await onAgentPlanModeChange(mode)
     }
     requestAnimationFrame(() => {
       textareaRef.current?.focus({ preventScroll: true })
     })
-  }, [agentPlanMode, closeProjectMenu, disabled, onAgentPlanModeChange])
+  }, [agentPlanMode, closeModeMenu, closeProjectMenu, disabled, onAgentPlanModeChange])
+
+  const toggleModeMenu = useCallback(() => {
+    if (disabled || !onAgentPlanModeChange) return
+    setSlashPanelOpen(false)
+    setToolPanelOpen(false)
+    closeProjectMenu()
+    setModeMenuOpen((open) => !open)
+  }, [closeProjectMenu, disabled, onAgentPlanModeChange])
 
   const toggleAgentPlanMode = useCallback(async () => {
     const next: AgentPlanMode =
@@ -1024,6 +1086,17 @@ export function InputBar({
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [toolPanelOpen])
+
+  useEffect(() => {
+    if (!modeMenuOpen) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeModeMenu()
+      }
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [closeModeMenu, modeMenuOpen])
 
   useEffect(() => {
     if (!projectMenuOpen) return
@@ -1566,38 +1639,116 @@ export function InputBar({
             )}
           </div>
         </div>
-        {projectEntryEnabled && (
-          <div className="relative z-10 mt-2 flex justify-start px-3">
-            <button
-              type="button"
-              onClick={toggleProjectMenu}
-              disabled={disabled}
-              className={`inline-flex h-[26px] max-w-full items-center gap-1 rounded-full px-2 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 dark:focus-visible:ring-neutral-600 ${
-                projectMenuOpen
-                  ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
-                  : selectedProject
-                    ? 'text-neutral-700 hover:bg-neutral-200/60 dark:text-neutral-200 dark:hover:bg-neutral-700/55'
-                    : 'text-neutral-500 hover:bg-neutral-200/50 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700/55 dark:hover:text-neutral-100'
-              } disabled:cursor-default disabled:opacity-50`}
-              aria-expanded={projectMenuOpen}
-              aria-haspopup="menu"
-            >
-              {selectedProject ? (
-                <Folder size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
-              ) : (
-                <FolderPlus size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
-              )}
-              <span className="min-w-0 truncate">
-                {selectedProject ? selectedProject.name : '进入项目工作'}
-              </span>
-              <ChevronDown
-                size={12}
-                strokeWidth={2}
-                className={`shrink-0 text-neutral-400 transition-transform ${
-                  projectMenuOpen ? 'rotate-180' : ''
-                }`}
-              />
-            </button>
+        {(projectEntryEnabled || modeEntryEnabled) && (
+          <div className="relative z-10 mt-2 flex items-center justify-start gap-1.5 px-3">
+            {projectEntryEnabled && (
+              <button
+                type="button"
+                onClick={toggleProjectMenu}
+                disabled={disabled}
+                className={`inline-flex h-[26px] max-w-full items-center gap-1 rounded-full px-2 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 dark:focus-visible:ring-neutral-600 ${
+                  projectMenuOpen
+                    ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
+                    : selectedProject
+                      ? 'text-neutral-700 hover:bg-neutral-200/60 dark:text-neutral-200 dark:hover:bg-neutral-700/55'
+                      : 'text-neutral-500 hover:bg-neutral-200/50 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700/55 dark:hover:text-neutral-100'
+                } disabled:cursor-default disabled:opacity-50`}
+                aria-expanded={projectMenuOpen}
+                aria-haspopup="menu"
+              >
+                {selectedProject ? (
+                  <Folder size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
+                ) : (
+                  <FolderPlus size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
+                )}
+                <span className="min-w-0 truncate">
+                  {selectedProject ? selectedProject.name : '进入项目工作'}
+                </span>
+                <ChevronDown
+                  size={12}
+                  strokeWidth={2}
+                  className={`shrink-0 text-neutral-400 transition-transform ${
+                    projectMenuOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+            )}
+            {modeEntryEnabled && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={toggleModeMenu}
+                  disabled={disabled}
+                  className={`inline-flex h-[26px] max-w-full items-center gap-1 rounded-full px-2 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 dark:focus-visible:ring-neutral-600 ${
+                    modeMenuOpen
+                      ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
+                      : activeModePillClass.idle
+                  } disabled:cursor-default disabled:opacity-50`}
+                  aria-expanded={modeMenuOpen}
+                  aria-haspopup="menu"
+                  title="切换模式 · Switch mode"
+                >
+                  <activeModeOption.icon
+                    size={13}
+                    strokeWidth={1.9}
+                    className={`shrink-0 ${activeModePillClass.iconColor}`}
+                  />
+                  <span className="min-w-0 truncate">{activeModeOption.label}</span>
+                  <ChevronDown
+                    size={12}
+                    strokeWidth={2}
+                    className={`shrink-0 text-neutral-400 transition-transform ${
+                      modeMenuOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+                {modeMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={closeModeMenu} aria-hidden />
+                    <div
+                      className={`chat-motion-popover absolute left-0 z-40 w-[min(248px,calc(100vw-32px))] overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+                      style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
+                      data-tauri-drag-region="false"
+                      role="menu"
+                    >
+                      {AGENT_MODE_OPTIONS.map((option) => {
+                        const active = option.mode === agentPlanMode
+                        const Icon = option.icon
+                        return (
+                          <button
+                            key={option.mode}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={active}
+                            onClick={() => void setAgentPlanMode(option.mode)}
+                            className={`flex min-h-[38px] w-full min-w-0 items-center gap-2 rounded-md px-2 text-left transition-colors ${
+                              active
+                                ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50'
+                                : 'text-neutral-800 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
+                            }`}
+                          >
+                            <Icon
+                              size={15}
+                              strokeWidth={1.8}
+                              className={`shrink-0 ${AGENT_MODE_PILL_CLASS[option.mode].iconColor}`}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[12px] font-semibold">{option.label}</span>
+                              <span className="block truncate text-[10px] font-medium text-neutral-400 dark:text-neutral-500">
+                                {option.description}
+                              </span>
+                            </span>
+                            {active && (
+                              <Check size={13} strokeWidth={2} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
