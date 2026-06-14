@@ -571,6 +571,12 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
     // 5) 关键：NSPanel 默认在宿主 app 失活时自动隐藏；浮窗显示时前台是别的 App（如全屏 Chrome），
     //    不设 NO 会立刻消失。
     let _: () = msg_send![window, setHidesOnDeactivate: false];
+
+    // 6) 关掉原生窗口阴影：lens 窗口是透明无边框，卡片/对话栏的阴影由 CSS（.window-frosted /
+    //    .lens-floating-surface）按圆角画。建窗时虽 .shadow(false)，但上面的 setStyleMask 加
+    //    NonactivatingPanel 会被 AppKit 把 hasShadow 重置成 YES → 透明矩形窗的原生矩形阴影露在
+    //    圆角卡外/下方（截图翻译结果卡下方那块怪阴影）。显式设 NO，只保留 CSS 阴影。
+    let _: () = msg_send![window, setHasShadow: false];
 }
 
 // ===== 浮窗关闭时把前台交还给"打开浮窗前的那个 App" =====
