@@ -326,9 +326,11 @@ pub fn ensure_overlay_panel(window: &WebviewWindow) {
     });
 }
 
-/// macOS：显示浮窗。`orderFrontRegardless` 不激活 app、不切 Space；`need_key=true` 时再
-/// `makeKeyWindow`，让 WebView 能接收键盘（翻译输入框 / lens 问题框 / Escape）。非激活 panel
-/// 成为 key 也不会激活 app。**绝不**用 `set_focus` / `makeKeyAndOrderFront` /
+/// macOS：显示浮窗。`orderFrontRegardless` 不激活 app、不切 Space；`need_key=true` 时
+/// `makeKeyWindow` 后把内部 WKWebView 设为 first responder（见 `find_wk_webview`），让 WebView
+/// 能接收键盘（翻译输入框 / lens 问题框 / Escape），并修掉"复用窗口第二次打开不聚焦、要手动点
+/// 一下"的问题。配合 `_setPreventsActivation:` + `_isNonactivatingPanel` 才能真正拿到键盘焦点。
+/// 非激活 panel 成为 key 也不会激活 app。**绝不**用 `set_focus` / `makeKeyAndOrderFront` /
 /// `activateIgnoringOtherApps`——那会激活 Regular app 并把用户从全屏 Space 拽走。
 #[cfg(target_os = "macos")]
 pub fn show_overlay_panel(window: &WebviewWindow, need_key: bool) {
@@ -340,14 +342,69 @@ pub fn show_overlay_panel(window: &WebviewWindow, need_key: bool) {
         let _: () = msg_send![ptr, orderFrontRegardless];
         if need_key {
             let _: () = msg_send![ptr, makeKeyWindow];
-            // configure_overlay_panel 里的 setStyleMask 会清掉 first responder，使 WebView 在
-            // 窗口被再次点击前收不到键盘（tao 自己在每次 setStyleMask 后也补这一步）。lens 会经
-            // set_resizable 间接走 tao 的补偿，但翻译窗不会，所以这里显式把 contentView 设回
-            // first responder，保证首帧就能输入。
-            let view: *mut objc::runtime::Object = msg_send![ptr, contentView];
-            if !view.is_null() {
-                let _: () = msg_send![ptr, makeFirstResponder: view];
+            // 把 first responder 精确落到内部 WKWebView（等价于用户手动点一下输入框）。
+            // 复用 lens 窗口时，contentView 是 wry 容器视图，makeFirstResponder(contentView) 不一定
+            // 下沉到 WKWebView → 第二次打开网页收不到键盘、必须手动点一下才聚焦。直接在视图树里找到
+            // WKWebView 设为 first responder 可消除这个"第二次不聚焦"的复用问题；找不到时回退 contentView。
+            let cv: *mut objc::runtime::Object = msg_send![ptr, contentView];
+            if !cv.is_null() {
+                let wk = find_wk_webview(cv);
+                let target = if wk.is_null() { cv } else { wk };
+                let _: () = msg_send![ptr, makeFirstResponder: target];
             }
+        }
+    });
+}
+
+/// 在视图树里深度优先找到第一个 WKWebView（wry 把 WKWebView 作为窗口 contentView 的子视图）。
+/// 找不到 / WebKit 未加载时返回 null。
+#[cfg(target_os = "macos")]
+unsafe fn find_wk_webview(view: *mut objc::runtime::Object) -> *mut objc::runtime::Object {
+    use objc::{msg_send, sel, sel_impl};
+
+    let nil: *mut objc::runtime::Object = std::ptr::null_mut();
+    if view.is_null() {
+        return nil;
+    }
+    // 运行时查类，避免 WebKit 未加载时 class! 直接 panic。
+    let Some(wk_class) = objc::runtime::Class::get("WKWebView") else {
+        return nil;
+    };
+    let is_wk: bool = msg_send![view, isKindOfClass: wk_class];
+    if is_wk {
+        return view;
+    }
+    let subviews: *mut objc::runtime::Object = msg_send![view, subviews];
+    if subviews.is_null() {
+        return nil;
+    }
+    let count: usize = msg_send![subviews, count];
+    let mut i = 0usize;
+    while i < count {
+        let sub: *mut objc::runtime::Object = msg_send![subviews, objectAtIndex: i];
+        let found = find_wk_webview(sub);
+        if !found.is_null() {
+            return found;
+        }
+        i += 1;
+    }
+    nil
+}
+
+/// macOS：把浮窗内部 WKWebView 设为 first responder。前端在聚焦输入框时调用（复用其
+/// [0,40,120,240,420] 多次重试时序），用来磨平"复用 lens 窗口第二次打开偶尔要手点一下才聚焦"
+/// 的时序问题。只 makeKeyWindow + makeFirstResponder(WKWebView)，不销毁窗口（销毁重分类窗口会
+/// 抛 ObjC 异常崩溃），零崩溃风险。
+#[cfg(target_os = "macos")]
+pub fn focus_overlay_webview(window: &WebviewWindow) {
+    use objc::{msg_send, sel, sel_impl};
+    run_overlay_on_main(window, |ptr| unsafe {
+        let _: () = msg_send![ptr, makeKeyWindow];
+        let cv: *mut objc::runtime::Object = msg_send![ptr, contentView];
+        if !cv.is_null() {
+            let wk = find_wk_webview(cv);
+            let target = if wk.is_null() { cv } else { wk };
+            let _: () = msg_send![ptr, makeFirstResponder: target];
         }
     });
 }
@@ -441,6 +498,12 @@ fn kivio_overlay_panel_class() -> *const objc::runtime::Class {
                     sel!(canBecomeMainWindow),
                     no_ as extern "C" fn(&Object, Sel) -> BOOL,
                 );
+                // 让 AppKit 一致地把本 panel 当作非激活 panel（与 _setPreventsActivation: 的
+                // WindowServer tag 配合，确保 key-focus theft 生效、键盘进得去）。私有 selector。
+                decl.add_method(
+                    sel!(_isNonactivatingPanel),
+                    yes as extern "C" fn(&Object, Sel) -> BOOL,
+                );
             }
             PanelClass(decl.register() as *const Class)
         })
@@ -470,6 +533,16 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
     let mask: usize = msg_send![window, styleMask];
     let _: () = msg_send![window, setStyleMask: mask | NONACTIVATING_PANEL];
 
+    // 2b) 关键修复（AppKit FB16484811）：object_setClass 重分类的窗口不会像 NSPanel 真正 init
+    //     那样设置 WindowServer 的 kCGSPreventsActivationTagBit；缺这个 tag，非激活 panel 成 key
+    //     也拿不到键盘（AppKit 不为它做 key-focus theft）→ 输入框聚焦却收不到打字/Esc、未处理
+    //     按键还会 beep。setStyleMask 之后显式补调私有 _setPreventsActivation:(YES) 补上该 tag。
+    let prevents_sel = sel!(_setPreventsActivation:);
+    let responds: bool = msg_send![window, respondsToSelector: prevents_sel];
+    if responds {
+        let _: () = msg_send![window, _setPreventsActivation: true];
+    }
+
     // 3) collectionBehavior：跨全 Space + 进别的 App 全屏 Space + 不受 Mission Control 影响 +
     //    不进 Cmd+` 循环。清掉互斥/不需要的位（MoveToActiveSpace 与 CanJoinAllSpaces 互斥；
     //    Stationary 与 Transient 互斥）。
@@ -495,4 +568,82 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
     // 5) 关键：NSPanel 默认在宿主 app 失活时自动隐藏；浮窗显示时前台是别的 App（如全屏 Chrome），
     //    不设 NO 会立刻消失。
     let _: () = msg_send![window, setHidesOnDeactivate: false];
+}
+
+// ===== 浮窗关闭时把前台交还给"打开浮窗前的那个 App" =====
+//
+// 非激活 NSPanel 关闭（orderOut）时，AppKit 有时会把 Regular 策略的 Kivio 进程重新激活成
+// 前台；此刻屏上只有浮窗（panel 不计入 hasVisibleWindows、也不在 USER_WINDOW_LABELS），
+// 于是 main.rs 的 RunEvent::Reopen 分支会误判"无可见窗口"而 open_chat_window，凭空弹出 Chat。
+// 解法：显示浮窗前快照当时的前台 App，关闭后把前台还给它 → Kivio 不会变成前台无窗口 →
+// 那个误触的 Reopen 不再发生。这也顺带让 Esc 后正确回到用户原来的位置（Spotlight 式）。
+
+/// 读取当前前台 App 的 PID（NSWorkspace 线程安全，可后台线程读）。取不到返回 0。
+#[cfg(target_os = "macos")]
+fn macos_frontmost_app_pid() -> i32 {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace.is_null() {
+            return 0;
+        }
+        let app: *mut Object = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return 0;
+        }
+        let pid: i32 = msg_send![app, processIdentifier];
+        pid
+    }
+}
+
+/// 把 `pid` 对应的 App 带回前台（主线程；激活属于 UI 操作）。
+#[cfg(target_os = "macos")]
+unsafe fn macos_activate_app(pid: i32) {
+    use objc::runtime::Object;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    let running: *mut Object =
+        msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid];
+    if running.is_null() {
+        return;
+    }
+    // NSApplicationActivateAllWindows = 1<<0：把上一个 App 带回前台。
+    // activateWithOptions: 在 macOS 14+ 标记 deprecated，但经 objc msg_send 动态调用不受弃用属性
+    // 影响、在 14/15 仍可用；用户发起的激活无需 IgnoringOtherApps 位。
+    const NS_ACTIVATE_ALL_WINDOWS: u64 = 1 << 0;
+    let _: bool = msg_send![running, activateWithOptions: NS_ACTIVATE_ALL_WINDOWS];
+}
+
+/// 显示浮窗前调用：记下当前前台 App 到给定槽。前台是 Kivio 自己（或取不到）时记 0 —— 不需要
+/// 交还，而"Chat 在前"的情况由 RunEvent::Reopen 的 has_visible_windows=true 分支正确处理。
+/// `slot`：lens 与输入翻译各用一个独立槽，避免两个浮窗同时存在时相互覆盖。
+#[cfg(target_os = "macos")]
+pub fn remember_frontmost_app(slot: &std::sync::atomic::AtomicI32) {
+    use std::sync::atomic::Ordering;
+    let pid = macos_frontmost_app_pid();
+    let self_pid = std::process::id() as i32;
+    let to_store = if pid > 0 && pid != self_pid { pid } else { 0 };
+    slot.store(to_store, Ordering::SeqCst);
+}
+
+/// 故意打开 Chat 的路径（open_chat_window / open_chat_settings_window）调用：清掉快照槽，避免
+/// 随后的浮窗关闭把前台从刚打开的 Chat 又交还回旧 App。
+#[cfg(target_os = "macos")]
+pub fn forget_frontmost_app(slot: &std::sync::atomic::AtomicI32) {
+    use std::sync::atomic::Ordering;
+    slot.store(0, Ordering::SeqCst);
+}
+
+/// 关闭浮窗后调用：把前台交还给该槽里记的 App（取出即清零，幂等）。0 = 无需交还。
+#[cfg(target_os = "macos")]
+pub fn restore_previous_frontmost_app(app: &AppHandle, slot: &std::sync::atomic::AtomicI32) {
+    use std::sync::atomic::Ordering;
+    let pid = slot.swap(0, Ordering::SeqCst);
+    if pid <= 0 {
+        return;
+    }
+    let _ = app.run_on_main_thread(move || unsafe {
+        macos_activate_app(pid);
+    });
 }

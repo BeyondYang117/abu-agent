@@ -285,6 +285,15 @@ export default function Lens() {
         // Native focus can fail briefly while the window is still becoming visible.
       }
       if (!canFocus()) return
+      // 复用 lens 窗口时，原生 first responder 可能没落到内部 WKWebView，导致"第二次打开"要
+      // 手点一下才聚焦。这里让原生把 WKWebView 设为 first responder；本函数本就带多次重试
+      // ([0,40,120,240,420])，复用其时序磨平复用窗口的聚焦不稳定。
+      try {
+        await api.lensFocusWebview()
+      } catch {
+        // ignore：非 macOS no-op，或窗口正在关闭
+      }
+      if (!canFocus()) return
       const focusTarget = modeRef.current === 'chat' ? inputRef.current : rootRef.current
       focusTarget?.focus({ preventScroll: true })
       requestAnimationFrame(() => {
@@ -1725,17 +1734,6 @@ export default function Lens() {
               boxShadow: '0 0 16px 2px rgba(217,119,87,0.45)',
             }}
           />
-          {capturedFrame.label && (
-            <div
-              className="absolute -translate-y-full pl-2 pr-2.5 py-1 rounded-md bg-neutral-900/95 text-white text-[12px] font-medium whitespace-nowrap shadow-lg pointer-events-none border-l-2 border-[#D97757]"
-              style={{
-                left: Math.max(8, capturedFrame.x),
-                top: Math.max(28, capturedFrame.y - 8),
-              }}
-            >
-              {t.lensScreenshotOf} {capturedFrame.label}
-            </div>
-          )}
         </>
       )}
 
@@ -1844,17 +1842,6 @@ export default function Lens() {
                   boxShadow: '0 0 16px 2px rgba(217,119,87,0.45)',
                 }}
               />
-              {hovered && (
-                <div
-                  className="absolute -translate-y-full pl-2 pr-2.5 py-1 rounded-md bg-neutral-900/95 text-white text-[12px] font-medium whitespace-nowrap shadow-lg pointer-events-none border-l-2 border-[#D97757]"
-                  style={{
-                    left: Math.max(8, hoverRect.x),
-                    top: Math.max(28, hoverRect.y - 8),
-                  }}
-                >
-                  {t.lensScreenshotOf} {hovered.owner}
-                </div>
-              )}
             </>
           )}
           {dragRect && dragging && (

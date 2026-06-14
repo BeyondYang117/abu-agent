@@ -16,7 +16,10 @@ use crate::windows::{
     ensure_chat_window_with_hash, ensure_main_window, normalize_chat_window_behavior,
 };
 #[cfg(target_os = "macos")]
-use crate::windows::{apply_macos_traffic_light_position, ensure_overlay_panel, show_overlay_panel};
+use crate::windows::{
+    apply_macos_traffic_light_position, ensure_overlay_panel, forget_frontmost_app,
+    remember_frontmost_app, show_overlay_panel,
+};
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
 /// 用于 Lens 启动时把前台 App 的选中文本拷进剪贴板。
@@ -614,7 +617,12 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
     #[cfg(not(target_os = "macos"))]
     let _ = window.set_always_on_top(true);
     #[cfg(target_os = "macos")]
-    ensure_overlay_panel(&window);
+    {
+        // 记下打开翻译窗前的前台 App，关闭时交还（见 main.rs CloseRequested "main"）。
+        let st = app.state::<AppState>();
+        remember_frontmost_app(&st.prev_frontmost_pid_main);
+        ensure_overlay_panel(&window);
+    }
 
     // 重置 hash 为翻译模式；main 现在只承载输入翻译。
     let _ = window.eval(
@@ -787,6 +795,14 @@ fn reveal_chat_window(app: &AppHandle, window: &WebviewWindow) {
 
 /// 打开独立 AI 客户端窗口。
 pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
+    // 故意打开 Chat：清掉浮窗的"前台交还"快照（两个槽都清），避免随后浮窗关闭把前台从 Chat
+    // 又交还回旧 App（例如 lens「在客户端继续」会先 open_chat_window 再关 lens）。
+    #[cfg(target_os = "macos")]
+    {
+        let st = app.state::<AppState>();
+        forget_frontmost_app(&st.prev_frontmost_pid_lens);
+        forget_frontmost_app(&st.prev_frontmost_pid_main);
+    }
     let existing_window = app.get_webview_window("chat");
     let window = ensure_chat_window(app)?;
     apply_chat_window_chrome(&window);
@@ -818,6 +834,14 @@ pub(crate) fn open_chat_window(app: &AppHandle) -> Result<(), String> {
 
 /// 打开 AI 客户端内嵌设置页，替代旧版独立设置窗口。
 pub(crate) fn open_chat_settings_window(app: &AppHandle) -> Result<(), String> {
+    // 同 open_chat_window：打开内嵌设置也是"故意把 Chat 推到前台"，必须清掉浮窗快照，
+    // 否则从翻译窗点设置后，翻译窗关闭会把前台又交还回旧 App，把刚打开的设置页压到后面。
+    #[cfg(target_os = "macos")]
+    {
+        let st = app.state::<AppState>();
+        forget_frontmost_app(&st.prev_frontmost_pid_lens);
+        forget_frontmost_app(&st.prev_frontmost_pid_main);
+    }
     if let Some(window) = crate::windows::get_settings_window(app) {
         let _ = window.close();
     }
@@ -958,7 +982,11 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
                     #[cfg(not(target_os = "macos"))]
                     let _ = window.set_always_on_top(true);
                     #[cfg(target_os = "macos")]
-                    ensure_overlay_panel(&window);
+                    {
+                        let st = app.state::<AppState>();
+                        remember_frontmost_app(&st.prev_frontmost_pid_main);
+                        ensure_overlay_panel(&window);
+                    }
                     let _ = window.eval(
                         "window.location.hash = '#translator'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
                     );

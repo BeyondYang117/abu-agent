@@ -429,6 +429,8 @@
             explain_images: Mutex::new(std::collections::HashMap::new()),
             current_explain_image_id: Mutex::new(None),
             lens_busy: AtomicBool::new(false),
+            prev_frontmost_pid_lens: std::sync::atomic::AtomicI32::new(0),
+            prev_frontmost_pid_main: std::sync::atomic::AtomicI32::new(0),
             explain_stream_generation: std::sync::atomic::AtomicU64::new(0),
             chat_stream_generations: Mutex::new(std::collections::HashMap::new()),
             chat_active_replies: Mutex::new(std::collections::HashSet::new()),

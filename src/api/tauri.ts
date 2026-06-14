@@ -1247,6 +1247,8 @@ export const api = {
       question,
     }),
   lensCancelStream: () => invoke<void>('lens_cancel_stream'),
+  // 让原生把 lens 浮窗内部 WKWebView 设为 first responder（修复复用窗口第二次打开偶尔不聚焦）。
+  lensFocusWebview: () => invoke<void>('lens_focus_webview'),
   lensClose: () => invoke<void>('lens_close'),
   // 把当前活跃 image 拷贝到 lens-history 持久目录，让重启后历史能继续提问
   lensCommitImageToHistory: (imageId: string) =>

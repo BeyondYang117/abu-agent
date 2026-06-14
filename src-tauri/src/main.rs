@@ -32,7 +32,7 @@ mod windows_ocr;
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicBool, AtomicU64},
+        atomic::{AtomicBool, AtomicI32, AtomicU64},
         Mutex, RwLock,
     },
     time::Duration,
@@ -55,7 +55,7 @@ use shortcuts::{
 use state::AppState;
 use updates::check_github_latest_release;
 #[cfg(target_os = "macos")]
-use windows::ensure_overlay_panel;
+use windows::{ensure_overlay_panel, restore_previous_frontmost_app};
 
 /// 自启动参数，用于区分用户手动启动和系统自动启动
 const AUTOSTART_ARG: &str = "--from-autostart";
@@ -109,6 +109,14 @@ fn main() {
                     let _ = window.hide();
                     return;
                 }
+                // 翻译窗（main）关闭（Esc / toggle / commit 都走 window.close()）→ 把前台交还给
+                // 打开它之前的 App，避免 Kivio 变成"前台却无窗口"触发 RunEvent::Reopen 误开 Chat。
+                #[cfg(target_os = "macos")]
+                if window.label() == "main" {
+                    let handle = window.app_handle();
+                    let st = handle.state::<AppState>();
+                    restore_previous_frontmost_app(handle, &st.prev_frontmost_pid_main);
+                }
             }
             tauri::WindowEvent::Focused(true) =>
             {
@@ -152,6 +160,8 @@ fn main() {
                 explain_images: Mutex::new(HashMap::new()),
                 current_explain_image_id: Mutex::new(None),
                 lens_busy: AtomicBool::new(false),
+                prev_frontmost_pid_lens: AtomicI32::new(0),
+                prev_frontmost_pid_main: AtomicI32::new(0),
                 explain_stream_generation: AtomicU64::new(0),
                 chat_stream_generations: Mutex::new(HashMap::new()),
                 chat_active_replies: Mutex::new(HashSet::new()),
@@ -309,6 +319,7 @@ fn main() {
             lens_commands::lens_translate,
             lens_commands::lens_translate_text,
             lens_commands::lens_cancel_stream,
+            lens_commands::lens_focus_webview,
             lens_commands::lens_close,
             lens_commands::lens_set_floating,
             lens_commands::lens_animate_floating,

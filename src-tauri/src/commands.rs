@@ -177,6 +177,11 @@ pub(crate) async fn commit_translation(
     let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
     clipboard.set_text(text).map_err(|e| e.to_string())?;
 
+    // commit 用下面的 [NSApp hide:] 把前台让回原 App（成熟路径）。先清掉翻译窗的前台快照，
+    // 让 main 关闭触发的 CloseRequested 焦点交还变成 no-op，避免与 hide 重复驱动激活。
+    #[cfg(target_os = "macos")]
+    crate::windows::forget_frontmost_app(&state.prev_frontmost_pid_main);
+
     // 关闭 main WebView，避免输入翻译页在后台长期占用内存。
     if let Some(window) = get_main_window(&app) {
         let _ = window.close();

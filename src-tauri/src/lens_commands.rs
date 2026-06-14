@@ -453,6 +453,10 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
             return Err(e);
         }
     };
+    // 窗口已确保会显示（早返回守卫都已通过）：此刻记下前台 App，关闭时交还给它，避免 Kivio
+    // 变成"前台却无窗口"而触发 RunEvent::Reopen 误开 Chat。lens 与翻译各用独立槽。
+    #[cfg(target_os = "macos")]
+    windows::remember_frontmost_app(&state.prev_frontmost_pid_lens);
     // 结果暂存在 state.pending_selection，等前端 take 走。translate 模式写 None，避免遗留旧值。
     if let Ok(mut guard) = state.pending_selection.lock() {
         *guard = pending_selection;
@@ -1220,6 +1224,18 @@ pub(crate) fn lens_cancel_stream(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 前端 focusLensSurface 在聚焦输入框时调用（带多次重试）：把 lens 浮窗内部 WKWebView 设为
+/// first responder。用来磨平"复用 lens 窗口第二次打开偶尔要手点一下才聚焦"的时序问题。
+/// macOS 专属；其它平台 no-op。
+#[tauri::command]
+pub(crate) fn lens_focus_webview(window: WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    windows::focus_overlay_webview(&window);
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+    Ok(())
+}
+
 /// 截图翻译（lens translate 模式）：单次调用视觉模型，模型先输出译文 + `<<<ORIGINAL>>>` + 原文。
 /// stream_enabled=true 时通过 lens-translate-stream emit 流式 delta（kind=translated → kind=original）。
 /// `direct_translate=true` 时降级为纯翻译路径（无原文显示），保留旧行为。
@@ -1769,10 +1785,9 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
     state.lens_busy.store(false, Ordering::SeqCst);
     unregister_lens_escape_shortcut(&app);
     if let Some(window) = app.get_webview_window("lens") {
-        // 先隐藏再复位：避免 visible 状态下从浮动尺寸 resize 到全屏时用户看到闪屏
-        // （尤其是 Windows 上 translateText 浮动弹窗点击外部关闭时）。
-        // hidden 状态下 set_position 在部分系统下可能被忽略，但 lens_request_internal
-        // 打开时会在 show 前后各调一次 lens_position_fullscreen 修正，足够兜底。
+        // 关闭只 hide、不销毁：lens 窗口被 object_setClass 换成了自定义 NSPanel 子类，
+        // destroy() 时 tao/wry 按原类清理会抛 ObjC 异常穿过 FFI → "Rust cannot catch foreign
+        // exceptions" abort。所以复用（隐藏 + 复位），不走销毁重建。
         let _ = window.hide();
         lens_position_fullscreen(&app, &window);
     }

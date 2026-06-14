@@ -127,6 +127,106 @@ let _ = window.set_focus();
 > work in dev but fail in release; the NSPanel conversion is the path that
 > survives release mode.
 
+## Overlay Keyboard Focus & No-Destroy Contract
+
+The lens/translator overlay is a tao `NSWindow` **reclassed at runtime** into a
+non-activating `NSPanel` (`object_setClass`, see `ensure_overlay_panel`). Three
+macOS facts about that reclassed panel are load-bearing — getting them wrong shows
+up as "input won't focus / can't type / Esc doesn't work" or an outright crash:
+
+1. **Prevents-activation tag (whether keyboard works at all).** A non-activating
+   panel receives keys via WindowServer "key-focus theft", gated on the
+   `kCGSPreventsActivationTagBit` tag that `NSPanel` sets **only at init**
+   (`_panelInitCommonCode`). Because we reclass a *live* window (init already ran as
+   a plain `NSWindow`), the tag is never set → the panel draws key but gets **no key
+   events** (Apple bug FB16484811). Fix in `configure_overlay_panel`: after
+   `setStyleMask` adds `NSWindowStyleMaskNonactivatingPanel`, call private
+   `-_setPreventsActivation:(YES)` (guarded by `respondsToSelector:`); and override
+   `-_isNonactivatingPanel → YES` on the panel subclass (`kivio_overlay_panel_class`).
+   Do NOT use `NSApp.activate` to get keyboard — it jumps Spaces over fullscreen.
+
+2. **First responder must land on the WKWebView, re-triggered from the frontend.**
+   The lens window is **reused** (hidden on close). On reuse,
+   `makeFirstResponder(contentView)` does NOT reliably sink to the inner `WKWebView`
+   (contentView is the wry container), so the 2nd+ open needed a manual click to
+   focus. Fix: walk the view tree to the real `WKWebView` (`find_wk_webview`) and
+   `makeFirstResponder` IT (`focus_overlay_webview`); and because the input only
+   exists in the post-capture `ready` stage, the **frontend** re-triggers it —
+   `focusLensSurface` calls `api.lensFocusWebview()` at its retry delays
+   `[0,40,120,240,420]`. The retries absorb the show→ready timing and keep focus
+   stable across repeated opens. (Show-time native FR alone was only "mostly".)
+
+3. **NEVER `destroy()` a reclassed overlay window.** `window.destroy()` on a window
+   whose class was swapped via `object_setClass` tears it down against its original
+   class and raises an Obj-C exception across FFI →
+   `fatal runtime error: Rust cannot catch foreign exceptions, aborting`. So the lens
+   window is **reused (hidden), never destroyed** — "recreate fresh each open" is NOT
+   available here. `lens_close` must `hide()`, not `destroy()`.
+
+## Overlay Dismissal Focus-Return Contract
+
+> **Status (06-14):** the `lens_close` reactivate-previous-app step was **removed** —
+> explicitly reactivating the prior app on lens close raced with the next open's
+> key-focus and caused the reused-panel "2nd open not focused" flakiness. With the
+> panel properly non-activating (tag above), hiding it returns focus to the prior app
+> on its own and never makes Kivio frontmost-windowless, so the Reopen→Chat jump does
+> not fire. Only the translator (`main`) still uses the explicit restore below; for
+> lens it is intentionally absent.
+
+When a lens / translator overlay (a non-activating NSPanel) is dismissed (Esc,
+toggle hotkey, blur, commit), focus must return to **the app that was frontmost
+before the overlay was shown** — not to a Kivio window.
+
+**Why this is load-bearing.** The overlay is a non-activating NSPanel: showing it
+makes it `key` without activating Kivio. When it is `orderOut`/hidden, AppKit must
+pick a new frontmost window/app and **sometimes reactivates the Regular-policy
+Kivio process**. At that instant the only thing on screen is the panel — which is
+not counted by AppKit's `hasVisibleWindows` and is excluded from
+`USER_WINDOW_LABELS` — so the `RunEvent::Reopen { has_visible_windows: false }`
+branch fires and **unconditionally `open_chat_window`s**, making Chat jump up /
+spawn from nothing (Chat is destroyed on close, so this is a fresh create). The
+fix removes the *trigger*, not the symptom: if dismissal returns front to the
+previous app, Kivio never becomes "frontmost with no window", so the stray Reopen
+never happens.
+
+**Mechanism (`windows.rs`, macOS).** Two `AtomicI32` slots in `AppState`
+(`prev_frontmost_pid_lens`, `prev_frontmost_pid_main`; 0 = none) hold the PID
+snapshotted at show time. lens (incl. screenshot/text translate, which use the
+lens window) and the input-translator (`main` window) are independent overlays
+that can be open at once, so each owns its own slot — a single shared slot would
+let whichever closes first consume the snapshot and leave the other's close
+without a focus hand-back.
+
+- `remember_frontmost_app(slot)` — call BEFORE showing the overlay, and only on a
+  path that will actually show it (`lens_request_internal` AFTER the early-return
+  guards, right after `ensure_lens_window` succeeds; `toggle_main_window` /
+  tray `"show"` on the show path). Stores `NSWorkspace.frontmostApplication.pid`,
+  or 0 if that is Kivio itself / unavailable. Do not snapshot on a path that may
+  abort before showing (it would leave a stale, never-consumed PID).
+- `restore_previous_frontmost_app(app, slot)` — call on dismiss (`lens_close` →
+  lens slot; `main.rs` `WindowEvent::CloseRequested` for label `"main"` → main
+  slot, without preventing close). Swaps the PID out (idempotent) and
+  `NSRunningApplication.activateWithOptions:` on the main thread. 0 ⇒ no-op.
+- `forget_frontmost_app(slot)` — clear a slot. Call **both** slots at the START of
+  every deliberate Chat-foreground action: `open_chat_window` AND
+  `open_chat_settings_window` (opening in-app Settings from the translator is also
+  deliberate — without this, the translator's subsequent close yanks focus back to
+  the old app and buries Settings). `commit_translation` clears the main slot so
+  its existing `[NSApp hide:]` paste-handoff is the sole focus-return (the
+  `CloseRequested("main")` restore then no-ops, avoiding redundant activation).
+
+### Rules
+
+- Restore by reactivating the PREVIOUS app (`NSRunningApplication.activate`), never
+  by `set_focus` / `makeKeyAndOrderFront` / `activateIgnoringOtherApps` on the
+  panel — those would drag Kivio forward (and out of a fullscreen Space).
+- Do NOT "fix" this by guarding the `RunEvent::Reopen` branch on `lens_busy` — that
+  is a symptom backstop. Remove the trigger (return focus) instead.
+- `commit_translation`'s existing `[NSApp hide:]` (paste-handoff path) is left as
+  is; the `CloseRequested("main")` restore also runs for it and is benign
+  (both yield front to the previous app).
+- macOS-only; Windows/Linux focus behavior is unchanged.
+
 ## Lens Window Selection Contract
 
 Lens window selection must treat Chat as a selectable app window. On macOS,

@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64},
+        atomic::{AtomicBool, AtomicI32, AtomicU64},
         Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
@@ -53,6 +53,12 @@ pub struct AppState {
     pub explain_images: Mutex<HashMap<String, PathBuf>>,
     pub current_explain_image_id: Mutex<Option<String>>,
     pub lens_busy: AtomicBool,
+    /// macOS：打开浮窗前记下的前台 App PID（0 = 无 / 前台就是 Kivio 自己），关闭浮窗时据此把
+    /// 前台交还给原来的 App，避免 Kivio 变成"前台却无窗口"而触发 RunEvent::Reopen 误开 Chat。
+    /// lens（含截图/选词翻译）与输入翻译是各自独立、可同时存在的浮窗，各占一个槽，避免相互覆盖。
+    /// 详见 spec/backend/window-lifecycle.md。
+    pub prev_frontmost_pid_lens: AtomicI32,
+    pub prev_frontmost_pid_main: AtomicI32,
     /// 流式取消代号：每开新的流就 +1，跑流的循环检测到代号变了就立即结束。
     pub explain_stream_generation: AtomicU64,
     /// Chat 流式取消代号，按 conversation_id 隔离，避免 Lens 与 Chat 互相取消。
@@ -294,6 +300,8 @@ pub(crate) fn test_app_state() -> AppState {
         explain_images: Mutex::new(HashMap::new()),
         current_explain_image_id: Mutex::new(None),
         lens_busy: AtomicBool::new(false),
+        prev_frontmost_pid_lens: AtomicI32::new(0),
+        prev_frontmost_pid_main: AtomicI32::new(0),
         explain_stream_generation: AtomicU64::new(0),
         chat_stream_generations: Mutex::new(HashMap::new()),
         chat_active_replies: Mutex::new(HashSet::new()),
