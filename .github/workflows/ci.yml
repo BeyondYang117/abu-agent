@@ -48,5 +48,10 @@ jobs:
             librsvg2-dev \
             libayatana-appindicator3-dev
 
+      # tauri-build 会校验 externalBin（kivio-ocr-helper）对应当前 target triple 的二进制存在。
+      # build:swift 在非 macOS 平台生成 stub 占位，满足校验（否则 cargo test 在 build-script 阶段失败）。
+      - name: Build Swift sidecar stub
+        run: npm run build:swift
+
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
