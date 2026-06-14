@@ -474,9 +474,8 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
     }
     #[cfg(target_os = "macos")]
     {
-        windows::apply_macos_workspace_behavior(&window);
-        let _ = window.show();
-        windows::apply_macos_auxiliary_window_activation(&window);
+        windows::ensure_overlay_panel(&window);
+        windows::show_overlay_panel(&window, true);
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -48,32 +48,53 @@ Lens and translator windows are intentionally different: they may be frameless, 
 
 ## macOS Auxiliary Floating Window Contract
 
-Lens and translator floating windows must work while another app, such as
-Chrome, is in macOS native fullscreen. Native fullscreen apps live in their own
-Space, so `visible_on_all_workspaces(true)` / `CanJoinAllSpaces` is not enough:
-it covers ordinary Spaces but does not reliably place an auxiliary Kivio window
-into another app's fullscreen Space.
+Lens and translator (`main`) floating windows must work while another app, such
+as Chrome, is in macOS **native fullscreen** (its own Space).
 
-For macOS-only Lens/translator floating windows, use
-`apply_macos_workspace_behavior` before showing the window, then use
-`apply_macos_auxiliary_window_activation` after `show()`. The behavior helper
-must apply native `NSWindow.collectionBehavior` bits synchronously enough for the
-subsequent show path, and the activation helper must order the NSWindow from the
-main thread so hidden windows join the currently active fullscreen Space.
+**Root cause of the long-standing breakage (do not regress):** since macOS
+10.14/Big Sur, only an **NSPanel**, or a window owned by an **Accessory
+(LSUIElement)** app, may be drawn into *another* app's fullscreen Space. Kivio
+runs as `ActivationPolicy::Regular` (Chat needs Dock/Cmd+Tab identity — see
+above), so a plain tao **NSWindow** can NOT appear over another app's fullscreen
+Space — no matter what `collectionBehavior`, window level, or `orderFrontRegardless`
+is set. `visible_on_all_workspaces(true)` / `CanJoinAllSpaces` alone is therefore
+insufficient. Any path that *activates* the app (`makeKeyAndOrderFront`,
+`activateIgnoringOtherApps`, `set_focus`) additionally yanks the user off the
+fullscreen Space.
 
-- `MoveToActiveSpace`
-- `FullScreenAuxiliary`
-- `Transient`
-- `IgnoresCycle`
+**The fix:** convert the lens/translator windows into **non-activating NSPanels**
+on macOS, via `windows::ensure_overlay_panel`. It is idempotent and:
 
-Do not leave `CanJoinAllSpaces` or `Stationary` on these auxiliary popups when
-showing them from a global shortcut. They can keep a hidden window associated
-with its previous Space instead of moving it into the fullscreen Space the user
-is currently in.
+1. `object_setClass`-es the window into a runtime `NSPanel` subclass
+   (`canBecomeKeyWindow=YES` — borderless windows default to NO, so this is
+   required for the translator input / lens question box to receive keyboard;
+   `canBecomeMainWindow=NO`).
+2. Sets `NSWindowStyleMaskNonactivatingPanel` — clicking/focusing the panel does
+   not activate Kivio, so it never switches away from the fullscreen Space.
+3. Sets `collectionBehavior = CanJoinAllSpaces | FullScreenAuxiliary | Stationary
+   | IgnoresCycle` (clears `MoveToActiveSpace` and `Transient`, which are
+   mutually exclusive with those).
+4. Sets window level to `NSStatusWindowLevel` (25) — above the menu bar /
+   fullscreen content, but below the `screenSaver` (1000) band that causes a
+   wrong-Space blink.
+5. Sets `hidesOnDeactivate = NO` — **critical**: NSPanel defaults to hiding when
+   its owning app deactivates, and the overlay is shown while another app (e.g.
+   fullscreen Chrome) is frontmost, so without this the panel vanishes instantly.
 
-Keep this behavior out of Chat. Chat is a normal desktop window and must continue
-through `normalize_chat_window_behavior`, which clears all-workspaces behavior
-and preserves normal Dock/Cmd+Tab/window-management identity.
+Then show with `windows::show_overlay_panel(&window, need_key)`, which calls
+`orderFrontRegardless` (and `makeKeyWindow` when `need_key`). Never use
+`window.show()` / `set_focus()` on the macOS overlay path.
+
+Apply `ensure_overlay_panel` at lens-window creation (`ensure_lens_window`), in
+the `Focused(true)` self-heal (`main.rs`), and once per show in
+`lens_request_internal` / `toggle_main_window` / tray `"show"`. Drop
+`set_always_on_top(true)` on macOS for these windows — the panel owns its level,
+and tao's `set_always_on_top` resets the level to `NSFloatingWindowLevel` (and to
+`Normal` on toggle-off), which would clobber the status level.
+
+Keep this behavior out of Chat. **Chat must never be converted to an NSPanel** —
+it stays a normal desktop NSWindow through `normalize_chat_window_behavior`,
+preserving Dock/Cmd+Tab/window-management identity.
 
 ### Wrong
 
@@ -83,21 +104,28 @@ let _ = window.show();
 let _ = window.set_focus();
 ```
 
-This may work on a normal desktop Space but fail silently over a fullscreen
-Chrome Space.
+A plain NSWindow from a Regular-policy app fails silently over another app's
+fullscreen Space (no overlay), and `set_focus`/activation switches Spaces.
 
 ### Correct
 
 ```rust
+#[cfg(not(target_os = "macos"))]
 let _ = window.set_always_on_top(true);
 #[cfg(target_os = "macos")]
-apply_macos_workspace_behavior(&window);
-let _ = window.show();
+windows::ensure_overlay_panel(&window); // idempotent: reclass to non-activating NSPanel
 #[cfg(target_os = "macos")]
-apply_macos_auxiliary_window_activation(&window);
+windows::show_overlay_panel(&window, /* need_key */ true);
+#[cfg(not(target_os = "macos"))]
+let _ = window.show();
 #[cfg(not(target_os = "macos"))]
 let _ = window.set_focus();
 ```
+
+> Validate in a **release** build (`tauri build`), not only `tauri dev` —
+> `setLevel`/`setCollectionBehavior` on a plain NSWindow are widely reported to
+> work in dev but fail in release; the NSPanel conversion is the path that
+> survives release mode.
 
 ## Lens Window Selection Contract
 

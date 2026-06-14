@@ -55,7 +55,7 @@ use shortcuts::{
 use state::AppState;
 use updates::check_github_latest_release;
 #[cfg(target_os = "macos")]
-use windows::apply_macos_workspace_behavior;
+use windows::ensure_overlay_panel;
 
 /// 自启动参数，用于区分用户手动启动和系统自动启动
 const AUTOSTART_ARG: &str = "--from-autostart";
@@ -115,7 +115,7 @@ fn main() {
                 #[cfg(target_os = "macos")]
                 if window.label() == "lens" {
                     if let Some(webview_window) = window.app_handle().get_webview_window("lens") {
-                        apply_macos_workspace_behavior(&webview_window);
+                        ensure_overlay_panel(&webview_window);
                     }
                 }
             }

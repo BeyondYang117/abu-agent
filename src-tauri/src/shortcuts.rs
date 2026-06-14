@@ -16,10 +16,7 @@ use crate::windows::{
     ensure_chat_window_with_hash, ensure_main_window, normalize_chat_window_behavior,
 };
 #[cfg(target_os = "macos")]
-use crate::windows::{
-    apply_macos_auxiliary_window_activation, apply_macos_traffic_light_position,
-    apply_macos_workspace_behavior,
-};
+use crate::windows::{apply_macos_traffic_light_position, ensure_overlay_panel, show_overlay_panel};
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
 /// 用于 Lens 启动时把前台 App 的选中文本拷进剪贴板。
@@ -614,9 +611,10 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
         return;
     }
 
+    #[cfg(not(target_os = "macos"))]
     let _ = window.set_always_on_top(true);
     #[cfg(target_os = "macos")]
-    apply_macos_workspace_behavior(&window);
+    ensure_overlay_panel(&window);
 
     // 重置 hash 为翻译模式；main 现在只承载输入翻译。
     let _ = window.eval(
@@ -638,8 +636,8 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
             } else {
                 eprintln!("Failed to get mouse position");
             }
-            let _ = window_for_task.show();
-            apply_macos_auxiliary_window_activation(&window_for_task);
+            // 非激活 panel：need_key=true 让翻译输入框接收键盘，但不激活 app、不切 Space。
+            show_overlay_panel(&window_for_task, true);
         });
         return;
     }
@@ -957,15 +955,17 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
             "show" => match ensure_main_window(app) {
                 Ok(window) => {
                     apply_frameless_window_chrome(&window);
+                    #[cfg(not(target_os = "macos"))]
                     let _ = window.set_always_on_top(true);
                     #[cfg(target_os = "macos")]
-                    apply_macos_workspace_behavior(&window);
+                    ensure_overlay_panel(&window);
                     let _ = window.eval(
                         "window.location.hash = '#translator'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
                     );
-                    let _ = window.show();
                     #[cfg(target_os = "macos")]
-                    apply_macos_auxiliary_window_activation(&window);
+                    show_overlay_panel(&window, true);
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = window.show();
                     #[cfg(not(target_os = "macos"))]
                     let _ = window.set_focus();
                 }
