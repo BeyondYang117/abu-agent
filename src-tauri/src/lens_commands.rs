@@ -1246,13 +1246,15 @@ pub(crate) fn lens_cancel_stream(state: State<AppState>) -> Result<(), String> {
 
 /// 前端 focusLensSurface 在聚焦输入框时调用（带多次重试）：把 lens 浮窗内部 WKWebView 设为
 /// first responder。用来磨平"复用 lens 窗口第二次打开偶尔要手点一下才聚焦"的时序问题。
-/// macOS 专属；其它平台 no-op。
+/// macOS：走非激活的 `focus_overlay_webview`（避免 NSApp 跨屏激活跳屏）。
+/// 其它平台（Windows）：做窗口级 set_focus 恢复重新聚焦——前端已删 getCurrentWindow().setFocus()
+/// （治 macOS 跨屏跳屏），改靠本命令；Windows set_focus 无 macOS 跨屏激活问题，安全。
 #[tauri::command]
 pub(crate) fn lens_focus_webview(window: WebviewWindow) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     windows::focus_overlay_webview(&window);
     #[cfg(not(target_os = "macos"))]
-    let _ = window;
+    let _ = window.set_focus();
     Ok(())
 }
 

@@ -180,8 +180,14 @@ fn read_accessibility_selected_text() -> AxSelection {
 
 /// Windows: 通过 UI Automation TextPattern 直接读取当前前台控件的选区。
 /// 这条路径不碰剪贴板；不支持 TextPattern 的控件会自动降级到 Ctrl+C fallback。
-/// 维持旧行为：读到选区 → `Text`，读不到 → `Unavailable`（落 Ctrl+C 兜底），
-/// 不引入 `Empty` 短路，避免改动 Windows 的选区捕获行为。
+/// 三态语义（与 macOS 分支对齐）：
+///   - TextPattern 明确可用（GetCurrentPattern + cast + GetSelection 均成功）且收集到的非空文本为空
+///     → `Empty`（确认无选区，上层跳过 Ctrl+C → 原生输入框不再响）。
+///   - 任一环节失败（CoCreateInstance / GetFocusedElement / GetCurrentPattern / cast / GetSelection 等）
+///     → `Unavailable`（保持 Ctrl+C 兜底，不碰浏览器/Electron 等不支持 TextPattern 的路径）。
+///   - 有非空选区 → `Text`。
+/// 保守原则：任何不确定/失败一律 `Unavailable`，只有 TextPattern 明确可用且选区确为空才 `Empty`，
+/// 避免 UIA underreport 时漏抓真实选区。
 #[cfg(target_os = "windows")]
 fn read_accessibility_selected_text() -> AxSelection {
     use ::windows::{
@@ -206,32 +212,74 @@ fn read_accessibility_selected_text() -> AxSelection {
         }
         let should_uninitialize = init_result.is_ok();
 
-        let result = (|| {
+        // closure 直接产出三态 AxSelection：
+        // 拿不到 TextPattern / GetSelection 失败 → Unavailable；
+        // TextPattern 明确可用且选区确为空 → Empty；否则 → Text。
+        let result = (|| -> AxSelection {
             let automation: IUIAutomation =
-                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
-            let focused = automation.GetFocusedElement().ok()?;
-            let pattern: IUIAutomationTextPattern = focused
-                .GetCurrentPattern(UIA_TextPatternId)
-                .ok()?
-                .cast()
-                .ok()?;
-            let ranges = pattern.GetSelection().ok()?;
-            let count = ranges.Length().ok()?.max(0);
+                match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("[lens-capture] UIA unavailable: CoCreateInstance failed: {e:?}");
+                        return AxSelection::Unavailable;
+                    }
+                };
+            let focused = match automation.GetFocusedElement() {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("[lens-capture] UIA unavailable: GetFocusedElement failed: {e:?}");
+                    return AxSelection::Unavailable;
+                }
+            };
+            // GetCurrentPattern + cast 任一失败 → 控件不支持 TextPattern（如浏览器/Electron）→ 兜底。
+            let pattern_unknown = match focused.GetCurrentPattern(UIA_TextPatternId) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "[lens-capture] UIA unavailable: GetCurrentPattern(Text) failed: {e:?}"
+                    );
+                    return AxSelection::Unavailable;
+                }
+            };
+            let pattern: IUIAutomationTextPattern = match pattern_unknown.cast() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[lens-capture] UIA unavailable: TextPattern cast failed: {e:?}");
+                    return AxSelection::Unavailable;
+                }
+            };
+            // 到这里 TextPattern 明确可用；GetSelection 失败仍视为无法判定 → 兜底。
+            let ranges = match pattern.GetSelection() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("[lens-capture] UIA unavailable: GetSelection failed: {e:?}");
+                    return AxSelection::Unavailable;
+                }
+            };
+            let count = ranges.Length().unwrap_or(0).max(0);
             let mut parts = Vec::new();
 
             for index in 0..count {
-                let range = ranges.GetElement(index).ok()?;
-                let text = range.GetText(-1).ok()?;
-                let text = String::from_utf16_lossy(&text);
+                let range = match ranges.GetElement(index) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let text = match range.GetText(-1) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let text = text.to_string();
                 if !text.trim().is_empty() {
                     parts.push(text);
                 }
             }
 
             if parts.is_empty() {
-                None
+                // TextPattern 明确可用 + 选区确为空 → Empty（上层跳过 Ctrl+C → 不响）。
+                eprintln!("[lens-capture] UIA confirmed empty selection (TextPattern available)");
+                AxSelection::Empty
             } else {
-                Some(parts.join("\n"))
+                AxSelection::Text(parts.join("\n"))
             }
         })();
 
@@ -239,10 +287,14 @@ fn read_accessibility_selected_text() -> AxSelection {
             CoUninitialize();
         }
 
-        match result {
-            Some(text) => AxSelection::Text(text),
-            None => AxSelection::Unavailable,
+        if let AxSelection::Text(ref text) = result {
+            eprintln!(
+                "[lens-capture] UIA selected text captured len={}",
+                text.len()
+            );
         }
+
+        result
     }
 }
 
