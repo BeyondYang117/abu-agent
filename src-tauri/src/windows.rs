@@ -543,9 +543,12 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
         let _: () = msg_send![window, _setPreventsActivation: true];
     }
 
-    // 3) collectionBehavior：跨全 Space + 进别的 App 全屏 Space + 不受 Mission Control 影响 +
-    //    不进 Cmd+` 循环。清掉互斥/不需要的位（MoveToActiveSpace 与 CanJoinAllSpaces 互斥；
-    //    Stationary 与 Transient 互斥）。
+    // 3) collectionBehavior：每次显示时把浮窗移到**当前活动 Space**（MoveToActiveSpace）+ 允许
+    //    进别的 App 全屏 Space（FullScreenAuxiliary）+ 不进 Cmd+` 循环。
+    //    用 MoveToActiveSpace 而非 CanJoinAllSpaces：复用的窗口 orderOut→orderFront 时，
+    //    CanJoinAllSpaces 会把窗口粘在上次显示的那个 Space（用户切到别的 Space 起 lens 会跑回旧
+    //    Space），MoveToActiveSpace 则显式跟到当前 Space。两者互斥；Transient 与 Stationary 互斥，
+    //    配 MoveToActiveSpace 用 Transient（浮窗随 Space 浮动）。
     const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
     const MOVE_TO_ACTIVE_SPACE: usize = 1 << 1;
     const TRANSIENT: usize = 1 << 3;
@@ -553,9 +556,9 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
     const IGNORES_CYCLE: usize = 1 << 6;
     const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
     let behavior: usize = msg_send![window, collectionBehavior];
-    let behavior = (behavior & !MOVE_TO_ACTIVE_SPACE & !TRANSIENT)
-        | CAN_JOIN_ALL_SPACES
-        | STATIONARY
+    let behavior = (behavior & !CAN_JOIN_ALL_SPACES & !STATIONARY)
+        | MOVE_TO_ACTIVE_SPACE
+        | TRANSIENT
         | IGNORES_CYCLE
         | FULL_SCREEN_AUXILIARY;
     let _: () = msg_send![window, setCollectionBehavior: behavior];

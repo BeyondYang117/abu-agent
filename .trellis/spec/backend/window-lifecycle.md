@@ -71,9 +71,14 @@ on macOS, via `windows::ensure_overlay_panel`. It is idempotent and:
    `canBecomeMainWindow=NO`).
 2. Sets `NSWindowStyleMaskNonactivatingPanel` — clicking/focusing the panel does
    not activate Kivio, so it never switches away from the fullscreen Space.
-3. Sets `collectionBehavior = CanJoinAllSpaces | FullScreenAuxiliary | Stationary
-   | IgnoresCycle` (clears `MoveToActiveSpace` and `Transient`, which are
-   mutually exclusive with those).
+3. Sets `collectionBehavior = MoveToActiveSpace | FullScreenAuxiliary | Transient
+   | IgnoresCycle` (clears `CanJoinAllSpaces` and `Stationary`, mutually exclusive
+   with those). **Use `MoveToActiveSpace`, NOT `CanJoinAllSpaces`** — the window is
+   reused (hidden, not destroyed), and `CanJoinAllSpaces` makes a reused window
+   `orderOut`→`orderFront`'d from a background app **stick to the Space it was last
+   shown on**, so triggering lens on another Mission Control desktop shows it on the
+   old desktop. `MoveToActiveSpace` moves it to the current active Space on each
+   show; `FullScreenAuxiliary` keeps it working over another app's fullscreen Space.
 4. Sets window level to `NSStatusWindowLevel` (25) — above the menu bar /
    fullscreen content, but below the `screenSaver` (1000) band that causes a
    wrong-Space blink.
