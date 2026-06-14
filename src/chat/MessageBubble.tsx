@@ -299,7 +299,7 @@ function MessageBubbleComponent({
     const hasText = message.content.trim().length > 0
     return (
       <div className="group chat-motion-fade-up flex justify-end py-2">
-        <div className="flex max-w-[85%] flex-col items-end gap-1">
+        <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1">
           {attachments.length > 0 && (
             <ChatAttachments
               attachments={attachments}
@@ -309,7 +309,7 @@ function MessageBubbleComponent({
           )}
           {hasText && (
             <div className="rounded-[20px] bg-neutral-100 px-4 py-2.5 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
-              <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+              <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed">
                 {message.content}
               </div>
             </div>
