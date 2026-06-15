@@ -67,6 +67,7 @@ function undoAccidentalFilenamePaste(
     textarea.selectionEnd = selectionStart
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
+    textarea.style.overflowY = textarea.scrollHeight > 160 ? 'auto' : 'hidden'
   })
 }
 
@@ -567,6 +568,7 @@ export function InputBar({
     if (!textarea) return
     textarea.style.height = 'auto'
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
+    textarea.style.overflowY = textarea.scrollHeight > 160 ? 'auto' : 'hidden'
   }, [])
 
   const syncSlashToken = useCallback((value: string, cursor: number) => {
@@ -853,6 +855,7 @@ export function InputBar({
     setSlashPanelOpen(false)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.overflowY = 'hidden'
     }
   }
 
@@ -918,6 +921,7 @@ export function InputBar({
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+    el.style.overflowY = el.scrollHeight > 160 ? 'auto' : 'hidden'
     syncSlashToken(nextValue, el.selectionStart)
   }
 
@@ -1593,7 +1597,7 @@ export function InputBar({
               onSelect={handleSelect}
               placeholder="Ask me anything..."
               rows={1}
-              className="mb-0.5 max-h-40 min-h-[28px] flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
+              className="mb-0.5 max-h-40 min-h-[28px] flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
             />
 
             {onExecuteAgentPlan && agentPlanText && (
