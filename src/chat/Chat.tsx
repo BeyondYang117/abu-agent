@@ -2115,6 +2115,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     syncGeneratingConversationIds,
   ])
 
+  // 用 ref 持有最新 handleSendMessage，使下方的 drainExternalSends 保持稳定身份，
+  // 避免其依赖抖动导致订阅 effect 反复 cleanup/重订阅（重订阅缝隙会丢掉外部发送事件）。
+  const handleSendMessageRef = useRef(handleSendMessage)
+  handleSendMessageRef.current = handleSendMessage
+
   const handleExecuteAgentPlan = useCallback(async () => {
     const conversation = currentConversation
     if (!conversation) return
@@ -2181,7 +2186,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             name: attachment.name || (attachment.type === 'file' ? 'Attachment' : 'Image'),
             path: attachment.path,
           }))
-        const accepted = await handleSendMessage(
+        const accepted = await handleSendMessageRef.current(
           request.content ?? '',
           attachments,
           { forceNewConversation: true },
@@ -2204,24 +2209,38 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         }, 0)
       }
     }
-  }, [handleSendMessage])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-    let unlisten: (() => void) | undefined
+    const disposers: Array<() => void> = []
+    const register = (p: Promise<() => void>) => {
+      p.then((dispose) => {
+        if (cancelled) dispose()
+        else disposers.push(dispose)
+      }).catch((err) => console.error(err))
+    }
 
+    // 外部发送（如 Lens 交接）的投递不依赖某个一次性事件的时序：
+    // 任意可靠时机都主动从后端取走 pending（chat_take_external_sends 幂等，取空即 no-op）。
     void drainExternalSends()
-    api.onChatExternalSendReady(() => {
-      if (cancelled) return
-      void drainExternalSends()
-    }).then((dispose) => {
-      if (cancelled) dispose()
-      else unlisten = dispose
-    }).catch(err => console.error(err))
+    // 1) 后端就绪事件
+    register(api.onChatExternalSendReady(() => {
+      if (!cancelled) void drainExternalSends()
+    }))
+    // 2) 窗口获得焦点 —— 覆盖复用窗口被重新唤起、以及冷启动时就绪事件丢失的情况
+    register(
+      import('@tauri-apps/api/window')
+        .then(({ getCurrentWindow }) =>
+          getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+            if (!cancelled && focused) void drainExternalSends()
+          }),
+        ),
+    )
 
     return () => {
       cancelled = true
-      unlisten?.()
+      disposers.forEach((dispose) => dispose())
     }
   }, [drainExternalSends])
 
