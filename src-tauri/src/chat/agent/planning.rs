@@ -12,7 +12,6 @@ use crate::settings::ProviderApiFormat;
 use super::finalize::{tool_planning_failed_run_result, RunResultBuilder};
 use super::host::AgentHost;
 use super::loop_::{LoopEnv, RunState};
-use super::recovery;
 use super::prepare::{prepare_agent_step, PrepareStepInput};
 use super::rounds::visible_tool_segment_calls;
 use super::stop::{
@@ -292,14 +291,12 @@ pub(crate) async fn planning_step(
         }
         Err(err) => {
             // 统一恢复:多轮中途 planning 调用硬失败时,若已收集到工具结果,不要让
-            // 整轮报错丢弃成果——确定性兜底把已检索内容交给用户(与 synthesis 同一不变式)。
+            // 整轮报错丢弃成果——走与 synthesis 同一条恢复阶梯(去敏重做 → 确定性兜底),
+            // 而非直接堆原始结果。
             if !state.tool_records.is_empty() {
-                let content = recovery::assemble_results_from_tool_records(
-                    &state.tool_records,
-                    &config.language,
-                );
+                let content = super::synthesis::recover_synthesis(env, state, &err).await;
                 if !content.trim().is_empty() {
-                    eprintln!("Chat planning call failed mid-run; degrading to gathered results: {err}");
+                    eprintln!("Chat planning call failed mid-run; recovered: {err}");
                     return Ok(PlanningStepOutcome::Recovered(
                         RunResultBuilder::new(host, env.ids(), content)
                             .segment(&planning_text_segment)

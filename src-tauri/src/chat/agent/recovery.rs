@@ -99,12 +99,13 @@ pub(crate) fn decide(
         return RecoveryAction::DegradeToGathered;
     }
     match kind {
-        // 请求因内容/长度被拒 → 用去敏精简的输入重做一次,通常能产出真正的总结。
-        FailureKind::ContentModeration | FailureKind::ContextOverflow => RecoveryAction::Remediate,
-        // 空响应 / 限流耗尽 / 其它:重做无意义,直接用已收集结果兜底,保证有结果。
-        FailureKind::Empty | FailureKind::Exhausted | FailureKind::Other => {
-            RecoveryAction::DegradeToGathered
+        // 请求因内容/长度被拒,或措辞没命中的 400(归到 Other)→ 用去敏精简的输入重做
+        // 一次,通常能产出真正的总结;失败了下一轮 already_remediated 会兜底,不会更糟。
+        FailureKind::ContentModeration | FailureKind::ContextOverflow | FailureKind::Other => {
+            RecoveryAction::Remediate
         }
+        // 空响应 / 限流耗尽:重做无意义(同样的输入只会再失败),直接用已收集结果兜底。
+        FailureKind::Empty | FailureKind::Exhausted => RecoveryAction::DegradeToGathered,
     }
 }
 
@@ -207,6 +208,16 @@ mod tests {
         // 已耗尽(限流/5xx)+ 有结果 → 直接兜底
         assert_eq!(
             decide(FailureKind::Exhausted, true, false),
+            RecoveryAction::DegradeToGathered
+        );
+        // 措辞没命中的 400(Other)+ 有结果 + 未补救 → 也先去敏重试(与 classify 注释一致)
+        assert_eq!(
+            decide(FailureKind::Other, true, false),
+            RecoveryAction::Remediate
+        );
+        // 空响应重做无意义 → 直接兜底
+        assert_eq!(
+            decide(FailureKind::Empty, true, false),
             RecoveryAction::DegradeToGathered
         );
     }

@@ -386,7 +386,12 @@ fn build_neutral_reduced_messages(state: &RunState, language: &str) -> Vec<Value
 
 /// 统一恢复入口:按 `recovery::decide` 走「去敏重做 → 确定性兜底」阶梯。
 /// 返回非空内容即视为已恢复;返回空串表示无可恢复(调用方退回静态文案)。
-async fn recover_synthesis(env: &LoopEnv<'_>, state: &RunState, failure_message: &str) -> String {
+/// planning 阶段中途失败也复用此入口,保证两条路径同一恢复策略。
+pub(crate) async fn recover_synthesis(
+    env: &LoopEnv<'_>,
+    state: &RunState,
+    failure_message: &str,
+) -> String {
     let config = env.config;
     let kind = recovery::classify(failure_message);
     let has_results = !state.tool_records.is_empty();
