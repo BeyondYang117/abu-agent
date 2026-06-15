@@ -1314,7 +1314,8 @@ export default function Lens() {
 
     const transferToChat = mode === 'chat' && sendToChatRef.current !== false
     if (transferToChat) {
-      setStage('answering')
+      // 发送到 AI 客户端：不要切到 'answering'（那会让窗口高度加上 answer 区 → 浮窗展开）。
+      // 用 streaming 显示忙碌、preparingSendRef 守卫 Esc（见 Esc 处理），浮窗保持紧凑直接交接。
       setStreaming(true)
       preparingSendRef.current = true
       try {
