@@ -19,14 +19,17 @@ use std::sync::Arc;
 use crate::chat::agent::execute::{ToolExecutionContext, ToolExecutor, ToolExecutorFuture};
 use crate::kivio_code::mcp_setup;
 use crate::mcp::native_registry::text_tool_result;
-use crate::mcp::registry::{file_mutation_tool_result, read_file_tool_result};
+use crate::mcp::registry::{
+    effective_skill_script_timeout_ms, file_mutation_tool_result, read_file_tool_result,
+};
 use crate::mcp::types::McpToolCallResult;
 use crate::mcp::ChatToolDefinition;
 use crate::native_tools::{
     edit_file, glob_files, list_dir, read_file, search_files, web_fetch, write_file,
     NativeToolWorkspace,
 };
-use crate::skills;
+use crate::settings::ChatToolsConfig;
+use crate::skills::{self, SkillRegistry};
 use crate::state::AppState;
 
 pub struct CliToolExecutor {
@@ -38,6 +41,14 @@ pub struct CliToolExecutor {
     /// lives here). Held so the executor can route unknown tools through
     /// [`mcp_setup::dispatch_mcp_tool`] before erroring.
     state: Arc<AppState>,
+    /// Pre-built skill registry (discovered once when the `TurnAssembly` was
+    /// resolved). Skill tools (`skill_activate` / `skill_read_file` /
+    /// `skill_run_script`) resolve their `SkillRecord` from here, so skill
+    /// dispatch never needs an `AppHandle` (the GUI's `registry_for` does).
+    skill_registry: SkillRegistry,
+    /// Effective chat-tools config: supplies the skill-enabled gate, the
+    /// `skill_run_script` interpreter allowlist, and the base tool timeout.
+    chat_tools: ChatToolsConfig,
 }
 
 impl CliToolExecutor {
@@ -46,12 +57,16 @@ impl CliToolExecutor {
         http: Client,
         default_timeout_ms: u64,
         state: Arc<AppState>,
+        skill_registry: SkillRegistry,
+        chat_tools: ChatToolsConfig,
     ) -> Self {
         Self {
             workspace: NativeToolWorkspace::global(&cwd_roots),
             http,
             default_timeout_ms,
             state,
+            skill_registry,
+            chat_tools,
         }
     }
 
@@ -103,11 +118,20 @@ impl ToolExecutor for CliToolExecutor {
         _ctx: &'a ToolExecutionContext<'a>,
         tool: &'a ChatToolDefinition,
         arguments: Value,
-        _skill_cache: Option<&'a mut skills::SkillRunCache>,
+        skill_cache: Option<&'a mut skills::SkillRunCache>,
     ) -> ToolExecutorFuture<'a> {
         let tool_name = tool.openai_tool_name();
         let fallback = tool.name.clone();
         Box::pin(async move {
+            // Skill tools are dispatched here (not in `dispatch`) because they
+            // need the mutable `skill_cache` to record activation / re-permit
+            // tools — mirroring `mcp::registry::call_skill_tool`.
+            if tool.source == "skill" {
+                return self
+                    .dispatch_skill(tool, arguments, skill_cache)
+                    .await;
+            }
+
             // Prefer the openai_tool_name (what the model called), fall back to
             // the raw name for native tools where they coincide.
             let result = self.dispatch(&tool_name, arguments.clone()).await;
@@ -127,6 +151,83 @@ impl ToolExecutor for CliToolExecutor {
 }
 
 impl CliToolExecutor {
+    /// Dispatch a skill tool (`skill_activate` / `skill_read_file` /
+    /// `skill_run_script`). Mirrors `mcp::registry::call_skill_tool`, but
+    /// resolves the `SkillRecord` from the pre-built `skill_registry` (so no
+    /// `AppHandle` is required) and uses the `skill_cache` exactly as the GUI
+    /// does: `skill_activate` records the activated skill's `allowed_tools` so
+    /// the loop re-permits them on the next planning round (mid-run activation),
+    /// and read/activate results are de-duplicated through the cache when present.
+    async fn dispatch_skill(
+        &self,
+        tool: &ChatToolDefinition,
+        arguments: Value,
+        skill_cache: Option<&mut skills::SkillRunCache>,
+    ) -> Result<McpToolCallResult, String> {
+        let skill_name = skills::extract_skill_name(&arguments)?;
+
+        // Resolve the SkillRecord from the run's pre-built registry. Clone it so
+        // the immutable borrow on the registry is dropped before we take a
+        // mutable borrow of the cache for activate / read dispatch.
+        let record = skills::lookup_skill(&self.skill_registry, &skill_name)
+            .cloned()
+            .ok_or_else(|| format!("Skill not found: {skill_name}"))?;
+
+        if !crate::settings::is_skill_enabled(&self.chat_tools, &record.meta.id) {
+            return Err(format!("Skill is disabled in Settings: {skill_name}"));
+        }
+
+        let mut skill_cache = skill_cache;
+        // Assistant skill allow-list hard gate (defense in depth), as in the GUI.
+        if let Some(cache) = skill_cache.as_deref() {
+            if !cache.skill_id_allowed(&record.meta.id) {
+                return Err(format!(
+                    "Skill is not allowed for the active assistant: {skill_name}"
+                ));
+            }
+        }
+
+        let content = match tool.name.as_str() {
+            "skill_activate" => {
+                if let Some(cache) = skill_cache.as_deref_mut() {
+                    // T3: a model-activated skill narrows the tool set on later
+                    // rounds — record its allowed_tools before activating.
+                    cache.record_activated_allowed_tools(&record.allowed_tools);
+                    cache.activate_with_cache(&record)
+                } else {
+                    skills::activate_skill(&record)
+                }
+            }
+            "skill_read_file" => {
+                let relative_path = skills::extract_relative_path(&arguments)?;
+                if let Some(cache) = skill_cache.as_deref_mut() {
+                    cache.read_file_with_cache(&record, &relative_path)?
+                } else {
+                    skills::read_skill_file(&record, &relative_path)?
+                }
+            }
+            "skill_run_script" => {
+                let relative_path = skills::extract_relative_path(&arguments)?;
+                let args = skills::extract_script_args(&arguments);
+                let timeout_ms = effective_skill_script_timeout_ms(
+                    self.chat_tools.tool_timeout_ms,
+                    arguments.get("timeout_ms").and_then(|value| value.as_u64()),
+                );
+                skills::run_skill_script(
+                    &record,
+                    &relative_path,
+                    &args,
+                    timeout_ms,
+                    &self.chat_tools.skill_script_allowlist,
+                )
+                .await?
+            }
+            other => return Err(format!("Unknown skill tool: {other}")),
+        };
+
+        Ok(text_tool_result(content))
+    }
+
     /// Final fallthrough for a tool the core set did not handle: try the MCP
     /// dispatch seam first (an MCP server may own this tool), and only return
     /// the original unknown-tool error if MCP did not handle it. The stub MCP
@@ -179,15 +280,16 @@ mod tests {
     fn temp_workspace() -> (std::path::PathBuf, CliToolExecutor) {
         let dir = std::env::temp_dir().join(format!("kivio-code-exec-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
-        let state = Arc::new(AppState::new_headless(
-            crate::settings::Settings::default(),
-            dir.join("usage"),
-        ));
+        let settings = crate::settings::Settings::default();
+        let chat_tools = settings.chat_tools.clone();
+        let state = Arc::new(AppState::new_headless(settings, dir.join("usage")));
         let executor = CliToolExecutor::new(
             vec![dir.to_string_lossy().into_owned()],
             reqwest::Client::new(),
             120_000,
             state,
+            SkillRegistry::default(),
+            chat_tools,
         );
         (dir, executor)
     }
@@ -274,6 +376,140 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not support tool"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- Skill-tool dispatch ------------------------------------------------
+
+    fn skill_tool(name: &str) -> ChatToolDefinition {
+        crate::mcp::types::native_skill_tools()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("skill tool exists")
+    }
+
+    /// Write a minimal valid skill with a `references/guide.md` resource, build a
+    /// registry from it (mirroring `TurnAssembly`), and construct an executor
+    /// holding that registry + the matching chat-tools config (scan path set so
+    /// the skill is discoverable and enabled).
+    fn skill_workspace() -> (std::path::PathBuf, CliToolExecutor) {
+        let dir = std::env::temp_dir().join(format!("kivio-code-skill-{}", uuid::Uuid::new_v4()));
+        let skill_dir = dir.join("demo-skill");
+        std::fs::create_dir_all(skill_dir.join("references")).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: demo-skill\ndescription: A demo skill for tests.\nallowed-tools: read web_fetch\n---\n\n# demo-skill\nDo the thing.\n",
+        )
+        .expect("write SKILL.md");
+        std::fs::write(
+            skill_dir.join("references").join("guide.md"),
+            "GUIDE CONTENTS",
+        )
+        .expect("write guide");
+
+        let mut settings = crate::settings::Settings::default();
+        settings.chat_tools.skill_scan_paths = vec![dir.to_string_lossy().into_owned()];
+        let chat_tools = settings.chat_tools.clone();
+        let registry = crate::kivio_code::skill_setup::build_skill_registry(
+            &settings,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(
+            !registry.records.is_empty(),
+            "precondition: demo-skill discovered"
+        );
+
+        let state = Arc::new(AppState::new_headless(settings, dir.join("usage")));
+        let executor = CliToolExecutor::new(
+            vec![dir.to_string_lossy().into_owned()],
+            reqwest::Client::new(),
+            120_000,
+            state,
+            registry,
+            chat_tools,
+        );
+        (dir, executor)
+    }
+
+    #[tokio::test]
+    async fn skill_activate_records_allowed_tools_and_returns_instructions() {
+        let (dir, executor) = skill_workspace();
+        let mut cache = skills::SkillRunCache::default();
+
+        let result = executor
+            .call(
+                &ctx(),
+                &skill_tool("skill_activate"),
+                serde_json::json!({ "name": "demo-skill" }),
+                Some(&mut cache),
+            )
+            .await
+            .expect("skill_activate ok");
+
+        assert!(!result.is_error);
+        // Activation returns the skill instructions / body.
+        assert!(result.content.contains("Do the thing"));
+        // Mid-run activation re-permits the skill's tools through the cache so
+        // the loop narrows the tool set on the next round (T3): the skill's
+        // declared allowed-tools must now be recorded in the cache.
+        assert!(
+            cache.activated_allowed_tools().iter().any(|t| t == "read"),
+            "skill's allowed_tools should be recorded for loop re-permit"
+        );
+        // A second activation is recognized as already active — proving the
+        // cache was mutated (activation state persisted).
+        let again = executor
+            .call(
+                &ctx(),
+                &skill_tool("skill_activate"),
+                serde_json::json!({ "name": "demo-skill" }),
+                Some(&mut cache),
+            )
+            .await
+            .expect("re-activate ok");
+        assert!(again.content.contains("already active"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn skill_activate_unknown_skill_errors() {
+        let (dir, executor) = skill_workspace();
+        let mut cache = skills::SkillRunCache::default();
+
+        let result = executor
+            .call(
+                &ctx(),
+                &skill_tool("skill_activate"),
+                serde_json::json!({ "name": "no-such-skill" }),
+                Some(&mut cache),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Skill not found"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn skill_read_file_reads_skill_resource() {
+        let (dir, executor) = skill_workspace();
+        let mut cache = skills::SkillRunCache::default();
+
+        let result = executor
+            .call(
+                &ctx(),
+                &skill_tool("skill_read_file"),
+                serde_json::json!({ "name": "demo-skill", "relative_path": "references/guide.md" }),
+                Some(&mut cache),
+            )
+            .await
+            .expect("skill_read_file ok");
+
+        assert!(!result.is_error);
+        assert!(result.content.contains("GUIDE CONTENTS"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

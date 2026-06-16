@@ -60,13 +60,70 @@ fn scan_root_entries(
         path: user_skills_dir(app)?,
         source: "user",
     });
+    append_external_roots(&mut roots, extra_paths);
+    Ok(roots)
+}
+
+/// Resolve the same per-user skills directory the GUI uses
+/// (`<app_data_dir>/skills`), but WITHOUT a Tauri `AppHandle`. Used by the
+/// headless `kivio-code` CLI. `app_data_dir` is derived from the
+/// `directories` crate against the bundle identifier `com.zmair.kivio`,
+/// mirroring `kivio_code::settings_loader::app_data_dir`.
+///
+/// Returns `None` only when no home/data directory can be determined. The
+/// directory is created if missing so the user has a place to drop skills.
+pub fn user_skills_dir_headless() -> Option<PathBuf> {
+    let dir = crate::kivio_code::settings_loader::app_data_dir()?.join("skills");
+    // Best-effort create; ignore failures (read-only / permission) — discovery
+    // simply finds nothing rather than erroring.
+    let _ = fs::create_dir_all(&dir);
+    Some(dir)
+}
+
+/// Headless variant of [`scan_root_entries`]: resolves skill roots without an
+/// `AppHandle`. Built-in (bundled) skills are resolved relative to the running
+/// executable's resource layout when present; the user skills dir comes from
+/// [`user_skills_dir_headless`]; `extra_paths` are appended as external roots.
+fn scan_root_entries_headless(extra_paths: &[String]) -> Vec<SkillScanRoot> {
+    let mut roots = Vec::new();
+    if let Some(path) = bundled_skills_dir_headless() {
+        roots.push(SkillScanRoot {
+            path,
+            source: "builtin",
+        });
+    }
+    if let Some(path) = user_skills_dir_headless() {
+        roots.push(SkillScanRoot {
+            path,
+            source: "user",
+        });
+    }
+    append_external_roots(&mut roots, extra_paths);
+    roots
+}
+
+/// Best-effort location of bundled skills next to the executable when running
+/// headless (no Tauri `resource_dir`). Checks `<exe_dir>/skills` and, for the
+/// macOS app-bundle layout, `<exe_dir>/../Resources/skills`. Returns `None`
+/// when neither exists (e.g. plain `cargo run`), which is fine — the CLI then
+/// surfaces only user skills.
+fn bundled_skills_dir_headless() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let candidates = [
+        exe_dir.join("skills"),
+        exe_dir.join("..").join("Resources").join("skills"),
+    ];
+    candidates.into_iter().find(|dir| dir.is_dir())
+}
+
+fn append_external_roots(roots: &mut Vec<SkillScanRoot>, extra_paths: &[String]) {
     roots.extend(extra_paths.iter().map(PathBuf::from).filter_map(|path| {
         path.is_dir().then_some(SkillScanRoot {
             path,
             source: "external",
         })
     }));
-    Ok(roots)
 }
 
 pub fn build_registry(app: &AppHandle, extra_paths: &[String]) -> Result<SkillRegistry, String> {
@@ -85,18 +142,34 @@ fn build_registry_inner(
     extra_paths: &[String],
     include_files: bool,
 ) -> Result<SkillRegistry, String> {
-    let mut registry = SkillRegistry::default();
     let roots = scan_root_entries(app, extra_paths)?;
+    Ok(build_registry_from_roots(roots, include_files))
+}
 
+/// Headless registry builder (no `AppHandle`): discovers user-dir + bundled +
+/// `extra_paths` skills exactly like [`build_registry`], indexing skill files so
+/// `skill_read_file` / `skill_run_script` resources are listed. Used by the
+/// `kivio-code` CLI.
+pub fn build_registry_headless(extra_paths: &[String]) -> SkillRegistry {
+    build_registry_from_roots(scan_root_entries_headless(extra_paths), true)
+}
+
+fn build_registry_from_roots(roots: Vec<SkillScanRoot>, include_files: bool) -> SkillRegistry {
+    let mut registry = SkillRegistry::default();
     for root in roots {
-        collect_skill_files(&root.path, 0, &mut registry, root.source, include_files)?;
+        if let Err(err) =
+            collect_skill_files(&root.path, 0, &mut registry, root.source, include_files)
+        {
+            registry
+                .warnings
+                .push(format!("Scan {} failed: {err}", root.path.display()));
+        }
     }
-
     dedup_records(&mut registry.records, &mut registry.warnings);
     registry
         .records
         .sort_by(|a, b| a.meta.name.to_lowercase().cmp(&b.meta.name.to_lowercase()));
-    Ok(registry)
+    registry
 }
 
 fn dedup_records(records: &mut Vec<super::types::SkillRecord>, warnings: &mut Vec<String>) {

@@ -171,6 +171,8 @@ impl TurnRuntime {
         let host = InteractiveAgentHost::new(agent_tx.clone(), cancel);
         let state = self.state.clone();
         let assembly = self.assembly.clone();
+        let skill_registry = assembly.skill_registry.clone();
+        let chat_tools = assembly.effective_chat_tools.clone();
         let messages = self.runtime_messages.clone();
         let cwd_root = self.cwd.to_string_lossy().into_owned();
         let http = self.state.http.clone();
@@ -179,7 +181,14 @@ impl TurnRuntime {
         let run_message_id = message_id.clone();
 
         self.handle.spawn(async move {
-            let executor = CliToolExecutor::new(vec![cwd_root], http, timeout_ms, state.clone());
+            let executor = CliToolExecutor::new(
+                vec![cwd_root],
+                http,
+                timeout_ms,
+                state.clone(),
+                skill_registry,
+                chat_tools,
+            );
             // Build the borrowing config inside the task body so the borrows of the
             // owned `state`/`assembly` Arcs live exactly as long as the loop call.
             let config = assembly.into_config(

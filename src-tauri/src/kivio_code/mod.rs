@@ -382,6 +382,8 @@ pub async fn run_print(options: PrintOptions, state: &Arc<AppState>) -> Result<S
         state.http.clone(),
         assembly.effective_chat_tools.tool_timeout_ms,
         state.clone(),
+        assembly.skill_registry.clone(),
+        assembly.effective_chat_tools.clone(),
     );
 
     let config = assembly.into_config(
