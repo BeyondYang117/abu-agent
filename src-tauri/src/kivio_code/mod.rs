@@ -164,6 +164,128 @@ pub fn build_app_state(settings: Settings) -> Arc<AppState> {
     Arc::new(AppState::new_headless(settings, usage_dir))
 }
 
+/// Shared, host-agnostic assembly for one agent turn. Both print mode
+/// ([`run_print`]) and interactive mode build their [`AgentRunConfig`] from this,
+/// so the provider/model resolution, system prompt, tool set, and the many
+/// per-run knobs derived from `Settings` live in exactly one place.
+///
+/// What this deliberately does *not* hold: the `host`, the `executor`, the
+/// `runtime_messages`, the cancel `generation`, and the per-turn `message_id` —
+/// those differ between print (one shot, stdout host) and interactive (streaming
+/// host, multi-turn message log) and are supplied at [`into_config`] time.
+///
+/// [`into_config`]: TurnAssembly::into_config
+pub struct TurnAssembly {
+    pub provider: ModelProvider,
+    pub model: String,
+    pub system_prompt: String,
+    pub effective_chat_tools: crate::settings::ChatToolsConfig,
+    pub language: String,
+    pub thinking_enabled: bool,
+    pub stream_enabled: bool,
+    pub max_output_tokens: u32,
+    pub retry_attempts: usize,
+    pub settings: Settings,
+}
+
+impl TurnAssembly {
+    /// Resolve the provider/model and derive every settings-driven knob for a
+    /// run rooted at `cwd`. `approve_sensitive` mirrors print mode's
+    /// `!no_approve`: when false the approval policy is `always_confirm` so the
+    /// host can deny sensitive (write/edit/bash) tools; when true it is `auto`.
+    pub fn resolve(
+        settings: &Settings,
+        provider_override: Option<&str>,
+        model_override: Option<&str>,
+        cwd: &std::path::Path,
+        approve_sensitive: bool,
+    ) -> Result<Self, String> {
+        let (provider, model) =
+            resolve_provider_model(settings, provider_override, model_override)?;
+
+        let mut effective_chat_tools = settings.chat_tools.clone();
+        effective_chat_tools.approval_policy = if approve_sensitive {
+            "auto".to_string()
+        } else {
+            "always_confirm".to_string()
+        };
+
+        let language = if settings.chat.default_language.trim().is_empty() {
+            "en".to_string()
+        } else {
+            settings.chat.default_language.clone()
+        };
+        let retry_attempts = if settings.retry_enabled {
+            settings.retry_attempts as usize
+        } else {
+            1
+        };
+
+        Ok(Self {
+            provider,
+            model,
+            system_prompt: build_system_prompt(cwd),
+            effective_chat_tools,
+            language,
+            thinking_enabled: settings.chat.thinking_enabled,
+            stream_enabled: settings.chat.stream_enabled,
+            max_output_tokens: settings.chat.max_output_tokens,
+            retry_attempts,
+            settings: settings.clone(),
+        })
+    }
+
+    /// The `provider:model` display string used by footers / session headers.
+    pub fn model_label(&self) -> String {
+        format!("{}:{}", self.provider.id, self.model)
+    }
+
+    /// Turn this assembly into a ready-to-run [`AgentRunConfig`]. `runtime_messages`
+    /// is the full conversation context (system + prior turns + new user message);
+    /// `message_id`/`run_id` identify this turn; `generation` is the cancel token
+    /// the host's `is_generation_active` polls against.
+    #[allow(clippy::too_many_arguments)]
+    pub fn into_config<'a>(
+        &'a self,
+        state: &'a AppState,
+        conversation_id: String,
+        run_id: String,
+        message_id: String,
+        generation: u64,
+        runtime_messages: Vec<Value>,
+    ) -> AgentRunConfig<'a> {
+        AgentRunConfig {
+            entry: AgentRunEntry::Send,
+            state,
+            tool_conversation_id: conversation_id.clone(),
+            conversation_id,
+            depth: 0,
+            run_id,
+            message_id,
+            generation,
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            runtime_messages,
+            tools: core_tool_definitions(),
+            blocked_tool_calls: Vec::new(),
+            settings: self.settings.clone(),
+            effective_chat_tools: self.effective_chat_tools.clone(),
+            language: self.language.clone(),
+            has_image: false,
+            thinking_enabled: self.thinking_enabled,
+            stream_enabled: self.stream_enabled,
+            max_output_tokens: self.max_output_tokens,
+            retry_attempts: self.retry_attempts,
+            skill_registry: SkillRegistry::default(),
+            active_skill_id: None,
+            active_skill_detail: None,
+            assistant_snapshot: None,
+            custom_system_prompt: String::new(),
+            provider_tools_fallback_system_prompt: self.system_prompt.clone(),
+        }
+    }
+}
+
 /// Run one print-mode agent turn end to end. Returns the final assistant text.
 ///
 /// `state` must outlive the loop; callers pass an owned `Arc<AppState>` that the
@@ -172,80 +294,35 @@ pub fn build_app_state(settings: Settings) -> Arc<AppState> {
 /// decision (empty answer with no tools is treated as a failure by the bin).
 pub async fn run_print(options: PrintOptions, state: &AppState) -> Result<String, String> {
     let settings = state.settings_read().clone();
-    let (provider, model) = resolve_provider_model(
+    let assembly = TurnAssembly::resolve(
         &settings,
         options.provider.as_deref(),
         options.model.as_deref(),
+        &options.cwd,
+        !options.no_approve,
     )?;
 
-    let system_prompt = build_system_prompt(&options.cwd);
     let runtime_messages: Vec<Value> = vec![
-        json!({ "role": "system", "content": system_prompt }),
+        json!({ "role": "system", "content": assembly.system_prompt.clone() }),
         json!({ "role": "user", "content": options.prompt }),
     ];
-
-    // Approval policy: print mode is non-interactive. Default consent-gated flow
-    // (host grants session consent). With --no-approve, switch to per-call
-    // confirmation so the host can deny sensitive (write/edit/bash) tools.
-    let mut effective_chat_tools = settings.chat_tools.clone();
-    if options.no_approve {
-        effective_chat_tools.approval_policy = "always_confirm".to_string();
-    } else {
-        effective_chat_tools.approval_policy = "auto".to_string();
-    }
 
     let cwd_root = options.cwd.to_string_lossy().into_owned();
     let host = CliAgentHost::new(options.verbose, !options.no_approve);
     let executor = CliToolExecutor::new(
         vec![cwd_root],
         state.http.clone(),
-        effective_chat_tools.tool_timeout_ms,
+        assembly.effective_chat_tools.tool_timeout_ms,
     );
 
-    let generation = host.generation();
-    let language = if settings.chat.default_language.trim().is_empty() {
-        "en".to_string()
-    } else {
-        settings.chat.default_language.clone()
-    };
-    let max_output_tokens = settings.chat.max_output_tokens;
-    let retry_attempts = if settings.retry_enabled {
-        settings.retry_attempts as usize
-    } else {
-        1
-    };
-    let thinking_enabled = settings.chat.thinking_enabled;
-    let stream_enabled = settings.chat.stream_enabled;
-
-    let config = AgentRunConfig {
-        entry: AgentRunEntry::Send,
+    let config = assembly.into_config(
         state,
-        conversation_id: "kivio-code".to_string(),
-        tool_conversation_id: "kivio-code".to_string(),
-        depth: 0,
-        run_id: "kivio-code-run".to_string(),
-        message_id: "kivio-code-msg".to_string(),
-        generation,
-        provider,
-        model,
+        "kivio-code".to_string(),
+        "kivio-code-run".to_string(),
+        "kivio-code-msg".to_string(),
+        host.generation(),
         runtime_messages,
-        tools: core_tool_definitions(),
-        blocked_tool_calls: Vec::new(),
-        settings: settings.clone(),
-        effective_chat_tools,
-        language,
-        has_image: false,
-        thinking_enabled,
-        stream_enabled,
-        max_output_tokens,
-        retry_attempts,
-        skill_registry: SkillRegistry::default(),
-        active_skill_id: None,
-        active_skill_detail: None,
-        assistant_snapshot: None,
-        custom_system_prompt: String::new(),
-        provider_tools_fallback_system_prompt: build_system_prompt(&options.cwd),
-    };
+    );
 
     let result = run_agent_loop(config, &host, &executor).await?;
     Ok(result.content)
