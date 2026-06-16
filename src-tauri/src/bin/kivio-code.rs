@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use kivio::kivio_code::interactive::{self, InteractiveOptions};
+use kivio::kivio_code::interactive::{self, InteractiveOptions, ResumeRequest};
 use kivio::kivio_code::{
     build_app_state, load_settings_from_disk, read_stdin_prompt, resolve_provider_model, run_print,
     PrintOptions,
@@ -53,6 +53,14 @@ struct Cli {
     /// Stream model reasoning to stderr.
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
+
+    /// Resume the most recent session for the working directory (interactive).
+    #[arg(short = 'c', long = "continue")]
+    continue_recent: bool,
+
+    /// Resume a specific session by id (or partial id) or `.jsonl` path (interactive).
+    #[arg(short = 'r', long = "resume", value_name = "ID|PATH")]
+    resume: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -133,9 +141,10 @@ fn main() -> ExitCode {
     })
 }
 
-/// Launch the interactive TUI shell (Phase 5a). Resolves the model for the footer
-/// from settings + `--model`/`--provider`, builds [`InteractiveOptions`], and runs
-/// the event loop. The actual agent loop is wired in Phase 5b.
+/// Launch the interactive TUI shell. Resolves the model for the footer from
+/// settings + `--model`/`--provider`, threads the CLI overrides (cwd / model /
+/// provider / no-approve / verbose / resume) into [`InteractiveOptions`], and
+/// runs the event loop.
 fn run_interactive(cli: &Cli, cwd: &Path) -> ExitCode {
     let settings = load_settings_from_disk();
     let model = match resolve_provider_model(
@@ -148,9 +157,24 @@ fn run_interactive(cli: &Cli, cwd: &Path) -> ExitCode {
         Err(_) => "<no model>".to_string(),
     };
 
+    // `-r` takes precedence over `-c`.
+    let resume = if let Some(reference) = cli.resume.clone() {
+        Some(ResumeRequest::Reference(reference))
+    } else if cli.continue_recent {
+        Some(ResumeRequest::Recent)
+    } else {
+        None
+    };
+
     let options = InteractiveOptions {
         cwd_display: display_cwd(cwd),
         model,
+        cwd: cwd.to_path_buf(),
+        provider_override: cli.provider.clone(),
+        model_override: cli.model.clone(),
+        no_approve: cli.no_approve,
+        verbose: cli.verbose,
+        resume,
     };
 
     match interactive::run(options) {

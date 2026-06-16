@@ -27,6 +27,7 @@
 pub mod agent_host;
 pub mod app;
 pub mod slash;
+pub mod tool_card;
 
 pub use agent_host::{AgentUiEvent, Generations, InteractiveAgentHost, RunCancel};
 pub use app::{App, AppEffect, AppMode, ToolCard, ToolCardPlaceholder};
@@ -75,12 +76,33 @@ impl Component for AppFrame {
     }
 }
 
-/// 交互模式的运行选项。
+/// 交互模式的运行选项。由 bin 从 CLI 参数填充。
 pub struct InteractiveOptions {
     /// 已折叠 home→`~` 的 cwd 展示串。
     pub cwd_display: String,
-    /// 形如 `provider:model` 的模型展示串。
+    /// 形如 `provider:model` 的模型展示串（已 resolve；`<no model>` 表示未配置）。
     pub model: String,
+    /// agent 实际操作的工作目录（`-C/--cwd` 已解析；workspace + session 根均用它）。
+    pub cwd: PathBuf,
+    /// `--provider` 覆盖（resolve turn assembly 用）。
+    pub provider_override: Option<String>,
+    /// `--model` 覆盖（resolve turn assembly 用）。
+    pub model_override: Option<String>,
+    /// `--no-approve`：禁用敏感工具（write/edit/bash）。
+    pub no_approve: bool,
+    /// `--verbose`：流式显示 reasoning。
+    pub verbose: bool,
+    /// 会话续跑请求（`-c/--continue` 或 `-r/--resume <id|path>`）；None = 新会话。
+    pub resume: Option<ResumeRequest>,
+}
+
+/// 续跑请求：最近一条（`-c`）或指定 id / 路径（`-r`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResumeRequest {
+    /// 续跑该 cwd 下最近的会话。
+    Recent,
+    /// 续跑指定会话：一个 `.jsonl` 路径，或一个（可能是部分前缀的）会话 id。
+    Reference(String),
 }
 
 /// 后台 agent 任务完成后送回主循环的结果（连同它跑在哪个 generation，便于丢弃过期任务）。
@@ -182,6 +204,89 @@ impl TurnRuntime {
         if let Some(cancel) = &self.current {
             cancel.cancel();
         }
+    }
+
+    /// 当前活动模型展示串（`provider:model`）。
+    fn model_label(&self) -> String {
+        self.assembly.model_label()
+    }
+
+    /// 切换活动模型（`/model` / Ctrl+L 选定后）。`value` 形如 `provider:model`。重新 resolve
+    /// 一个 [`TurnAssembly`]（沿用同 cwd / approve 策略），写一条 ModelChange 到 session，并把新的
+    /// `system_prompt` 同步到 runtime_messages 的首条 system（如有）。成功返回 Ok(label)。
+    fn switch_model(&mut self, value: &str) -> Result<String, String> {
+        let (provider_override, model_override) = split_model_label(value);
+        let settings = self.state.settings_read().clone();
+        let approve_sensitive = self.assembly.effective_chat_tools.approval_policy == "auto";
+        let new_assembly = TurnAssembly::resolve(
+            &settings,
+            provider_override.as_deref(),
+            model_override.as_deref(),
+            &self.cwd,
+            approve_sensitive,
+        )?;
+        let label = new_assembly.model_label();
+        // 更新首条 system（系统提示不随模型变，但稳妥起见同步）。
+        if let Some(first) = self.runtime_messages.first_mut() {
+            if first["role"] == "system" {
+                first["content"] = json!(new_assembly.system_prompt.clone());
+            }
+        }
+        self.timeout_ms = new_assembly.effective_chat_tools.tool_timeout_ms;
+        self.assembly = Arc::new(new_assembly);
+        self.append_session(SessionRecord::ModelChange {
+            id: String::new(),
+            parent_id: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            model: label.clone(),
+        });
+        Ok(label)
+    }
+
+    /// settings 里所有 enabled 模型作为选择器条目：`(provider:model, label, description)`。
+    fn enabled_model_items(&self) -> Vec<(String, String, Option<String>)> {
+        let settings = self.state.settings_read();
+        let mut items = Vec::new();
+        for provider in &settings.providers {
+            if !provider.enabled {
+                continue;
+            }
+            for model in &provider.enabled_models {
+                let value = format!("{}:{}", provider.id, model);
+                items.push((value, model.clone(), Some(provider.name.clone())));
+            }
+        }
+        items
+    }
+
+    /// 该 cwd 下最近的会话作为选择器条目：`(jsonl_path, label, preview)`。
+    fn session_items(&self) -> Vec<(String, String, Option<String>)> {
+        session_items_for_cwd(&self.cwd)
+    }
+
+    /// `/sessions` 选定后：加载该会话，替换 session + 重建 runtime_messages，并刷新 UI transcript。
+    /// best-effort：加载失败仅通知。返回是否成功。
+    fn resume_session_path(&mut self, path: &str, app: &mut App) -> bool {
+        let path = PathBuf::from(path);
+        let session = match Session::load(&path) {
+            Ok(s) => s,
+            Err(err) => {
+                app.push_notice(format!("Failed to load session: {err}"));
+                return false;
+            }
+        };
+        app.rebuild_from_session(&session);
+        let mut messages = session.to_runtime_messages();
+        if !messages.iter().any(|m| m["role"] == "system") {
+            messages.insert(
+                0,
+                json!({ "role": "system", "content": self.assembly.system_prompt.clone() }),
+            );
+        }
+        self.runtime_messages = messages;
+        self.persisted_tool_calls = std::collections::HashSet::new();
+        self.session = Some(session);
+        true
     }
 
     /// 处理一轮结束：忽略过期 generation；否则把 assistant 消息 + 工具调用持久化、累积进
@@ -332,6 +437,7 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
     let cwd_display = options.cwd_display.clone();
     let mut app = App::new(cwd_display, options.model.clone());
     app.set_terminal_rows(rows);
+    app.set_show_reasoning(options.verbose);
 
     // 输入线程：raw stdin → StdinBuffer → InputEvent channel。
     let (tx, rx) = mpsc::channel::<InputEvent>();
@@ -356,30 +462,32 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
     };
 
     // 解析 settings → assembly（provider/model + 各项 knob）。失败也启动 shell，只是提交会报错。
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // cwd 直接用 options.cwd（bin 已据 `-C` 解析；不再重新取 current_dir）。
+    let cwd = options.cwd.clone();
     let settings = load_settings_from_disk();
-    let (provider_override, model_override) = split_model_label(&options.model);
     let assembly = TurnAssembly::resolve(
         &settings,
-        provider_override.as_deref(),
-        model_override.as_deref(),
+        options.provider_override.as_deref(),
+        options.model_override.as_deref(),
         &cwd,
-        /* approve_sensitive */ true,
+        /* approve_sensitive */ !options.no_approve,
     );
 
     let mut turn = match assembly {
         Ok(assembly) => {
-            // 把 system prompt 作为 runtime_messages 的第一条。
-            let runtime_messages =
-                vec![json!({ "role": "system", "content": assembly.system_prompt.clone() })];
-            // 建 session（best-effort：失败则无持久化但继续）。
-            let session = Session::create(&cwd, &assembly.model_label()).ok();
-            if session.is_none() {
-                app.push_notice("(session persistence unavailable; continuing without it)");
+            // session：续跑请求优先（加载已存在的）；否则新建。
+            let (session, mut runtime_messages, resumed) =
+                resolve_session(&options.resume, &cwd, &assembly, &mut app);
+            if runtime_messages.is_empty() {
+                // 新会话：system prompt 作为 runtime_messages 的第一条。
+                runtime_messages =
+                    vec![json!({ "role": "system", "content": assembly.system_prompt.clone() })];
             }
             let state = build_app_state(settings.clone());
             let timeout_ms = assembly.effective_chat_tools.tool_timeout_ms;
-            app.push_notice("kivio-code interactive. Type a message; /help for commands; Esc cancels a run; Ctrl+D exits.");
+            if !resumed {
+                app.push_notice("kivio-code interactive. Type a message; /help for commands; /model switches model; Esc cancels a run; Ctrl+D exits.");
+            }
             Some(TurnRuntime {
                 handle: runtime.handle().clone(),
                 state,
@@ -442,11 +550,147 @@ fn split_model_label(label: &str) -> (Option<String>, Option<String>) {
     }
 }
 
-/// 主事件循环。返回 Ok 表示正常退出。
+/// 解析续跑请求：续跑时加载已有会话并重建 transcript + runtime_messages；否则新建一个会话。
 ///
-/// `recv_timeout` 一个 [`InputEvent`] → 喂 [`App`]；超时分支先 drain agent-event / turn-done，
-/// 再轮询 resize。每次有变更后做一次差分渲染。
-#[allow(clippy::too_many_arguments)]
+/// 返回 `(session, runtime_messages, resumed)`：
+/// - `session`：要追加写入的会话（None = 持久化不可用，仍继续运行）。
+/// - `runtime_messages`：续跑时由会话记录重建的上下文（含 system）；新会话为空 vec（调用方补 system）。
+/// - `resumed`：是否真的从磁盘续跑了一个会话（用于决定欢迎语 / footer）。
+fn resolve_session(
+    resume: &Option<ResumeRequest>,
+    cwd: &PathBuf,
+    assembly: &TurnAssembly,
+    app: &mut App,
+) -> (Option<Session>, Vec<Value>, bool) {
+    if let Some(request) = resume {
+        if let Some(session) = load_session_for_resume(request, cwd) {
+            // 重建 UI transcript + 上下文消息。
+            app.rebuild_from_session(&session);
+            let mut messages = session.to_runtime_messages();
+            // to_runtime_messages 不含 system（session 不存 system）；补一条当前 system。
+            if !messages.iter().any(|m| m["role"] == "system") {
+                messages.insert(
+                    0,
+                    json!({ "role": "system", "content": assembly.system_prompt.clone() }),
+                );
+            }
+            return (Some(session), messages, true);
+        }
+        app.push_notice("No matching session to resume; starting a new one.");
+    }
+    // 新会话。
+    let session = Session::create(cwd, &assembly.model_label()).ok();
+    if session.is_none() {
+        app.push_notice("(session persistence unavailable; continuing without it)");
+    }
+    (session, Vec::new(), false)
+}
+
+/// 按续跑请求找到一个会话并加载：`Recent` → cwd 下最近一条；`Reference(s)` → 若 `s` 是存在的
+/// `.jsonl` 路径则直接 load，否则按（部分前缀）id 在该 cwd 的会话里匹配。
+fn load_session_for_resume(request: &ResumeRequest, cwd: &PathBuf) -> Option<Session> {
+    match request {
+        ResumeRequest::Recent => crate::kivio_code::session::resume_recent(cwd),
+        ResumeRequest::Reference(reference) => {
+            let path = PathBuf::from(reference);
+            if path.is_file() {
+                return Session::load(&path).ok();
+            }
+            // id（或前缀）匹配：在该 cwd 的会话里找。
+            let summary = crate::kivio_code::session::list_sessions(cwd)
+                .into_iter()
+                .find(|s| s.id == *reference || s.id.starts_with(reference.as_str()))?;
+            Session::load(&summary.path).ok()
+        }
+    }
+}
+
+/// 该 cwd 下的会话作为选择器条目（最近优先）：`(jsonl_path, label, preview)`。label 用
+/// 创建时间，description 用首条用户消息预览。纯函数，便于单测。
+fn session_items_for_cwd(cwd: &PathBuf) -> Vec<(String, String, Option<String>)> {
+    crate::kivio_code::session::list_sessions(cwd)
+        .into_iter()
+        .map(|s| {
+            let label = s.created_at.clone();
+            let desc = s.first_user_message.clone();
+            (s.path.to_string_lossy().into_owned(), label, desc)
+        })
+        .collect()
+}
+
+/// `apply_effect` 的控制流结果。
+enum EffectFlow {
+    /// 退出事件循环。
+    Quit,
+    /// 继续（已就地处理；调用方应重绘）。
+    Continue,
+}
+
+/// 把一个 [`AppEffect`] 应用到运行时：提交起轮、取消、打开 / 应用选择器、切模型、续会话。
+/// 与 `run_loop` 分离以便集中处理新增的 effect 分支（且便于测试覆盖路由约定）。
+fn apply_effect(
+    effect: AppEffect,
+    app: &mut App,
+    agent_tx: &Sender<AgentUiEvent>,
+    turn: Option<&mut TurnRuntime>,
+) -> EffectFlow {
+    match effect {
+        AppEffect::Quit => return EffectFlow::Quit,
+        AppEffect::None => {}
+        AppEffect::Submitted(text) => {
+            if let Some(turn) = turn {
+                if !turn.is_generating() {
+                    app.set_mode(AppMode::Generating);
+                    turn.begin_turn(text, agent_tx);
+                }
+            } else {
+                app.push_notice("No model configured; cannot run.");
+            }
+        }
+        AppEffect::Cancel => {
+            if let Some(turn) = turn {
+                turn.request_cancel();
+            }
+        }
+        AppEffect::OpenModelSelector => {
+            if let Some(turn) = turn {
+                let items = turn.enabled_model_items();
+                app.open_model_selector(items);
+            } else {
+                app.push_notice("No model configured.");
+            }
+        }
+        AppEffect::OpenSessionSelector => {
+            if let Some(turn) = turn {
+                let items = turn.session_items();
+                app.open_session_selector(items);
+            } else {
+                app.push_notice("No sessions available.");
+            }
+        }
+        AppEffect::ModelSelected(value) => {
+            if let Some(turn) = turn {
+                match turn.switch_model(&value) {
+                    Ok(label) => {
+                        app.set_model(label.clone());
+                        app.push_notice(format!("Switched model to {label}."));
+                    }
+                    Err(err) => app.push_notice(format!("Could not switch model: {err}")),
+                }
+            }
+        }
+        AppEffect::SessionSelected(path) => {
+            if let Some(turn) = turn {
+                if turn.resume_session_path(&path, app) {
+                    app.set_model(turn.model_label());
+                }
+            }
+        }
+    }
+    EffectFlow::Continue
+}
+
+/// 主事件循环。返回 Ok 表示正常退出。
 fn run_loop(
     tui: &mut Tui<CrosstermTerminal>,
     app: &mut App,
@@ -459,32 +703,19 @@ fn run_loop(
     loop {
         let mut dirty = false;
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(InputEvent::Key(data)) => match app.handle_key(&data) {
-                AppEffect::Quit => return Ok(()),
-                AppEffect::Submitted(text) => {
-                    if let Some(turn) = turn.as_deref_mut() {
-                        if !turn.is_generating() {
-                            app.set_mode(AppMode::Generating);
-                            turn.begin_turn(text, agent_tx);
-                        }
-                    } else {
-                        app.push_notice("No model configured; cannot run.");
-                    }
-                    dirty = true;
+            Ok(InputEvent::Key(data)) => {
+                let effect = app.handle_key(&data);
+                match apply_effect(effect, app, agent_tx, turn.as_deref_mut()) {
+                    EffectFlow::Quit => return Ok(()),
+                    EffectFlow::Continue => dirty = true,
                 }
-                AppEffect::Cancel => {
-                    if let Some(turn) = turn.as_deref_mut() {
-                        turn.request_cancel();
-                    }
-                    dirty = true;
-                }
-                AppEffect::None => dirty = true,
-            },
+            }
             Ok(InputEvent::Paste(content)) => {
                 let wrapped = format!("\x1b[200~{content}\x1b[201~");
-                match app.handle_key(&wrapped) {
-                    AppEffect::Quit => return Ok(()),
-                    _ => dirty = true,
+                let effect = app.handle_key(&wrapped);
+                match apply_effect(effect, app, agent_tx, turn.as_deref_mut()) {
+                    EffectFlow::Quit => return Ok(()),
+                    EffectFlow::Continue => dirty = true,
                 }
             }
             Ok(InputEvent::Resize(cols, rows)) => {
@@ -498,6 +729,10 @@ fn run_loop(
                 if tui.terminal.refresh_size() {
                     app.set_terminal_rows(tui.terminal.rows());
                     tui.invalidate();
+                    dirty = true;
+                }
+                // 推进 thinking spinner（generating 态）。
+                if app.tick_loader() {
                     dirty = true;
                 }
             }
@@ -885,6 +1120,211 @@ mod tests {
         assert!(!rt.is_generating());
         assert_eq!(app.mode(), AppMode::Idle);
         assert!(!app.assistant_streaming());
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    // ---- Phase 5c: model selector data + switching ----
+
+    /// Settings with two enabled providers, each with two enabled models.
+    fn multi_provider_settings() -> Settings {
+        let mut s = Settings::default();
+        let mut p1 = provider("chat");
+        p1.enabled_models = vec!["m1".to_string(), "m2".to_string()];
+        let mut p2 = provider("alt");
+        p2.enabled_models = vec!["x1".to_string()];
+        s.providers = vec![p1, p2];
+        s.default_models.chat.provider_id = "chat".to_string();
+        s.default_models.chat.model = "m1".to_string();
+        s
+    }
+
+    fn turn_runtime_with(settings: Settings, cwd: &PathBuf) -> (TurnRuntime, Receiver<TurnDone>) {
+        let assembly =
+            TurnAssembly::resolve(&settings, None, None, cwd, true).expect("assembly resolves");
+        let runtime_messages =
+            vec![json!({ "role": "system", "content": assembly.system_prompt.clone() })];
+        let session = Session::create(cwd, &assembly.model_label()).expect("session create");
+        let state = build_app_state(settings);
+        let (done_tx, done_rx) = mpsc::channel::<TurnDone>();
+        let rt = TurnRuntime {
+            handle: tokio::runtime::Handle::current(),
+            state,
+            assembly: Arc::new(assembly),
+            cwd: cwd.clone(),
+            timeout_ms: 120_000,
+            generations: Generations::default(),
+            current: None,
+            current_message_id: None,
+            runtime_messages,
+            session: Some(session),
+            persisted_tool_calls: std::collections::HashSet::new(),
+            turn_done_tx: done_tx,
+        };
+        (rt, done_rx)
+    }
+
+    #[tokio::test]
+    async fn enabled_model_items_lists_all_enabled() {
+        let cwd = unique_cwd("modelitems");
+        let (rt, _done) = turn_runtime_with(multi_provider_settings(), &cwd);
+        let items = rt.enabled_model_items();
+        let values: Vec<String> = items.iter().map(|(v, _, _)| v.clone()).collect();
+        assert!(values.contains(&"chat:m1".to_string()));
+        assert!(values.contains(&"chat:m2".to_string()));
+        assert!(values.contains(&"alt:x1".to_string()));
+        assert_eq!(values.len(), 3);
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn switch_model_reresolves_assembly_and_records_change() {
+        let cwd = unique_cwd("switchmodel");
+        let (mut rt, _done) = turn_runtime_with(multi_provider_settings(), &cwd);
+        assert_eq!(rt.model_label(), "chat:m1");
+
+        let label = rt.switch_model("alt:x1").expect("switch ok");
+        assert_eq!(label, "alt:x1");
+        assert_eq!(rt.model_label(), "alt:x1");
+
+        // A ModelChange record was persisted.
+        let path = rt.session.as_ref().unwrap().path.clone();
+        let reloaded = Session::load(&path).expect("reload");
+        assert!(reloaded
+            .records
+            .iter()
+            .any(|r| matches!(r, SessionRecord::ModelChange { model, .. } if model == "alt:x1")));
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn switch_model_unknown_provider_errors() {
+        let cwd = unique_cwd("switchbad");
+        let (mut rt, _done) = turn_runtime_with(multi_provider_settings(), &cwd);
+        assert!(rt.switch_model("nope:zzz").is_err());
+        // unchanged
+        assert_eq!(rt.model_label(), "chat:m1");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    // ---- Phase 5c: session resume ----
+
+    #[tokio::test]
+    async fn session_items_and_resolve_recent() {
+        let cwd = unique_cwd("resumeitems");
+        // No sessions yet.
+        assert!(session_items_for_cwd(&cwd).is_empty());
+
+        // Create a session with a user message so it shows a preview.
+        let mut s = Session::create(&cwd, "chat:m1").unwrap();
+        s.append(SessionRecord::Message {
+            id: String::new(),
+            parent_id: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            role: "user".to_string(),
+            content: "summarize the readme".to_string(),
+        })
+        .unwrap();
+
+        let items = session_items_for_cwd(&cwd);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, s.path.to_string_lossy());
+        assert!(items[0].2.as_deref().unwrap().contains("summarize"));
+
+        // resolve_session with Recent rebuilds messages + transcript.
+        let settings = test_settings();
+        let assembly = TurnAssembly::resolve(&settings, None, None, &cwd, true).unwrap();
+        let mut app = App::new("~".into(), "chat:m1".into());
+        app.set_terminal_rows(24);
+        let (session, messages, resumed) =
+            resolve_session(&Some(ResumeRequest::Recent), &cwd, &assembly, &mut app);
+        assert!(resumed);
+        assert!(session.is_some());
+        // system + user
+        assert!(messages.iter().any(|m| m["role"] == "system"));
+        assert!(messages.iter().any(|m| m["content"] == "summarize the readme"));
+        // transcript shows the user message.
+        assert!(app.render(80).join("\n").contains("summarize the readme"));
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn resolve_session_reference_by_id() {
+        let cwd = unique_cwd("resumeid");
+        let s = Session::create(&cwd, "chat:m1").unwrap();
+        let id = s.id.clone();
+        let settings = test_settings();
+        let assembly = TurnAssembly::resolve(&settings, None, None, &cwd, true).unwrap();
+        let mut app = App::new("~".into(), "chat:m1".into());
+        app.set_terminal_rows(24);
+        // partial id prefix resolves.
+        let prefix: String = id.chars().take(8).collect();
+        let (session, _messages, resumed) = resolve_session(
+            &Some(ResumeRequest::Reference(prefix)),
+            &cwd,
+            &assembly,
+            &mut app,
+        );
+        assert!(resumed);
+        assert_eq!(session.unwrap().id, id);
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn resolve_session_no_match_starts_new() {
+        let cwd = unique_cwd("resumenone");
+        let settings = test_settings();
+        let assembly = TurnAssembly::resolve(&settings, None, None, &cwd, true).unwrap();
+        let mut app = App::new("~".into(), "chat:m1".into());
+        app.set_terminal_rows(24);
+        let (session, messages, resumed) =
+            resolve_session(&Some(ResumeRequest::Recent), &cwd, &assembly, &mut app);
+        // No existing session → falls back to a brand-new one.
+        assert!(!resumed);
+        assert!(session.is_some());
+        assert!(messages.is_empty()); // caller seeds system
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn resume_session_path_swaps_runtime_messages() {
+        let cwd = unique_cwd("resumepath");
+        let (mut rt, _done) = turn_runtime_with(test_settings(), &cwd);
+
+        // Build a separate session on disk with two messages.
+        let mut other = Session::create(&cwd, "chat:m1").unwrap();
+        other
+            .append(SessionRecord::Message {
+                id: String::new(),
+                parent_id: None,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                role: "user".to_string(),
+                content: "earlier question".to_string(),
+            })
+            .unwrap();
+        let other_path = other.path.to_string_lossy().into_owned();
+
+        let mut app = App::new("~".into(), "chat:m1".into());
+        app.set_terminal_rows(24);
+        assert!(rt.resume_session_path(&other_path, &mut app));
+        // runtime_messages rebuilt from the chosen session (system + user).
+        assert!(rt.runtime_messages.iter().any(|m| m["content"] == "earlier question"));
+        assert!(rt.runtime_messages.iter().any(|m| m["role"] == "system"));
+        // session now points at the resumed file.
+        assert_eq!(rt.session.as_ref().unwrap().path.to_string_lossy(), other_path);
 
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));

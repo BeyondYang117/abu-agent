@@ -16,9 +16,11 @@ pub struct SlashCommandSpec {
     pub description: &'static str,
 }
 
-/// 5a 支持的内建 slash 命令表。
+/// 5c 支持的内建 slash 命令表。
 pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "help", aliases: &["h", "?"], description: "Show available commands" },
+    SlashCommandSpec { name: "model", aliases: &["m"], description: "Switch the active model" },
+    SlashCommandSpec { name: "sessions", aliases: &["session", "resume"], description: "Resume a recent session" },
     SlashCommandSpec { name: "new", aliases: &[], description: "Clear the transcript and start fresh" },
     SlashCommandSpec { name: "clear", aliases: &[], description: "Clear the transcript" },
     SlashCommandSpec { name: "quit", aliases: &["exit", "q"], description: "Exit kivio-code" },
@@ -31,6 +33,10 @@ pub enum SlashOutcome {
     Quit,
     /// 清空 transcript。
     ClearTranscript,
+    /// 打开模型选择器（数据由事件循环 / App 从 settings 注入）。
+    OpenModelSelector,
+    /// 打开会话选择器（数据由事件循环从磁盘注入）。
+    OpenSessionSelector,
     /// 在 transcript 里追加一条通知（已构造好的文本）。
     Notice(String),
     /// 未知命令（携带去掉前导 `/` 的命令名）。
@@ -55,6 +61,8 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
 
     match spec.map(|s| s.name) {
         Some("help") | Some("?") => SlashOutcome::Notice(help_text()),
+        Some("model") => SlashOutcome::OpenModelSelector,
+        Some("sessions") => SlashOutcome::OpenSessionSelector,
         Some("new") | Some("clear") => SlashOutcome::ClearTranscript,
         Some("quit") => SlashOutcome::Quit,
         _ => SlashOutcome::Unknown(name),
@@ -67,7 +75,7 @@ pub fn help_text() -> String {
     for spec in SLASH_COMMANDS {
         out.push_str(&format!("  /{:<8} {}\n", spec.name, spec.description));
     }
-    out.push_str("\nKeys: Enter submit · Ctrl+C clear input · Ctrl+D exit · Esc cancel");
+    out.push_str("\nKeys: Enter submit · Ctrl+C clear input · Ctrl+D exit · Esc cancel · Ctrl+L model");
     out
 }
 
@@ -102,6 +110,19 @@ mod tests {
     #[test]
     fn unknown_command() {
         assert_eq!(dispatch_slash("/frobnicate"), SlashOutcome::Unknown("frobnicate".to_string()));
+    }
+
+    #[test]
+    fn model_opens_selector() {
+        assert_eq!(dispatch_slash("/model"), SlashOutcome::OpenModelSelector);
+        assert_eq!(dispatch_slash("/m"), SlashOutcome::OpenModelSelector);
+    }
+
+    #[test]
+    fn sessions_opens_selector() {
+        assert_eq!(dispatch_slash("/sessions"), SlashOutcome::OpenSessionSelector);
+        assert_eq!(dispatch_slash("/session"), SlashOutcome::OpenSessionSelector);
+        assert_eq!(dispatch_slash("/resume"), SlashOutcome::OpenSessionSelector);
     }
 
     #[test]

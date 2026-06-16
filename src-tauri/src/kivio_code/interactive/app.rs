@@ -15,11 +15,17 @@
 //! （把 transcript + editor + footer 组合成行）。5a 阶段 submit 不真正调用 agent，而是把输入回显为
 //! 一条助手通知（真正接 agent loop 留待 5b）。
 
-use crate::kivio_code::tui::components::{Editor, EditorTheme, Markdown, MarkdownTheme, SelectListTheme, Spacer, Text};
+use std::sync::Arc;
+
+use crate::kivio_code::tui::components::{
+    ColorFn, Editor, EditorTheme, Loader, Markdown, MarkdownTheme, SelectItem, SelectList,
+    SelectListLayoutOptions, SelectListTheme, Spacer, Text,
+};
 use crate::kivio_code::tui::render::Component;
 
 use super::agent_host::AgentUiEvent;
 use super::slash::{dispatch_slash, SlashOutcome};
+use super::tool_card::render_tool_card;
 use crate::chat::types::{ToolCallRecord, ToolCallStatus};
 
 /// transcript 里的一条目。每条目自带其渲染所需的 [`Component`]（懒构造、按需重渲染）。
@@ -55,10 +61,14 @@ pub struct ToolCard {
     pub status: ToolCallStatus,
     /// 简短的参数摘要（如 `path=src/main.rs`），用于卡片标题行。
     pub summary: String,
-    /// 结果预览（成功）或错误文本（失败），已裁剪。
+    /// 结果预览（成功）或错误文本（失败）。5c 起按工具类型在 `tool_card.rs` 里成形渲染，
+    /// 故这里保留较完整文本（不再预裁剪到 200 列），由渲染器按工具裁剪。
     pub detail: Option<String>,
     /// 文件改动的 unified diff（仅 write/edit；从 structured_content 提取）。
     pub diff: Option<String>,
+    /// 原始 structured_content（read 的行数 / mutation 的完整 diff 等），供 `tool_card.rs`
+    /// 做按工具的可读渲染。
+    pub structured_content: Option<serde_json::Value>,
 }
 
 /// 旧的占位结构名保留为别名，方便既有 `push_tool_card` 调用点与测试编译。
@@ -85,6 +95,24 @@ pub enum AppEffect {
     Submitted(String),
     /// 用户请求中断当前生成（Esc / generating 中的 Ctrl+C）。事件循环翻 cancel flag。
     Cancel,
+    /// 请求打开模型选择器（事件循环从 settings 取 enabled 模型列表，调
+    /// [`App::open_model_selector`]）。
+    OpenModelSelector,
+    /// 请求打开会话选择器（事件循环从磁盘取 cwd 下的会话列表，调
+    /// [`App::open_session_selector`]）。
+    OpenSessionSelector,
+    /// 用户在模型选择器里选定了一个 `provider:model`，事件循环据此切换后续轮的活动模型。
+    ModelSelected(String),
+    /// 用户在会话选择器里选定了一个会话（携带其 `.jsonl` 路径），事件循环加载并重建 transcript。
+    SessionSelected(String),
+}
+
+/// 覆盖层（overlay）：当前打开的全屏选择器。打开时拦截输入、渲染在 editor 上方。
+enum Overlay {
+    /// 模型选择器：选定后发 [`AppEffect::ModelSelected`]。
+    Model(SelectList),
+    /// 会话选择器：选定后发 [`AppEffect::SessionSelected`]（item.value = 会话路径）。
+    Session(SelectList),
 }
 
 /// footer 数据模型（cwd / model / status；token 统计在一轮结束后由事件循环填入）。
@@ -105,6 +133,12 @@ pub struct App {
     kitty_active: bool,
     /// 最近一次 submit 留下的待处理回显（5a：让事件循环也能观察到“刚提交了什么”用于断言）。
     last_submitted: Option<String>,
+    /// 当前打开的覆盖层（模型 / 会话选择器）；None = 无。打开时拦截输入。
+    overlay: Option<Overlay>,
+    /// generating 态下的 thinking spinner（事件循环按其 interval 调 [`App::tick_loader`]）。
+    loader: Loader,
+    /// 当 thinking/verbose 开启时，把 reasoning delta 显示在 spinner 旁（最近一行预览）。
+    show_reasoning: bool,
 }
 
 impl App {
@@ -113,6 +147,9 @@ impl App {
         let mut editor = Editor::new(default_editor_theme());
         editor.focused = true;
         editor.set_padding_x(1);
+        let dim: ColorFn = Arc::new(|s: &str| format!("\x1b[2m{s}\x1b[22m"));
+        let cyan: ColorFn = Arc::new(|s: &str| format!("\x1b[36m{s}\x1b[39m"));
+        let loader = Loader::new(cyan, dim, "thinking…", None);
         Self {
             transcript: Vec::new(),
             editor,
@@ -120,12 +157,37 @@ impl App {
             mode: AppMode::Idle,
             kitty_active: false,
             last_submitted: None,
+            overlay: None,
+            loader,
+            show_reasoning: false,
         }
+    }
+
+    /// 是否把 reasoning delta 显示在 spinner 旁（`--verbose` 或 thinking 开启时）。
+    pub fn set_show_reasoning(&mut self, show: bool) {
+        self.show_reasoning = show;
+    }
+
+    /// 推进 thinking spinner 一帧（仅 generating 态有意义）；返回是否变化（用于决定重绘）。
+    pub fn tick_loader(&mut self) -> bool {
+        if self.mode == AppMode::Generating {
+            self.loader.tick()
+        } else {
+            false
+        }
+    }
+
+    /// loader 帧间隔（事件循环用它决定 tick 节奏）。
+    pub fn loader_interval(&self) -> std::time::Duration {
+        self.loader.interval()
     }
 
     pub fn set_kitty_active(&mut self, active: bool) {
         self.kitty_active = active;
         self.editor.set_kitty_active(active);
+        if let Some(overlay) = self.overlay_select_mut() {
+            overlay.set_kitty_active(active);
+        }
     }
 
     /// 终端尺寸变化时调用（editor 据此决定可见行数 / 翻页）。
@@ -139,6 +201,131 @@ impl App {
 
     pub fn set_status(&mut self, status: impl Into<String>) {
         self.footer.status = status.into();
+    }
+
+    /// 当前活动模型（`provider:model`）。事件循环切模型后回填 footer。
+    pub fn model(&self) -> &str {
+        &self.footer.model
+    }
+
+    /// 设置活动模型（footer 展示），由事件循环在 [`AppEffect::ModelSelected`] 后调用。
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.footer.model = model.into();
+    }
+
+    /// 是否有覆盖层打开（事件循环据此决定是否把 resize 转发给 overlay 等）。
+    pub fn overlay_open(&self) -> bool {
+        self.overlay.is_some()
+    }
+
+    /// 打开模型选择器：`items` 是 `(provider:model, label, description)` 列表，
+    /// `current` 是当前活动模型（用于把选中项定位到它）。
+    pub fn open_model_selector(&mut self, items: Vec<(String, String, Option<String>)>) {
+        if items.is_empty() {
+            self.push_notice("No enabled models found. Enable models in the Kivio app.");
+            return;
+        }
+        let current = self.footer.model.clone();
+        let select_items: Vec<SelectItem> = items
+            .into_iter()
+            .map(|(value, label, desc)| SelectItem::new(value, label, desc))
+            .collect();
+        let initial = select_items
+            .iter()
+            .position(|i| i.value == current)
+            .unwrap_or(0);
+        let mut list = SelectList::new(
+            select_items,
+            10,
+            default_select_theme(),
+            SelectListLayoutOptions::default(),
+        );
+        list.set_kitty_active(self.kitty_active);
+        list.set_selected_index(initial);
+        self.overlay = Some(Overlay::Model(list));
+    }
+
+    /// 打开会话选择器：`items` 是 `(session_path, label, description)` 列表。
+    pub fn open_session_selector(&mut self, items: Vec<(String, String, Option<String>)>) {
+        if items.is_empty() {
+            self.push_notice("No saved sessions for this directory yet.");
+            return;
+        }
+        let select_items: Vec<SelectItem> = items
+            .into_iter()
+            .map(|(value, label, desc)| SelectItem::new(value, label, desc))
+            .collect();
+        let mut list = SelectList::new(
+            select_items,
+            10,
+            default_select_theme(),
+            SelectListLayoutOptions::default(),
+        );
+        list.set_kitty_active(self.kitty_active);
+        self.overlay = Some(Overlay::Session(list));
+    }
+
+    /// 关闭任何打开的覆盖层。
+    pub fn close_overlay(&mut self) {
+        self.overlay = None;
+    }
+
+    /// 取覆盖层内 SelectList 可变引用（无论种类）。
+    fn overlay_select_mut(&mut self) -> Option<&mut SelectList> {
+        match &mut self.overlay {
+            Some(Overlay::Model(list)) | Some(Overlay::Session(list)) => Some(list),
+            None => None,
+        }
+    }
+
+    /// 用一个已加载的 [`Session`] 重建 transcript（resume）：清空后按记录逐条还原为
+    /// user / assistant 消息 + 工具卡片。仅 UI 重建；`runtime_messages` 由事件循环单独 seed。
+    pub fn rebuild_from_session(&mut self, session: &crate::kivio_code::session::Session) {
+        use crate::kivio_code::session::SessionRecord;
+        self.transcript.clear();
+        for record in session.branch_records() {
+            match record {
+                SessionRecord::Message { role, content, .. } => match role.as_str() {
+                    "user" => self.transcript.push(TranscriptItem::UserMessage(content.clone())),
+                    "assistant" => self.push_assistant(content.clone()),
+                    // system messages aren't shown in the transcript.
+                    _ => {}
+                },
+                SessionRecord::ToolCall { call_id, name, arguments, .. } => {
+                    let summary = summarize_arguments(name, &arguments.to_string());
+                    self.transcript.push(TranscriptItem::ToolCard(ToolCard {
+                        id: call_id.clone(),
+                        tool_name: name.clone(),
+                        status: ToolCallStatus::Success,
+                        summary,
+                        detail: None,
+                        diff: None,
+                        structured_content: None,
+                    }));
+                }
+                SessionRecord::ToolResult { call_id, is_error, content, .. } => {
+                    // Attach the result to the matching card (upsert by call_id).
+                    if let Some(TranscriptItem::ToolCard(card)) = self
+                        .transcript
+                        .iter_mut()
+                        .rev()
+                        .find(|it| matches!(it, TranscriptItem::ToolCard(c) if &c.id == call_id))
+                    {
+                        card.status = if *is_error {
+                            ToolCallStatus::Error
+                        } else {
+                            ToolCallStatus::Success
+                        };
+                        card.detail = Some(content.clone());
+                    }
+                }
+                SessionRecord::Compaction { summary, .. } => {
+                    self.push_notice(format!("(compacted) {summary}"));
+                }
+                SessionRecord::ModelChange { .. } | SessionRecord::Header { .. } => {}
+            }
+        }
+        self.push_notice("Resumed session.");
     }
 
     /// transcript 条目数（测试用）。
@@ -314,6 +501,16 @@ impl App {
     pub fn handle_key(&mut self, data: &str) -> AppEffect {
         use crate::kivio_code::tui::keys::matches_key;
 
+        // 覆盖层（模型 / 会话选择器）优先吃掉所有输入。
+        if self.overlay.is_some() {
+            return self.handle_overlay_key(data);
+        }
+
+        // Ctrl+L：打开模型选择器（任何时候；事件循环填充列表）。
+        if matches_key(data, "ctrl+l", self.kitty_active) {
+            return AppEffect::OpenModelSelector;
+        }
+
         // Esc：generating 中请求中断当前 agent 轮次（空闲时透传给 editor，由其处理补全关闭等）。
         if matches_key(data, "escape", self.kitty_active) && self.mode == AppMode::Generating {
             return AppEffect::Cancel;
@@ -389,6 +586,8 @@ impl App {
                 self.clear_transcript();
                 AppEffect::None
             }
+            SlashOutcome::OpenModelSelector => AppEffect::OpenModelSelector,
+            SlashOutcome::OpenSessionSelector => AppEffect::OpenSessionSelector,
             SlashOutcome::Notice(text) => {
                 self.push_notice(text);
                 AppEffect::None
@@ -398,6 +597,39 @@ impl App {
                 AppEffect::None
             }
         }
+    }
+
+    /// 覆盖层打开时的按键处理：Enter 确认（发对应 Selected 效果并关层）、Esc 取消（关层）、
+    /// 其余（Up/Down 等导航）转发给 SelectList。
+    fn handle_overlay_key(&mut self, data: &str) -> AppEffect {
+        use crate::kivio_code::tui::keys::matches_key;
+
+        if matches_key(data, "escape", self.kitty_active)
+            || matches_key(data, "ctrl+c", self.kitty_active)
+        {
+            self.close_overlay();
+            return AppEffect::None;
+        }
+
+        if matches_key(data, "enter", self.kitty_active) {
+            let selected = self
+                .overlay_select_mut()
+                .and_then(|l| l.get_selected_item())
+                .map(|i| i.value);
+            let kind_is_model = matches!(self.overlay, Some(Overlay::Model(_)));
+            self.close_overlay();
+            return match selected {
+                Some(value) if kind_is_model => AppEffect::ModelSelected(value),
+                Some(value) => AppEffect::SessionSelected(value),
+                None => AppEffect::None,
+            };
+        }
+
+        // Navigation (up/down/wrap) goes to the list.
+        if let Some(list) = self.overlay_select_mut() {
+            list.handle_input(data);
+        }
+        AppEffect::None
     }
 
     /// 渲染整棵 UI（transcript → 间隔 → editor → footer）成行数组（每行 ≤ width 可见列）。
@@ -437,8 +669,34 @@ impl App {
             }
         }
 
-        // editor。
-        lines.extend(self.editor.render(width));
+        // thinking spinner（generating 态）。在 transcript 与 editor/overlay 之间。
+        if self.mode == AppMode::Generating {
+            if self.show_reasoning {
+                if let Some(reasoning) = self.latest_reasoning_tail() {
+                    self.loader.set_message(format!("thinking… {reasoning}"));
+                } else {
+                    self.loader.set_message("thinking…");
+                }
+            }
+            lines.extend(self.loader.render(width));
+        }
+
+        // overlay（模型 / 会话选择器）打开时替代 editor；否则渲染 editor。
+        if let Some(overlay) = &mut self.overlay {
+            lines.push(String::new());
+            let (heading, list) = match overlay {
+                Overlay::Model(list) => ("Select a model (Enter to choose · Esc to cancel)", list),
+                Overlay::Session(list) => {
+                    ("Resume a session (Enter to choose · Esc to cancel)", list)
+                }
+            };
+            let mut h = Text::new(heading.to_string(), 1, 0, None);
+            lines.extend(h.render(width));
+            lines.extend(list.render(width));
+        } else {
+            // editor。
+            lines.extend(self.editor.render(width));
+        }
 
         // footer：一行空隔 + 状态行。
         let mut spacer = Spacer::new(0);
@@ -446,6 +704,21 @@ impl App {
         lines.extend(self.render_footer(width));
 
         lines
+    }
+
+    /// 取最近一条助手消息 reasoning 的尾行（spinner 旁显示用），裁剪到 60 列。
+    fn latest_reasoning_tail(&self) -> Option<String> {
+        self.transcript.iter().rev().find_map(|item| match item {
+            TranscriptItem::AssistantMessage(m) if !m.reasoning.is_empty() => {
+                let last = m.reasoning.lines().last().unwrap_or("").trim();
+                if last.is_empty() {
+                    None
+                } else {
+                    Some(clip(last, 60))
+                }
+            }
+            _ => None,
+        })
     }
 
     fn render_footer(&mut self, width: u16) -> Vec<String> {
@@ -467,11 +740,11 @@ impl ToolCard {
     /// （path/command/pattern/…）；diff 从 `structured_content`（file mutation）里取。
     pub fn from_record(record: &ToolCallRecord) -> Self {
         let summary = summarize_arguments(&record.name, &record.arguments);
+        // Keep a fuller detail; tool_card.rs clips per tool family.
         let detail = record
             .error
             .clone()
-            .or_else(|| record.result_preview.clone())
-            .map(|t| clip(&t, 200));
+            .or_else(|| record.result_preview.clone());
         let diff = extract_diff(record);
         Self {
             id: record.id.clone(),
@@ -480,47 +753,9 @@ impl ToolCard {
             summary,
             detail,
             diff,
+            structured_content: record.structured_content.clone(),
         }
     }
-}
-
-/// 工具卡片的状态符号（与 print-mode host 对齐）。
-fn status_symbol(status: &ToolCallStatus) -> &'static str {
-    match status {
-        ToolCallStatus::Pending => "·",
-        ToolCallStatus::Running => "▶",
-        ToolCallStatus::Success => "✓",
-        ToolCallStatus::Error => "✗",
-        ToolCallStatus::Skipped => "⊘",
-        ToolCallStatus::Cancelled => "⊗",
-    }
-}
-
-/// 渲染一张工具卡片：标题行（符号 + 工具名 + 参数摘要），随后是结果预览 / 错误，
-/// 以及（write/edit）一段裁剪后的 unified diff（带 +/- 前缀的逐行展示）。
-fn render_tool_card(card: &ToolCard, width: u16) -> Vec<String> {
-    let mut lines = Vec::new();
-    let header = if card.summary.is_empty() {
-        format!("{} {}", status_symbol(&card.status), card.tool_name)
-    } else {
-        format!("{} {} — {}", status_symbol(&card.status), card.tool_name, card.summary)
-    };
-    let mut header_text = Text::new(header, 1, 0, None);
-    lines.extend(header_text.render(width));
-
-    if let Some(diff) = &card.diff {
-        // diff 优先：逐行展示（已在 from_record/extract_diff 里裁剪过行数）。
-        for raw in diff.lines() {
-            let mut t = Text::new(format!("  {raw}"), 1, 0, None);
-            lines.extend(t.render(width));
-        }
-    } else if let Some(detail) = &card.detail {
-        // 非文件改动：展示一行结果预览（换行折叠成空格，已裁剪长度）。
-        let collapsed = detail.replace('\n', " ");
-        let mut t = Text::new(format!("  {collapsed}"), 1, 0, None);
-        lines.extend(t.render(width));
-    }
-    lines
 }
 
 /// 从工具参数 JSON 里取一个简短的人读摘要。失败 / 无常见键时返回空串。
@@ -545,8 +780,9 @@ fn summarize_arguments(tool_name: &str, arguments: &str) -> String {
     String::new()
 }
 
-/// 从 file-mutation 工具的 `structured_content` 里取 unified diff，并裁剪到 ~40 行。
-/// 非文件改动工具返回 `None`。
+/// 从 file-mutation 工具的 `structured_content` 里取 unified diff（完整，不裁剪——裁剪交给
+/// `tool_card.rs`）。非文件改动工具返回 `None`。保留为 `card.diff` 兜底字段（当
+/// structured_content 缺 diff 时仍可用）。
 fn extract_diff(record: &ToolCallRecord) -> Option<String> {
     if !matches!(record.name.as_str(), "write" | "edit" | "write_file" | "edit_file") {
         return None;
@@ -556,18 +792,7 @@ fn extract_diff(record: &ToolCallRecord) -> Option<String> {
     if diff.trim().is_empty() {
         return None;
     }
-    const MAX_DIFF_LINES: usize = 40;
-    let lines: Vec<&str> = diff.lines().collect();
-    if lines.len() > MAX_DIFF_LINES {
-        let head = lines[..MAX_DIFF_LINES].join("\n");
-        Some(format!(
-            "{head}\n… diff clipped ({} of {} lines)",
-            MAX_DIFF_LINES,
-            lines.len()
-        ))
-    } else {
-        Some(diff.to_string())
-    }
+    Some(diff.to_string())
 }
 
 /// 字符安全地裁剪到 `max` 列，超出加 `…`。
@@ -582,20 +807,28 @@ fn clip(text: &str, max: usize) -> String {
 
 /// 一个 ANSI dim 风格的默认 editor 主题（边框灰、补全下拉素色），不依赖完整主题系统（Phase 4f 留待后续）。
 fn default_editor_theme() -> EditorTheme {
-    use std::sync::Arc;
-    let dim: crate::kivio_code::tui::components::ColorFn =
-        Arc::new(|s: &str| format!("\x1b[2m{s}\x1b[22m"));
-    let cyan: crate::kivio_code::tui::components::ColorFn =
-        Arc::new(|s: &str| format!("\x1b[36m{s}\x1b[39m"));
+    let dim: ColorFn = Arc::new(|s: &str| format!("\x1b[2m{s}\x1b[22m"));
+    let cyan: ColorFn = Arc::new(|s: &str| format!("\x1b[36m{s}\x1b[39m"));
     EditorTheme {
         border_color: dim.clone(),
-        select_list: SelectListTheme {
-            selected_prefix: cyan.clone(),
-            selected_text: cyan,
-            description: dim.clone(),
-            scroll_info: dim.clone(),
-            no_match: dim,
-        },
+        select_list: default_select_theme_inner(cyan, dim),
+    }
+}
+
+/// overlay 选择器主题（与 editor 内 autocomplete 同风格）。
+fn default_select_theme() -> SelectListTheme {
+    let dim: ColorFn = Arc::new(|s: &str| format!("\x1b[2m{s}\x1b[22m"));
+    let cyan: ColorFn = Arc::new(|s: &str| format!("\x1b[36m{s}\x1b[39m"));
+    default_select_theme_inner(cyan, dim)
+}
+
+fn default_select_theme_inner(cyan: ColorFn, dim: ColorFn) -> SelectListTheme {
+    SelectListTheme {
+        selected_prefix: cyan.clone(),
+        selected_text: cyan,
+        description: dim.clone(),
+        scroll_info: dim.clone(),
+        no_match: dim,
     }
 }
 
@@ -769,6 +1002,7 @@ mod tests {
             summary: "path=src/main.rs".to_string(),
             detail: None,
             diff: None,
+            structured_content: None,
         });
         let joined = a.render(60).join("\n");
         assert!(joined.contains("read"));
@@ -939,5 +1173,210 @@ mod tests {
         a.set_usage(Some("1.2k in · 340 out".to_string()));
         let joined = a.render(80).join("\n");
         assert!(joined.contains("1.2k in"));
+    }
+
+    // ---- Phase 5c: model selector / overlay ----
+
+    fn model_items() -> Vec<(String, String, Option<String>)> {
+        vec![
+            ("openai:gpt-4o".into(), "gpt-4o".into(), Some("OpenAI".into())),
+            ("anthropic:claude".into(), "claude".into(), Some("Anthropic".into())),
+        ]
+    }
+
+    #[test]
+    fn ctrl_l_requests_model_selector() {
+        let mut a = app();
+        assert_eq!(a.handle_key("\x0c"), AppEffect::OpenModelSelector);
+    }
+
+    #[test]
+    fn slash_model_requests_model_selector() {
+        let mut a = app();
+        type_str(&mut a, "/model");
+        assert_eq!(a.handle_key("\r"), AppEffect::OpenModelSelector);
+    }
+
+    #[test]
+    fn slash_sessions_requests_session_selector() {
+        let mut a = app();
+        type_str(&mut a, "/sessions");
+        assert_eq!(a.handle_key("\r"), AppEffect::OpenSessionSelector);
+    }
+
+    #[test]
+    fn open_model_selector_renders_and_intercepts_input() {
+        let mut a = app();
+        a.open_model_selector(model_items());
+        assert!(a.overlay_open());
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("Select a model"));
+        assert!(joined.contains("gpt-4o"));
+        assert!(joined.contains("claude"));
+        // Typing while overlay open does NOT reach the editor.
+        type_str(&mut a, "hello");
+        assert!(a.editor_text().is_empty());
+    }
+
+    #[test]
+    fn model_selector_confirm_emits_selected_and_closes() {
+        let mut a = app();
+        a.open_model_selector(model_items());
+        // selection starts at current model (openai:gpt-4o); move down to anthropic.
+        a.handle_key("\x1b[B"); // down
+        let effect = a.handle_key("\r"); // confirm
+        assert_eq!(effect, AppEffect::ModelSelected("anthropic:claude".to_string()));
+        assert!(!a.overlay_open(), "overlay closed after confirm");
+    }
+
+    #[test]
+    fn model_selector_starts_at_current_model() {
+        let mut a = App::new("~".into(), "anthropic:claude".into());
+        a.set_terminal_rows(24);
+        a.open_model_selector(model_items());
+        // current is the second item → selecting immediately returns it.
+        let effect = a.handle_key("\r");
+        assert_eq!(effect, AppEffect::ModelSelected("anthropic:claude".to_string()));
+    }
+
+    #[test]
+    fn overlay_esc_cancels_without_selection() {
+        let mut a = app();
+        a.open_model_selector(model_items());
+        let effect = a.handle_key("\x1b"); // esc
+        assert_eq!(effect, AppEffect::None);
+        assert!(!a.overlay_open());
+    }
+
+    #[test]
+    fn empty_model_list_pushes_notice_not_overlay() {
+        let mut a = app();
+        a.open_model_selector(Vec::new());
+        assert!(!a.overlay_open());
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("No enabled models"));
+    }
+
+    #[test]
+    fn set_model_updates_footer() {
+        let mut a = app();
+        a.set_model("anthropic:claude-3");
+        assert_eq!(a.model(), "anthropic:claude-3");
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("anthropic:claude-3"));
+    }
+
+    #[test]
+    fn session_selector_confirm_emits_session_selected() {
+        let mut a = app();
+        a.open_session_selector(vec![(
+            "/path/to/a.jsonl".into(),
+            "2026-06-16".into(),
+            Some("read main.rs".into()),
+        )]);
+        assert!(a.overlay_open());
+        let effect = a.handle_key("\r");
+        assert_eq!(effect, AppEffect::SessionSelected("/path/to/a.jsonl".to_string()));
+        assert!(!a.overlay_open());
+    }
+
+    // ---- Phase 5c: thinking loader ----
+
+    #[test]
+    fn loader_shown_only_while_generating() {
+        let mut a = app();
+        // idle: no spinner text
+        assert!(!a.render(80).join("\n").contains("thinking"));
+        a.set_mode(AppMode::Generating);
+        assert!(a.render(80).join("\n").contains("thinking"));
+    }
+
+    #[test]
+    fn tick_loader_only_advances_when_generating() {
+        let mut a = app();
+        assert!(!a.tick_loader(), "no tick while idle");
+        a.set_mode(AppMode::Generating);
+        assert!(a.tick_loader(), "ticks while generating");
+    }
+
+    // ---- Phase 5c: input history cycling (editor-backed) ----
+
+    #[test]
+    fn up_arrow_cycles_previous_inputs() {
+        let mut a = app();
+        // submit two messages so they enter history.
+        type_str(&mut a, "first message");
+        a.handle_key("\r");
+        type_str(&mut a, "second message");
+        a.handle_key("\r");
+        // editor empty; Up loads the most recent submission.
+        assert!(a.editor_text().is_empty());
+        a.handle_key("\x1b[A"); // up
+        assert_eq!(a.editor_text(), "second message");
+        a.handle_key("\x1b[A"); // up again → older
+        assert_eq!(a.editor_text(), "first message");
+        a.handle_key("\x1b[B"); // down → back to newer
+        assert_eq!(a.editor_text(), "second message");
+    }
+
+    // ---- Phase 5c: resume rebuild ----
+
+    #[test]
+    fn rebuild_from_session_restores_transcript() {
+        use crate::kivio_code::session::{Session, SessionRecord};
+        let cwd = std::env::temp_dir().join(format!("kivio-app-resume-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut session = Session::create(&cwd, "p:m").unwrap();
+        session
+            .append(SessionRecord::Message {
+                id: String::new(),
+                parent_id: None,
+                timestamp: "t".into(),
+                role: "user".into(),
+                content: "read main.rs".into(),
+            })
+            .unwrap();
+        session
+            .append(SessionRecord::ToolCall {
+                id: String::new(),
+                parent_id: None,
+                timestamp: "t".into(),
+                call_id: "call_1".into(),
+                name: "read".into(),
+                arguments: serde_json::json!({ "path": "main.rs" }),
+            })
+            .unwrap();
+        session
+            .append(SessionRecord::ToolResult {
+                id: String::new(),
+                parent_id: None,
+                timestamp: "t".into(),
+                call_id: "call_1".into(),
+                name: "read".into(),
+                content: "fn main() {}".into(),
+                is_error: false,
+            })
+            .unwrap();
+        session
+            .append(SessionRecord::Message {
+                id: String::new(),
+                parent_id: None,
+                timestamp: "t".into(),
+                role: "assistant".into(),
+                content: "It is empty.".into(),
+            })
+            .unwrap();
+
+        let mut a = app();
+        a.rebuild_from_session(&session);
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("read main.rs"), "user message restored");
+        assert!(joined.contains("It is empty."), "assistant message restored");
+        // tool card present and carries its result via summary/path.
+        assert!(joined.contains("main.rs"), "tool card restored");
+        assert_eq!(a.tool_card("call_1").map(|c| c.status.clone()), Some(ToolCallStatus::Success));
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
     }
 }
