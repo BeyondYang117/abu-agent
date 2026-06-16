@@ -371,6 +371,7 @@ function App() {
     let unlistenResize: (() => void) | undefined
     let unlistenMove: (() => void) | undefined
     let readyToRemember = false
+    let geomTimer: ReturnType<typeof setTimeout> | undefined
 
     const setup = async () => {
       try {
@@ -378,9 +379,14 @@ function App() {
         await new Promise(resolve => window.setTimeout(resolve, 0))
         if (!cancelled) readyToRemember = true
 
+        // resize/move 在拖动中高频触发；几何持久化（多次 IPC 读尺寸 + 写 store）debounce 到停止后做一次，
+        // 否则每帧都发 IPC 会和窗口伸缩/拖动的渲染抢资源，造成明显卡顿（Windows/WebView2 尤甚）。
         const persistIfReady = () => {
           if (!readyToRemember || cancelled) return
-          void persistChatWindowGeometry()
+          if (geomTimer !== undefined) clearTimeout(geomTimer)
+          geomTimer = setTimeout(() => {
+            if (!cancelled) void persistChatWindowGeometry()
+          }, 250)
         }
 
         const resizeHandler = await win.onResized(() => {
@@ -404,6 +410,7 @@ function App() {
     void setup()
     return () => {
       cancelled = true
+      if (geomTimer !== undefined) clearTimeout(geomTimer)
       unlistenResize?.()
       unlistenMove?.()
     }
