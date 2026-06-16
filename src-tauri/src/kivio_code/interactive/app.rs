@@ -948,10 +948,8 @@ impl App {
             AppMode::Idle => self.footer.status.clone(),
             AppMode::Generating => "generating… (Esc to cancel)".to_string(),
         };
-        let mut text = format!(
-            "{}  ·  {}  ·  {}",
-            self.footer.cwd_display, self.footer.model_display, status
-        );
+        // 不在 footer 行展示模型/provider（已在欢迎头里给出）；footer 仅 cwd · 状态 · token · ctx。
+        let mut text = format!("{}  ·  {}", self.footer.cwd_display, status);
         if let Some(usage) = &self.footer.usage {
             text.push_str(&format!("  ·  {usage}"));
         }
@@ -1357,10 +1355,14 @@ mod tests {
         let joined = lines.join("\n");
         // transcript user line
         assert!(joined.contains("question one"), "transcript present");
-        // footer shows cwd + model + status
-        assert!(joined.contains("~/proj"), "footer cwd present");
-        assert!(joined.contains("openai:gpt-4o"), "footer model present");
-        assert!(joined.contains("ready"), "footer status present");
+        // footer line shows cwd + status, but NOT the model (model lives in the welcome header).
+        let footer_line = lines
+            .iter()
+            .rfind(|l| l.contains("~/proj"))
+            .expect("footer line present");
+        assert!(footer_line.contains("~/proj"), "footer cwd present");
+        assert!(footer_line.contains("ready"), "footer status present");
+        assert!(!footer_line.contains("gpt-4o"), "footer must not show the model");
         // every line within width
         for l in &lines {
             assert!(

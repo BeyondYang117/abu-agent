@@ -689,10 +689,12 @@ impl<'a> BlockRenderer<'a> {
         };
 
         self.emit_block_line((self.theme.code_block_border)(&line("┌", "┬", "┐")));
+        // 竖线分隔符与横线统一走 code_block_border（dim），保证整框线宽一致；单元格内容样式不变。
+        let bar = (self.theme.code_block_border)("│");
         // header
         let hcells: Vec<String> =
             header.iter().enumerate().map(|(i, c)| (self.theme.bold)(&pad_cell(c, widths[i]))).collect();
-        self.emit_block_line(format!("│ {} │", hcells.join(" │ ")));
+        self.emit_block_line(format!("{bar} {} {bar}", hcells.join(&format!(" {bar} "))));
         self.emit_block_line((self.theme.code_block_border)(&line("├", "┼", "┤")));
         for row in &rows {
             let cells: Vec<String> = widths
@@ -700,7 +702,7 @@ impl<'a> BlockRenderer<'a> {
                 .enumerate()
                 .map(|(i, w)| pad_cell(row.get(i).map(|s| s.as_str()).unwrap_or(""), *w))
                 .collect();
-            self.emit_block_line(format!("│ {} │", cells.join(" │ ")));
+            self.emit_block_line(format!("{bar} {} {bar}", cells.join(&format!(" {bar} "))));
         }
         self.emit_block_line((self.theme.code_block_border)(&line("└", "┴", "┘")));
     }
@@ -946,6 +948,13 @@ mod tests {
         assert!(out.contains("└") && out.contains("┘"), "bottom border");
         assert!(out.contains('1') && out.contains('2'), "row content: {out:?}");
         assert!(out.contains("<B>"), "header bold: {out:?}");
+        // Uniform frame weight: the vertical separators carry the SAME dim border
+        // color as the horizontal rules (both wrapped by code_block_border).
+        assert!(out.contains("<CBB>│</CBB>"), "vertical separators dimmed like horizontals: {out:?}");
+        assert!(
+            !out.contains("│ <B>"),
+            "no bare (undimmed) vertical separator before a cell: {out:?}"
+        );
     }
 
     #[test]
