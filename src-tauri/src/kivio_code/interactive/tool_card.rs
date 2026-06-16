@@ -84,28 +84,13 @@ fn status_glyph_colored(status: &ToolCallStatus) -> String {
     }
 }
 
-/// A short, fixed-width text tag shown before the tool name in the header so the
-/// card type is scannable at a glance. Plain ASCII (no emoji) keeps the column
-/// alignment exact across terminals — emoji are double-width on some and
-/// single on others, which would jitter the header.
-fn tool_tag(name: &str) -> &'static str {
-    match normalize_tool(name) {
-        ToolKind::Read => "read",
-        ToolKind::Listing => "list",
-        ToolKind::Grep => "find",
-        ToolKind::Mutation => "edit",
-        ToolKind::Bash => "bash",
-        ToolKind::Other => "tool",
-    }
-}
-
 /// Render one tool card to ANSI lines for the given viewport width.
 ///
 /// Layout is a grouped block:
 ///
 /// ```text
 ///                          ← one blank line separating it from the previous block
-/// ✓ list  src — path=.     ← header: colored glyph, fixed tag, bold name, dim summary
+/// ✓ ls  path=.             ← header: colored glyph, bold name, dim summary
 /// │ sub/                   ← body, indented under a dim left gutter
 /// │ alpha.rs
 /// ```
@@ -139,22 +124,19 @@ pub fn render_tool_card(card: &ToolCard, width: u16) -> Vec<String> {
     lines
 }
 
-/// The card header line(s): `<glyph> <tag> <name>  <summary>`.
+/// The card header line(s): `<glyph> <name>  <summary>`.
 ///
-/// The glyph is themed by status, the fixed-width tag makes the card type
-/// scannable, the tool name is emphasized (bold), and the argument summary is
-/// dimmed so it reads as metadata rather than chat text.
+/// The glyph is themed by status, the tool name is emphasized (bold), and the
+/// argument summary is dimmed so it reads as metadata rather than chat text.
+/// The tool name alone identifies the card type — no redundant category tag is
+/// shown before it (`✓ ls`, not `✓ list ls`).
 fn header_lines(card: &ToolCard, width: u16) -> Vec<String> {
     let glyph = status_glyph_colored(&card.status);
-    let tag = tool_tag(&card.tool_name);
     let name = format!("{BOLD}{}{BOLD_OFF}", card.tool_name);
     let header = if card.summary.is_empty() {
-        format!("{glyph} {DIM}{tag}{DIM_OFF} {name}")
+        format!("{glyph} {name}")
     } else {
-        format!(
-            "{glyph} {DIM}{tag}{DIM_OFF} {name}  {DIM}{}{DIM_OFF}",
-            card.summary
-        )
+        format!("{glyph} {name}  {DIM}{}{DIM_OFF}", card.summary)
     };
     text_line(&header, width)
 }
@@ -1073,11 +1055,12 @@ mod tests {
         assert_eq!(strip_ansi(&rendered[0]).trim(), "", "first line should be blank");
     }
 
-    /// The header carries the themed status glyph (green ✓ on success), a short
-    /// type tag, and the bold tool name — not the old `name — summary` form.
+    /// The header carries the themed status glyph (green ✓ on success) and the
+    /// bold tool name — shown exactly once, with no redundant category tag
+    /// before it (`✓ ls`, not `✓ list ls`).
     #[test]
-    fn header_has_colored_glyph_tag_and_bold_name() {
-        let mut c = card("list_dir", ToolCallStatus::Success);
+    fn header_has_colored_glyph_and_single_bold_name() {
+        let mut c = card("ls", ToolCallStatus::Success);
         c.summary = "path=.".to_string();
         let rendered = render_tool_card(&c, 70);
         // header is the line right after the blank separator
@@ -1086,10 +1069,27 @@ mod tests {
         assert!(header.contains(BOLD), "tool name should be bold: {header:?}");
         let plain = strip_ansi(header);
         assert!(plain.contains('✓'), "{plain}");
-        assert!(plain.contains("list"), "tag present: {plain}");
-        assert!(plain.contains("list_dir"), "tool name present: {plain}");
+        assert!(plain.contains("ls"), "tool name present: {plain}");
+        // no redundant tag word before the name (the old `list ls` form).
+        assert!(!plain.contains("list ls"), "no duplicated tag+name: {plain}");
+        assert!(!plain.contains("list"), "no separate category tag: {plain}");
         // no leftover em-dash separator from the old layout
         assert!(!plain.contains('—'), "old em-dash layout removed: {plain}");
+    }
+
+    /// The tool name appears exactly once in the header for the duplicate-prone
+    /// tools (`read`, `bash`) — never `read read` / `bash bash`.
+    #[test]
+    fn header_does_not_duplicate_tool_name() {
+        for name in ["read", "bash", "edit"] {
+            let mut c = card(name, ToolCallStatus::Success);
+            c.summary = "path=x".to_string();
+            let header = strip_ansi(&render_tool_card(&c, 70)[1]);
+            assert!(
+                !header.contains(&format!("{name} {name}")),
+                "tool name duplicated in header for {name:?}: {header}"
+            );
+        }
     }
 
     /// Error glyph is red.

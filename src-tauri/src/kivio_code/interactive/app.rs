@@ -1063,19 +1063,25 @@ fn format_context_usage(tokens: Option<u64>, window: Option<usize>) -> Option<St
     }
 }
 
-/// 把 token 数折成 `1.2k` 风格的短串（与事件循环侧 `human_tokens` 同义；这里独立一份避免跨模块
-/// 暴露内部 helper）。
+/// 把 token 数折成 `1.2k` / `1.0M` 风格的短串（与事件循环侧 `human_tokens` 同义；这里独立一份
+/// 避免跨模块暴露内部 helper）。≥1,000,000 用 megatokens（`1048576 -> 1.0M`），≥1000 用 `k`，
+/// 更小的原样显示。
 fn human_tokens(n: u64) -> String {
-    if n >= 1000 {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1000 {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
         n.to_string()
     }
 }
 
-/// 上下文窗口上限的短串：整 k 值省略小数（`128k`，不是 `128.0k`），非整 k 保留一位小数。
+/// 上下文窗口上限的短串：megatokens（`1048576 -> 1.0M`）；整 k 值省略小数（`128k`，不是
+/// `128.0k`），非整 k 保留一位小数。
 fn human_tokens_round(n: u64) -> String {
-    if n >= 1000 {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1000 {
         if n % 1000 == 0 {
             format!("{}k", n / 1000)
         } else {
@@ -1570,6 +1576,32 @@ mod tests {
     fn format_context_usage_no_tokens_is_none() {
         assert!(format_context_usage(None, Some(128_000)).is_none());
         assert!(format_context_usage(None, None).is_none());
+    }
+
+    #[test]
+    fn human_tokens_formats_megatokens() {
+        // ≥ 1,000,000 → megatokens with one decimal.
+        assert_eq!(human_tokens(1_048_576), "1.0M");
+        assert_eq!(human_tokens(2_000_000), "2.0M");
+        // thousands keep `k`.
+        assert_eq!(human_tokens(2_200), "2.2k");
+        // small raw numbers as-is.
+        assert_eq!(human_tokens(512), "512");
+    }
+
+    #[test]
+    fn human_tokens_round_formats_megatokens() {
+        assert_eq!(human_tokens_round(1_048_576), "1.0M");
+        assert_eq!(human_tokens_round(2_000_000), "2.0M");
+        // integral k stays sans decimal.
+        assert_eq!(human_tokens_round(128_000), "128k");
+    }
+
+    #[test]
+    fn footer_context_window_million_reads_as_megatokens() {
+        // A 1,048,576-token window must render as 1.0M, not 1048.6k.
+        let s = format_context_usage(Some(2_200), Some(1_048_576)).unwrap();
+        assert_eq!(s, "ctx 2.2k/1.0M (0%)");
     }
 
     #[test]
