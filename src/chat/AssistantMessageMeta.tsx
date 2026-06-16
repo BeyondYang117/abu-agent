@@ -89,7 +89,7 @@ export function AssistantMessageMeta({
           title={copied ? '已复制' : '复制'}
           aria-label={copied ? '已复制' : '复制'}
         >
-          {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={2} />}
+          {copied ? <Check size={14} strokeWidth={2} className="chat-motion-pop" /> : <Copy size={14} strokeWidth={2} />}
         </button>
         <button
           type="button"

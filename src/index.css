@@ -902,6 +902,58 @@ body {
   animation: chat-motion-modal-in var(--kv-dur-normal) var(--kv-ease-standard) both;
 }
 
+/* 微动效：成功反馈（复制 ✓ 等）弹入。靠全局兜底在 reduced-motion 下变瞬时。 */
+@keyframes chat-motion-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.chat-motion-pop {
+  animation: chat-motion-pop var(--kv-dur-fast) var(--kv-ease-spring) both;
+}
+
+/* 骨架屏：加载占位的流光。reduced-motion 下由全局兜底冻结为近静态。 */
+@keyframes kv-skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.kv-skeleton {
+  background-color: rgba(0, 0, 0, 0.04);
+  background-image: linear-gradient(
+    100deg,
+    rgba(0, 0, 0, 0) 30%,
+    rgba(0, 0, 0, 0.05) 50%,
+    rgba(0, 0, 0, 0) 70%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: kv-skeleton-shimmer 1.6s linear infinite;
+}
+
+.dark .kv-skeleton {
+  background-color: rgba(255, 255, 255, 0.05);
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 30%,
+    rgba(255, 255, 255, 0.07) 50%,
+    rgba(255, 255, 255, 0) 70%
+  );
+}
+
 @keyframes chat-motion-fade-up {
   from {
     opacity: 0;
@@ -1058,8 +1110,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   /* 全局兜底：覆盖内联 Tailwind transition / animate 工具类等未被下方具名规则捕获的动效。
      用 0.01ms 而非 0，保留 transitionend/animationend 事件（附件退出动画等依赖它清理 DOM）。
-     注：chat-motion-fade / chat-motion-modal-in / chat-motion-exit 刻意不进下方 animation:none 列表，
-     仅靠本兜底压到 0.01ms —— 这样它们的 animationend 仍会触发，依赖它清理 DOM 的逻辑不会卡住。 */
+     注：chat-motion-fade / chat-motion-modal-in / chat-motion-exit / chat-motion-pop 刻意不进下方
+     animation:none 列表，仅靠本兜底压到 0.01ms —— 这样它们的 animationend 仍会触发、逻辑不卡住。
+     kv-skeleton 见下方单独的静态规则。 */
   *,
   *::before,
   *::after {
@@ -1067,6 +1120,12 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* 骨架屏：停掉流光，留静态底色作占位（否则单次极短动画会把渐变冻结到屏外、看不见）。 */
+  .kv-skeleton {
+    animation: none;
+    background-image: none;
   }
 
   .chat-motion-fade-up,

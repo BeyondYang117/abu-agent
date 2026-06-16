@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FileText, Loader2, X } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
 import { loadAttachmentDataUrl, openAttachment, type DisplayAttachment } from './attachmentPreview'
 import { openChatImageViewer } from './imageViewer'
 
@@ -49,23 +49,19 @@ function ImagePreview({
   const isComposer = variant === 'composer'
   const loadingClass =
     isComposer
-      ? 'flex h-20 w-28 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800'
-      : 'flex min-h-[72px] min-w-[120px] items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.06]'
+      ? 'kv-skeleton h-20 w-28 rounded-xl'
+      : 'kv-skeleton min-h-[72px] min-w-[120px] rounded-xl'
 
   return (
     <div className={isComposer ? 'relative h-20 w-28 overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-800' : 'relative inline-block max-w-full'}>
-      {loading && (
-        <div className={loadingClass}>
-          <Loader2 size={14} className="animate-spin text-neutral-400" />
-        </div>
-      )}
+      {loading && <div className={loadingClass} aria-hidden="true" />}
       {!loading && src && (
         <button
           type="button"
           className={
             isComposer
-              ? 'block h-full w-full cursor-zoom-in rounded-xl p-0'
-              : 'block max-w-full cursor-zoom-in rounded-xl p-0 text-left'
+              ? 'chat-motion-fade block h-full w-full cursor-zoom-in rounded-xl p-0'
+              : 'chat-motion-fade block max-w-full cursor-zoom-in rounded-xl p-0 text-left'
           }
           onClick={() => onPreview?.(src, attachment.name)}
           title="预览图片"
