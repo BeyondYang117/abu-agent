@@ -1,17 +1,20 @@
 //! Kivio Code — Rust terminal coding agent.
 //!
-//! Thin binary entry: parse args with clap, resolve the prompt, build the
-//! headless runtime, and run one print-mode agent turn via
-//! `kivio::kivio_code::run_print`. All real logic lives in the library module so
+//! Thin binary entry: parse args with clap, resolve the prompt, then either run
+//! one print-mode agent turn (`-p` / piped prompt) or launch the interactive TUI
+//! shell (no prompt + a real TTY). All real logic lives in the library module so
 //! it stays unit-testable (`kivio::kivio_code`).
 
-use std::path::PathBuf;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
 
+use kivio::kivio_code::interactive::{self, InteractiveOptions};
 use kivio::kivio_code::{
-    build_app_state, load_settings_from_disk, read_stdin_prompt, run_print, PrintOptions,
+    build_app_state, load_settings_from_disk, read_stdin_prompt, resolve_provider_model, run_print,
+    PrintOptions,
 };
 
 #[derive(Parser, Debug)]
@@ -55,22 +58,8 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Resolve the prompt: -p > positional > piped stdin.
-    let prompt = cli
-        .print
-        .or(cli.prompt)
-        .or_else(read_stdin_prompt)
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty());
-
-    let Some(prompt) = prompt else {
-        eprintln!(
-            "kivio-code: no prompt provided. Use -p \"<task>\", a positional prompt, or pipe stdin.\nTry --help."
-        );
-        return ExitCode::from(2);
-    };
-
-    let cwd = match cli.cwd {
+    // Resolve the working directory first (shared by both modes).
+    let cwd = match cli.cwd.clone() {
         Some(dir) => dir,
         None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     };
@@ -81,6 +70,28 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     }
+
+    // Resolve the prompt: -p > positional > piped stdin.
+    let prompt = cli
+        .print
+        .clone()
+        .or(cli.prompt.clone())
+        .or_else(read_stdin_prompt)
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
+
+    // No prompt + a real interactive TTY (both stdin and stdout) → interactive shell.
+    // Otherwise fall through to print mode (which errors if there is still no prompt).
+    if prompt.is_none() && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        return run_interactive(&cli, &cwd);
+    }
+
+    let Some(prompt) = prompt else {
+        eprintln!(
+            "kivio-code: no prompt provided. Use -p \"<task>\", a positional prompt, or pipe stdin.\nTry --help."
+        );
+        return ExitCode::from(2);
+    };
 
     let options = PrintOptions {
         prompt,
@@ -120,4 +131,54 @@ fn main() -> ExitCode {
             }
         }
     })
+}
+
+/// Launch the interactive TUI shell (Phase 5a). Resolves the model for the footer
+/// from settings + `--model`/`--provider`, builds [`InteractiveOptions`], and runs
+/// the event loop. The actual agent loop is wired in Phase 5b.
+fn run_interactive(cli: &Cli, cwd: &Path) -> ExitCode {
+    let settings = load_settings_from_disk();
+    let model = match resolve_provider_model(
+        &settings,
+        cli.provider.as_deref(),
+        cli.model.as_deref(),
+    ) {
+        Ok((provider, model)) => format!("{}:{}", provider.id, model),
+        // No configured model yet — still launch the shell; the footer shows a hint.
+        Err(_) => "<no model>".to_string(),
+    };
+
+    let options = InteractiveOptions {
+        cwd_display: display_cwd(cwd),
+        model,
+    };
+
+    match interactive::run(options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("kivio-code: interactive mode failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Collapse `$HOME` prefix to `~` for footer display.
+fn display_cwd(cwd: &Path) -> String {
+    let full = cwd.display().to_string();
+    if let Some(home) = dirs_home() {
+        let home = home.display().to_string();
+        if full == home {
+            return "~".to_string();
+        }
+        if let Some(rest) = full.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    full
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }

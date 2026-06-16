@@ -154,6 +154,103 @@ impl ResizeFlag {
     }
 }
 
+/// crossterm 后端的真实终端：写到 stdout，尺寸来自 `crossterm::terminal::size()`。
+///
+/// 与 [`StdoutTerminal`] 的差别是它缓存了实际的终端尺寸（由事件循环在 resize 时刷新），并提供
+/// raw-mode 的启停（[`RawModeGuard`]）。**仍渲染进 NORMAL buffer**（不进 alt-screen），让内容自然
+/// 滚入 scrollback，对齐 PI / [`Tui`]。raw-mode / 尺寸查询用 crossterm，按键解码仍走本库的
+/// [`super::stdin_buffer`] + [`super::keys`]（保真度高于 crossterm 的 key parser）。
+pub struct CrosstermTerminal {
+    columns: u16,
+    rows: u16,
+}
+
+impl CrosstermTerminal {
+    /// 查询当前终端尺寸构造（失败回退 80x24）。
+    pub fn new() -> Self {
+        let (columns, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        Self { columns: columns.max(1), rows: rows.max(1) }
+    }
+
+    /// 从终端重新查询尺寸（resize 后调用）。返回是否变化。
+    pub fn refresh_size(&mut self) -> bool {
+        if let Ok((columns, rows)) = crossterm::terminal::size() {
+            let columns = columns.max(1);
+            let rows = rows.max(1);
+            if columns != self.columns || rows != self.rows {
+                self.columns = columns;
+                self.rows = rows;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 显式设置尺寸（测试 / 已知值时）。
+    pub fn set_size(&mut self, columns: u16, rows: u16) {
+        self.columns = columns.max(1);
+        self.rows = rows.max(1);
+    }
+}
+
+impl Default for CrosstermTerminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Terminal for CrosstermTerminal {
+    fn columns(&self) -> u16 {
+        self.columns
+    }
+    fn rows(&self) -> u16 {
+        self.rows
+    }
+    fn write(&mut self, data: &str) {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let _ = lock.write_all(data.as_bytes());
+        let _ = lock.flush();
+    }
+}
+
+/// RAII raw-mode 守卫：构造时 `enable_raw_mode` + 开启 bracketed paste，drop 时还原（即使 panic 也还原）。
+///
+/// 不进 alt-screen；仅做 raw I/O。drop 顺序：关 bracketed paste → 显示光标 → 关 raw mode。
+pub struct RawModeGuard {
+    active: bool,
+}
+
+impl RawModeGuard {
+    /// 进入 raw mode。失败时返回错误且不改变终端状态。
+    pub fn enter() -> std::io::Result<Self> {
+        crossterm::terminal::enable_raw_mode()?;
+        // 开启 bracketed paste，让粘贴整段到达（StdinBuffer 据此聚合）。
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let _ = lock.write_all(b"\x1b[?2004h");
+        let _ = lock.flush();
+        Ok(Self { active: true })
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let stdout = std::io::stdout();
+        {
+            let mut lock = stdout.lock();
+            // 关 bracketed paste + 显示硬件光标。
+            let _ = lock.write_all(b"\x1b[?2004l\x1b[?25h");
+            let _ = lock.flush();
+        }
+        let _ = crossterm::terminal::disable_raw_mode();
+        self.active = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +302,17 @@ mod tests {
         f.signal();
         assert!(f.take());
         assert!(!f.take());
+    }
+
+    #[test]
+    fn crossterm_terminal_set_size_clamps_and_reports() {
+        let mut t = CrosstermTerminal::new();
+        t.set_size(120, 40);
+        assert_eq!(t.columns(), 120);
+        assert_eq!(t.rows(), 40);
+        // zero clamps to 1 (never report a 0-width/height viewport).
+        t.set_size(0, 0);
+        assert_eq!(t.columns(), 1);
+        assert_eq!(t.rows(), 1);
     }
 }
