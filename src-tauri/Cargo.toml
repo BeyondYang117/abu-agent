@@ -48,6 +48,12 @@ ignore = "0.4"
 clap = { version = "4", features = ["derive"] }
 directories = "5"
 
+# Kivio Code CLI / TUI
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+unicode-normalization = "0.1"
+
 # 工具库
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }

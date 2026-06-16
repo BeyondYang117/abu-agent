@@ -9,7 +9,9 @@
 
 pub mod executor;
 pub mod host;
+pub mod session;
 pub mod settings_loader;
+pub mod tui;
 
 use std::io::Read;
 use std::path::PathBuf;
