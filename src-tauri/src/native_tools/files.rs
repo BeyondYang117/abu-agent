@@ -9,6 +9,7 @@ use std::{
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use super::{
@@ -21,6 +22,8 @@ const MAX_GLOB_RESULTS: usize = 500;
 const MAX_SEARCH_FILES: usize = 5_000;
 const MAX_SEARCH_MATCHES: usize = 1_000;
 const MAX_SEARCH_FILE_BYTES: u64 = 1024 * 1024;
+/// Cap each emitted grep line at this many chars; longer lines get a marker.
+const MAX_GREP_LINE_CHARS: usize = 500;
 const UTF8_BOM: &str = "\u{feff}";
 const DEFAULT_IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -358,13 +361,6 @@ pub fn edit_file(
             return Err(format!("edits[{i}]: old_string is empty."));
         }
         let count = working.matches(&normalized_old).count();
-        if count == 0 {
-            return Err(format!(
-                "edits[{i}]: old_string not found in file. Re-read the file and copy an exact, \
-                 contiguous snippet including its leading whitespace/indentation. Line endings are \
-                 normalized automatically, so a CRLF vs LF mismatch is not the cause."
-            ));
-        }
         if count > 1 {
             return Err(format!(
                 "edits[{i}]: old_string appears {count} times; extend it with surrounding context \
@@ -372,8 +368,37 @@ pub fn edit_file(
                  occurrence as its own edit)."
             ));
         }
-        working = working.replacen(&normalized_old, &normalized_new, 1);
-        applied += 1;
+        if count == 1 {
+            working = working.replacen(&normalized_old, &normalized_new, 1);
+            applied += 1;
+            continue;
+        }
+
+        // Exact match found nothing. Fall back to fuzzy matching: cosmetic unicode
+        // differences (NFKC, smart quotes/dashes, whitespace runs) are normalized on
+        // BOTH sides, the match is located in normalized space, then mapped back to an
+        // ORIGINAL byte range via an alignment table so the replacement preserves the
+        // file's real bytes everywhere except the matched span.
+        match fuzzy_find_unique(&working, &normalized_old) {
+            Ok(range) => {
+                working.replace_range(range, &normalized_new);
+                applied += 1;
+            }
+            Err(FuzzyMatchError::NotFound) => {
+                return Err(format!(
+                    "edits[{i}]: old_string not found in file. Re-read the file and copy an exact, \
+                     contiguous snippet including its leading whitespace/indentation. Line endings are \
+                     normalized automatically, so a CRLF vs LF mismatch is not the cause."
+                ));
+            }
+            Err(FuzzyMatchError::Ambiguous(n)) => {
+                return Err(format!(
+                    "edits[{i}]: old_string appears {n} times; extend it with surrounding context \
+                     so it matches exactly one location (replace_all is no longer supported — list each \
+                     occurrence as its own edit)."
+                ));
+            }
+        }
     }
 
     if applied == 0 {
@@ -422,6 +447,156 @@ pub fn edit_file(
 struct FileMutationLocks {
     active: Mutex<HashSet<PathBuf>>,
     ready: Condvar,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FuzzyMatchError {
+    NotFound,
+    Ambiguous(usize),
+}
+
+/// One normalized character produced from the original text, plus the original
+/// byte range it came from. Whitespace runs collapse to a single space whose
+/// range spans the whole run, so a normalized-space match maps cleanly back to
+/// the original byte offsets.
+struct NormChar {
+    ch: char,
+    start: usize,
+    end: usize,
+}
+
+/// Normalize a single original char for fuzzy matching: smart quotes/dashes →
+/// ASCII, then NFKC. Returns the resulting (usually one) chars. Whitespace is
+/// handled by the caller (run collapsing), so this never emits a space here for
+/// non-space input.
+fn fuzzy_normalize_char(ch: char) -> Vec<char> {
+    let mapped = match ch {
+        // Smart single quotes / prime → '
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' | '\u{2032}' => '\'',
+        // Smart double quotes / double prime → "
+        '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' | '\u{2033}' => '"',
+        // Dashes (hyphen/non-breaking-hyphen/figure/en/em/horizontal-bar/minus) → -
+        '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+        | '\u{2212}' => '-',
+        other => other,
+    };
+    mapped.to_string().nfkc().collect()
+}
+
+/// Treat any unicode whitespace (incl. NBSP, narrow NBSP, ideographic space) as
+/// collapsible whitespace.
+fn is_fuzzy_whitespace(ch: char) -> bool {
+    ch.is_whitespace()
+}
+
+/// Build the normalized form of `text` alongside an alignment table back to the
+/// ORIGINAL byte offsets. Whitespace runs collapse to one space spanning the run.
+fn build_normalized(text: &str) -> (String, Vec<NormChar>) {
+    let mut norm = String::new();
+    let mut table: Vec<NormChar> = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((byte_idx, ch)) = chars.next() {
+        if is_fuzzy_whitespace(ch) {
+            let start = byte_idx;
+            let mut end = byte_idx + ch.len_utf8();
+            // Consume the rest of the whitespace run.
+            while let Some(&(next_idx, next_ch)) = chars.peek() {
+                if is_fuzzy_whitespace(next_ch) {
+                    end = next_idx + next_ch.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            norm.push(' ');
+            table.push(NormChar {
+                ch: ' ',
+                start,
+                end,
+            });
+            continue;
+        }
+        let end = byte_idx + ch.len_utf8();
+        for mapped in fuzzy_normalize_char(ch) {
+            norm.push(mapped);
+            table.push(NormChar {
+                ch: mapped,
+                start: byte_idx,
+                end,
+            });
+        }
+    }
+    (norm, table)
+}
+
+/// Find a unique fuzzy match of `needle` inside `haystack` and return the
+/// ORIGINAL byte range in `haystack` it corresponds to. Leading/trailing
+/// whitespace of the needle (in normalized space) is trimmed so cosmetic edge
+/// whitespace doesn't block the match; the mapped original range still covers
+/// exactly the matched original bytes.
+fn fuzzy_find_unique(
+    haystack: &str,
+    needle: &str,
+) -> Result<std::ops::Range<usize>, FuzzyMatchError> {
+    let (norm_hay, hay_table) = build_normalized(haystack);
+    let (norm_needle, _needle_table) = build_normalized(needle);
+    let needle_trimmed = norm_needle.trim();
+    if needle_trimmed.is_empty() {
+        return Err(FuzzyMatchError::NotFound);
+    }
+
+    // Collect all non-overlapping occurrences in normalized space.
+    let mut occurrences: Vec<(usize, usize)> = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel) = norm_hay[search_from..].find(needle_trimmed) {
+        let start = search_from + rel;
+        let end = start + needle_trimmed.len();
+        occurrences.push((start, end));
+        // Advance past this match so overlapping matches aren't double-counted.
+        search_from = end;
+    }
+
+    match occurrences.len() {
+        0 => Err(FuzzyMatchError::NotFound),
+        1 => {
+            let (norm_start, norm_end) = occurrences[0];
+            Ok(map_norm_range_to_original(&hay_table, norm_start, norm_end))
+        }
+        n => Err(FuzzyMatchError::Ambiguous(n)),
+    }
+}
+
+/// Map a byte range in the normalized string to the spanning original byte range
+/// using the per-normalized-char alignment table.
+fn map_norm_range_to_original(
+    table: &[NormChar],
+    norm_start: usize,
+    norm_end: usize,
+) -> std::ops::Range<usize> {
+    let mut byte = 0usize;
+    let mut first: Option<usize> = None;
+    let mut last: Option<usize> = None;
+    for (idx, nc) in table.iter().enumerate() {
+        let ch_len = nc.ch.len_utf8();
+        let ch_start = byte;
+        let ch_end = byte + ch_len;
+        // Overlap test against [norm_start, norm_end).
+        if ch_start < norm_end && ch_end > norm_start {
+            if first.is_none() {
+                first = Some(idx);
+            }
+            last = Some(idx);
+        }
+        byte = ch_end;
+        if byte >= norm_end {
+            break;
+        }
+    }
+    match (first, last) {
+        (Some(f), Some(l)) => table[f].start..table[l].end,
+        // Should not happen for a non-empty match; fall back to a no-op range.
+        _ => 0..0,
+    }
 }
 
 struct FileMutationLockGuard {
@@ -996,6 +1171,12 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
             "output_mode must be one of: content, files_with_matches, count".to_string(),
         );
     }
+    // Optional context lines emitted before/after each content match (default 0).
+    let context = arguments
+        .get("context")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(0);
     let glob = arguments
         .get("glob")
         .and_then(|v| v.as_str())
@@ -1066,17 +1247,31 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
         files_scanned += 1;
         let display = workspace_display_path(workspace, &path);
         let mut file_count = 0usize;
-        for (idx, line) in content.lines().enumerate() {
+        let lines: Vec<&str> = content.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
             if !is_match(line) {
                 continue;
             }
             file_count += 1;
             if output_mode == "content" {
-                content_matches.push(json!({
+                let mut entry = json!({
                     "path": display,
                     "line": idx + 1,
-                    "text": line
-                }));
+                    "text": cap_grep_line(line),
+                });
+                if context > 0 {
+                    let before_start = idx.saturating_sub(context);
+                    let after_end = (idx + 1 + context).min(lines.len());
+                    let before: Vec<Value> = (before_start..idx)
+                        .map(|i| json!({ "line": i + 1, "text": cap_grep_line(lines[i]) }))
+                        .collect();
+                    let after: Vec<Value> = ((idx + 1)..after_end)
+                        .map(|i| json!({ "line": i + 1, "text": cap_grep_line(lines[i]) }))
+                        .collect();
+                    entry["before"] = json!(before);
+                    entry["after"] = json!(after);
+                }
+                content_matches.push(entry);
                 if content_matches.len() >= max_results {
                     limit_hit = true;
                     break 'outer;
@@ -1129,6 +1324,16 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
         }
     }
     format_json(out)
+}
+
+/// Cap a single grep output line at MAX_GREP_LINE_CHARS chars, appending a marker
+/// when truncated. Counts by chars (not bytes) and respects char boundaries.
+fn cap_grep_line(line: &str) -> String {
+    if line.chars().count() <= MAX_GREP_LINE_CHARS {
+        return line.to_string();
+    }
+    let truncated: String = line.chars().take(MAX_GREP_LINE_CHARS).collect();
+    format!("{truncated}... [line truncated to {MAX_GREP_LINE_CHARS} chars]")
 }
 
 fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -1683,6 +1888,228 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn edit_file_fuzzy_matches_smart_quotes() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_q_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("q.txt");
+        // File uses curly single + double quotes (e.g. pasted from a doc).
+        fs::write(&file, "say \u{201C}hello\u{201D} and don\u{2019}t stop\n").expect("write");
+
+        // Model supplies ASCII quotes — exact match fails, fuzzy must succeed.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "q.txt",
+                "edits": [{ "old_string": "say \"hello\" and don't stop", "new_string": "say BYE and quit" }]
+            }),
+        )
+        .expect("fuzzy smart-quote match");
+        assert!(result.ok);
+        assert_eq!(result.files[0].operation, "edit");
+        let on_disk = fs::read_to_string(&file).expect("read");
+        assert_eq!(on_disk, "say BYE and quit\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_matches_dashes_and_nfkc() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_d_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("d.txt");
+        // File: em-dash + a NFKC-decomposable ligature (ﬁ U+FB01 -> "fi").
+        fs::write(&file, "range A\u{2014}B \u{FB01}le\n").expect("write");
+
+        // Model: ASCII hyphen + plain "file" — only fuzzy (NFKC + dash) matches.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "d.txt",
+                "edits": [{ "old_string": "range A-B file", "new_string": "range done" }]
+            }),
+        )
+        .expect("fuzzy dash + nfkc match");
+        assert!(result.ok);
+        let on_disk = fs::read_to_string(&file).expect("read");
+        assert_eq!(on_disk, "range done\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_matches_whitespace_runs() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_ws_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("ws.txt");
+        // File uses multiple spaces + a tab between tokens.
+        fs::write(&file, "let   x\t=  1;\n").expect("write");
+
+        // Model uses single spaces — whitespace-run normalization makes it match.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "ws.txt",
+                "edits": [{ "old_string": "let x = 1;", "new_string": "let y = 2;" }]
+            }),
+        )
+        .expect("fuzzy whitespace match");
+        assert!(result.ok);
+        let on_disk = fs::read_to_string(&file).expect("read");
+        // The matched run is replaced wholesale; surrounding bytes preserved.
+        assert_eq!(on_disk, "let y = 2;\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_rejects_ambiguous_match() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_amb_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("amb.txt");
+        // Two curly-quote occurrences; an ASCII-quote needle fuzzily hits both.
+        fs::write(&file, "a \u{201C}x\u{201D} b\na \u{201C}x\u{201D} b\n").expect("write");
+
+        let err = edit_file(
+            &workspace,
+            &json!({
+                "path": "amb.txt",
+                "edits": [{ "old_string": "a \"x\" b", "new_string": "z" }]
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("appears"), "ambiguous fuzzy match must error: {err}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_exact_match_still_preferred_over_fuzzy() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_exact_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("exact.txt");
+        fs::write(&file, "plain ascii line\n").expect("write");
+
+        // Exact match path: identical bytes, no normalization needed.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "exact.txt",
+                "edits": [{ "old_string": "plain ascii line", "new_string": "changed line" }]
+            }),
+        )
+        .expect("exact match still works");
+        assert!(result.ok);
+        assert_eq!(fs::read_to_string(&file).expect("read"), "changed line\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_not_found_errors() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_nf_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("nf.txt");
+        fs::write(&file, "alpha beta\n").expect("write");
+
+        let err = edit_file(
+            &workspace,
+            &json!({
+                "path": "nf.txt",
+                "edits": [{ "old_string": "gamma delta", "new_string": "z" }]
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("not found"), "no fuzzy match must error: {err}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cap_grep_line_truncates_long_lines() {
+        let short = "abc";
+        assert_eq!(cap_grep_line(short), short);
+        let long: String = "x".repeat(MAX_GREP_LINE_CHARS + 50);
+        let capped = cap_grep_line(&long);
+        assert!(capped.starts_with(&"x".repeat(MAX_GREP_LINE_CHARS)));
+        assert!(capped.contains("line truncated"));
+        assert_eq!(capped.chars().filter(|c| *c == 'x').count(), MAX_GREP_LINE_CHARS);
+    }
+
+    #[test]
+    fn search_files_context_and_long_line_cap() {
+        let root = std::env::temp_dir().join(format!("kivio_grep_ctx_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        // 5 lines; match on line 3 (index 2). Line 3 itself is very long.
+        let long_match = format!("NEEDLE {}", "y".repeat(MAX_GREP_LINE_CHARS + 100));
+        let body = format!("l1\nl2\n{long_match}\nl4\nl5\n");
+        fs::write(root.join("ctx.txt"), &body).expect("write");
+
+        let parse = |s: String| serde_json::from_str::<Value>(&s).expect("json");
+        let out = parse(
+            search_files(&workspace, &json!({ "query": "NEEDLE", "context": 1 }))
+                .expect("context grep"),
+        );
+        let matches = out["matches"].as_array().expect("matches");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(m["line"], 3);
+        // Long matching line is capped.
+        let text = m["text"].as_str().unwrap();
+        assert!(text.contains("line truncated"), "long line must be capped: {text}");
+        // context=1 → one before (l2) + one after (l4).
+        let before = m["before"].as_array().expect("before");
+        let after = m["after"].as_array().expect("after");
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0]["text"], "l2");
+        assert_eq!(before[0]["line"], 2);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0]["text"], "l4");
+        assert_eq!(after[0]["line"], 4);
+
+        // Default context=0 → no before/after keys emitted.
+        let out0 = parse(search_files(&workspace, &json!({ "query": "NEEDLE" })).expect("no ctx"));
+        let m0 = &out0["matches"].as_array().unwrap()[0];
+        assert!(m0.get("before").is_none());
+        assert!(m0.get("after").is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
     #[test]
     fn search_files_regex_output_modes_and_glob() {
         let root = std::env::temp_dir().join(format!("kivio_search_{}", uuid::Uuid::new_v4()));
