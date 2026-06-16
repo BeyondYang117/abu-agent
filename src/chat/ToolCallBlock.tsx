@@ -930,10 +930,14 @@ function DefaultToolCallBlock({
           hasDetails
             ? 'hover:text-neutral-700 dark:hover:text-neutral-200'
             : 'cursor-default'
-        } ${status === 'running' ? 'chat-motion-soft-pulse px-1 text-neutral-600 dark:text-neutral-300' : ''}`}
+        }`}
       >
         <StatusIcon status={status} />
-        <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
+        <span
+          className={`shrink-0 font-medium text-neutral-700 dark:text-neutral-200${
+            status === 'running' ? ' chat-motion-tool-shimmer' : ''
+          }`}
+        >
           {toolName || mergedLabels.tool}
         </span>
         {source && (

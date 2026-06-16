@@ -1046,8 +1046,8 @@ body {
   }
 }
 
-/* 子 Agent「运行中」状态行：紫色调流光扫过文字（autonomous agent working） */
-@keyframes chat-motion-subagent-shimmer {
+/* 文字流光扫过：背景位置左右扫动（autonomous agent / 运行中工具名共用的中性机制） */
+@keyframes chat-motion-shimmer-sweep {
   0% {
     background-position: 180% 0;
   }
@@ -1056,6 +1056,7 @@ body {
   }
 }
 
+/* 子 Agent「运行中」状态行：紫色调流光扫过文字（autonomous agent working） */
 .chat-motion-subagent-shimmer {
   background-image: linear-gradient(
     100deg,
@@ -1068,7 +1069,7 @@ body {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
-  animation: chat-motion-subagent-shimmer 2s linear infinite;
+  animation: chat-motion-shimmer-sweep 2s linear infinite;
 }
 
 .dark .chat-motion-subagent-shimmer {
@@ -1077,6 +1078,32 @@ body {
     rgba(167, 139, 250, 0.45) 30%,
     rgba(196, 181, 253, 1) 50%,
     rgba(167, 139, 250, 0.45) 70%
+  );
+}
+
+/* 普通工具「运行中」状态：terracotta 强调色流光扫过工具名（中性基色 → 高光 → 中性基色），
+   整行不再缩放/发光，仅工具名被「点亮」。颜色与已完成 ✓ 的 #C56646 / dark #E39A78 同源。 */
+.chat-motion-tool-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgba(64, 64, 64, 1) 30%,
+    rgba(197, 102, 70, 1) 50%,
+    rgba(64, 64, 64, 1) 70%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: chat-motion-shimmer-sweep 2s linear infinite;
+}
+
+.dark .chat-motion-tool-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgba(229, 229, 229, 1) 30%,
+    rgba(227, 154, 120, 1) 50%,
+    rgba(229, 229, 229, 1) 70%
   );
 }
 
@@ -1167,7 +1194,8 @@ body {
   }
 
   .reasoning-shimmer-text,
-  .chat-motion-subagent-shimmer {
+  .chat-motion-subagent-shimmer,
+  .chat-motion-tool-shimmer {
     animation: none;
     background: none;
     -webkit-text-fill-color: currentColor;
