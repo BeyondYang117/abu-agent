@@ -65,14 +65,14 @@ export function ProjectDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[300] flex items-center justify-center bg-black/30 px-4 backdrop-blur-[1px]"
+      className="chat-motion-fade fixed inset-0 z-[300] flex items-center justify-center bg-black/30 px-4 backdrop-blur-[1px]"
       data-tauri-drag-region="false"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
     >
       <form
-        className="w-full max-w-[340px] rounded-[10px] border border-neutral-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-[#252527]"
+        className="chat-motion-modal-in w-full max-w-[340px] rounded-[10px] border border-neutral-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-[#252527]"
         role="dialog"
         aria-modal="true"
         aria-label={title}

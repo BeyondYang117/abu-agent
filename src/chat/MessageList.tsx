@@ -219,7 +219,7 @@ export function MessageList({
   }, [scrollToBottom])
 
   return (
-    <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="custom-scrollbar flex-1 overflow-y-auto">
+    <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto">
       <div ref={innerRef} className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
         <AgentPlanPanel planState={agentPlanState} />
 

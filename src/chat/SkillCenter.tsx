@@ -480,7 +480,7 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
               <span className="text-[12px] text-neutral-400">自动匹配 · 降级模式 · 解释器白名单 · 扫描路径</span>
               <ChevronDown
                 size={16}
-                className={`ml-auto shrink-0 text-neutral-400 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+                className={`ml-auto shrink-0 text-neutral-400 transition-transform duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-standard)] ${advancedOpen ? 'rotate-180' : ''}`}
               />
             </button>
             {advancedOpen && (
@@ -631,18 +631,21 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
       {/* 预览弹窗 */}
       {selectedSkillPreview && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          className="chat-motion-fade fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
           data-tauri-drag-region="false"
           onClick={() => setSelectedSkillPreview(null)}
         >
           <div
-            className="flex max-h-[80vh] w-full max-w-[640px] flex-col gap-3 overflow-hidden rounded-2xl border border-neutral-200 bg-white p-5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="skill-preview-title"
+            className="chat-motion-modal-in flex max-h-[80vh] w-full max-w-[640px] flex-col gap-3 overflow-hidden rounded-2xl border border-neutral-200 bg-white p-5 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start gap-2">
               <Sparkles size={16} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
               <div className="min-w-0 flex-1">
-                <h3 className="truncate text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
+                <h3 id="skill-preview-title" className="truncate text-[15px] font-semibold text-neutral-900 dark:text-neutral-100">
                   {selectedSkillPreview.name}
                 </h3>
                 <p className="mt-0.5 text-[12.5px] text-neutral-500 dark:text-neutral-400">

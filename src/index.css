@@ -36,6 +36,24 @@ body {
   --theme-surface-border-strong: #d4d4d8;
 }
 
+/* ===== Motion tokens =====
+   Chat UI 动效的单一来源：缓动曲线 + 时长。新增动效一律引用这些 token，
+   保持克制的 macOS 原生质感与全局一致性。改这里即可全局调速/换曲线。
+   reduced-motion 下统一在 @media (prefers-reduced-motion) 兜底（见文件末）。 */
+:root {
+  /* 缓动曲线 */
+  --kv-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);  /* 主曲线：入场/展开/弹出，干脆 + 轻微回弹尾 */
+  --kv-ease-firm: cubic-bezier(0.2, 0, 0, 1);          /* 拖拽/重排：起步快、落点稳 */
+  --kv-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* 轻弹：按压回弹、强调微动效 */
+  --kv-ease-out: cubic-bezier(0.33, 1, 0.68, 1);       /* 收尾型：颜色/透明度过渡 */
+
+  /* 时长（保持短促；交互反馈优先 instant/fast） */
+  --kv-dur-instant: 90ms;  /* 按压/hover 等即时反馈 */
+  --kv-dur-fast: 150ms;    /* 弹出/小过渡 */
+  --kv-dur-normal: 220ms;  /* 入场/展开/cross-fade */
+  --kv-dur-slow: 320ms;    /* 较大位移/侧栏折叠 */
+}
+
 :root[data-theme-color="warm"] {
   --theme-surface: #faf9f5;
   --theme-surface-soft: #f6f3ed;
@@ -476,6 +494,17 @@ body {
 
 .chat-sidebar-shell {
   background: var(--theme-surface-muted);
+  /* 折叠动画：负 margin 把固定宽度（240px，与 w-[240px] 同步）的侧栏整体滑出左侧，
+     由 .chat-window-shell 的 overflow:hidden 裁剪；width 不变 → 内容不被压缩。 */
+  transition:
+    margin-left var(--kv-dur-slow) var(--kv-ease-standard),
+    opacity var(--kv-dur-normal) var(--kv-ease-out);
+}
+
+.chat-sidebar-shell.is-collapsed {
+  margin-left: -240px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .chat-composer-shell {
@@ -706,17 +735,17 @@ body {
 }
 
 .chat-motion-fade-up {
-  animation: chat-motion-fade-up var(--chat-motion-duration, 220ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: chat-motion-fade-up var(--chat-motion-duration, var(--kv-dur-normal)) var(--kv-ease-standard) both;
   animation-delay: var(--chat-motion-delay, 0ms);
 }
 
 .chat-motion-popover {
   transform-origin: var(--chat-popover-origin, top left);
-  animation: chat-motion-popover 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: chat-motion-popover var(--kv-dur-fast) var(--kv-ease-standard) both;
 }
 
 .chat-motion-row {
-  animation: chat-motion-row 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: chat-motion-row 180ms var(--kv-ease-standard) both;
   animation-delay: var(--chat-motion-delay, 0ms);
 }
 
@@ -725,7 +754,7 @@ body {
 }
 
 .chat-motion-search-reveal {
-  animation: chat-motion-search-reveal 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: chat-motion-search-reveal 180ms var(--kv-ease-standard) both;
 }
 
 .chat-motion-reveal {
@@ -734,9 +763,9 @@ body {
   opacity: 0;
   transform: translateY(-2px);
   transition:
-    grid-template-rows 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 160ms ease,
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    grid-template-rows 180ms var(--kv-ease-standard),
+    opacity 160ms var(--kv-ease-out),
+    transform 180ms var(--kv-ease-standard);
 }
 
 .chat-motion-reveal.is-open {
@@ -753,9 +782,9 @@ body {
 .chat-motion-reasoning-body {
   overflow: hidden;
   transition:
-    max-height 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 160ms ease,
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    max-height var(--kv-dur-normal) var(--kv-ease-standard),
+    opacity 160ms var(--kv-ease-out),
+    transform 180ms var(--kv-ease-standard);
 }
 
 .chat-motion-reasoning-body.is-collapsed {
@@ -823,6 +852,54 @@ body {
 .dark .image-generation-pending-indicator {
   background: #8a8a8a;
   box-shadow: 0 0 0 0 rgba(138, 138, 138, 0.24);
+}
+
+/* 退出动画：元素移除前缩小淡出。NOTE: 故意不在 reduced-motion 里设 animation:none，
+   靠全局兜底把时长压到 0.01ms —— 这样 animationend 仍会触发，依赖它清理 DOM 的逻辑（附件移除）不会卡住。 */
+@keyframes chat-motion-exit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+.chat-motion-exit {
+  animation: chat-motion-exit var(--kv-dur-fast) var(--kv-ease-out) both;
+  pointer-events: none;
+}
+
+/* 纯透明度淡入：模态/对话框 backdrop 等 */
+@keyframes chat-motion-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.chat-motion-fade {
+  animation: chat-motion-fade var(--kv-dur-fast) var(--kv-ease-out) both;
+}
+
+/* 居中模态入场：从中心轻微放大 + 上移淡入（transform-origin 默认 center） */
+@keyframes chat-motion-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.chat-motion-modal-in {
+  animation: chat-motion-modal-in var(--kv-dur-normal) var(--kv-ease-standard) both;
 }
 
 @keyframes chat-motion-fade-up {
@@ -979,6 +1056,19 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* 全局兜底：覆盖内联 Tailwind transition / animate 工具类等未被下方具名规则捕获的动效。
+     用 0.01ms 而非 0，保留 transitionend/animationend 事件（附件退出动画等依赖它清理 DOM）。
+     注：chat-motion-fade / chat-motion-modal-in / chat-motion-exit 刻意不进下方 animation:none 列表，
+     仅靠本兜底压到 0.01ms —— 这样它们的 animationend 仍会触发，依赖它清理 DOM 的逻辑不会卡住。 */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
   .chat-motion-fade-up,
   .chat-motion-popover,
   .chat-motion-row,
