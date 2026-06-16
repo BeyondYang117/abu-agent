@@ -256,6 +256,8 @@ function App() {
     } else {
       document.documentElement.classList.remove('dark')
     }
+    // 同步 chat 窗口原生背景（Windows 不透明窗口），避免伸缩时露白底闪烁。其他窗口/平台 no-op。
+    void api.setChatWindowBackground(isDark)
     document.documentElement.dataset.themeColor = normalizeThemeColorId(settings.themeColor)
     setTranslateSource(settings.translatorModel || 'AI')
     setLang((settings.settingsLanguage as Lang) || 'zh')
