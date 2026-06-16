@@ -30,6 +30,7 @@ futures = { version = "0.3", default-features = false, features = ["std", "async
 scraper = "0.23"
 html-escape = "0.2"
 regex = "1"
+ignore = "0.4"
 
 # 工具库
 base64 = "0.22"

@@ -1238,37 +1238,51 @@ fn is_hidden_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Walk a directory tree, honoring `.gitignore` (and `.ignore`, global gitignore,
+/// parent ignores) via the `ignore` crate — the same engine ripgrep uses — so
+/// grep/find skip `node_modules`, `target`, `dist`, etc. automatically. A small
+/// hardcoded floor (`DEFAULT_IGNORED_DIRS`) is always skipped too, so repos with
+/// no `.gitignore` still avoid the obvious noise. `include_hidden` toggles
+/// dotfile visibility (gitignore is still respected either way, like `rg --hidden`).
 fn walk_paths(
     root: &Path,
     recursive: bool,
     include_hidden: bool,
     max_paths: usize,
 ) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).map_err(|err| format!("Read directory failed: {err}"))? {
-            let entry = entry.map_err(|err| format!("Read directory entry failed: {err}"))?;
-            let path = entry.path();
-            let name = path
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(!include_hidden)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        // Honor .gitignore even when the directory isn't inside a git repo.
+        .require_git(false)
+        .max_depth(if recursive { None } else { Some(1) })
+        .filter_entry(|entry| {
+            entry
                 .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("");
-            if !include_hidden && name.starts_with('.') {
-                continue;
-            }
-            let metadata = entry
-                .metadata()
-                .map_err(|err| format!("Read entry metadata failed: {err}"))?;
-            if metadata.is_dir() {
-                if recursive && !DEFAULT_IGNORED_DIRS.contains(&name) {
-                    stack.push(path.clone());
-                }
-            }
-            out.push(path);
-            if out.len() >= max_paths {
-                return Ok(out);
-            }
+                .to_str()
+                .map(|name| !DEFAULT_IGNORED_DIRS.contains(&name))
+                .unwrap_or(true)
+        });
+
+    let mut out = Vec::new();
+    for result in builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            // Skip unreadable entries (permissions, races) rather than failing
+            // the whole walk.
+            Err(_) => continue,
+        };
+        // The walk yields the root itself at depth 0; callers want its contents.
+        if entry.depth() == 0 {
+            continue;
+        }
+        out.push(entry.into_path());
+        if out.len() >= max_paths {
+            break;
         }
     }
     Ok(out)

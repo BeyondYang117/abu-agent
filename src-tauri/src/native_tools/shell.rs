@@ -131,13 +131,36 @@ pub async fn run_command(
         .max(default_timeout_ms);
 
     let output = run_shell_command(&command, cwd, timeout_ms).await?;
-    let formatted = format_command_output(&output);
+    let formatted = offload_large_output(format_command_output(&output));
     if let Some(code) = output.status_code {
         if code != 0 {
             return Err(formatted);
         }
     }
     Ok(formatted)
+}
+
+/// Above this size, a command's full output is written to a temp file and the
+/// returned text is prefixed with the path. The body is still returned inline
+/// (the agent loop truncates the middle for the model), but the note — kept in
+/// the head of that truncation — tells the model where to read the complete log.
+const MAX_INLINE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024;
+
+fn offload_large_output(formatted: String) -> String {
+    if formatted.len() <= MAX_INLINE_COMMAND_OUTPUT_BYTES {
+        return formatted;
+    }
+    let lines = formatted.lines().count();
+    let bytes = formatted.len();
+    let path = std::env::temp_dir().join(format!("kivio-bash-{}.log", uuid::Uuid::new_v4()));
+    match std::fs::write(&path, &formatted) {
+        Ok(()) => format!(
+            "[full output: {lines} lines, {bytes} bytes — complete log saved to {}. Read it with the `read` tool (use offset/limit or grep it) if the output below is truncated.]\n{formatted}",
+            path.display()
+        ),
+        // Best-effort: if the temp write fails, return the output inline as-is.
+        Err(_) => formatted,
+    }
 }
 
 fn resolve_command_cwd(
@@ -441,6 +464,33 @@ mod tests {
 
         assert!(formatted.contains("exit_code: 1"));
         assert!(formatted.contains("stderr:\nboom"));
+    }
+
+    #[test]
+    fn offload_large_output_passes_small_output_through() {
+        let small = "exit_code: 0\nstdout:\nhello\n".to_string();
+        assert_eq!(offload_large_output(small.clone()), small);
+    }
+
+    #[test]
+    fn offload_large_output_writes_temp_file_and_notes_path() {
+        let big = "x".repeat(MAX_INLINE_COMMAND_OUTPUT_BYTES + 1);
+        let result = offload_large_output(big.clone());
+        assert!(result.starts_with("[full output:"));
+        assert!(result.contains("kivio-bash-"));
+        assert!(result.contains("complete log saved to"));
+        // The full body is still present inline (the loop truncates the middle).
+        assert!(result.contains(&big));
+        // The referenced temp file exists and holds the full output; clean up.
+        let path = result
+            .lines()
+            .next()
+            .and_then(|line| line.find("saved to ").map(|i| &line[i + "saved to ".len()..]))
+            .and_then(|rest| rest.split(". Read it").next())
+            .map(|p| p.to_string())
+            .expect("temp path in note");
+        assert_eq!(std::fs::read_to_string(&path).expect("read temp log"), big);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(target_os = "windows")]
