@@ -60,11 +60,20 @@ body {
 .theme-transitions-ready .window-frosted,
 .theme-transitions-ready .chat-window-shell,
 .theme-transitions-ready .chat-main-pane,
-.theme-transitions-ready .chat-sidebar-shell,
 .theme-transitions-ready .chat-themed-surface,
-.theme-transitions-ready .chat-composer-shell,
 .theme-transitions-ready .assistant-center-root {
   transition:
+    background-color var(--kv-dur-normal) var(--kv-ease-out),
+    border-color var(--kv-dur-normal) var(--kv-ease-out);
+}
+
+/* 侧栏单列出来：transition 是简写，会整条覆盖。必须把折叠用的 margin-left/opacity 一起写进来，
+   否则只声明 background/border 会冲掉折叠动画（这正是之前折叠变回硬跳的回归原因）。
+   composer 不纳入主题过渡：它自带 transition-[box-shadow,border-color] 焦点辉光，避免被覆盖。 */
+.theme-transitions-ready .chat-sidebar-shell {
+  transition:
+    margin-left var(--kv-dur-slow) var(--kv-ease-standard),
+    opacity var(--kv-dur-normal) var(--kv-ease-out),
     background-color var(--kv-dur-normal) var(--kv-ease-out),
     border-color var(--kv-dur-normal) var(--kv-ease-out);
 }
