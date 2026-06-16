@@ -2781,6 +2781,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     <>
                   <Suspense fallback={<MessageListLoading />}>
                     <MessageList
+                      key={currentConversation?.id ?? 'empty'}
                       conversationId={currentConversation?.id}
                       messages={displayMessages}
                       agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}

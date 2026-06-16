@@ -1005,6 +1005,9 @@ async function on<T>(event: string, handler: (payload: T) => void): Promise<Unli
 export const api = {
   // 设置相关
   getSettings: async () => normalizeSettings(await invoke<Settings>('get_settings')),
+  // 把（Windows 不透明）chat 窗口的原生背景设为当前主题色，避免伸缩时闪白。其他窗口/平台为 no-op。
+  setChatWindowBackground: (isDark: boolean) =>
+    invoke('set_chat_window_background', { isDark }).catch(() => {}),
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
   saveSettings: async (settings: Settings) =>
     normalizeSettings(await invoke<Settings>('save_settings', { settings: prepareSettingsForSave(settings) })),

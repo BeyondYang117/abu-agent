@@ -249,21 +249,14 @@ function TimelineSegments({
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
       {ordered.map((segment, index) => {
+        let node: React.ReactNode
         if (segment.kind === 'tool') {
-          return (
-            <TimelineToolSegment
-              key={segment.id}
-              segment={segment}
-              toolCalls={toolCalls}
-            />
-          )
-        }
-        if (segment.kind === 'reasoning') {
+          node = <TimelineToolSegment segment={segment} toolCalls={toolCalls} />
+        } else if (segment.kind === 'reasoning') {
           const reasoning = segmentText(segment)
           if (!reasoning.trim()) return null
-          return (
+          node = (
             <ReasoningBlock
-              key={segment.id}
               reasoning={reasoning}
               streaming={reasoningStreaming && index === ordered.length - 1}
               durationMs={
@@ -272,13 +265,16 @@ function TimelineSegments({
               }
             />
           )
+        } else {
+          if (!segmentText(segment).trim()) return null
+          node = <TimelineTextSegment segment={segment} artifacts={artifacts} />
         }
+        // 每个时间线分段（推理/工具/正文）单独淡入：流式中新分段顺次出现而非"啪"地弹出。
+        // 用纯透明度（非 fade-up）避免与外层消息 fade-up 的位移叠加；不加 index 错峰避免拖慢流式后续分段。
         return (
-          <TimelineTextSegment
-            key={segment.id}
-            segment={segment}
-            artifacts={artifacts}
-          />
+          <div key={segment.id} className="chat-motion-fade">
+            {node}
+          </div>
         )
       })}
     </section>
@@ -369,7 +365,7 @@ function MessageBubbleComponent({
                 title={copied ? '已复制' : '复制'}
                 aria-label={copied ? '已复制' : '复制'}
               >
-                {copied ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={2} />}
+                {copied ? <Check size={14} strokeWidth={2} className="chat-motion-pop" /> : <Copy size={14} strokeWidth={2} />}
               </button>
               {onDeleteMessage && (
                 <button

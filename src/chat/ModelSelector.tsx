@@ -61,7 +61,7 @@ export function ModelSelector({
         </span>
         <ChevronDown
           size={15}
-          className={`shrink-0 text-neutral-400 transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`shrink-0 text-neutral-400 transition-transform duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-standard)] ${open ? 'rotate-180' : ''}`}
         />
       </button>
 

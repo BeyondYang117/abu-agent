@@ -322,6 +322,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
+            commands::set_chat_window_background,
             commands::get_default_prompt_templates,
             commands::save_settings,
             commands::open_settings_window,

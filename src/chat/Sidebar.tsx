@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ChevronRight,
@@ -381,6 +381,13 @@ export const Sidebar = memo(function Sidebar({
   searchOpen,
   onSearchOpenChange,
 }: SidebarProps) {
+  const asideRef = useRef<HTMLElement>(null)
+  // 折叠后侧栏仍挂载（用于滑出动画），用 inert 让其退出 tab 序 / 不可点击 / 不进 a11y 树。
+  // useLayoutEffect：在绘制前与 JSX 里的 aria-hidden 原子地一起生效，避免短暂可聚焦窗口。
+  useLayoutEffect(() => {
+    const el = asideRef.current
+    if (el) el.inert = collapsed
+  }, [collapsed])
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [projects, setProjects] = useState<ChatProject[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -676,13 +683,15 @@ export const Sidebar = memo(function Sidebar({
     ? projects.find((project) => project.id === projectMenuState.projectId)
     : undefined
 
-  if (collapsed) {
-    return null
-  }
-
   return (
     <>
-      <aside className="chat-sidebar-shell flex h-full w-[240px] shrink-0 flex-col">
+      <aside
+        ref={asideRef}
+        className={`chat-sidebar-shell flex h-full w-[240px] shrink-0 flex-col${
+          collapsed ? ' is-collapsed' : ''
+        }`}
+        aria-hidden={collapsed}
+      >
         <div
           className={`${chatTitlebarRowClass} ${chatTitlebarMacInsetClass} pr-3`}
           data-tauri-drag-region
@@ -719,7 +728,11 @@ export const Sidebar = memo(function Sidebar({
 
       <div className="custom-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto" data-tauri-drag-region="false">
         {loading ? (
-          <div className="px-3 py-8 text-center text-[13px] text-neutral-400">加载中…</div>
+          <div className="space-y-2 px-3 py-3" aria-label="加载中" aria-busy="true">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="kv-skeleton h-7 rounded-lg" />
+            ))}
+          </div>
         ) : (
           <>
             <section className="group/projects px-3 pb-2 pt-3">

@@ -256,9 +256,16 @@ function App() {
     } else {
       document.documentElement.classList.remove('dark')
     }
+    // 同步 chat 窗口原生背景（Windows 不透明窗口），避免伸缩时露白底闪烁。其他窗口/平台 no-op。
+    void api.setChatWindowBackground(isDark)
     document.documentElement.dataset.themeColor = normalizeThemeColorId(settings.themeColor)
     setTranslateSource(settings.translatorModel || 'AI')
     setLang((settings.settingsLanguage as Lang) || 'zh')
+    // 首次应用主题后（下一帧）再开启主题色过渡，避免初始 light↔dark 闪烁；
+    // 之后用户切换主题/系统主题变化时才平滑过渡。classList.add 幂等。
+    requestAnimationFrame(() => {
+      document.documentElement.classList.add('theme-transitions-ready')
+    })
   }
 
   // 初始化主题并监听系统主题变化
@@ -364,6 +371,7 @@ function App() {
     let unlistenResize: (() => void) | undefined
     let unlistenMove: (() => void) | undefined
     let readyToRemember = false
+    let geomTimer: ReturnType<typeof setTimeout> | undefined
 
     const setup = async () => {
       try {
@@ -371,9 +379,14 @@ function App() {
         await new Promise(resolve => window.setTimeout(resolve, 0))
         if (!cancelled) readyToRemember = true
 
+        // resize/move 在拖动中高频触发；几何持久化（多次 IPC 读尺寸 + 写 store）debounce 到停止后做一次，
+        // 否则每帧都发 IPC 会和窗口伸缩/拖动的渲染抢资源，造成明显卡顿（Windows/WebView2 尤甚）。
         const persistIfReady = () => {
           if (!readyToRemember || cancelled) return
-          void persistChatWindowGeometry()
+          if (geomTimer !== undefined) clearTimeout(geomTimer)
+          geomTimer = setTimeout(() => {
+            if (!cancelled) void persistChatWindowGeometry()
+          }, 250)
         }
 
         const resizeHandler = await win.onResized(() => {
@@ -397,6 +410,7 @@ function App() {
     void setup()
     return () => {
       cancelled = true
+      if (geomTimer !== undefined) clearTimeout(geomTimer)
       unlistenResize?.()
       unlistenMove?.()
     }

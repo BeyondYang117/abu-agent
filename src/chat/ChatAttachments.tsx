@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FileText, Loader2, X } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
 import { loadAttachmentDataUrl, openAttachment, type DisplayAttachment } from './attachmentPreview'
 import { openChatImageViewer } from './imageViewer'
 
@@ -49,23 +49,19 @@ function ImagePreview({
   const isComposer = variant === 'composer'
   const loadingClass =
     isComposer
-      ? 'flex h-20 w-28 items-center justify-center rounded-xl bg-neutral-100 dark:bg-neutral-800'
-      : 'flex min-h-[72px] min-w-[120px] items-center justify-center rounded-xl bg-black/[0.04] dark:bg-white/[0.06]'
+      ? 'kv-skeleton h-20 w-28 rounded-xl'
+      : 'kv-skeleton min-h-[72px] min-w-[120px] rounded-xl'
 
   return (
     <div className={isComposer ? 'relative h-20 w-28 overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-800' : 'relative inline-block max-w-full'}>
-      {loading && (
-        <div className={loadingClass}>
-          <Loader2 size={14} className="animate-spin text-neutral-400" />
-        </div>
-      )}
+      {loading && <div className={loadingClass} aria-hidden="true" />}
       {!loading && src && (
         <button
           type="button"
           className={
             isComposer
-              ? 'block h-full w-full cursor-zoom-in rounded-xl p-0'
-              : 'block max-w-full cursor-zoom-in rounded-xl p-0 text-left'
+              ? 'chat-motion-fade block h-full w-full cursor-zoom-in rounded-xl p-0'
+              : 'chat-motion-fade block max-w-full cursor-zoom-in rounded-xl p-0 text-left'
           }
           onClick={() => onPreview?.(src, attachment.name)}
           title="预览图片"
@@ -97,11 +93,15 @@ function FileAttachmentChip({
   conversationId,
   variant,
   onRemove,
+  removing = false,
+  onExited,
 }: {
   attachment: DisplayAttachment
   conversationId?: string | null
   variant: ChatAttachmentsProps['variant']
   onRemove?: (id: string) => void
+  removing?: boolean
+  onExited?: (id: string) => void
 }) {
   const chipClass =
     variant === 'composer'
@@ -111,7 +111,16 @@ function FileAttachmentChip({
         : 'flex max-w-full items-center gap-2 rounded-lg border border-neutral-200/80 px-2.5 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:text-neutral-200'
 
   return (
-    <div className={`chat-motion-fade-up ${chipClass}`}>
+    <div
+      className={`${removing ? 'chat-motion-exit' : 'chat-motion-fade-up'} ${chipClass}`}
+      onAnimationEnd={
+        removing && onExited
+          ? (event) => {
+              if (event.target === event.currentTarget) onExited(attachment.id)
+            }
+          : undefined
+      }
+    >
       <button
         type="button"
         onClick={() => void openAttachment(attachment, conversationId)}
@@ -150,6 +159,22 @@ export function ChatAttachments({
   variant,
   onRemove,
 }: ChatAttachmentsProps) {
+  // 移除中的附件：先打退出动画，animationend 后再真正 onRemove（卸载节点）。
+  const [removingIds, setRemovingIds] = useState<ReadonlySet<string>>(() => new Set())
+
+  const beginRemove = onRemove
+    ? (id: string) => setRemovingIds((prev) => new Set(prev).add(id))
+    : undefined
+  const finishRemove = (id: string) => {
+    setRemovingIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    onRemove?.(id)
+  }
+
   if (attachments.length === 0) return null
 
   const images = attachments.filter((item) => item.type === 'image')
@@ -159,31 +184,49 @@ export function ChatAttachments({
     <div className={variant === 'composer' ? 'space-y-1.5' : 'mt-2 space-y-2'}>
       {images.length > 0 && (
         <div className={variant === 'composer' ? 'flex flex-wrap gap-2' : 'flex flex-col gap-2'}>
-          {images.map((attachment) => (
-            <div key={attachment.id} className={variant === 'composer' ? 'chat-motion-fade-up relative h-20 w-28 shrink-0' : 'chat-motion-fade-up relative'}>
-              <ImagePreview
-                attachment={attachment}
-                conversationId={conversationId}
-                variant={variant}
-                onPreview={(src, alt) => openChatImageViewer({ src, alt, name: attachment.name })}
-              />
-              {onRemove ? (
-                <button
-                  type="button"
-                  onClick={() => onRemove(attachment.id)}
-                  className={
-                    variant === 'composer'
-                      ? 'absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-950/90 text-white shadow-sm transition-colors hover:bg-neutral-800'
-                      : 'absolute right-2 top-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm hover:bg-black/65'
-                  }
-                  title="移除图片"
-                  aria-label="移除图片"
-                >
-                  {variant === 'composer' ? <X size={12} strokeWidth={2.4} /> : '移除'}
-                </button>
-              ) : null}
-            </div>
-          ))}
+          {images.map((attachment) => {
+            const removing = removingIds.has(attachment.id)
+            const baseMotion = removing ? 'chat-motion-exit' : 'chat-motion-fade-up'
+            return (
+              <div
+                key={attachment.id}
+                className={
+                  variant === 'composer'
+                    ? `${baseMotion} relative h-20 w-28 shrink-0`
+                    : `${baseMotion} relative`
+                }
+                onAnimationEnd={
+                  removing
+                    ? (event) => {
+                        if (event.target === event.currentTarget) finishRemove(attachment.id)
+                      }
+                    : undefined
+                }
+              >
+                <ImagePreview
+                  attachment={attachment}
+                  conversationId={conversationId}
+                  variant={variant}
+                  onPreview={(src, alt) => openChatImageViewer({ src, alt, name: attachment.name })}
+                />
+                {beginRemove ? (
+                  <button
+                    type="button"
+                    onClick={() => beginRemove(attachment.id)}
+                    className={
+                      variant === 'composer'
+                        ? 'absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-950/90 text-white shadow-sm transition-colors hover:bg-neutral-800'
+                        : 'absolute right-2 top-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm hover:bg-black/65'
+                    }
+                    title="移除图片"
+                    aria-label="移除图片"
+                  >
+                    {variant === 'composer' ? <X size={12} strokeWidth={2.4} /> : '移除'}
+                  </button>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
       )}
       {files.length > 0 && (
@@ -194,7 +237,9 @@ export function ChatAttachments({
               attachment={attachment}
               conversationId={conversationId}
               variant={variant}
-              onRemove={onRemove}
+              onRemove={beginRemove}
+              removing={removingIds.has(attachment.id)}
+              onExited={finishRemove}
             />
           ))}
         </div>

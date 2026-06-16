@@ -266,7 +266,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
           title={copied ? '已复制' : '复制代码'}
           aria-label={copied ? '已复制' : '复制代码'}
         >
-          {copied ? <Check size={17} strokeWidth={2.2} /> : <Copy size={17} strokeWidth={2.2} />}
+          {copied ? <Check size={17} strokeWidth={2.2} className="chat-motion-pop" /> : <Copy size={17} strokeWidth={2.2} />}
         </button>
       </div>
       <pre className="m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900">

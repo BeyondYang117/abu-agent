@@ -40,3 +40,6 @@ src-tauri/swift/kivio-ai-helper/.build/
 src-tauri/swift/kivio-ocr-helper/.build/
 
 .superpowers/
+
+# CodeGraph 本地索引（生成物 / 本地缓存，不入库）
+.codegraph/
