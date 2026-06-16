@@ -1,18 +1,27 @@
-//! Readable per-tool rendering for interactive tool cards (Phase 5c).
+//! Readable per-tool rendering for interactive tool cards (Phase 5c / 6a).
 //!
 //! Where 5b dumped a raw clipped JSON / preview blob under every tool card, this
 //! module mirrors PI's `modes/interactive/components/tool-execution.ts`: each
 //! tool's result is shaped into a compact, human-readable body —
 //!
-//! - `ls` / `find` / `glob_files`: a clean file/dir name list, truncated with a
-//!   `… +N more` line.
-//! - `search_files` / `grep`: matched `file:line` lines (kept verbatim from the
-//!   tool's own `path:line:` formatting), truncated.
+//! - `ls` / `find` / `glob_files`: a clean file/dir name list (basenames, dirs
+//!   first), truncated with a `… +N more` line.
+//! - `search_files` / `grep`: matched `file:line` references, truncated.
 //! - `read_file`: a one-line `read <path> (N lines)` header from
 //!   `structured_content`.
 //! - `edit_file` / `write_file`: the unified diff rendered prominently with
 //!   green `+` / red `-` line coloring, clipped.
 //! - `bash` / `run_command`: the command echoed, then a tail of its output.
+//!
+//! **Structured-first parsing (6a).** Cards parse the tool's *structured* result
+//! shape — `structured_content` when the tool carries it (read/edit/write),
+//! else the JSON the listing/grep tools emit through their preview. They never
+//! line-split a clipped JSON string (which is what produced raw `"entries":
+//! [ … ] +N more` dumps for larger `ls`/`find`/`grep` results). The `+N more`
+//! counts reflect the real entry/match count, not where a string was clipped.
+//! If a result is genuinely unparseable (a blob truncated mid-JSON), a tolerant
+//! `"path": "…"` scan recovers a clean name list; failing that, a single clipped
+//! preview line — never a wall of JSON braces.
 //!
 //! Everything here is pure (`ToolCard` + width → `Vec<String>` of pre-colored
 //! ANSI lines) so it is unit-testable without a TTY. The colors are emitted as
@@ -23,6 +32,7 @@ use super::app::ToolCard;
 use crate::chat::types::ToolCallStatus;
 use crate::kivio_code::tui::components::{Text, Markdown, MarkdownTheme};
 use crate::kivio_code::tui::render::Component;
+use serde_json::Value;
 
 /// Max list entries (ls/find) or match lines (grep) shown before a `+N more`.
 const MAX_LIST_LINES: usize = 12;
@@ -161,59 +171,288 @@ fn read_header(card: &ToolCard) -> String {
     }
 }
 
-/// `ls` / `find`: a clean per-entry list, clipped with a `… +N more` line. The
-/// tool returns a newline (ls) or newline-joined glob list as text; we split,
-/// drop blank/heading lines, and show the leaf entries.
+/// The structured result to render a card from, **structured-first**: prefer
+/// `structured_content` (the complete, parseable result the tool produced);
+/// otherwise try to parse the (model-facing, possibly truncated) `detail`
+/// preview as whole JSON. Returns `None` when neither is available/parseable —
+/// callers then fall back to a string scan or a clipped preview.
+///
+/// This is the crux of the tool-card fix: native listing/grep tools
+/// (`list_dir`/`glob_files`/`search_files`) go through the SyncText registry
+/// path, which leaves `structured_content = None` and stuffs the full JSON into
+/// the preview — so for those we parse `detail`. read/edit/write carry real
+/// `structured_content`, so they use it directly.
+fn card_payload(card: &ToolCard) -> Option<Value> {
+    if let Some(sc) = &card.structured_content {
+        return Some(sc.clone());
+    }
+    let detail = card.detail.as_deref()?.trim();
+    // `bash` etc. sometimes prefix with `stdout:`; only attempt a clean JSON
+    // parse here — partial/truncated blobs intentionally fail and fall through.
+    serde_json::from_str::<Value>(detail).ok()
+}
+
+/// `ls` / `find` / `glob_files`: a clean per-entry name list, grouped into
+/// directories and files, clipped with a `… +N more` line.
+///
+/// These tools (`list_dir`/`glob_files`/`find`) emit a structured JSON object
+/// with an `entries`/`matches` array of `{ path, type, sizeBytes, modifiedAt }`.
+/// We parse that structure (structured-first; see [`card_payload`]) and show
+/// each entry's **basename**, dirs first. The `+N more` count reflects the real
+/// number of entries — never an artifact of where a truncated JSON string was
+/// clipped, which is what produced the raw `"entries": [ … ] +N more` dumps.
 fn listing_body(card: &ToolCard, width: u16) -> Vec<String> {
-    let Some(detail) = card.detail.as_deref() else {
-        return Vec::new();
+    let names = card_payload(card)
+        .as_ref()
+        .and_then(listing_names)
+        .or_else(|| card.detail.as_deref().and_then(listing_names_from_text));
+
+    let Some(names) = names else {
+        // No structured array and no parseable preview: clip the raw preview to
+        // a single line rather than dumping a wall of JSON braces.
+        return clipped_preview_line(card, width);
     };
-    let entries: Vec<&str> = detail
-        .lines()
-        .map(str::trim_end)
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    if entries.is_empty() {
+    if names.is_empty() {
         return text_line(&format!("  {DIM}(empty){DIM_OFF}"), width);
     }
-    let mut lines = Vec::new();
-    let shown = entries.len().min(MAX_LIST_LINES);
-    for entry in &entries[..shown] {
-        lines.extend(text_line(&format!("  {entry}"), width));
+
+    // Partition while preserving order: directories first, then files/other.
+    let mut dirs: Vec<String> = Vec::new();
+    let mut files: Vec<String> = Vec::new();
+    for entry in &names {
+        if entry.is_dir {
+            dirs.push(format!("{}/", entry.name));
+        } else {
+            files.push(entry.name.clone());
+        }
     }
-    if entries.len() > shown {
-        let more = entries.len() - shown;
+    let ordered: Vec<String> = dirs.into_iter().chain(files).collect();
+    let total = ordered.len();
+    let shown = total.min(MAX_LIST_LINES);
+
+    let mut lines = Vec::new();
+    for name in &ordered[..shown] {
+        lines.extend(text_line(&format!("  {name}"), width));
+    }
+    if total > shown {
+        let more = total - shown;
         lines.extend(text_line(&format!("  {DIM}… +{more} more{DIM_OFF}"), width));
     }
     lines
 }
 
-/// `grep`: matched lines (kept as the tool emits them, typically `path:line:…`),
-/// clipped with a `… +N more` line.
+/// `grep` / `search_files`: matched `file:line` references, clipped with a
+/// `… +N more` line.
+///
+/// `search_files` emits a structured JSON object whose shape depends on
+/// `output_mode`: `matches` (`{ path, line, text }`) for content mode, `files`
+/// (a string array) for `files_with_matches`, or `counts` (`{ path, count }`)
+/// for `count`. We parse the structure (structured-first), formatting each as a
+/// concise `path:line` (or `path` / `path (N)`) reference. The `+N more` count
+/// is the real match count, not a truncation artifact.
 fn grep_body(card: &ToolCard, width: u16) -> Vec<String> {
-    let Some(detail) = card.detail.as_deref() else {
-        return Vec::new();
+    let refs = card_payload(card)
+        .as_ref()
+        .and_then(grep_refs)
+        .or_else(|| card.detail.as_deref().and_then(grep_refs_from_text));
+
+    let Some(refs) = refs else {
+        return clipped_preview_line(card, width);
     };
-    let matches: Vec<&str> = detail
-        .lines()
-        .map(str::trim_end)
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    if matches.is_empty() {
+    if refs.is_empty() {
         return text_line(&format!("  {DIM}no matches{DIM_OFF}"), width);
     }
+
+    let total = refs.len();
+    let shown = total.min(MAX_LIST_LINES);
     let mut lines = Vec::new();
-    let shown = matches.len().min(MAX_LIST_LINES);
-    for m in &matches[..shown] {
-        // Dim the line so the `path:line:` prefix and the matched text read as
-        // a reference rather than chat content.
+    for m in &refs[..shown] {
+        // Dim so the `path:line` reference reads as a reference, not chat text.
         lines.extend(text_line(&format!("  {DIM}{m}{DIM_OFF}"), width));
     }
-    if matches.len() > shown {
-        let more = matches.len() - shown;
+    if total > shown {
+        let more = total - shown;
         lines.extend(text_line(&format!("  {DIM}… +{more} more{DIM_OFF}"), width));
     }
     lines
+}
+
+/// One listing entry: its display basename and whether it's a directory.
+struct ListEntry {
+    name: String,
+    is_dir: bool,
+}
+
+/// Extract listing entries from a parsed tool result. Handles `list_dir`
+/// (`entries`), `glob_files`/`find` (`matches`), each an array of
+/// `{ path, type }` objects, plus a bare string array as a defensive fallback.
+fn listing_names(value: &Value) -> Option<Vec<ListEntry>> {
+    let array = value
+        .get("entries")
+        .or_else(|| value.get("matches"))
+        .or_else(|| value.get("files"))
+        .and_then(Value::as_array)?;
+    let entries = array
+        .iter()
+        .filter_map(|item| match item {
+            Value::Object(_) => {
+                let path = item.get("path").and_then(Value::as_str)?;
+                let is_dir = item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(|t| t == "dir" || t == "directory")
+                    .unwrap_or(false);
+                Some(ListEntry { name: basename(path), is_dir })
+            }
+            // `files_with_matches` (or a plain glob list) is an array of strings.
+            Value::String(path) => Some(ListEntry { name: basename(path), is_dir: false }),
+            _ => None,
+        })
+        .collect();
+    Some(entries)
+}
+
+/// Extract grep references from a parsed `search_files` result. Supports all
+/// three output modes; returns `path:line` / `path` / `path (N)` strings.
+fn grep_refs(value: &Value) -> Option<Vec<String>> {
+    if let Some(matches) = value.get("matches").and_then(Value::as_array) {
+        let refs = matches
+            .iter()
+            .filter_map(|m| {
+                let path = m.get("path").and_then(Value::as_str)?;
+                match m.get("line").and_then(Value::as_u64) {
+                    Some(line) => Some(format!("{path}:{line}")),
+                    None => Some(path.to_string()),
+                }
+            })
+            .collect();
+        return Some(refs);
+    }
+    if let Some(files) = value.get("files").and_then(Value::as_array) {
+        let refs = files
+            .iter()
+            .filter_map(|f| f.as_str().map(str::to_string))
+            .collect();
+        return Some(refs);
+    }
+    if let Some(counts) = value.get("counts").and_then(Value::as_array) {
+        let refs = counts
+            .iter()
+            .filter_map(|c| {
+                let path = c.get("path").and_then(Value::as_str)?;
+                let count = c.get("count").and_then(Value::as_u64).unwrap_or(0);
+                Some(format!("{path} ({count})"))
+            })
+            .collect();
+        return Some(refs);
+    }
+    None
+}
+
+/// Last path segment (forward- or back-slash) of a display path.
+fn basename(path: &str) -> String {
+    path.rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Fallback path-extraction from a (possibly truncated) preview string: pulls
+/// every `"path": "<value>"` occurrence out by scanning, so even a JSON blob
+/// clipped mid-object yields a clean name list instead of raw braces. Returns
+/// `None` when the text has no recognizable structure at all (so the caller can
+/// fall through to a clipped preview).
+fn listing_names_from_text(text: &str) -> Option<Vec<ListEntry>> {
+    let paths = extract_json_string_values(text, "path");
+    if paths.is_empty() {
+        return None;
+    }
+    Some(
+        paths
+            .into_iter()
+            .map(|p| ListEntry { name: basename(&p), is_dir: false })
+            .collect(),
+    )
+}
+
+/// Fallback grep-reference extraction from a (possibly truncated) preview: pulls
+/// `"path"` values out by scanning. Line numbers aren't reliably recoverable
+/// from a clipped blob, so this yields bare paths. `None` when no structure.
+fn grep_refs_from_text(text: &str) -> Option<Vec<String>> {
+    let paths = extract_json_string_values(text, "path");
+    if paths.is_empty() {
+        return None;
+    }
+    Some(paths)
+}
+
+/// Scan `text` for every `"<key>": "<value>"` occurrence and collect the string
+/// values, JSON-unescaping `\"`, `\\`, `\n`, `\t`, `\/`. Tolerant of a blob
+/// truncated mid-value (the trailing partial is dropped). Used only as a last
+/// resort when the result couldn't be parsed as whole JSON.
+fn extract_json_string_values(text: &str, key: &str) -> Vec<String> {
+    let needle = format!("\"{key}\"");
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(pos) = rest.find(&needle) {
+        rest = &rest[pos + needle.len()..];
+        // Expect `:` then an opening quote (allow whitespace between).
+        let after_colon = match rest.find(':') {
+            Some(c) => &rest[c + 1..],
+            None => break,
+        };
+        let trimmed = after_colon.trim_start();
+        let Some(body) = trimmed.strip_prefix('"') else {
+            rest = after_colon;
+            continue;
+        };
+        // Read until the closing unescaped quote.
+        let mut value = String::new();
+        let mut chars = body.char_indices();
+        let mut closed = false;
+        let mut consumed = 0usize;
+        while let Some((idx, c)) = chars.next() {
+            consumed = idx + c.len_utf8();
+            match c {
+                '\\' => {
+                    if let Some((nidx, esc)) = chars.next() {
+                        consumed = nidx + esc.len_utf8();
+                        match esc {
+                            'n' => value.push('\n'),
+                            't' => value.push('\t'),
+                            'r' => value.push('\r'),
+                            '"' => value.push('"'),
+                            '\\' => value.push('\\'),
+                            '/' => value.push('/'),
+                            other => value.push(other),
+                        }
+                    }
+                }
+                '"' => {
+                    closed = true;
+                    break;
+                }
+                _ => value.push(c),
+            }
+        }
+        rest = &body[consumed..];
+        if closed && !value.is_empty() {
+            out.push(value);
+        }
+    }
+    out
+}
+
+/// A clean single clipped preview line (newlines → spaces), used when a listing
+/// or grep result is neither structured nor parseable — never a JSON-brace wall.
+fn clipped_preview_line(card: &ToolCard, width: u16) -> Vec<String> {
+    let Some(detail) = card.detail.as_deref() else {
+        return text_line(&format!("  {DIM}(no result){DIM_OFF}"), width);
+    };
+    let collapsed = detail.replace('\n', " ");
+    let collapsed = clip_chars(collapsed.trim(), 200);
+    text_line(&format!("  {DIM}{collapsed}{DIM_OFF}"), width)
 }
 
 /// `write_file` / `edit_file`: the unified diff, green `+` / red `-`, clipped.
@@ -368,6 +607,63 @@ mod tests {
         }
     }
 
+    // ---- real-output card builders ----
+    //
+    // These run the *actual* native tools against a throwaway temp dir and feed
+    // the real result into the card the same way the registry/executor does, so
+    // the card tests assert against the shapes the tools genuinely emit (not
+    // hand-written JSON). `list_dir`/`glob_files`/`search_files` are SyncText
+    // tools: the executor leaves `structured_content = None` and puts the JSON
+    // string into the preview (→ `card.detail`). `read_file` carries real
+    // `structured_content`. We mirror both.
+
+    use crate::chat::types::ToolCallRecord;
+    use crate::native_tools::NativeToolWorkspace;
+
+    /// A unique scratch project dir for a single test, returned with a workspace
+    /// scoped to it.
+    fn scratch() -> (std::path::PathBuf, NativeToolWorkspace) {
+        let dir =
+            std::env::temp_dir().join(format!("kivio_card_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir scratch");
+        let ws = NativeToolWorkspace::project(
+            "card".into(),
+            "Card".into(),
+            Some(dir.to_string_lossy().into_owned()),
+        );
+        (dir, ws)
+    }
+
+    /// Build a `ToolCard` for a SyncText tool (list_dir/glob_files/search_files):
+    /// JSON output goes into the preview/detail, `structured_content = None`.
+    fn text_tool_card(name: &str, summary: &str, json_output: String) -> ToolCard {
+        let mut record = base_record(name, summary);
+        record.result_preview = Some(json_output);
+        ToolCard::from_record(&record)
+    }
+
+    fn base_record(name: &str, summary: &str) -> ToolCallRecord {
+        ToolCallRecord {
+            id: "r1".to_string(),
+            name: name.to_string(),
+            source: "native".to_string(),
+            server_id: None,
+            arguments: summary.to_string(),
+            status: ToolCallStatus::Success,
+            result_preview: None,
+            error: None,
+            duration_ms: None,
+            started_at: None,
+            completed_at: None,
+            round: 0,
+            sensitive: false,
+            artifacts: Vec::new(),
+            trace_id: None,
+            span_id: None,
+            structured_content: None,
+        }
+    }
+
     fn joined(card: &ToolCard, width: u16) -> String {
         render_tool_card(card, width).join("\n")
     }
@@ -401,17 +697,27 @@ mod tests {
     }
 
     #[test]
-    fn read_body_uses_structured_line_count() {
-        let mut c = card("read_file", ToolCallStatus::Success);
-        c.summary = "path=src/lib.rs".to_string();
-        c.structured_content = Some(serde_json::json!({
-            "path": "src/lib.rs",
-            "total_lines": 120,
-            "start_line": 1,
-            "end_line": 120,
-        }));
+    fn read_body_uses_real_read_file_structured_content() {
+        // Drive the real read_file tool, then build the card from its real
+        // structured_content (read_file IS a SyncResult tool that carries it).
+        let (dir, ws) = scratch();
+        let file = dir.join("lib.rs");
+        let body: String = (0..120).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(&file, body).expect("write file");
+        let result = crate::native_tools::read_file(
+            &ws,
+            &serde_json::json!({ "path": file.to_string_lossy() }),
+        )
+        .expect("read_file");
+        let mut record = base_record("read_file", "path=lib.rs");
+        record.structured_content =
+            Some(serde_json::to_value(&result).expect("serialize read result"));
+        record.result_preview = Some("ignored — structured wins".to_string());
+        let c = ToolCard::from_record(&record);
+
         let text = strip_ansi(&joined(&c, 80));
-        assert!(text.contains("read src/lib.rs (120 lines)"), "{text}");
+        assert!(text.contains("lib.rs (120 lines)"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -425,44 +731,180 @@ mod tests {
     }
 
     #[test]
-    fn listing_body_lists_entries_and_truncates() {
-        let mut c = card("ls", ToolCallStatus::Success);
-        let names: Vec<String> = (0..20).map(|i| format!("file{i}.rs")).collect();
-        c.detail = Some(names.join("\n"));
+    fn listing_body_lists_real_list_dir_entries_with_dirs_first() {
+        // Real list_dir output → its JSON (with `entries: [{path,type,...}]`)
+        // becomes the SyncText preview, structured_content stays None.
+        let (dir, ws) = scratch();
+        std::fs::create_dir_all(dir.join("sub")).expect("mkdir sub");
+        std::fs::write(dir.join("alpha.rs"), "a").expect("write alpha");
+        std::fs::write(dir.join("beta.rs"), "b").expect("write beta");
+        let out = crate::native_tools::list_dir(
+            &ws,
+            &serde_json::json!({ "path": dir.to_string_lossy() }),
+        )
+        .expect("list_dir");
+        let c = text_tool_card("ls", "path=.", out);
+
         let text = strip_ansi(&joined(&c, 80));
-        assert!(text.contains("file0.rs"));
-        assert!(text.contains("file11.rs"));
-        // 20 entries, 12 shown → 8 more.
-        assert!(text.contains("+8 more"), "{text}");
-        assert!(!text.contains("file19.rs"));
+        // Clean basenames, NOT raw JSON keys.
+        assert!(text.contains("sub/"), "dir should render with trailing slash: {text}");
+        assert!(text.contains("alpha.rs"), "{text}");
+        assert!(text.contains("beta.rs"), "{text}");
+        assert!(!text.contains("\"entries\""), "must not dump raw JSON: {text}");
+        assert!(!text.contains("sizeBytes"), "must not dump raw JSON: {text}");
+        assert!(!text.contains("modifiedAt"), "must not dump raw JSON: {text}");
+        // Directory listed before files.
+        let dir_pos = text.find("sub/").unwrap();
+        let file_pos = text.find("alpha.rs").unwrap();
+        assert!(dir_pos < file_pos, "dirs should sort before files: {text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn listing_empty_shows_empty_marker() {
-        let mut c = card("find", ToolCallStatus::Success);
-        c.detail = Some("   \n  ".to_string());
+    fn listing_body_truncates_large_real_listing_with_correct_count() {
+        // 30 real files → 12 shown, "+18 more" — and the count is the REAL entry
+        // count, not an artifact of where a JSON string was clipped.
+        let (dir, ws) = scratch();
+        for i in 0..30 {
+            std::fs::write(dir.join(format!("f{i:02}.rs")), "x").expect("write");
+        }
+        let out = crate::native_tools::list_dir(
+            &ws,
+            &serde_json::json!({ "path": dir.to_string_lossy() }),
+        )
+        .expect("list_dir");
+        let c = text_tool_card("ls", "path=.", out);
+
         let text = strip_ansi(&joined(&c, 80));
-        assert!(text.contains("(empty)"));
+        assert!(text.contains("f00.rs"), "{text}");
+        assert!(text.contains("+18 more"), "expected real count +18 more: {text}");
+        assert!(!text.contains("\"entries\""), "must not dump raw JSON: {text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn grep_body_shows_match_lines_and_truncates() {
-        let mut c = card("grep", ToolCallStatus::Success);
-        let lines: Vec<String> = (0..15)
-            .map(|i| format!("src/a.rs:{}: let x = {i};", i + 1))
-            .collect();
-        c.detail = Some(lines.join("\n"));
+    fn listing_body_lists_real_glob_matches() {
+        let (dir, ws) = scratch();
+        std::fs::create_dir_all(dir.join("src")).expect("mkdir src");
+        std::fs::write(dir.join("src/main.rs"), "fn main(){}").expect("write main");
+        std::fs::write(dir.join("src/lib.rs"), "pub fn x(){}").expect("write lib");
+        std::fs::write(dir.join("README.md"), "# hi").expect("write readme");
+        let out = crate::native_tools::glob_files(
+            &ws,
+            &serde_json::json!({ "pattern": "**/*.rs", "path": dir.to_string_lossy() }),
+        )
+        .expect("glob_files");
+        let c = text_tool_card("find", "pattern=**/*.rs", out);
+
+        let text = strip_ansi(&joined(&c, 80));
+        assert!(text.contains("main.rs"), "{text}");
+        assert!(text.contains("lib.rs"), "{text}");
+        assert!(!text.contains("README"), "glob filtered to *.rs: {text}");
+        assert!(!text.contains("\"matches\""), "must not dump raw JSON: {text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn listing_empty_real_dir_shows_empty_marker() {
+        let (dir, ws) = scratch();
+        let out = crate::native_tools::list_dir(
+            &ws,
+            &serde_json::json!({ "path": dir.to_string_lossy() }),
+        )
+        .expect("list_dir");
+        let c = text_tool_card("ls", "path=.", out);
+        let text = strip_ansi(&joined(&c, 80));
+        assert!(text.contains("(empty)"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn grep_body_shows_real_search_files_matches_as_file_line() {
+        let (dir, ws) = scratch();
+        std::fs::create_dir_all(dir.join("src")).expect("mkdir src");
+        std::fs::write(
+            dir.join("src/a.rs"),
+            "let x = 1;\nlet TODO = here;\nmore\nTODO again\n",
+        )
+        .expect("write a");
+        let out = crate::native_tools::search_files(
+            &ws,
+            &serde_json::json!({ "query": "TODO", "path": dir.to_string_lossy() }),
+        )
+        .expect("search_files");
+        let c = text_tool_card("grep", "query=TODO", out);
+
         let text = strip_ansi(&joined(&c, 100));
-        assert!(text.contains("src/a.rs:1:"));
-        assert!(text.contains("+3 more"), "{text}");
+        // file:line references, not raw JSON braces.
+        assert!(text.contains("a.rs:2"), "expected file:line ref: {text}");
+        assert!(text.contains("a.rs:4"), "expected file:line ref: {text}");
+        assert!(!text.contains("\"matches\""), "must not dump raw JSON: {text}");
+        assert!(!text.contains("\"text\""), "must not dump raw JSON: {text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn grep_no_matches() {
-        let mut c = card("search_files", ToolCallStatus::Success);
-        c.detail = Some(String::new());
+    fn grep_body_truncates_large_real_match_set_with_correct_count() {
+        let (dir, ws) = scratch();
+        // One file, 20 matching lines → 20 matches, 12 shown, "+8 more".
+        let body: String = (0..20).map(|_| "TODO line\n").collect();
+        std::fs::write(dir.join("big.rs"), body).expect("write big");
+        let out = crate::native_tools::search_files(
+            &ws,
+            &serde_json::json!({ "query": "TODO", "path": dir.to_string_lossy() }),
+        )
+        .expect("search_files");
+        let c = text_tool_card("grep", "query=TODO", out);
+
+        let text = strip_ansi(&joined(&c, 100));
+        assert!(text.contains("big.rs:1"), "{text}");
+        assert!(text.contains("+8 more"), "expected real count +8 more: {text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn grep_no_matches_real_empty_result() {
+        let (dir, ws) = scratch();
+        std::fs::write(dir.join("a.rs"), "nothing here\n").expect("write a");
+        let out = crate::native_tools::search_files(
+            &ws,
+            &serde_json::json!({ "query": "ZZZ_NOPE", "path": dir.to_string_lossy() }),
+        )
+        .expect("search_files");
+        let c = text_tool_card("search_files", "query=ZZZ_NOPE", out);
         let text = strip_ansi(&joined(&c, 80));
-        assert!(text.contains("no matches"));
+        assert!(text.contains("no matches"), "{text}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn listing_recovers_from_truncated_json_blob_without_dumping_braces() {
+        // Simulate a preview clipped mid-JSON (what `max_tool_output_chars`
+        // truncation produces): whole-JSON parse fails, so the card falls back
+        // to scanning `"path"` values — still a clean name list, no braces.
+        let (dir, ws) = scratch();
+        for i in 0..50 {
+            std::fs::write(dir.join(format!("file{i:02}.rs")), "x").expect("write");
+        }
+        let full = crate::native_tools::list_dir(
+            &ws,
+            &serde_json::json!({ "path": dir.to_string_lossy() }),
+        )
+        .expect("list_dir");
+        // Clip mid-object so serde_json::from_str fails.
+        let clipped: String = full.chars().take(full.chars().count() / 3).collect();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&clipped).is_err(),
+            "test precondition: clipped blob must be unparseable"
+        );
+        let c = text_tool_card("ls", "path=.", clipped);
+
+        let text = strip_ansi(&joined(&c, 80));
+        assert!(text.contains("file00.rs"), "recovered a name: {text}");
+        assert!(!text.contains("\"path\""), "must not dump raw JSON keys: {text}");
+        assert!(!text.contains("sizeBytes"), "must not dump raw JSON: {text}");
+        assert!(!text.contains('{'), "must not dump JSON braces: {text}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
