@@ -767,10 +767,89 @@ fn render_frame(tui: &mut Tui<CrosstermTerminal>, app: &mut App, width: u16) {
     tui.render();
 }
 
-/// 起一条输入线程：阻塞读 stdin 原始字节，喂 StdinBuffer，把序列 / 粘贴发到主循环。
-///
-/// 线程只读原始 stdin（不碰 crossterm 事件读），避免对同一 fd 争用。stdin EOF 或 channel 关闭时退出；
-/// 用户正常退出（Ctrl+D / `/quit`）后主循环返回、进程结束，本线程随之被回收（调用方不 join）。
+/// 转义键消歧超时（ms）：一个孤立的 `ESC`（`\x1b`）是 CSI/SS3 等长序列的合法前缀，
+/// 故 [`StdinBuffer`] 把它判为 `Incomplete` 暂存。若不在「无后续字节」时把它 flush 出来，
+/// 单独按 Esc（关 overlay / 取消生成）就会被吞掉，直到下一次按键才连带产出（且会和那次
+/// 按键被错误地黏成一个 `ESC+char` meta 序列）。PI 用 ~10ms 的定时器消歧；这里在 unix 上用
+/// `poll` 的超时实现同一行为。
+#[cfg(unix)]
+const ESC_DISAMBIGUATION_MS: i32 = 25;
+
+/// 起一条输入线程（unix）：用 `poll(2)` 带超时读 stdin。有数据就读并处理；超时且缓冲里残留
+/// 不完整序列（典型是孤立的 `ESC`）时调 [`StdinBuffer::flush`] 把它作为一个完整按键产出 ——
+/// 这让单独按 Esc 立即生效。stdin EOF 或 channel 关闭时退出；用户正常退出（Ctrl+D / `/quit`）后
+/// 主循环返回、进程结束，本线程随之被回收（调用方不 join）。
+#[cfg(unix)]
+fn spawn_input_thread(tx: Sender<InputEvent>) {
+    use std::os::fd::AsRawFd;
+
+    std::thread::spawn(move || {
+        let mut buffer = StdinBuffer::new();
+        let stdin = std::io::stdin();
+        let fd = stdin.as_raw_fd();
+        let mut handle = stdin.lock();
+        let mut bytes = [0u8; 1024];
+
+        loop {
+            // 若缓冲里有残留（不完整序列），只等 ESC_DISAMBIGUATION_MS；否则无限等待。
+            let timeout_ms: i32 = if buffer.pending().is_empty() { -1 } else { ESC_DISAMBIGUATION_MS };
+            let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+            // SAFETY: 单个有效 pollfd，count=1。
+            let ready = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+
+            if ready < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                let _ = tx.send(InputEvent::Eof);
+                return;
+            }
+
+            if ready == 0 {
+                // poll 超时：把残留的不完整序列（如孤立 ESC）作为完整按键 flush 出去。
+                for seq in buffer.flush() {
+                    if tx.send(InputEvent::Key(seq)).is_err() {
+                        return;
+                    }
+                }
+                continue;
+            }
+
+            // poll 报错位（挂断 / 错误）也按 EOF 处理（先尝试读完剩余数据）。
+            let n = match handle.read(&mut bytes) {
+                Ok(0) => {
+                    let _ = tx.send(InputEvent::Eof);
+                    return;
+                }
+                Ok(n) => n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    let _ = tx.send(InputEvent::Eof);
+                    return;
+                }
+            };
+
+            let chunk = String::from_utf8_lossy(&bytes[..n]);
+            let events = buffer.process(&chunk);
+            for seq in events.sequences {
+                if tx.send(InputEvent::Key(seq)).is_err() {
+                    return;
+                }
+            }
+            for paste in events.pastes {
+                if tx.send(InputEvent::Paste(paste)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// 起一条输入线程（非 unix 回退，如 Windows）：阻塞读 stdin（无 `poll` 超时消歧）。功能等价于
+/// unix 路径，但孤立 ESC 会等到下一次按键才一并产出（Windows 上 Esc 通常以单独的 key event
+/// 形态到达，影响较小）。
+#[cfg(not(unix))]
 fn spawn_input_thread(tx: Sender<InputEvent>) {
     std::thread::spawn(move || {
         let mut buffer = StdinBuffer::new();

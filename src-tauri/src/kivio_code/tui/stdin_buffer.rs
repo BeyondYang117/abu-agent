@@ -313,6 +313,28 @@ mod tests {
     }
 
     #[test]
+    fn lone_escape_is_incomplete_then_flushes_as_escape() {
+        // A bare ESC is the legal prefix of CSI/SS3/etc., so it is buffered as
+        // Incomplete and NOT produced on `process`. The input thread's poll
+        // timeout must `flush()` it so a standalone Esc key takes effect (close
+        // overlay / cancel run). Regression guard for the swallowed-Esc bug.
+        let mut b = StdinBuffer::new();
+        let e = b.process("\x1b");
+        assert!(e.sequences.is_empty(), "lone ESC must not emit immediately");
+        assert_eq!(b.pending(), "\x1b");
+        let flushed = b.flush();
+        assert_eq!(flushed, vec!["\x1b"]);
+        // And the flushed token must be recognized as the escape key.
+        assert!(crate::kivio_code::tui::keys::matches_key("\x1b", "escape", false));
+    }
+
+    #[test]
+    fn flush_empty_buffer_is_noop() {
+        let mut b = StdinBuffer::new();
+        assert!(b.flush().is_empty());
+    }
+
+    #[test]
     fn osc_terminated_by_bel() {
         let mut b = StdinBuffer::new();
         let e = b.process("\x1b]11;rgb:0000/0000/0000\x07");
