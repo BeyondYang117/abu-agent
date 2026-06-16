@@ -380,12 +380,32 @@ impl App {
         })
     }
 
-    /// 取最后一条助手消息的累积文本（测试用）。
-    pub fn last_assistant_text(&self) -> Option<String> {
+    /// 取最后一条助手消息的累积文本（`/copy` 与测试用）。纯方法，不触剪贴板。
+    pub fn last_assistant_text(&self) -> Option<&str> {
         self.transcript.iter().rev().find_map(|item| match item {
-            TranscriptItem::AssistantMessage(m) => Some(m.content.clone()),
+            TranscriptItem::AssistantMessage(m) => Some(m.content.as_str()),
             _ => None,
         })
+    }
+
+    /// `/copy`：把最近一条助手消息复制到系统剪贴板，并按结果推一条通知。
+    ///
+    /// 把「找最近助手文本」交给纯方法 [`App::last_assistant_text`]（已单测），实际写剪贴板交给薄封装
+    /// [`copy_to_clipboard`]（测试不触发真实剪贴板）。无助手消息时通知「Nothing to copy」；剪贴板后端
+    /// 报错（部分 headless 环境可能发生）时把错误作为通知，不 panic。
+    pub fn copy_last_assistant_to_clipboard(&mut self) {
+        let text = match self.last_assistant_text() {
+            Some(t) if !t.is_empty() => t.to_string(),
+            _ => {
+                self.push_notice("Nothing to copy");
+                return;
+            }
+        };
+        let char_count = text.chars().count();
+        match copy_to_clipboard(&text) {
+            Ok(()) => self.push_notice(format!("Copied {char_count} chars to clipboard")),
+            Err(err) => self.push_notice(format!("Could not copy to clipboard: {err}")),
+        }
     }
 
     /// 取某 id 的工具卡片（测试用）。
@@ -584,6 +604,10 @@ impl App {
             SlashOutcome::Quit => AppEffect::Quit,
             SlashOutcome::ClearTranscript => {
                 self.clear_transcript();
+                AppEffect::None
+            }
+            SlashOutcome::CopyLastAssistant => {
+                self.copy_last_assistant_to_clipboard();
                 AppEffect::None
             }
             SlashOutcome::OpenModelSelector => AppEffect::OpenModelSelector,
@@ -795,6 +819,14 @@ fn extract_diff(record: &ToolCallRecord) -> Option<String> {
     Some(diff.to_string())
 }
 
+/// `/copy` 的薄剪贴板封装：用 `arboard`（Tauri app 已依赖）把文本写入系统剪贴板。
+/// 单测不调用本函数（避免在 headless / CI 上触真实剪贴板）；交互路径里其错误被
+/// [`App::copy_last_assistant_to_clipboard`] 转成一条通知而非 panic。
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.set_text(text.to_string()).map_err(|e| e.to_string())
+}
+
 /// 字符安全地裁剪到 `max` 列，超出加 `…`。
 fn clip(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
@@ -920,6 +952,42 @@ mod tests {
         assert!(joined.contains("/help"));
         assert!(joined.contains("/quit"));
         assert!(joined.contains("/new"));
+        assert!(joined.contains("/copy"));
+    }
+
+    #[test]
+    fn last_assistant_text_none_when_empty() {
+        let a = app();
+        assert_eq!(a.last_assistant_text(), None);
+    }
+
+    #[test]
+    fn last_assistant_text_returns_most_recent() {
+        let mut a = app();
+        a.push_assistant("first answer");
+        a.push_assistant("second answer");
+        assert_eq!(a.last_assistant_text(), Some("second answer"));
+    }
+
+    #[test]
+    fn copy_with_no_assistant_message_notices_nothing_to_copy() {
+        let mut a = app();
+        a.copy_last_assistant_to_clipboard();
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("Nothing to copy"));
+    }
+
+    #[test]
+    fn slash_copy_routes_through_copy_handler() {
+        // With no assistant message yet, /copy must push the "Nothing to copy"
+        // notice (and never touch the real clipboard) — proving the slash command
+        // is wired to the copy handler on the App state-machine path.
+        let mut a = app();
+        type_str(&mut a, "/copy");
+        let effect = a.handle_key("\r");
+        assert_eq!(effect, AppEffect::None);
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("Nothing to copy"));
     }
 
     #[test]
@@ -1044,7 +1112,7 @@ mod tests {
             delta: "lo".to_string(),
             reasoning: String::new(),
         });
-        assert_eq!(a.last_assistant_text().as_deref(), Some("Hello"));
+        assert_eq!(a.last_assistant_text(), Some("Hello"));
         assert!(a.assistant_streaming(), "still streaming before Done");
     }
 
@@ -1061,7 +1129,7 @@ mod tests {
             reason: "completed".to_string(),
         });
         assert!(!a.assistant_streaming(), "finalized after Done");
-        assert_eq!(a.last_assistant_text().as_deref(), Some("Answer"));
+        assert_eq!(a.last_assistant_text(), Some("Answer"));
     }
 
     #[test]

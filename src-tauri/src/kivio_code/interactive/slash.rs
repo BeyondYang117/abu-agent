@@ -23,6 +23,7 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "sessions", aliases: &["session", "resume"], description: "Resume a recent session" },
     SlashCommandSpec { name: "new", aliases: &[], description: "Clear the transcript and start fresh" },
     SlashCommandSpec { name: "clear", aliases: &[], description: "Clear the transcript" },
+    SlashCommandSpec { name: "copy", aliases: &["cp"], description: "Copy the last assistant message to the clipboard" },
     SlashCommandSpec { name: "quit", aliases: &["exit", "q"], description: "Exit kivio-code" },
 ];
 
@@ -33,6 +34,8 @@ pub enum SlashOutcome {
     Quit,
     /// 清空 transcript。
     ClearTranscript,
+    /// 把最近一条助手消息复制到系统剪贴板。
+    CopyLastAssistant,
     /// 打开模型选择器（数据由事件循环 / App 从 settings 注入）。
     OpenModelSelector,
     /// 打开会话选择器（数据由事件循环从磁盘注入）。
@@ -64,6 +67,7 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
         Some("model") => SlashOutcome::OpenModelSelector,
         Some("sessions") => SlashOutcome::OpenSessionSelector,
         Some("new") | Some("clear") => SlashOutcome::ClearTranscript,
+        Some("copy") => SlashOutcome::CopyLastAssistant,
         Some("quit") => SlashOutcome::Quit,
         _ => SlashOutcome::Unknown(name),
     }
@@ -97,6 +101,12 @@ mod tests {
     }
 
     #[test]
+    fn copy_dispatches_to_copy_last_assistant() {
+        assert_eq!(dispatch_slash("/copy"), SlashOutcome::CopyLastAssistant);
+        assert_eq!(dispatch_slash("/cp"), SlashOutcome::CopyLastAssistant);
+    }
+
+    #[test]
     fn help_lists_commands() {
         let SlashOutcome::Notice(text) = dispatch_slash("/help") else {
             panic!("expected notice");
@@ -105,6 +115,7 @@ mod tests {
         assert!(text.contains("/quit"));
         assert!(text.contains("/new"));
         assert!(text.contains("/clear"));
+        assert!(text.contains("/copy"));
     }
 
     #[test]
