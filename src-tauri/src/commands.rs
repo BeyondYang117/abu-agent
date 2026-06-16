@@ -215,11 +215,11 @@ pub(crate) fn take_lens_selection(state: State<'_, AppState>) -> Result<String, 
     }
 }
 
-/// 使用系统默认浏览器打开外部链接（仅限 https）
+/// 使用系统默认浏览器打开外部链接（仅限 http/https）
 #[tauri::command]
 #[allow(deprecated)]
 pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
-    if !url.starts_with("https://") {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("Invalid URL".to_string());
     }
 

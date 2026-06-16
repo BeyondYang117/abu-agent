@@ -489,6 +489,26 @@ const markdownComponents: Components = {
       {children}
     </td>
   ),
+  a: ({ href, children }) => {
+    const url = typeof href === 'string' ? href : ''
+    const isWeb = /^https?:\/\//i.test(url)
+    return (
+      <a
+        href={url || undefined}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => {
+          // A plain <a> click would navigate the Tauri webview itself and
+          // blow away the chat UI. Open web links in the system browser.
+          if (!isWeb) return
+          event.preventDefault()
+          void api.openExternal(url).catch((err) => console.error('openExternal failed', err))
+        }}
+      >
+        {children}
+      </a>
+    )
+  },
 }
 
 function artifactDataUrl(artifact: ChatToolArtifact): string {
