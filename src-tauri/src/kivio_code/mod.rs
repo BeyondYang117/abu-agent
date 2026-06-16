@@ -10,8 +10,10 @@
 pub mod executor;
 pub mod host;
 pub mod interactive;
+pub mod mcp_setup;
 pub mod session;
 pub mod settings_loader;
+pub mod skill_setup;
 pub mod tui;
 
 use std::io::Read;
@@ -186,6 +188,20 @@ pub struct TurnAssembly {
     pub max_output_tokens: u32,
     pub retry_attempts: usize,
     pub settings: Settings,
+    /// Tool definitions contributed by connected MCP servers. Collected
+    /// asynchronously at startup (MCP connection is async) via
+    /// [`mcp_setup::collect_mcp_tools`] and set with [`set_mcp_tools`]; empty
+    /// until then. Merged into the per-turn tool set in [`into_config`].
+    ///
+    /// [`set_mcp_tools`]: TurnAssembly::set_mcp_tools
+    /// [`into_config`]: TurnAssembly::into_config
+    pub mcp_tools: Vec<ChatToolDefinition>,
+    /// Skills discovered for this run (user dir + built-ins), built at
+    /// construction via [`skill_setup::build_skill_registry`]. Passed to the
+    /// loop and used to derive skill tool definitions in [`into_config`].
+    ///
+    /// [`into_config`]: TurnAssembly::into_config
+    pub skill_registry: SkillRegistry,
 }
 
 impl TurnAssembly {
@@ -232,6 +248,11 @@ impl TurnAssembly {
             max_output_tokens: settings.chat.max_output_tokens,
             retry_attempts,
             settings: settings.clone(),
+            // MCP tools are collected asynchronously at startup (see
+            // `set_mcp_tools`); start empty. Skills are discovered synchronously
+            // here so they are available the moment the assembly exists.
+            mcp_tools: Vec::new(),
+            skill_registry: skill_setup::build_skill_registry(settings, cwd),
         })
     }
 
@@ -252,6 +273,16 @@ impl TurnAssembly {
         provider_model_display(&self.provider.name, &self.provider.id, &self.model)
     }
 
+    /// Install the MCP tool definitions collected by
+    /// [`mcp_setup::collect_mcp_tools`]. Called once at startup after the (async)
+    /// MCP connection completes; they are then merged into every turn's tool set
+    /// by [`into_config`].
+    ///
+    /// [`into_config`]: TurnAssembly::into_config
+    pub fn set_mcp_tools(&mut self, tools: Vec<ChatToolDefinition>) {
+        self.mcp_tools = tools;
+    }
+
     /// Turn this assembly into a ready-to-run [`AgentRunConfig`]. `runtime_messages`
     /// is the full conversation context (system + prior turns + new user message);
     /// `message_id`/`run_id` identify this turn; `generation` is the cancel token
@@ -266,6 +297,14 @@ impl TurnAssembly {
         generation: u64,
         runtime_messages: Vec<Value>,
     ) -> AgentRunConfig<'a> {
+        // Assemble the per-turn tool set from all sources: core coding tools,
+        // MCP server tools, and skill-provided tools. Each source owns its own
+        // module (executor / mcp_setup / skill_setup) so they extend disjoint
+        // lines here.
+        let mut tools = core_tool_definitions();
+        tools.extend(self.mcp_tools.clone());
+        tools.extend(skill_setup::skill_tool_definitions(&self.skill_registry));
+
         AgentRunConfig {
             entry: AgentRunEntry::Send,
             state,
@@ -278,7 +317,7 @@ impl TurnAssembly {
             provider: self.provider.clone(),
             model: self.model.clone(),
             runtime_messages,
-            tools: core_tool_definitions(),
+            tools,
             blocked_tool_calls: Vec::new(),
             settings: self.settings.clone(),
             effective_chat_tools: self.effective_chat_tools.clone(),
@@ -288,7 +327,7 @@ impl TurnAssembly {
             stream_enabled: self.stream_enabled,
             max_output_tokens: self.max_output_tokens,
             retry_attempts: self.retry_attempts,
-            skill_registry: SkillRegistry::default(),
+            skill_registry: self.skill_registry.clone(),
             active_skill_id: None,
             active_skill_detail: None,
             assistant_snapshot: None,
@@ -316,15 +355,20 @@ pub fn provider_model_display(provider_name: &str, provider_id: &str, model: &st
 /// borrow here is tied to. The loop streams the answer to stdout via
 /// [`CliAgentHost`]; this returns the accumulated content for the exit-code
 /// decision (empty answer with no tools is treated as a failure by the bin).
-pub async fn run_print(options: PrintOptions, state: &AppState) -> Result<String, String> {
+pub async fn run_print(options: PrintOptions, state: &Arc<AppState>) -> Result<String, String> {
     let settings = state.settings_read().clone();
-    let assembly = TurnAssembly::resolve(
+    let mut assembly = TurnAssembly::resolve(
         &settings,
         options.provider.as_deref(),
         options.model.as_deref(),
         &options.cwd,
         !options.no_approve,
     )?;
+
+    // MCP tools are collected asynchronously (server connection is async), then
+    // merged into the per-turn tool set by `into_config`. Stub returns empty.
+    let mcp_tools = mcp_setup::collect_mcp_tools(state, &settings).await;
+    assembly.set_mcp_tools(mcp_tools);
 
     let runtime_messages: Vec<Value> = vec![
         json!({ "role": "system", "content": assembly.system_prompt.clone() }),
@@ -337,6 +381,7 @@ pub async fn run_print(options: PrintOptions, state: &AppState) -> Result<String
         vec![cwd_root],
         state.http.clone(),
         assembly.effective_chat_tools.tool_timeout_ms,
+        state.clone(),
     );
 
     let config = assembly.into_config(
@@ -444,6 +489,8 @@ mod tests {
             max_output_tokens: 4096,
             retry_attempts: 1,
             settings,
+            mcp_tools: Vec::new(),
+            skill_registry: SkillRegistry::default(),
         }
     }
 

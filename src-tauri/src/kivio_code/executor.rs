@@ -14,8 +14,10 @@
 
 use reqwest::Client;
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::chat::agent::execute::{ToolExecutionContext, ToolExecutor, ToolExecutorFuture};
+use crate::kivio_code::mcp_setup;
 use crate::mcp::native_registry::text_tool_result;
 use crate::mcp::registry::{file_mutation_tool_result, read_file_tool_result};
 use crate::mcp::types::McpToolCallResult;
@@ -25,20 +27,31 @@ use crate::native_tools::{
     NativeToolWorkspace,
 };
 use crate::skills;
+use crate::state::AppState;
 
 pub struct CliToolExecutor {
     workspace: NativeToolWorkspace,
     http: Client,
     /// Default bash timeout (ms) when the model omits one.
     default_timeout_ms: u64,
+    /// Headless app state, used to dispatch MCP tool calls (the MCP manager
+    /// lives here). Held so the executor can route unknown tools through
+    /// [`mcp_setup::dispatch_mcp_tool`] before erroring.
+    state: Arc<AppState>,
 }
 
 impl CliToolExecutor {
-    pub fn new(cwd_roots: Vec<String>, http: Client, default_timeout_ms: u64) -> Self {
+    pub fn new(
+        cwd_roots: Vec<String>,
+        http: Client,
+        default_timeout_ms: u64,
+        state: Arc<AppState>,
+    ) -> Self {
         Self {
             workspace: NativeToolWorkspace::global(&cwd_roots),
             http,
             default_timeout_ms,
+            state,
         }
     }
 
@@ -102,14 +115,32 @@ impl ToolExecutor for CliToolExecutor {
                 Ok(output) => Ok(output),
                 Err(err) if tool_name != fallback => {
                     // Retry under the raw name in case of an alias mismatch.
-                    match self.dispatch(&fallback, arguments).await {
+                    match self.dispatch(&fallback, arguments.clone()).await {
                         Ok(output) => Ok(output),
-                        Err(_) => Err(err),
+                        Err(_) => self.dispatch_mcp_or_error(tool, &arguments, err).await,
                     }
                 }
-                Err(err) => Err(err),
+                Err(err) => self.dispatch_mcp_or_error(tool, &arguments, err).await,
             }
         })
+    }
+}
+
+impl CliToolExecutor {
+    /// Final fallthrough for a tool the core set did not handle: try the MCP
+    /// dispatch seam first (an MCP server may own this tool), and only return
+    /// the original unknown-tool error if MCP did not handle it. The stub MCP
+    /// dispatch always errs, so today this is equivalent to returning `err`.
+    async fn dispatch_mcp_or_error(
+        &self,
+        tool: &ChatToolDefinition,
+        arguments: &Value,
+        err: String,
+    ) -> Result<McpToolCallResult, String> {
+        match mcp_setup::dispatch_mcp_tool(&self.state, tool, arguments).await {
+            Ok(output) => Ok(output),
+            Err(_) => Err(err),
+        }
     }
 }
 
@@ -148,10 +179,15 @@ mod tests {
     fn temp_workspace() -> (std::path::PathBuf, CliToolExecutor) {
         let dir = std::env::temp_dir().join(format!("kivio-code-exec-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
+        let state = Arc::new(AppState::new_headless(
+            crate::settings::Settings::default(),
+            dir.join("usage"),
+        ));
         let executor = CliToolExecutor::new(
             vec![dir.to_string_lossy().into_owned()],
             reqwest::Client::new(),
             120_000,
+            state,
         );
         (dir, executor)
     }

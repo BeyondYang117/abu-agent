@@ -179,7 +179,7 @@ impl TurnRuntime {
         let run_message_id = message_id.clone();
 
         self.handle.spawn(async move {
-            let executor = CliToolExecutor::new(vec![cwd_root], http, timeout_ms);
+            let executor = CliToolExecutor::new(vec![cwd_root], http, timeout_ms, state.clone());
             // Build the borrowing config inside the task body so the borrows of the
             // owned `state`/`assembly` Arcs live exactly as long as the loop call.
             let config = assembly.into_config(
@@ -497,7 +497,7 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
     );
 
     let mut turn = match assembly {
-        Ok(assembly) => {
+        Ok(mut assembly) => {
             // session：续跑请求优先（加载已存在的）；否则新建。
             let (session, mut runtime_messages, resumed) =
                 resolve_session(&options.resume, &cwd, &assembly, &mut app);
@@ -507,6 +507,16 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
                     vec![json!({ "role": "system", "content": assembly.system_prompt.clone() })];
             }
             let state = build_app_state(settings.clone());
+            // MCP tools are collected asynchronously (server connection is
+            // async), then merged into the per-turn tool set by `into_config`.
+            // Block on the runtime since `run()` itself is sync. Stub returns
+            // empty, so this is a no-op until MCP is wired up.
+            let mcp_tools = runtime
+                .handle()
+                .block_on(crate::kivio_code::mcp_setup::collect_mcp_tools(
+                    &state, &settings,
+                ));
+            assembly.set_mcp_tools(mcp_tools);
             let timeout_ms = assembly.effective_chat_tools.tool_timeout_ms;
             // The branded welcome header (rendered by App::render) replaces the old
             // bare one-line startup notice. On resume the restored transcript is the
