@@ -120,10 +120,19 @@ enum Overlay {
 /// footer 数据模型（cwd / model / status；token 统计在一轮结束后由事件循环填入）。
 struct Footer {
     cwd_display: String,
+    /// 用于选择器定位 / 续会话解析的 id 形式值（`providerId:model`）。**不直接展示**。
     model: String,
+    /// 人读展示串（`<Provider Name> · <model>`）。footer / welcome / 选择器定位用 `model`，
+    /// 但渲染统一用本字段（FIX 2）。为空时退回 `model`（id 形式）。
+    model_display: String,
     status: String,
     /// 上一轮的 token usage 摘要（如 `1.2k in · 340 out`），无则不显示。
     usage: Option<String>,
+    /// 当前模型的上下文窗口大小（tokens）+ 是否可靠（FIX 3）。`None` = 未知（仅显示原始
+    /// token 数，不显示占比）。事件循环切模型 / 起轮时回填。
+    context_window: Option<usize>,
+    /// 最近一轮 agent 上报的 input_tokens，近似当前已占用的上下文（FIX 3）。
+    context_tokens: Option<u64>,
 }
 
 /// 交互模式 App 状态机。
@@ -148,7 +157,9 @@ pub struct App {
 }
 
 impl App {
-    /// 构造一个新的交互 App。`cwd_display` 已做 home→`~` 折叠；`model` 形如 `provider:model`。
+    /// 构造一个新的交互 App。`cwd_display` 已做 home→`~` 折叠；`model` 形如 `provider:model`
+    /// （id 形式，作为选择器定位 / 续会话解析的解析值）。展示串默认等于它，事件循环随后可用
+    /// [`App::set_model_display`] 覆盖为人读串（`<Provider Name> · model`）。
     pub fn new(cwd_display: String, model: String) -> Self {
         let mut editor = Editor::new(default_editor_theme());
         editor.focused = true;
@@ -159,7 +170,15 @@ impl App {
         Self {
             transcript: Vec::new(),
             editor,
-            footer: Footer { cwd_display, model, status: "ready".to_string(), usage: None },
+            footer: Footer {
+                cwd_display,
+                model_display: model.clone(),
+                model,
+                status: "ready".to_string(),
+                usage: None,
+                context_window: None,
+                context_tokens: None,
+            },
             mode: AppMode::Idle,
             kitty_active: false,
             last_submitted: None,
@@ -216,14 +235,22 @@ impl App {
         self.footer.status = status.into();
     }
 
-    /// 当前活动模型（`provider:model`）。事件循环切模型后回填 footer。
+    /// 当前活动模型的**解析值**（`provider:model`，id 形式）。选择器定位 / 续会话解析用，
+    /// 不用于展示。事件循环切模型后回填。
     pub fn model(&self) -> &str {
         &self.footer.model
     }
 
-    /// 设置活动模型（footer 展示），由事件循环在 [`AppEffect::ModelSelected`] 后调用。
+    /// 设置活动模型的**解析值**（id 形式），由事件循环在 [`AppEffect::ModelSelected`] 后调用。
+    /// 注意：这只更新选择器定位用的值；展示串由 [`App::set_model_display`] 单独设置。
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.footer.model = model.into();
+    }
+
+    /// 设置活动模型的**展示串**（`<Provider Name> · model`），footer / welcome 渲染用。
+    /// 与解析值解耦（FIX 2）：切模型时事件循环同时调 [`App::set_model`]（id 值）+ 本方法（展示串）。
+    pub fn set_model_display(&mut self, display: impl Into<String>) {
+        self.footer.model_display = display.into();
     }
 
     /// 是否有覆盖层打开（事件循环据此决定是否把 resize 转发给 overlay 等）。
@@ -399,6 +426,17 @@ impl App {
     /// 设置上一轮 token usage 摘要（footer 展示）。
     pub fn set_usage(&mut self, usage: Option<String>) {
         self.footer.usage = usage;
+    }
+
+    /// 设置当前模型的上下文窗口大小（tokens；`None` = 未知，则 footer 只显示原始 token 数）。
+    /// 由事件循环在起轮 / 切模型时回填（FIX 3）。
+    pub fn set_context_window(&mut self, window: Option<usize>) {
+        self.footer.context_window = window;
+    }
+
+    /// 设置最近一轮 agent 上报的 input_tokens（近似当前上下文占用），footer 据此算占比（FIX 3）。
+    pub fn set_context_tokens(&mut self, tokens: Option<u64>) {
+        self.footer.context_tokens = tokens;
     }
 
     /// 当前是否有一条正在流式写入的助手消息（测试 / 收尾判断用）。
@@ -773,7 +811,7 @@ impl App {
         let version = env!("CARGO_PKG_VERSION");
         let title = format!("{} {}", bold("Kivio Code"), dim(&format!("v{version}")));
         let cwd_line = format!("{}  {}", dim("cwd"), self.footer.cwd_display);
-        let model_line = format!("{}  {}", dim("model"), cyan(&self.footer.model));
+        let model_line = format!("{}  {}", dim("model"), cyan(&self.footer.model_display));
         let tips = dim("/help · /model · Ctrl+D exit · Esc cancel");
 
         // 盒宽：在终端宽内、留两列外边距，给一个上限避免在超宽终端拉得过长。
@@ -910,9 +948,15 @@ impl App {
             AppMode::Idle => self.footer.status.clone(),
             AppMode::Generating => "generating… (Esc to cancel)".to_string(),
         };
-        let mut text = format!("{}  ·  {}  ·  {}", self.footer.cwd_display, self.footer.model, status);
+        let mut text = format!(
+            "{}  ·  {}  ·  {}",
+            self.footer.cwd_display, self.footer.model_display, status
+        );
         if let Some(usage) = &self.footer.usage {
             text.push_str(&format!("  ·  {usage}"));
+        }
+        if let Some(ctx) = format_context_usage(self.footer.context_tokens, self.footer.context_window) {
+            text.push_str(&format!("  ·  {ctx}"));
         }
         let mut footer = Text::new(text, 1, 0, None);
         footer.render(width)
@@ -997,6 +1041,51 @@ fn clip(text: &str, max: usize) -> String {
     }
 }
 
+/// footer 的上下文窗口占用指示（FIX 3）。
+///
+/// - 已知窗口（`window = Some(limit)`）且有最近 input_tokens：`ctx 61.2k/128k (48%)`。
+/// - 窗口未知（`None`）但有 token 数：仅 `ctx 61.2k`（优雅降级，不显示 %/上限）。
+/// - 无 token 数：`None`（footer 不加这一段）。
+///
+/// 纯函数，便于单测；`window` 为 `Some(0)` 视为未知（避免除零）。
+fn format_context_usage(tokens: Option<u64>, window: Option<usize>) -> Option<String> {
+    let tokens = tokens?;
+    match window {
+        Some(limit) if limit > 0 => {
+            let pct = ((tokens as f64 / limit as f64) * 100.0).round() as u64;
+            Some(format!(
+                "ctx {}/{} ({pct}%)",
+                human_tokens(tokens),
+                human_tokens_round(limit as u64)
+            ))
+        }
+        _ => Some(format!("ctx {}", human_tokens(tokens))),
+    }
+}
+
+/// 把 token 数折成 `1.2k` 风格的短串（与事件循环侧 `human_tokens` 同义；这里独立一份避免跨模块
+/// 暴露内部 helper）。
+fn human_tokens(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// 上下文窗口上限的短串：整 k 值省略小数（`128k`，不是 `128.0k`），非整 k 保留一位小数。
+fn human_tokens_round(n: u64) -> String {
+    if n >= 1000 {
+        if n % 1000 == 0 {
+            format!("{}k", n / 1000)
+        } else {
+            format!("{:.1}k", n as f64 / 1000.0)
+        }
+    } else {
+        n.to_string()
+    }
+}
+
 /// slash 命令补全候选（BUG 4 的纯逻辑，便于单测）。
 ///
 /// 仅当 `input` 是单行、以 `/` 开头、且命令名后还没有空格（即仍在敲命令名）时返回 `Some(candidates)`；
@@ -1035,7 +1124,7 @@ fn slash_candidates(input: &str) -> Option<Vec<(String, String, Option<String>)>
 /// 把 reasoning（thinking）渲染成 DIM 次要块（BUG 3）。
 ///
 /// 流式中（`streaming=true`）逐行 dim 显示完整推理，让用户看到模型「在想什么」；完成后折叠为一行
-/// `💭 thought for a moment` dim 摘要，保持其从属于答案的视觉层级。
+/// `┄ thought for a moment` dim 摘要（无 emoji），保持其从属于答案的视觉层级。
 fn render_reasoning(reasoning: &str, streaming: bool, width: u16) -> Vec<String> {
     let dim: ColorFn = Arc::new(|s: &str| format!("\x1b[2;3m{s}\x1b[0m"));
     if streaming {
@@ -1048,7 +1137,7 @@ fn render_reasoning(reasoning: &str, streaming: bool, width: u16) -> Vec<String>
         }
         lines
     } else {
-        let mut t = Text::new("💭 thought for a moment".to_string(), 1, 0, None);
+        let mut t = Text::new("┄ thought for a moment".to_string(), 1, 0, None);
         t.render(width).into_iter().map(|l| dim(&l)).collect()
     }
 }
@@ -1459,6 +1548,49 @@ mod tests {
         assert!(joined.contains("1.2k in"));
     }
 
+    // ---- FIX 3: context-window occupancy in footer ----
+
+    #[test]
+    fn format_context_usage_known_window_shows_percent() {
+        // 61.2k of a 128k window ≈ 48%.
+        let s = format_context_usage(Some(61_200), Some(128_000)).unwrap();
+        assert_eq!(s, "ctx 61.2k/128k (48%)");
+    }
+
+    #[test]
+    fn format_context_usage_unknown_window_degrades_to_raw_tokens() {
+        let s = format_context_usage(Some(61_200), None).unwrap();
+        assert_eq!(s, "ctx 61.2k");
+        // a Some(0) window is treated as unknown (no divide-by-zero / 0% noise).
+        let s0 = format_context_usage(Some(500), Some(0)).unwrap();
+        assert_eq!(s0, "ctx 500");
+    }
+
+    #[test]
+    fn format_context_usage_no_tokens_is_none() {
+        assert!(format_context_usage(None, Some(128_000)).is_none());
+        assert!(format_context_usage(None, None).is_none());
+    }
+
+    #[test]
+    fn footer_renders_context_occupancy_when_window_known() {
+        let mut a = app();
+        a.set_context_window(Some(128_000));
+        a.set_context_tokens(Some(61_200));
+        let joined = a.render(120).join("\n");
+        assert!(joined.contains("ctx 61.2k/128k (48%)"), "footer shows ctx occupancy: {joined}");
+    }
+
+    #[test]
+    fn footer_degrades_when_context_window_unknown() {
+        let mut a = app();
+        a.set_context_window(None);
+        a.set_context_tokens(Some(61_200));
+        let joined = a.render(120).join("\n");
+        assert!(joined.contains("ctx 61.2k"), "raw tokens only when window unknown");
+        assert!(!joined.contains('%'), "no percent without a known window");
+    }
+
     // ---- Phase 5c: model selector / overlay ----
 
     fn model_items() -> Vec<(String, String, Option<String>)> {
@@ -1542,12 +1674,17 @@ mod tests {
     }
 
     #[test]
-    fn set_model_updates_footer() {
+    fn set_model_updates_resolution_value_and_display_independently() {
         let mut a = app();
+        // The resolution value (used by the model selector / resume) is id-based…
         a.set_model("anthropic:claude-3");
         assert_eq!(a.model(), "anthropic:claude-3");
+        // …while the footer renders the separate human-readable display label (FIX 2).
+        a.set_model_display("Anthropic · claude-3");
         let joined = a.render(80).join("\n");
-        assert!(joined.contains("anthropic:claude-3"));
+        assert!(joined.contains("Anthropic · claude-3"), "footer shows display label");
+        // resolution value still resolves the provider id, unaffected by display.
+        assert_eq!(a.model(), "anthropic:claude-3");
     }
 
     #[test]
@@ -1799,6 +1936,8 @@ mod tests {
         let joined = a.render(80).join("\n");
         assert!(joined.contains("thought for a moment"), "collapsed thought summary shown");
         assert!(!joined.contains("long chain of thought"), "full reasoning hidden once done");
+        // No emoji in the collapsed reasoning line (the 💭 was removed).
+        assert!(!joined.contains('💭'), "reasoning line is emoji-free");
     }
 
     // ---- BUG 4: slash command autocomplete ----

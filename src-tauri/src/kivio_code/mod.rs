@@ -235,9 +235,21 @@ impl TurnAssembly {
         })
     }
 
-    /// The `provider:model` display string used by footers / session headers.
+    /// The `providerId:model` **resolution** value: used by session headers,
+    /// `/model` selection, and `split_model_label` to RESOLVE the provider back
+    /// from settings. This MUST stay id-based — do not switch it to the name.
     pub fn model_label(&self) -> String {
         format!("{}:{}", self.provider.id, self.model)
+    }
+
+    /// The human-readable **display** label for footers / welcome / notices:
+    /// `<Provider Name> · <model>`. Falls back to the provider id only when the
+    /// name is blank. This is purely cosmetic and is never parsed back into a
+    /// provider — selection/resolution always go through [`model_label`].
+    ///
+    /// [`model_label`]: TurnAssembly::model_label
+    pub fn model_label_display(&self) -> String {
+        provider_model_display(&self.provider.name, &self.provider.id, &self.model)
     }
 
     /// Turn this assembly into a ready-to-run [`AgentRunConfig`]. `runtime_messages`
@@ -284,6 +296,18 @@ impl TurnAssembly {
             provider_tools_fallback_system_prompt: self.system_prompt.clone(),
         }
     }
+}
+
+/// Build the cosmetic `<Provider Name> · <model>` display label. Falls back to
+/// the provider id when the name is blank. Display-only — never parsed back into
+/// a provider (selection/resolution use `providerId:model`).
+pub fn provider_model_display(provider_name: &str, provider_id: &str, model: &str) -> String {
+    let label = if provider_name.trim().is_empty() {
+        provider_id
+    } else {
+        provider_name
+    };
+    format!("{label} · {model}")
 }
 
 /// Run one print-mode agent turn end to end. Returns the final assistant text.
@@ -402,5 +426,52 @@ mod tests {
         assert!(prompt.contains("/tmp/project"));
         assert!(prompt.contains("Current working directory"));
         assert!(prompt.contains("kivio-code"));
+    }
+
+    fn assembly_with(provider_id: &str, provider_name: &str, model: &str) -> TurnAssembly {
+        let mut p = provider(provider_id);
+        p.name = provider_name.to_string();
+        let mut settings = Settings::default();
+        settings.providers = vec![p.clone()];
+        TurnAssembly {
+            provider: p,
+            model: model.to_string(),
+            system_prompt: String::new(),
+            effective_chat_tools: settings.chat_tools.clone(),
+            language: "en".to_string(),
+            thinking_enabled: false,
+            stream_enabled: true,
+            max_output_tokens: 4096,
+            retry_attempts: 1,
+            settings,
+        }
+    }
+
+    #[test]
+    fn model_label_is_id_based_for_resolution() {
+        // The selection / resolution VALUE must stay `providerId:model` so the
+        // /model selector and split_model_label can resolve the provider back.
+        let a = assembly_with("provider-1780492912291", "DeepSeek Pool", "deepseek-v4-flash");
+        assert_eq!(a.model_label(), "provider-1780492912291:deepseek-v4-flash");
+    }
+
+    #[test]
+    fn model_label_display_uses_provider_name() {
+        let a = assembly_with("provider-1780492912291", "DeepSeek Pool", "deepseek-v4-flash");
+        assert_eq!(a.model_label_display(), "DeepSeek Pool · deepseek-v4-flash");
+        // raw id must NOT leak into the display label.
+        assert!(!a.model_label_display().contains("provider-1780492912291"));
+    }
+
+    #[test]
+    fn model_label_display_falls_back_to_id_when_name_blank() {
+        let a = assembly_with("prov-id", "", "m1");
+        assert_eq!(a.model_label_display(), "prov-id · m1");
+    }
+
+    #[test]
+    fn provider_model_display_helper() {
+        assert_eq!(provider_model_display("OpenAI", "p1", "gpt-4o"), "OpenAI · gpt-4o");
+        assert_eq!(provider_model_display("  ", "p1", "gpt-4o"), "p1 · gpt-4o");
     }
 }

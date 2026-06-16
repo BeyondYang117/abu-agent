@@ -206,9 +206,28 @@ impl TurnRuntime {
         }
     }
 
-    /// 当前活动模型展示串（`provider:model`）。
+    /// 当前活动模型展示串（`provider:model`，id 形式）——选择器定位 / 续会话解析用。
     fn model_label(&self) -> String {
         self.assembly.model_label()
+    }
+
+    /// 当前活动模型的人读展示串（`<Provider Name> · model`）——footer / welcome / 通知用（FIX 2）。
+    fn model_display_label(&self) -> String {
+        self.assembly.model_label_display()
+    }
+
+    /// 当前活动模型的上下文窗口大小（tokens）；`context_window_for_model` 返回 `(tokens, is_fallback)`，
+    /// 仅当**非** fallback（即可靠已知）时返回 `Some`，否则 `None` 让 footer 优雅降级（FIX 3）。
+    fn context_window(&self) -> Option<usize> {
+        let (tokens, is_fallback) = crate::chat::model_metadata::context_window_for_model(
+            Some(&self.assembly.provider),
+            &self.assembly.model,
+        );
+        if is_fallback {
+            None
+        } else {
+            Some(tokens)
+        }
     }
 
     /// 切换活动模型（`/model` / Ctrl+L 选定后）。`value` 形如 `provider:model`。重新 resolve
@@ -314,6 +333,10 @@ impl TurnRuntime {
                 self.persist_turn_records(&result);
                 self.accumulate_runtime_messages(&result);
                 app.set_usage(format_usage(result.usage.as_ref()));
+                // input_tokens approximates the current context size after a turn (FIX 3).
+                app.set_context_tokens(
+                    result.usage.as_ref().and_then(|u| u.input_tokens),
+                );
             }
             Err(err) => {
                 if err == "cancelled" {
@@ -516,6 +539,15 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
     let mut tui = Tui::new(terminal);
     tui.set_show_hardware_cursor(true);
 
+    // 把 footer / welcome 的展示串切到人读的 provider name + 上下文窗口（FIX 2 + 3）。
+    // `App::new` 初始化时用的是 bin 传入的 id 形式串（也用作选择器定位的解析值），这里在拿到
+    // 解析后的 assembly 后，把展示串覆盖为 `<Provider Name> · model`，并把已知上下文窗口填进 footer。
+    if let Some(turn) = turn.as_ref() {
+        app.set_model(turn.model_label());
+        app.set_model_display(turn.model_display_label());
+        app.set_context_window(turn.context_window());
+    }
+
     // 首帧。
     render_frame(&mut tui, &mut app, cols);
 
@@ -675,8 +707,13 @@ fn apply_effect(
             if let Some(turn) = turn {
                 match turn.switch_model(&value) {
                     Ok(label) => {
-                        app.set_model(label.clone());
-                        app.push_notice(format!("Switched model to {label}."));
+                        // `label` is the id-based resolution value (selector positioning);
+                        // the footer/notice show the human-readable provider name (FIX 2).
+                        let display = turn.model_display_label();
+                        app.set_model(label);
+                        app.set_model_display(display.clone());
+                        app.set_context_window(turn.context_window());
+                        app.push_notice(format!("Switched model to {display}."));
                     }
                     Err(err) => app.push_notice(format!("Could not switch model: {err}")),
                 }
@@ -686,6 +723,8 @@ fn apply_effect(
             if let Some(turn) = turn {
                 if turn.resume_session_path(&path, app) {
                     app.set_model(turn.model_label());
+                    app.set_model_display(turn.model_display_label());
+                    app.set_context_window(turn.context_window());
                 }
             }
         }
@@ -1291,6 +1330,90 @@ mod tests {
         assert!(rt.switch_model("nope:zzz").is_err());
         // unchanged
         assert_eq!(rt.model_label(), "chat:m1");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    // ---- FIX 2: display label uses provider name; resolution stays id-based ----
+
+    /// Settings whose provider id is an opaque token but has a friendly name.
+    fn named_provider_settings() -> Settings {
+        let mut s = Settings::default();
+        let mut p = provider("provider-1780492912291");
+        p.name = "DeepSeek Pool".to_string();
+        p.enabled_models = vec!["deepseek-v4-flash".to_string()];
+        s.providers = vec![p];
+        s.default_models.chat.provider_id = "provider-1780492912291".to_string();
+        s.default_models.chat.model = "deepseek-v4-flash".to_string();
+        s
+    }
+
+    #[tokio::test]
+    async fn model_display_label_uses_name_while_resolution_stays_id() {
+        let cwd = unique_cwd("displaylabel");
+        let (rt, _done) = turn_runtime_with(named_provider_settings(), &cwd);
+        // Resolution value (selector / resume) is id-based.
+        assert_eq!(rt.model_label(), "provider-1780492912291:deepseek-v4-flash");
+        // Display label is the human-readable provider name.
+        assert_eq!(rt.model_display_label(), "DeepSeek Pool · deepseek-v4-flash");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn switch_model_still_resolves_with_id_based_value() {
+        // /model selector emits the id-based value (enabled_model_items); switching
+        // must resolve it back to the provider even though the footer shows the name.
+        let cwd = unique_cwd("switchresolves");
+        let (mut rt, _done) = turn_runtime_with(named_provider_settings(), &cwd);
+        // The selector item value is the id-based pair.
+        let items = rt.enabled_model_items();
+        let value = items[0].0.clone();
+        assert_eq!(value, "provider-1780492912291:deepseek-v4-flash");
+        // Switching with that value resolves and keeps the id-based label.
+        let label = rt.switch_model(&value).expect("switch resolves");
+        assert_eq!(label, "provider-1780492912291:deepseek-v4-flash");
+        // …and the display label is still name-based.
+        assert_eq!(rt.model_display_label(), "DeepSeek Pool · deepseek-v4-flash");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    // ---- FIX 3: context window resolution ----
+
+    #[tokio::test]
+    async fn context_window_known_model_is_some() {
+        let cwd = unique_cwd("ctxwindow");
+        // deepseek* resolves to a fallback (is_fallback=true) → None per our policy,
+        // but a model name carrying an explicit window (e.g. "...-128k") is known.
+        let mut s = Settings::default();
+        let mut p = provider("p");
+        p.enabled_models = vec!["my-model-128k".to_string()];
+        s.providers = vec![p];
+        s.default_models.chat.provider_id = "p".to_string();
+        s.default_models.chat.model = "my-model-128k".to_string();
+        let (rt, _done) = turn_runtime_with(s, &cwd);
+        assert_eq!(rt.context_window(), Some(128_000));
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    #[tokio::test]
+    async fn context_window_unknown_model_is_none() {
+        let cwd = unique_cwd("ctxunknown");
+        let mut s = Settings::default();
+        let mut p = provider("p");
+        p.enabled_models = vec!["totally-unknown-model".to_string()];
+        s.providers = vec![p];
+        s.default_models.chat.provider_id = "p".to_string();
+        s.default_models.chat.model = "totally-unknown-model".to_string();
+        let (rt, _done) = turn_runtime_with(s, &cwd);
+        // Fallback guess → None, so the footer degrades to raw tokens.
+        assert_eq!(rt.context_window(), None);
 
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
