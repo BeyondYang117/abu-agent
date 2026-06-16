@@ -32,6 +32,7 @@ import {
 import { ChatAttachments } from './ChatAttachments'
 import { api, type ChatToolDefinition } from '../api/tauri'
 import { chatApi } from './api'
+import { builtinAssistantGlyph } from './assistantIcons'
 import type { AgentPlanMode, AgentPlanState, ChatProject, PendingAttachment } from './types'
 import {
   buildSlashCommands,
@@ -1778,7 +1779,11 @@ export function InputBar({
                     className="inline-flex min-w-0 items-center gap-1"
                     title={currentAssistant.name}
                   >
-                    <Bot size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
+                    <span className="grid size-[15px] shrink-0 place-items-center text-neutral-500 dark:text-neutral-300">
+                      {builtinAssistantGlyph(currentAssistant.id, 14) ?? (
+                        <Bot size={13} strokeWidth={1.75} />
+                      )}
+                    </span>
                     <span className="min-w-0 max-w-[150px] truncate">{currentAssistant.name}</span>
                   </button>
                   {onClearAssistant && (

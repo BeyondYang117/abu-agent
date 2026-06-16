@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
+import { builtinAssistantGlyph } from './assistantIcons'
 import { chatApi } from './api'
 import { usesNativeTitlebar } from './platform'
 import type { ChatAssistant, SkillMeta } from './types'
@@ -395,7 +396,7 @@ export function AssistantCenter({
                   style={{ color: assistant.color || '#6A8FBD' }}
                   aria-label={`打开 ${assistant.name}`}
                 >
-                  {assistant.name.trim().slice(0, 1) || '套'}
+                  {builtinAssistantGlyph(assistant.id, 20) ?? (assistant.name.trim().slice(0, 1) || '套')}
                 </button>
                 <button
                   type="button"
@@ -467,7 +468,7 @@ export function AssistantCenter({
               className="grid size-16 shrink-0 place-items-center rounded-md text-[26px] font-semibold text-white"
               style={{ backgroundColor: assistant.color || '#6A8FBD' }}
             >
-              {assistant.name.trim().slice(0, 1) || '助'}
+              {builtinAssistantGlyph(assistant.id, 32) ?? (assistant.name.trim().slice(0, 1) || '助')}
             </div>
             <div className="min-w-0">
               <h2 className="truncate text-[28px] font-semibold tracking-normal text-neutral-950 dark:text-neutral-50">
