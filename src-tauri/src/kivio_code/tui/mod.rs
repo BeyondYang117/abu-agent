@@ -13,11 +13,19 @@
 //! 4. [`keys`] / [`keybindings`] —— 字节序列 → `Key` 解码 + 动作绑定表。
 //! 5. [`render`] —— 差分行渲染器（`Component`/`Container`/`Tui`/`do_render`）。
 //! 6. [`components`] —— `Text` / `BoxView` / `Spacer` / `TruncatedText`。
+//! 7. 编辑原语 [`kill_ring`] / [`undo_stack`] / [`word_navigation`] —— emacs 风格编辑基石。
+//! 8. [`fuzzy`] / [`autocomplete`] —— 模糊匹配 + 补全状态机（驱动 SelectList 下拉）。
+//! 9. 高级组件 `Input` / `Editor` / `SelectList` / `Loader`（见 [`components`]）。
 
+pub mod autocomplete;
 pub mod components;
+pub mod fuzzy;
 pub mod keybindings;
 pub mod keys;
+pub mod kill_ring;
 pub mod render;
 pub mod stdin_buffer;
 pub mod terminal;
 pub mod text_width;
+pub mod undo_stack;
+pub mod word_navigation;
