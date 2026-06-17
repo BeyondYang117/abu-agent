@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 use crate::chat::model::{
     generate_request_from_openai_messages, AnthropicMessagesProvider, GenerateOptions,
-    GenerateRequestContext, LanguageModelProvider, OpenAiChatProvider,
+    GenerateRequestContext, LanguageModelProvider, OpenAiChatProvider, OpenAiResponsesProvider,
 };
 use crate::settings::{ModelProvider, ProviderApiFormat, Settings};
 use crate::state::AppState;
@@ -119,6 +119,11 @@ async fn analyze_one_image(
         }
         ProviderApiFormat::AnthropicMessages => {
             AnthropicMessagesProvider::new(state, provider, 1)
+                .generate(request)
+                .await
+        }
+        ProviderApiFormat::OpenAiResponses => {
+            OpenAiResponsesProvider::new(state, provider, 1)
                 .generate(request)
                 .await
         }
@@ -227,6 +232,52 @@ pub(crate) fn inject_vision_observations(
     messages
 }
 
+/// 把一批图片读成 inline `image_url` content parts（best-effort）。单张读取失败不致命：
+/// 跳过该张并把错误收集进第二个返回值，供调用方提示。供「主编码模型自身支持视觉」时把
+/// 图片**直接**塞进主请求（跳过 mixer）用——与 GUI 主模型支持视觉时直发图片的行为对齐。
+pub(crate) fn inline_image_parts(image_paths: &[PathBuf]) -> (Vec<Value>, Vec<String>) {
+    let mut parts = Vec::new();
+    let mut errors = Vec::new();
+    for path in image_paths {
+        match image_content_part(path) {
+            Ok(part) => parts.push(part),
+            Err(err) => errors.push(err),
+        }
+    }
+    (parts, errors)
+}
+
+/// 纯函数：把 inline 图片 parts 合并进**最后一条 user 消息**的 content，使支持视觉的主模型
+/// 直接「看到」截图。图片置于文字之前（与 mixer 的 user 消息约定一致）。无 user 消息或
+/// `image_parts` 为空时为 no-op。原 content 为字符串则转成数组（图片 + 文字）；已是数组则
+/// 在其前插入图片 parts。调用方应传入 `runtime_messages.clone()`——图片只进本轮克隆，不持久化。
+pub(crate) fn inject_inline_images(
+    mut messages: Vec<Value>,
+    image_parts: Vec<Value>,
+) -> Vec<Value> {
+    if image_parts.is_empty() {
+        return messages;
+    }
+    let Some(idx) = messages
+        .iter()
+        .rposition(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+    else {
+        return messages;
+    };
+    let mut content = image_parts;
+    match messages[idx].get("content").cloned() {
+        Some(Value::String(text)) if !text.trim().is_empty() => {
+            content.push(json!({ "type": "text", "text": text }));
+        }
+        Some(Value::Array(existing)) => content.extend(existing),
+        _ => {}
+    }
+    if let Some(obj) = messages[idx].as_object_mut() {
+        obj.insert("content".to_string(), Value::Array(content));
+    }
+    messages
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +326,49 @@ mod tests {
         let base = vec![json!({ "role": "user", "content": "no images here" })];
         let out = inject_vision_observations(base.clone(), &[]);
         assert_eq!(out, base);
+    }
+
+    #[test]
+    fn inline_empty_parts_is_noop() {
+        let base = vec![json!({ "role": "user", "content": "look at this" })];
+        assert_eq!(inject_inline_images(base.clone(), vec![]), base);
+    }
+
+    #[test]
+    fn inline_rewrites_last_user_message_with_image_before_text() {
+        let img = json!({ "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } });
+        let base = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "first" }),
+            json!({ "role": "assistant", "content": "ok" }),
+            json!({ "role": "user", "content": "what is [Image #1]?" }),
+        ];
+        let out = inject_inline_images(base, vec![img.clone()]);
+
+        // 只改最后一条 user 消息；前面的消息原样保留。
+        assert_eq!(out[1]["content"], json!("first"));
+        let content = out[3]["content"].as_array().expect("content should be array");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], json!("image_url")); // 图片在前
+        assert_eq!(content[1], json!({ "type": "text", "text": "what is [Image #1]?" }));
+    }
+
+    #[test]
+    fn inline_handles_empty_text_user_message() {
+        let img = json!({ "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } });
+        let base = vec![json!({ "role": "user", "content": "" })];
+        let out = inject_inline_images(base, vec![img]);
+        let content = out[0]["content"].as_array().expect("content should be array");
+        // 空文字不追加 text part，只剩图片。
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], json!("image_url"));
+    }
+
+    #[test]
+    fn inline_noop_when_no_user_message() {
+        let img = json!({ "type": "image_url", "image_url": { "url": "x" } });
+        let base = vec![json!({ "role": "system", "content": "sys" })];
+        assert_eq!(inject_inline_images(base.clone(), vec![img]), base);
     }
 
     #[test]

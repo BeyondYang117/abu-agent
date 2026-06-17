@@ -786,6 +786,7 @@ function normalizeProvider(provider: ModelProvider): ModelProvider {
 
 export function normalizeProviderApiFormat(apiFormat?: string): string {
   if (apiFormat === 'anthropic' || apiFormat === 'anthropic_messages') return 'anthropic_messages'
+  if (apiFormat === 'openai_responses' || apiFormat === 'responses') return 'openai_responses'
   return 'openai_chat'
 }
 

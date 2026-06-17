@@ -413,6 +413,19 @@ impl TurnAssembly {
             tools.retain(|t| t.is_read_only_tool());
         }
 
+        // 主模型支持视觉时，调用方已把图片 inline 进某条 user 消息（content 数组里含 image_url）。
+        // 据此设 has_image，让系统提示按「带图」措辞（不影响图片本身的传递）。
+        let has_image = runtime_messages.iter().any(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part.get("type").and_then(Value::as_str) == Some("image_url")
+                    })
+                })
+        });
+
         AgentRunConfig {
             entry: AgentRunEntry::Send,
             state,
@@ -430,7 +443,7 @@ impl TurnAssembly {
             settings: self.settings.clone(),
             effective_chat_tools: self.effective_chat_tools.clone(),
             language: self.language.clone(),
-            has_image: false,
+            has_image,
             thinking_enabled: self.thinking_enabled,
             stream_enabled: self.stream_enabled,
             max_output_tokens: self.max_output_tokens,

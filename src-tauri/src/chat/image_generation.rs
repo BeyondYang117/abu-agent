@@ -178,7 +178,7 @@ fn parse_request(arguments: &Value) -> Result<ImageGenerationRequest, String> {
 
 fn validate_provider(provider: &ModelProvider) -> Result<(), String> {
     match provider.api_format_kind() {
-        ProviderApiFormat::OpenAiChat => {}
+        ProviderApiFormat::OpenAiChat | ProviderApiFormat::OpenAiResponses => {}
         ProviderApiFormat::AnthropicMessages => {
             return Err("Mixer image generation requires an OpenAI-compatible provider".to_string())
         }

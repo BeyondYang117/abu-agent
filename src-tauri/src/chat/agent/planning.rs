@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::chat::model::{
     generate_request_from_openai_messages, AnthropicMessagesProvider, GenerateOptions,
     GenerateOutput, GenerateRequestContext, LanguageModelProvider, ModelError, OpenAiChatProvider,
-    PendingToolCall,
+    OpenAiResponsesProvider, PendingToolCall,
 };
 use crate::chat::types::{ChatMessageSegment, ChatMessageSegmentKind, ChatMessageSegmentPhase};
 use crate::mcp::ChatToolDefinition;
@@ -616,6 +616,11 @@ pub(crate) async fn generate_with_chat_provider(
                 .generate(request)
                 .await
         }
+        ProviderApiFormat::OpenAiResponses => {
+            OpenAiResponsesProvider::new(state, provider, retry_attempts)
+                .generate(request)
+                .await
+        }
     }
 }
 
@@ -634,6 +639,11 @@ pub(crate) async fn stream_with_chat_provider(
         }
         ProviderApiFormat::AnthropicMessages => {
             AnthropicMessagesProvider::new(state, provider, retry_attempts)
+                .stream(request, sink)
+                .await
+        }
+        ProviderApiFormat::OpenAiResponses => {
+            OpenAiResponsesProvider::new(state, provider, retry_attempts)
                 .stream(request, sink)
                 .await
         }

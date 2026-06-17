@@ -109,6 +109,17 @@ impl ModelTool {
             }
         })
     }
+
+    /// OpenAI **Responses** API tool shape: flat `name`/`description`/`parameters`,
+    /// not nested under a `function` object (unlike Chat Completions' `to_openai_tool`).
+    pub fn to_openai_responses_tool(&self) -> Value {
+        serde_json::json!({
+            "type": "function",
+            "name": self.openai_tool_name(),
+            "description": self.description,
+            "parameters": self.input_schema,
+        })
+    }
 }
 
 impl From<&ChatToolDefinition> for ModelTool {
@@ -433,6 +444,20 @@ pub fn parse_tool_arguments(arguments_raw: &str) -> (Value, Option<String>) {
     }
 }
 
+/// 把 OpenAI `function.arguments` 归一成 raw JSON 字符串。
+///
+/// OpenAI 规范里它是 JSON **字符串**，但不少 OpenAI 兼容网关（含部分 codex / 代理模型，
+/// 如 `gpt-*-codex-*`）直接发已解析的 JSON **对象**。只认字符串会把对象静默丢成 `{}`，
+/// 于是 `query` 等必填参数缺失、schema 校验反复失败、模型空手重试形成死循环。两种形态都接：
+/// 字符串原样返回，对象 / 数组 / 其它序列化成字符串，null / 缺失回退 `{}`。
+pub fn tool_arguments_to_raw(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Null) | None => "{}".to_string(),
+        Some(other) => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
+    }
+}
+
 pub fn generate_request_from_openai_messages(
     model: &str,
     messages: Vec<Value>,
@@ -635,11 +660,7 @@ pub fn pending_tool_calls_from_openai_message(message: &Value) -> Vec<PendingToo
                 .filter_map(|call| {
                     let function = call.get("function")?;
                     let name = function.get("name")?.as_str()?.to_string();
-                    let arguments_raw = function
-                        .get("arguments")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("{}")
-                        .to_string();
+                    let arguments_raw = tool_arguments_to_raw(function.get("arguments"));
                     let (arguments, arguments_parse_error) = parse_tool_arguments(&arguments_raw);
                     Some(PendingToolCall {
                         id: call
@@ -749,6 +770,92 @@ fn parse_data_image_url(url: &str) -> Option<(String, String)> {
     Some((mime.to_string(), data.to_string()))
 }
 
+/// Build the OpenAI **Responses** API `input` array from canonical `ModelMessage`s.
+///
+/// The Responses API models conversation state as a flat list of *items* rather than
+/// chat messages: tool calls become `{"type":"function_call",...}` items and tool
+/// results become `{"type":"function_call_output",...}` items (NOT `role:"tool"`
+/// messages). User/assistant text use `input_text` / `output_text` content parts, and
+/// user images use `input_image`. Mirrors `openai_messages_from_model_message` but for
+/// the Responses item shapes. (System text is carried separately as `instructions`.)
+pub fn responses_input_from_model_messages(messages: &[ModelMessage]) -> Vec<Value> {
+    let mut items = Vec::new();
+    for message in messages {
+        responses_items_from_model_message(message, &mut items);
+    }
+    items
+}
+
+fn responses_items_from_model_message(message: &ModelMessage, items: &mut Vec<Value>) {
+    if message.role == ModelRole::Tool {
+        for part in &message.content {
+            if let MessagePart::ToolResult {
+                tool_call_id,
+                content,
+                ..
+            } = part
+            {
+                items.push(serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": content,
+                }));
+            }
+        }
+        return;
+    }
+
+    let is_assistant = message.role == ModelRole::Assistant;
+    let text_part_type = if is_assistant { "output_text" } else { "input_text" };
+    let mut content_parts: Vec<Value> = Vec::new();
+    // Tool calls are sibling items, emitted AFTER the assistant's text content so the
+    // ordering matches a natural turn (message, then the calls it made).
+    let mut tool_call_items: Vec<Value> = Vec::new();
+
+    for part in &message.content {
+        match part {
+            MessagePart::Text { text } => {
+                content_parts.push(serde_json::json!({ "type": text_part_type, "text": text }));
+            }
+            MessagePart::Image { mime_type, data } => {
+                content_parts.push(serde_json::json!({
+                    "type": "input_image",
+                    "image_url": format!("data:{mime_type};base64,{data}"),
+                }));
+            }
+            MessagePart::ImageUrl { url } => {
+                content_parts.push(serde_json::json!({
+                    "type": "input_image",
+                    "image_url": url,
+                }));
+            }
+            MessagePart::ToolCall {
+                id,
+                name,
+                arguments_raw,
+                ..
+            } => {
+                tool_call_items.push(serde_json::json!({
+                    "type": "function_call",
+                    "call_id": id,
+                    "name": name,
+                    "arguments": arguments_raw,
+                }));
+            }
+            // Reasoning is omitted on replay; ToolResult only appears on Tool messages.
+            MessagePart::Reasoning { .. } | MessagePart::ToolResult { .. } => {}
+        }
+    }
+
+    if !content_parts.is_empty() {
+        items.push(serde_json::json!({
+            "role": message.role.as_str(),
+            "content": content_parts,
+        }));
+    }
+    items.extend(tool_call_items);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -763,5 +870,99 @@ mod tests {
 
         assert!(stream_error.is_stream_read_interrupted());
         assert!(!generic_error.is_stream_read_interrupted());
+    }
+
+    #[test]
+    fn pending_tool_calls_accept_string_and_object_arguments() {
+        // 字符串形态（OpenAI 规范）。
+        let string_msg = serde_json::json!({
+            "tool_calls": [{
+                "id": "call_1",
+                "function": { "name": "web_search", "arguments": "{\"query\":\"a\"}" }
+            }]
+        });
+        let calls = pending_tool_calls_from_openai_message(&string_msg);
+        assert_eq!(calls[0].arguments["query"], "a");
+        assert!(calls[0].arguments_parse_error.is_none());
+
+        // 对象形态（部分 OpenAI 兼容网关 / codex 代理）。回归：旧逻辑会丢成 `{}`。
+        let object_msg = serde_json::json!({
+            "tool_calls": [{
+                "id": "call_2",
+                "function": { "name": "web_search", "arguments": { "query": "b" } }
+            }]
+        });
+        let calls = pending_tool_calls_from_openai_message(&object_msg);
+        assert_eq!(calls[0].arguments["query"], "b");
+        assert!(calls[0].arguments_parse_error.is_none());
+
+        // 缺失 / null → 回退空对象，不报错。
+        let null_msg = serde_json::json!({
+            "tool_calls": [{
+                "id": "call_3",
+                "function": { "name": "web_search", "arguments": null }
+            }]
+        });
+        let calls = pending_tool_calls_from_openai_message(&null_msg);
+        assert_eq!(calls[0].arguments_raw, "{}");
+        assert!(calls[0].arguments_parse_error.is_none());
+    }
+
+    #[test]
+    fn responses_input_maps_tool_call_and_result_to_items() {
+        let messages = vec![
+            ModelMessage::text(ModelRole::User, "明天吉林市天气？"),
+            ModelMessage {
+                role: ModelRole::Assistant,
+                content: vec![MessagePart::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "web_search".to_string(),
+                    arguments: serde_json::json!({ "query": "吉林市 明天 天气" }),
+                    arguments_raw: "{\"query\":\"吉林市 明天 天气\"}".to_string(),
+                }],
+            },
+            ModelMessage {
+                role: ModelRole::Tool,
+                content: vec![MessagePart::ToolResult {
+                    tool_call_id: "call_1".to_string(),
+                    content: "多云转晴 16-24℃".to_string(),
+                    is_error: false,
+                    artifacts: Vec::new(),
+                }],
+            },
+        ];
+        let items = responses_input_from_model_messages(&messages);
+
+        // user message → role item with input_text
+        assert_eq!(items[0]["role"], "user");
+        assert_eq!(items[0]["content"][0]["type"], "input_text");
+        assert_eq!(items[0]["content"][0]["text"], "明天吉林市天气？");
+        // assistant tool call → function_call item (no empty assistant message emitted)
+        assert_eq!(items[1]["type"], "function_call");
+        assert_eq!(items[1]["call_id"], "call_1");
+        assert_eq!(items[1]["name"], "web_search");
+        assert_eq!(items[1]["arguments"], "{\"query\":\"吉林市 明天 天气\"}");
+        // tool result → function_call_output item
+        assert_eq!(items[2]["type"], "function_call_output");
+        assert_eq!(items[2]["call_id"], "call_1");
+        assert_eq!(items[2]["output"], "多云转晴 16-24℃");
+        assert_eq!(items.len(), 3);
+    }
+
+    #[test]
+    fn responses_input_maps_user_image_to_input_image() {
+        let messages = vec![ModelMessage {
+            role: ModelRole::User,
+            content: vec![
+                MessagePart::ImageUrl { url: "data:image/png;base64,AAAA".to_string() },
+                MessagePart::Text { text: "what is this?".to_string() },
+            ],
+        }];
+        let items = responses_input_from_model_messages(&messages);
+        assert_eq!(items.len(), 1);
+        let content = items[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "input_image");
+        assert_eq!(content[0]["image_url"], "data:image/png;base64,AAAA");
+        assert_eq!(content[1]["type"], "input_text");
     }
 }

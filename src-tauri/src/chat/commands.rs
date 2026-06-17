@@ -23,7 +23,7 @@ use crate::chat::model::{
     generate_request_from_openai_messages, model_messages_from_openai_messages,
     openai_messages_from_model_messages, AnthropicMessagesProvider, GenerateOptions,
     GenerateOutput, GenerateRequestContext, LanguageModelProvider, MessagePart, ModelMessage,
-    ModelRole, OpenAiChatProvider,
+    ModelRole, OpenAiChatProvider, OpenAiResponsesProvider,
 };
 use crate::chat::model_metadata::{
     chat_max_output_tokens_for_model, context_window_for_model, model_can_generate_images_directly,
@@ -2797,6 +2797,12 @@ fn auxiliary_vision_model_for_images(
         return None;
     }
 
+    // 主模型自身支持视觉时，图片永远直接交给主模型——即便配置了独立视觉模型。
+    // 独立视觉模型只是给「纯文本主模型」补视觉的兜底，不应把会看图的主模型降级走 mixer。
+    if model_supports_vision(main_provider, main_model) == Some(true) {
+        return None;
+    }
+
     if settings.has_explicit_vision_model() {
         let (provider_id, model) = settings.effective_vision_model();
         return auxiliary_vision_model_from_selection(settings, &provider_id, &model);
@@ -3912,6 +3918,11 @@ async fn generate_with_chat_provider(
                 .generate(request)
                 .await
         }
+        ProviderApiFormat::OpenAiResponses => {
+            OpenAiResponsesProvider::new(state, provider, retry_attempts)
+                .generate(request)
+                .await
+        }
     }
     .map_err(|err| err.to_string())
 }
@@ -4837,6 +4848,43 @@ mod tests {
                 &[PathBuf::from("image.png")],
             ),
             None
+        );
+    }
+
+    #[test]
+    fn explicit_vision_model_does_not_hijack_vision_capable_main_model() {
+        // 用户给主模型在 model_overrides 里手动开了 vision=true，同时设置里又配了独立视觉模型。
+        // 期望：图片直接发给会看图的主模型，不走 mixer。回归 #vision-mixer-hijack。
+        use crate::settings::{ModelCapabilities, ModelInfo};
+
+        let mut main_provider = test_provider("main", "Main", vec!["models/gemini-3.1-flash-lite"]);
+        main_provider.model_overrides.insert(
+            "models/gemini-3.1-flash-lite".to_string(),
+            ModelInfo {
+                capabilities: Some(ModelCapabilities {
+                    vision: Some(true),
+                    ..ModelCapabilities::default()
+                }),
+                ..ModelInfo::default()
+            },
+        );
+        let vision_provider = test_provider("vision", "Vision", vec!["gpt-4o"]);
+
+        let mut settings = Settings::default();
+        settings.providers = vec![main_provider.clone(), vision_provider];
+        // 显式配置一个独立视觉模型（旧逻辑会因此把所有图片都劫持到 mixer）。
+        settings.default_models.vision.provider_id = "vision".to_string();
+        settings.default_models.vision.model = "gpt-4o".to_string();
+
+        assert_eq!(
+            auxiliary_vision_model_for_images(
+                &settings,
+                Some(&main_provider),
+                "models/gemini-3.1-flash-lite",
+                &[PathBuf::from("image.png")],
+            ),
+            None,
+            "vision-capable main model should keep images, not route to the mixer"
         );
     }
 

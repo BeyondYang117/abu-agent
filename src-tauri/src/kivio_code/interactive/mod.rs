@@ -153,6 +153,15 @@ impl TurnRuntime {
         self.state.settings_read().has_explicit_vision_model()
     }
 
+    /// 主编码模型自身是否支持视觉。支持时图片**直接**交给主模型（跳过 mixer）——mixer 只是
+    /// 给纯文本主模型补视觉的兜底。与 GUI `auxiliary_vision_model_for_images` 的判断对齐。
+    fn main_model_supports_vision(&self) -> bool {
+        crate::chat::model_metadata::model_supports_vision(
+            Some(&self.assembly.provider),
+            &self.assembly.model,
+        ) == Some(true)
+    }
+
     /// 起一轮 agent turn：把 user 消息持久化 + 累积进 runtime_messages，新建 generation/cancel，
     /// 在 tokio runtime 上 spawn 跑 `run_agent_loop`，事件经 `agent_tx` 回到主循环。
     ///
@@ -213,63 +222,91 @@ impl TurnRuntime {
         let vision_settings = self.state.settings_read().clone();
         let vision_text = text;
         let vision_tx = agent_tx.clone();
+        // 主模型自身支持视觉时，图片直接 inline 进主请求（跳过 mixer）。在 spawn 前同步算好，
+        // 因为它依赖 `self.assembly`（任务里只持有 clone 出来的 owned 数据）。
+        let main_supports_vision = self.main_model_supports_vision();
 
         self.handle.spawn(async move {
-            // Step 0: vision mixer pre-analysis (if images attached). Runs inside the spawned
-            // task so the network call never blocks the UI thread; observations are appended
-            // to the per-turn `messages` clone before the loop builds its config.
+            // Step 0: vision handling (if images attached). Runs inside the spawned task so any
+            // network call never blocks the UI thread; the per-turn `messages` clone is augmented
+            // before the loop builds its config.
             if !image_paths.is_empty() {
-                let labels: Vec<String> = (1..=image_paths.len())
-                    .map(|n| format!("[Image #{n}]"))
-                    .collect();
-                let card_id = format!("kivio-code-vision-{generation}");
-                emit_vision_card(
-                    &vision_tx,
-                    &card_id,
-                    ToolCallStatus::Running,
-                    image_paths.len(),
-                    None,
-                    None,
-                );
-                let outcome = crate::kivio_code::vision::run_vision_mixer(
-                    &state,
-                    &vision_settings,
-                    &labels,
-                    &image_paths,
-                    &vision_text,
-                )
-                .await;
-                match outcome {
-                    crate::kivio_code::vision::VisionMixerOutcome::Analyzed {
-                        provider_name,
-                        model,
-                        observations,
-                    } => {
-                        messages = crate::kivio_code::vision::inject_vision_observations(
-                            messages,
-                            &observations,
-                        );
+                if main_supports_vision {
+                    // 主模型自身支持视觉：把图片直接 inline 进最后一条 user 消息，交给主模型，
+                    // 不走 mixer（与 GUI 主模型支持视觉时直发图片一致）。无 mixer 卡片。
+                    let (parts, errors) =
+                        crate::kivio_code::vision::inline_image_parts(&image_paths);
+                    if !parts.is_empty() {
+                        messages =
+                            crate::kivio_code::vision::inject_inline_images(messages, parts);
+                    }
+                    if !errors.is_empty() {
+                        // best-effort：读图失败（极罕见，路径来自刚校验的 pending image）不致命，
+                        // 成功的图已 inline；用一张 Error 卡片提示，不静默丢弃。
+                        let card_id = format!("kivio-code-vision-{generation}");
                         emit_vision_card(
                             &vision_tx,
                             &card_id,
-                            ToolCallStatus::Success,
-                            image_paths.len(),
-                            Some(format!("{provider_name} · {model}")),
+                            ToolCallStatus::Error,
+                            errors.len(),
                             None,
+                            Some(errors.join("; ")),
                         );
                     }
-                    crate::kivio_code::vision::VisionMixerOutcome::NoVisionModel => {
-                        // The synchronous gate in `apply_effect` already pushed a Notice and
-                        // cleared the images, so this branch should be unreachable; mark the
-                        // card skipped defensively rather than leaving it spinning.
-                        emit_vision_card(
-                            &vision_tx,
-                            &card_id,
-                            ToolCallStatus::Skipped,
-                            image_paths.len(),
-                            None,
-                            Some("no vision model configured".to_string()),
-                        );
+                } else {
+                    // 主模型不支持视觉：走 mixer 兜底——用显式视觉模型把图片转成文字观察注入。
+                    let labels: Vec<String> = (1..=image_paths.len())
+                        .map(|n| format!("[Image #{n}]"))
+                        .collect();
+                    let card_id = format!("kivio-code-vision-{generation}");
+                    emit_vision_card(
+                        &vision_tx,
+                        &card_id,
+                        ToolCallStatus::Running,
+                        image_paths.len(),
+                        None,
+                        None,
+                    );
+                    let outcome = crate::kivio_code::vision::run_vision_mixer(
+                        &state,
+                        &vision_settings,
+                        &labels,
+                        &image_paths,
+                        &vision_text,
+                    )
+                    .await;
+                    match outcome {
+                        crate::kivio_code::vision::VisionMixerOutcome::Analyzed {
+                            provider_name,
+                            model,
+                            observations,
+                        } => {
+                            messages = crate::kivio_code::vision::inject_vision_observations(
+                                messages,
+                                &observations,
+                            );
+                            emit_vision_card(
+                                &vision_tx,
+                                &card_id,
+                                ToolCallStatus::Success,
+                                image_paths.len(),
+                                Some(format!("{provider_name} · {model}")),
+                                None,
+                            );
+                        }
+                        crate::kivio_code::vision::VisionMixerOutcome::NoVisionModel => {
+                            // The synchronous gate in `apply_effect` already pushed a Notice and
+                            // cleared the images, so this branch should be unreachable; mark the
+                            // card skipped defensively rather than leaving it spinning.
+                            emit_vision_card(
+                                &vision_tx,
+                                &card_id,
+                                ToolCallStatus::Skipped,
+                                image_paths.len(),
+                                None,
+                                Some("no vision model configured".to_string()),
+                            );
+                        }
                     }
                 }
             }
@@ -979,11 +1016,15 @@ fn apply_effect(
         AppEffect::Submitted { text, images } => {
             if let Some(turn) = turn {
                 if !turn.is_generating() {
-                    // 图片附件但未配置显式视觉模型：推一条 Notice 并丢弃本轮图片（纯文本继续）。
-                    // 同步检查（settings 读），保证 Notice 出现在 transcript 而非异步事件流里。
-                    let images = if !images.is_empty() && !turn.has_vision_model() {
+                    // 图片附件但既无法直接交给主模型、又没配显式视觉模型：推一条 Notice 并丢弃
+                    // 本轮图片（纯文本继续）。同步检查（settings 读），保证 Notice 出现在 transcript
+                    // 而非异步事件流里。主模型支持视觉 → 直发；否则有显式视觉模型 → mixer 兜底。
+                    let images = if !images.is_empty()
+                        && !turn.main_model_supports_vision()
+                        && !turn.has_vision_model()
+                    {
                         app.push_notice(
-                            "No vision model configured — attach one in the Kivio app's Mixer/vision settings; images skipped this turn.",
+                            "No vision support — pick a vision-capable main model, or configure a Mixer/vision model in the Kivio app; images skipped this turn.",
                         );
                         Vec::new()
                     } else {

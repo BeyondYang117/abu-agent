@@ -154,12 +154,16 @@ pub struct ModelProvider {
 pub enum ProviderApiFormat {
     OpenAiChat,
     AnthropicMessages,
+    /// OpenAI Responses API (`POST /v1/responses`). Used by Codex / Responses-native
+    /// models and proxies that only emit tool-call arguments over this protocol.
+    OpenAiResponses,
 }
 
 impl ProviderApiFormat {
     pub fn from_raw(raw: &str) -> Self {
         match raw.trim() {
             "anthropic" | "anthropic_messages" => Self::AnthropicMessages,
+            "openai_responses" | "responses" => Self::OpenAiResponses,
             _ => Self::OpenAiChat,
         }
     }
@@ -168,6 +172,7 @@ impl ProviderApiFormat {
         match self {
             Self::OpenAiChat => "openai_chat",
             Self::AnthropicMessages => "anthropic_messages",
+            Self::OpenAiResponses => "openai_responses",
         }
     }
 }

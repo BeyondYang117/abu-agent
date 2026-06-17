@@ -3963,6 +3963,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                 onChange={(apiFormat) => updateProvider(provider.id, { apiFormat })}
                                 options={[
                                   { value: 'openai_chat', label: 'OpenAI Chat' },
+                                  { value: 'openai_responses', label: 'OpenAI Responses' },
                                   { value: 'anthropic_messages', label: 'Anthropic' },
                                 ]}
                               />
