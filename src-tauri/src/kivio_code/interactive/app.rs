@@ -438,9 +438,16 @@ impl App {
         self.footer.context_window = window;
     }
 
-    /// 设置最近一轮 agent 上报的 input_tokens（近似当前上下文占用），footer 据此算占比（FIX 3）。
+    /// 设置当前对话的上下文占用估算（tokens），footer 据此算占比。
+    /// 来源是累积对话规模的估算（见 `interactive::estimate_context_tokens`），**不是**单轮花费。
     pub fn set_context_tokens(&mut self, tokens: Option<u64>) {
         self.footer.context_tokens = tokens;
+    }
+
+    /// 当前 footer 记录的上下文占用估算（测试断言用）。
+    #[cfg(test)]
+    pub fn context_tokens(&self) -> Option<u64> {
+        self.footer.context_tokens
     }
 
     /// 当前是否有一条正在流式写入的助手消息（测试 / 收尾判断用）。

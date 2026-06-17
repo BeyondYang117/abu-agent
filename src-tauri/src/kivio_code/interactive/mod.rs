@@ -368,6 +368,8 @@ impl TurnRuntime {
         self.runtime_messages = messages;
         self.persisted_tool_calls = std::collections::HashSet::new();
         self.session = Some(session);
+        // Reflect the resumed conversation's size in the footer ctx gauge immediately.
+        app.set_context_tokens(Some(estimate_context_tokens(&self.runtime_messages)));
         true
     }
 
@@ -395,11 +397,15 @@ impl TurnRuntime {
                 });
                 self.persist_turn_records(&result);
                 self.accumulate_runtime_messages(&result);
+                // The `in · out` numbers stay the turn's real billed usage.
                 app.set_usage(format_usage(result.usage.as_ref()));
-                // input_tokens approximates the current context size after a turn (FIX 3).
-                app.set_context_tokens(
-                    result.usage.as_ref().and_then(|u| u.input_tokens),
-                );
+                // Context occupancy must reflect the CURRENT conversation size (the
+                // prompt that will be sent next), NOT `result.usage.input_tokens` —
+                // that value is summed across every model call in the turn (planning +
+                // each tool round + synthesis; see RunState::merge_usage), so a
+                // multi-round turn inflates it and it jumps around non-monotonically.
+                // Estimate from the accumulated transcript instead (the regression fix).
+                app.set_context_tokens(Some(estimate_context_tokens(&self.runtime_messages)));
             }
             Err(err) => {
                 if err == "cancelled" {
@@ -498,6 +504,40 @@ fn format_usage(usage: Option<&crate::chat::model::ModelUsage>) -> Option<String
     let input = usage.input_tokens?;
     let output = usage.output_tokens.unwrap_or(0);
     Some(format!("{} in · {} out", human_tokens(input), human_tokens(output)))
+}
+
+/// 估算一段对话（OpenAI 兼容 message 序列）占用的上下文 token 数。
+///
+/// 这是 footer `ctx X/window` 用的占用量来源：它反映**当前对话规模**（下一次请求要发的
+/// prompt 大小），而非「本轮花了多少 token」。做法是遍历每条 message 的所有字符串值
+/// （role、`content`、`tool_calls` 函数参数、`tool` 结果内容等）累加字符数，再按业界常用的
+/// `tokens ≈ chars / 4` 粗略启发式换算。**这是估算值**，不追求精确，但保证随对话增长单调、稳定。
+fn estimate_context_tokens(messages: &[Value]) -> u64 {
+    fn sum_string_chars(value: &Value, acc: &mut usize) {
+        match value {
+            Value::String(s) => *acc += s.chars().count(),
+            Value::Array(items) => {
+                for item in items {
+                    sum_string_chars(item, acc);
+                }
+            }
+            Value::Object(map) => {
+                for (key, val) in map {
+                    // 键名也是 prompt 的一部分（如 JSON 序列化的 tool 参数），计入。
+                    *acc += key.chars().count();
+                    sum_string_chars(val, acc);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut chars = 0usize;
+    for message in messages {
+        sum_string_chars(message, &mut chars);
+    }
+    // tokens ≈ chars / 4，四舍五入。
+    ((chars as f64 / 4.0).round()) as u64
 }
 
 /// 把 token 数折成 `1.2k` 风格的短串。
@@ -1092,6 +1132,54 @@ mod tests {
         assert!(format_usage(None).is_none());
     }
 
+    #[test]
+    fn estimate_context_tokens_grows_monotonically() {
+        // Start with just a system message; appending more messages must never
+        // shrink the estimate (the footer ctx gauge must be monotonic per turn).
+        let mut messages = vec![json!({ "role": "system", "content": "you are a coding agent" })];
+        let s0 = estimate_context_tokens(&messages);
+        messages.push(json!({ "role": "user", "content": "read main.rs and summarize it" }));
+        let s1 = estimate_context_tokens(&messages);
+        messages.push(json!({ "role": "assistant", "content": "Here is a summary of the file." }));
+        let s2 = estimate_context_tokens(&messages);
+        assert!(s0 < s1, "user message should grow the estimate ({s0} < {s1})");
+        assert!(s1 < s2, "assistant message should grow the estimate ({s1} < {s2})");
+    }
+
+    #[test]
+    fn estimate_context_tokens_roughly_chars_over_four() {
+        // A single message whose content is 400 chars → ~100 tokens (chars/4),
+        // plus the small overhead of the role/keys. Assert it lands in the ballpark.
+        let content = "x".repeat(400);
+        let messages = vec![json!({ "role": "user", "content": content })];
+        let est = estimate_context_tokens(&messages);
+        // 400 content chars + "role"(4) + "user"(4) + "content"(7) = 415 chars → 104 tokens.
+        assert!((100..=110).contains(&est), "estimate {est} should be ~chars/4");
+    }
+
+    #[test]
+    fn estimate_context_tokens_counts_tool_calls_and_results() {
+        // tool_call function arguments and tool-result content are part of the
+        // prompt, so they must count toward the estimate.
+        let bare = vec![json!({ "role": "assistant", "content": "calling a tool" })];
+        let with_tools = vec![
+            json!({
+                "role": "assistant",
+                "content": "calling a tool",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": { "name": "read_file", "arguments": "{\"path\":\"a_very_long_file_path/main.rs\"}" }
+                }]
+            }),
+            json!({ "role": "tool", "tool_call_id": "call_1", "content": "the entire contents of the file go here and are long" }),
+        ];
+        assert!(
+            estimate_context_tokens(&with_tools) > estimate_context_tokens(&bare),
+            "tool_calls + tool results must add to the estimate"
+        );
+    }
+
     // ---- TurnRuntime integration (no real model / TTY) ----
 
     fn provider(id: &str) -> ModelProvider {
@@ -1335,7 +1423,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
     }
 
-    // ---- Phase 5c: model selector data + switching ----
+    /// Regression guard for the reported footer ctx bug: a turn whose summed usage
+    /// `input_tokens` is huge (900k — the loop accumulates planning + every tool round +
+    /// synthesis via RunState::merge_usage) must NOT set the ctx gauge to that number.
+    /// The ctx gauge reflects the *current conversation size*, which for a tiny 2-message
+    /// transcript is small — even though the billed `in` usage is huge.
+    #[tokio::test]
+    async fn finish_turn_sets_ctx_from_conversation_not_summed_usage() {
+        let cwd = unique_cwd("ctxfromconv");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        // Conversation is just system + a short user message → small ctx estimate.
+        rt.runtime_messages
+            .push(json!({ "role": "user", "content": "hi" }));
+
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.set_mode(AppMode::Generating);
+        rt.current = Some(RunCancel::new(9));
+
+        // The agent reports a massive SUMMED input usage for the turn.
+        let mut result = result_with(
+            "ok",
+            vec![json!({ "role": "assistant", "content": "ok" })],
+            Vec::new(),
+        );
+        result.usage = Some(crate::chat::model::ModelUsage {
+            input_tokens: Some(900_000),
+            output_tokens: Some(120),
+            ..Default::default()
+        });
+        let done = TurnDone {
+            generation: 9,
+            result: Ok(result),
+            message_id: "m9".to_string(),
+        };
+        rt.finish_turn(done, &mut app);
+
+        let ctx = app.context_tokens().expect("ctx set after turn");
+        // Must be the small conversation estimate, NOT the 900k summed usage.
+        assert!(ctx < 1_000, "ctx {ctx} must reflect the small conversation, not summed usage");
+        // And it must match the estimate of the accumulated transcript.
+        assert_eq!(ctx, estimate_context_tokens(&rt.runtime_messages));
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
 
     /// Settings with two enabled providers, each with two enabled models.
     fn multi_provider_settings() -> Settings {
@@ -1619,6 +1751,11 @@ mod tests {
         assert!(rt.runtime_messages.iter().any(|m| m["role"] == "system"));
         // session now points at the resumed file.
         assert_eq!(rt.session.as_ref().unwrap().path.to_string_lossy(), other_path);
+        // ctx gauge is refreshed from the resumed conversation size immediately.
+        assert_eq!(
+            app.context_tokens(),
+            Some(estimate_context_tokens(&rt.runtime_messages))
+        );
 
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
