@@ -460,6 +460,24 @@ impl Editor {
         self.set_text_internal(&normalized, false);
     }
 
+    /// Insert plain text at the cursor (no newlines expected). Used for programmatic
+    /// inserts such as the `[Image #N]` attachment placeholder. Pushes one undo step
+    /// and advances the cursor past the inserted text.
+    pub fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.exit_history_browsing();
+        self.push_undo();
+        self.last_action = None;
+        let line = &mut self.state.lines[self.state.cursor_line];
+        line.insert_str(self.state.cursor_col, text);
+        self.state.cursor_col += text.len();
+        self.preferred_visual_col = None;
+        self.snapped_from_cursor_col = None;
+        self.fire_change();
+    }
+
     fn set_text_internal(&mut self, text: &str, cursor_at_start: bool) {
         let lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
         self.state.lines = if lines.is_empty() { vec![String::new()] } else { lines };

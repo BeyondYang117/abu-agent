@@ -16,6 +16,7 @@
 //! 一条助手通知（真正接 agent loop 留待 5b）。
 
 use std::sync::Arc;
+use std::path::PathBuf;
 
 use crate::kivio_code::tui::components::{
     ColorFn, Editor, EditorTheme, Loader, Markdown, MarkdownTheme, SelectItem, SelectList,
@@ -29,6 +30,15 @@ use super::slash::{dispatch_slash, SlashOutcome, SlashCommandSpec, SLASH_COMMAND
 use super::tool_card::render_tool_card;
 use crate::chat::types::{ToolCallRecord, ToolCallStatus};
 use crate::kivio_code::tui::fuzzy::fuzzy_filter;
+
+/// 一张待提交的图片附件。`label` 是它在编辑器文本里的占位符（`[Image #N]`，1-based，
+/// 按当前未发送消息的添加顺序编号）。提交后清空、`/new` 时也清空。**永不**在终端渲染图片，
+/// 只保留占位符文本。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingImage {
+    path: PathBuf,
+    label: String,
+}
 
 /// transcript 里的一条目。每条目自带其渲染所需的 [`Component`]（懒构造、按需重渲染）。
 pub enum TranscriptItem {
@@ -113,8 +123,13 @@ pub enum AppEffect {
     /// 开新会话（`/new` / `/clear`）：事件循环清屏 + 重置 [`TurnRuntime`] 上下文
     /// （runtime_messages / session / ctx gauge），而不仅清掉屏幕 transcript。
     NewConversation,
-    /// 用户提交了一条消息，事件循环应交给 agent loop 跑。
-    Submitted(String),
+    /// 用户提交了一条消息，事件循环应交给 agent loop 跑。`text` 是占位符已替换的用户文字
+    /// （`[Image #N]` 占位符 verbatim 保留）；`images` 是本轮附带的图片文件路径（按 `[Image #N]`
+    /// 编号顺序），事件循环把它交给视觉 mixer 预分析。无图时 `images` 为空。
+    Submitted {
+        text: String,
+        images: Vec<PathBuf>,
+    },
     /// 用户请求中断当前生成（Esc / generating 中的 Ctrl+C）。事件循环翻 cancel flag。
     Cancel,
     /// 请求打开模型选择器（事件循环从 settings 取 enabled 模型列表，调
@@ -199,6 +214,9 @@ pub struct App {
     /// `generating m:ss · Esc to cancel` 的实时计时；退出 Generating（回到 Idle）时清空。
     /// 用 `Instant` 而非 wall-clock，确保计时不受系统时间跳变影响。
     generating_started: Option<std::time::Instant>,
+    /// 当前未发送消息附带的图片（Ctrl+V 粘贴 / 拖入路径）。每张对应编辑器里一个 `[Image #N]`
+    /// 占位符；提交后清空，`/new` 时清空。**永不**渲染图片本体。
+    pending_images: Vec<PendingImage>,
 }
 
 impl App {
@@ -238,6 +256,7 @@ impl App {
             read_claude_dir: crate::kivio_code::config::load().read_claude_dir,
             terminal_cols: 80,
             generating_started: None,
+            pending_images: Vec::new(),
         }
     }
 
@@ -654,6 +673,76 @@ impl App {
         }
     }
 
+    /// 把一个已落盘的图片路径登记为待提交附件，返回分配的 `[Image #N]` 占位符（N = 当前
+    /// `pending_images` 长度 + 1，1-based，提交 / `/new` 后从 1 重新计数）。不插入编辑器、不渲染图片
+    /// 本体——纯状态更新，便于单测。
+    fn attach_pending_image(&mut self, path: PathBuf) -> String {
+        let number = self.pending_images.len() + 1;
+        let label = format!("[Image #{number}]");
+        self.pending_images.push(PendingImage {
+            path,
+            label: label.clone(),
+        });
+        label
+    }
+
+    /// 待提交图片数量（测试用）。
+    #[cfg(test)]
+    pub fn pending_image_count(&self) -> usize {
+        self.pending_images.len()
+    }
+
+    /// 处理 Ctrl+V：优先尝试把系统剪贴板里的**图片**作为附件（编码 PNG → 落盘 →
+    /// 插入 `[Image #N]` 占位符 + 推通知）。剪贴板无图片 / 后端报错时**静默 no-op**
+    /// （文本粘贴由 bracketed-paste 单独走 [`super::InputEvent::Paste`]，不在此分支）。
+    /// 永不 panic、永不渲染图片本体。
+    fn handle_clipboard_image_paste(&mut self) {
+        let image = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
+            Ok(image) => image,
+            // 无图片（或 headless / 无剪贴板后端）：静默放过，让文本粘贴路径处理。
+            Err(_) => return,
+        };
+
+        let width = image.width;
+        let height = image.height;
+        let rgba = match image::RgbaImage::from_raw(
+            width as u32,
+            height as u32,
+            image.bytes.into_owned(),
+        ) {
+            Some(buf) => buf,
+            None => {
+                self.push_notice("Could not read clipboard image (bad dimensions)");
+                return;
+            }
+        };
+
+        let mut png_bytes: Vec<u8> = Vec::new();
+        if let Err(err) = rgba.write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        ) {
+            self.push_notice(format!("Could not encode clipboard image: {err}"));
+            return;
+        }
+
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_bytes);
+        match crate::chat::attachments::save_pasted_image("pasted", "image/png", &b64) {
+            Ok(crate::chat::attachments::PastedImageSave::Saved { path, .. }) => {
+                let label = self.attach_pending_image(path);
+                self.editor.insert_text(&label);
+                self.refresh_slash_popup();
+                self.push_notice(format!("Attached {label} from clipboard"));
+            }
+            Ok(crate::chat::attachments::PastedImageSave::Failed { error }) => {
+                self.push_notice(format!("Could not attach clipboard image: {error}"));
+            }
+            Err(err) => {
+                self.push_notice(format!("Could not attach clipboard image: {err}"));
+            }
+        }
+    }
+
     /// 取某 id 的工具卡片（测试用）。
     pub fn tool_card(&self, id: &str) -> Option<&ToolCard> {
         self.transcript.iter().rev().find_map(|item| match item {
@@ -793,9 +882,10 @@ impl App {
         self.transcript.push(TranscriptItem::ToolCard(card));
     }
 
-    /// 清空 transcript（`/new`）。
+    /// 清空 transcript（`/new`）。同时丢弃未提交的图片附件（占位符编号从 `[Image #1]` 重新开始）。
     pub fn clear_transcript(&mut self) {
         self.transcript.clear();
+        self.pending_images.clear();
     }
 
     /// 翻转 `read_claude_dir` 并持久化到 kivio-code 配置（`/settings` 选定时调用）。更新内存值，
@@ -863,6 +953,15 @@ impl App {
                 self.push_notice("(To exit, press Ctrl+D or type /quit)");
             } else {
                 self.editor.set_text("");
+            }
+            return AppEffect::None;
+        }
+
+        // Ctrl+V：尝试把剪贴板里的图片作为附件（image-first，文本回退由 bracketed-paste 处理）。
+        // 仅在空闲态处理；生成中忽略。
+        if matches_key(data, "ctrl+v", self.kitty_active) {
+            if self.mode != AppMode::Generating {
+                self.handle_clipboard_image_paste();
             }
             return AppEffect::None;
         }
@@ -970,16 +1069,31 @@ impl App {
             return AppEffect::None;
         }
 
+        // 拖入 / 输入的本地图片路径 → 附件：扫描文本里指向存在图片文件的 token，登记为附件并把
+        // 该 token 替换为 `[Image #N]`（编号续接已有的 clipboard 附件）。非图片 / 不存在的 token 原样保留。
+        let start_number = self.pending_images.len() + 1;
+        let (rewritten, drag_paths) = extract_image_paths_from_text(&trimmed, start_number);
+        for path in drag_paths {
+            self.attach_pending_image(path);
+        }
+
         // 普通消息：记入 transcript，交给 agent loop。
-        self.submit_message(trimmed)
+        self.submit_message(rewritten)
     }
 
     /// 把一条消息记入 transcript + last_submitted，返回 [`AppEffect::Submitted`]，交给 agent loop。
-    /// 普通用户输入与 `/init`（喂入固定 [`INIT_PROMPT`]）共用此路径。调用方负责 generating-gate。
+    /// 携带本轮附带的图片路径（来自 clipboard 粘贴 + 拖入路径，按 `[Image #N]` 编号顺序），并清空
+    /// `pending_images`（下一条消息从 `[Image #1]` 重新计数）。普通用户输入与 `/init` 共用此路径；
+    /// 调用方负责 generating-gate。
     fn submit_message(&mut self, text: String) -> AppEffect {
         self.transcript.push(TranscriptItem::UserMessage(text.clone()));
         self.last_submitted = Some(text.clone());
-        AppEffect::Submitted(text)
+        let images: Vec<PathBuf> =
+            std::mem::take(&mut self.pending_images)
+                .into_iter()
+                .map(|img| img.path)
+                .collect();
+        AppEffect::Submitted { text, images }
     }
 
     fn dispatch_slash_command(&mut self, input: &str) -> AppEffect {
@@ -1398,6 +1512,144 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
     clipboard.set_text(text.to_string()).map_err(|e| e.to_string())
 }
 
+/// 受支持的图片扩展名（拖入路径检测用）。
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+
+/// 把一个**可能是终端拖入/输入**的路径 token 还原为真实路径串。
+///
+/// 处理两类转义（macOS Terminal.app / iTerm2 拖入文件时的行为）：
+/// - 去掉首尾成对的单引号或双引号（`'/a b.png'` → `/a b.png`）。
+/// - 反斜杠转义：`\<char>` → `<char>`（`/a\ b.png` → `/a b.png`，`\(` → `(` 等）。
+///
+/// 不存在的引号 / 转义则原样返回。纯函数，便于单测。
+fn dequote_unescape_path(token: &str) -> String {
+    let trimmed = token.trim();
+    // 去成对引号。
+    let inner = if (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+        || (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    // 反斜杠转义还原。
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+            // 末尾孤立的反斜杠：丢弃。
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 判断一个路径串是否指向一个**存在的本地图片文件**（扩展名 ∈ [`IMAGE_EXTENSIONS`] 且 `is_file()`）。
+fn is_existing_image_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let p = std::path::Path::new(path);
+    let ext_ok = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            let lower = e.to_ascii_lowercase();
+            IMAGE_EXTENSIONS.contains(&lower.as_str())
+        })
+        .unwrap_or(false);
+    ext_ok && p.is_file()
+}
+
+/// 扫描提交文本，把其中指向**存在的本地图片文件**的空白分隔 token 识别为附件。
+///
+/// 规则（对齐 Claude Code 拖入 / `@path` 行为）：
+/// - 按空白切分；每个 token 先去引号 + 反斜杠转义还原（[`dequote_unescape_path`]）。
+/// - 额外接受前导 `@`（`@img.png` 形式）：剥掉 `@` 后再判定。
+/// - 仅当还原后的路径**存在且是图片文件**时识别为附件；否则 token 原样保留。
+///
+/// 返回 `(替换后的文本, 新识别出的图片路径列表)`。识别到的 token 在文本里被替换为 `[Image #N]`
+/// 占位符，N 从 `start_number` 起按出现顺序递增。其余文本（含换行 / 连续空白）原样保留。纯函数，便于单测。
+fn extract_image_paths_from_text(
+    text: &str,
+    start_number: usize,
+) -> (String, Vec<PathBuf>) {
+    let mut images = Vec::new();
+    let mut next_number = start_number;
+    let mut out = String::with_capacity(text.len());
+    // 手动按「空白段 / 非空白段（token）」交替扫描，保留原始空白（含换行、连续空格）。
+    let mut chars = text.char_indices().peekable();
+    while let Some(&(start, c)) = chars.peek() {
+        if c.is_whitespace() {
+            // 收集空白段原样输出。
+            while let Some(&(_, w)) = chars.peek() {
+                if w.is_whitespace() {
+                    out.push(w);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        // 收集一个 token。若以引号开头，吞到配对引号为止（支持含空格的引号路径，
+        // 如 `'/a b.png'`）；否则吞到下一个空白（反斜杠转义的空格 `\ ` 在 dequote 阶段还原）。
+        let mut end = start;
+        let quote = if c == '\'' || c == '"' { Some(c) } else { None };
+        if let Some(q) = quote {
+            // 吞掉开引号本身。
+            chars.next();
+            end = start + c.len_utf8();
+            let mut closed = false;
+            while let Some(&(idx, t)) = chars.peek() {
+                end = idx + t.len_utf8();
+                chars.next();
+                if t == q {
+                    closed = true;
+                    break;
+                }
+            }
+            // 未闭合引号：回退到普通 token 语义不值得，直接用已吞到的内容。
+            let _ = closed;
+        } else {
+            // 反斜杠转义的空白（`\ `）属于 token 一部分，不在此断开（drag 路径常见形态）。
+            while let Some(&(idx, t)) = chars.peek() {
+                if t == '\\' {
+                    // 吞掉反斜杠 + 紧随的转义字符（含空格）。
+                    end = idx + t.len_utf8();
+                    chars.next();
+                    if let Some(&(nidx, n)) = chars.peek() {
+                        end = nidx + n.len_utf8();
+                        chars.next();
+                    }
+                    continue;
+                }
+                if t.is_whitespace() {
+                    break;
+                }
+                end = idx + t.len_utf8();
+                chars.next();
+            }
+        }
+        let token = &text[start..end];
+        let candidate = token.strip_prefix('@').unwrap_or(token);
+        let resolved = dequote_unescape_path(candidate);
+        if is_existing_image_path(&resolved) {
+            out.push_str(&format!("[Image #{next_number}]"));
+            images.push(PathBuf::from(resolved));
+            next_number += 1;
+        } else {
+            out.push_str(token);
+        }
+    }
+
+    (out, images)
+}
+
 /// 字符安全地裁剪到 `max` 列，超出加 `…`。
 fn clip(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
@@ -1617,7 +1869,13 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "do a thing");
         let effect = a.handle_key("\r"); // enter
-        assert_eq!(effect, AppEffect::Submitted("do a thing".to_string()));
+        assert_eq!(
+            effect,
+            AppEffect::Submitted {
+                text: "do a thing".to_string(),
+                images: Vec::new(),
+            }
+        );
         // only the user message is recorded; the assistant message arrives via streaming.
         assert_eq!(a.transcript_len(), 1);
         assert_eq!(a.last_submitted(), Some("do a thing"));
@@ -1731,9 +1989,176 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/init");
         let effect = a.handle_key("\r");
-        assert_eq!(effect, AppEffect::Submitted(INIT_PROMPT.to_string()));
+        assert_eq!(
+            effect,
+            AppEffect::Submitted {
+                text: INIT_PROMPT.to_string(),
+                images: Vec::new(),
+            }
+        );
         // The INIT prompt is recorded as the turn's user message.
         assert_eq!(a.last_submitted(), Some(INIT_PROMPT));
+    }
+
+    // ---- image input: drag/path parsing + placeholder numbering ----
+
+    /// 在临时目录建一个真实的 `.png` 文件，返回其绝对路径串。
+    fn temp_png(tag: &str) -> String {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "kivio-code-imgtest-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir temp");
+        let path = dir.join(format!("{tag}.png"));
+        // 1x1 PNG 不必有效——检测只看扩展名 + 文件存在。
+        std::fs::write(&path, b"not-a-real-png-but-exists").expect("write png");
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn dequote_unescape_strips_quotes_and_backslashes() {
+        assert_eq!(dequote_unescape_path("/a/b.png"), "/a/b.png");
+        assert_eq!(dequote_unescape_path("'/a b/c.png'"), "/a b/c.png");
+        assert_eq!(dequote_unescape_path("\"/a b/c.png\""), "/a b/c.png");
+        assert_eq!(dequote_unescape_path("/a\\ b/c.png"), "/a b/c.png");
+        assert_eq!(dequote_unescape_path("/x\\(1\\).png"), "/x(1).png");
+    }
+
+    #[test]
+    fn is_existing_image_path_checks_extension_and_existence() {
+        let png = temp_png("exists");
+        assert!(is_existing_image_path(&png));
+        // Non-existent path with image extension.
+        assert!(!is_existing_image_path("/nope/missing.png"));
+        // Existing file but non-image extension is rejected.
+        let txt = {
+            let mut p = std::path::PathBuf::from(&png);
+            p.set_extension("txt");
+            std::fs::write(&p, b"x").unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        assert!(!is_existing_image_path(&txt));
+    }
+
+    #[test]
+    fn extract_converts_real_image_path_to_placeholder() {
+        let png = temp_png("convert");
+        let text = format!("describe {png} please");
+        let (rewritten, paths) = extract_image_paths_from_text(&text, 1);
+        assert_eq!(rewritten, "describe [Image #1] please");
+        assert_eq!(paths, vec![PathBuf::from(&png)]);
+    }
+
+    #[test]
+    fn extract_leaves_nonexistent_and_nonimage_tokens_untouched() {
+        let text = "see /nope/x.png and notes.txt and just-words";
+        let (rewritten, paths) = extract_image_paths_from_text(text, 1);
+        assert_eq!(rewritten, text);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn extract_handles_quoted_and_space_escaped_paths() {
+        // Build an image file whose path contains a space.
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("kivio-code-imgspace-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("my shot.png");
+        std::fs::write(&path, b"x").unwrap();
+        let path_str = path.to_string_lossy().into_owned();
+
+        // Single-quoted form (terminal drag style).
+        let quoted = format!("look at '{path_str}'");
+        let (rewritten, paths) = extract_image_paths_from_text(&quoted, 1);
+        assert_eq!(rewritten, "look at [Image #1]");
+        assert_eq!(paths, vec![path.clone()]);
+
+        // Backslash-escaped space form.
+        let escaped = format!("look at {}", path_str.replace(' ', "\\ "));
+        let (rewritten2, paths2) = extract_image_paths_from_text(&escaped, 1);
+        assert_eq!(rewritten2, "look at [Image #1]");
+        assert_eq!(paths2, vec![path]);
+    }
+
+    #[test]
+    fn extract_at_prefixed_path_is_attached() {
+        let png = temp_png("atpath");
+        let text = format!("@{png}");
+        let (rewritten, paths) = extract_image_paths_from_text(&text, 2);
+        assert_eq!(rewritten, "[Image #2]");
+        assert_eq!(paths, vec![PathBuf::from(&png)]);
+    }
+
+    #[test]
+    fn extract_numbers_multiple_images_from_start() {
+        let a = temp_png("multi-a");
+        let b = temp_png("multi-b");
+        let text = format!("{a} then {b}");
+        let (rewritten, paths) = extract_image_paths_from_text(&text, 1);
+        assert_eq!(rewritten, "[Image #1] then [Image #2]");
+        assert_eq!(paths.len(), 2);
+    }
+
+    #[test]
+    fn attach_pending_image_increments_label() {
+        let mut a = app();
+        assert_eq!(a.attach_pending_image(PathBuf::from("/a.png")), "[Image #1]");
+        assert_eq!(a.attach_pending_image(PathBuf::from("/b.png")), "[Image #2]");
+        assert_eq!(a.pending_image_count(), 2);
+    }
+
+    #[test]
+    fn submit_yields_placeholder_text_and_image_list() {
+        let png = temp_png("submit");
+        let mut a = app();
+        type_str(&mut a, &format!("look at {png}"));
+        let effect = a.handle_key("\r");
+        match effect {
+            AppEffect::Submitted { text, images } => {
+                assert_eq!(text, "look at [Image #1]");
+                assert_eq!(images, vec![PathBuf::from(&png)]);
+            }
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+        // Pending images reset after submit so the next message starts at [Image #1].
+        assert_eq!(a.pending_image_count(), 0);
+    }
+
+    #[test]
+    fn submit_carries_clipboard_attachments_then_drag_paths_in_order() {
+        let drag = temp_png("order-drag");
+        let mut a = app();
+        // Simulate a clipboard-pasted image already attached + its placeholder typed.
+        let label = a.attach_pending_image(PathBuf::from("/clip/pasted.png"));
+        assert_eq!(label, "[Image #1]");
+        type_str(&mut a, &format!("{label} and {drag}"));
+        let effect = a.handle_key("\r");
+        match effect {
+            AppEffect::Submitted { text, images } => {
+                // Drag path numbering continues after the clipboard attachment.
+                assert_eq!(text, "[Image #1] and [Image #2]");
+                assert_eq!(
+                    images,
+                    vec![PathBuf::from("/clip/pasted.png"), PathBuf::from(&drag)]
+                );
+            }
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+        assert_eq!(a.pending_image_count(), 0);
+    }
+
+    #[test]
+    fn new_conversation_clears_pending_images() {
+        let mut a = app();
+        a.attach_pending_image(PathBuf::from("/a.png"));
+        a.attach_pending_image(PathBuf::from("/b.png"));
+        assert_eq!(a.pending_image_count(), 2);
+        a.clear_transcript();
+        assert_eq!(a.pending_image_count(), 0);
+        // Numbering restarts at 1 after a /new.
+        assert_eq!(a.attach_pending_image(PathBuf::from("/c.png")), "[Image #1]");
     }
 
     #[test]

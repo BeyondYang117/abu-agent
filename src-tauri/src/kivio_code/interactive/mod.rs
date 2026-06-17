@@ -148,13 +148,24 @@ impl TurnRuntime {
         self.current.is_some()
     }
 
+    /// 当前 settings 是否配置了显式视觉模型（图片 mixer 预分析的前提）。
+    fn has_vision_model(&self) -> bool {
+        self.state.settings_read().has_explicit_vision_model()
+    }
+
     /// 起一轮 agent turn：把 user 消息持久化 + 累积进 runtime_messages，新建 generation/cancel，
     /// 在 tokio runtime 上 spawn 跑 `run_agent_loop`，事件经 `agent_tx` 回到主循环。
     ///
     /// `plan_mode`（来自 App 的当前 [`AgentMode`]）gate 本轮工具集为只读，并把一条**临时** plan-mode
     /// system note 追加到本轮 `runtime_messages` 的 **克隆**（不污染存储的 `self.runtime_messages`），
     /// 让模型只研究/搜索 + 出方案。
-    fn begin_turn(&mut self, text: String, agent_tx: &Sender<AgentUiEvent>, plan_mode: bool) {
+    fn begin_turn(
+        &mut self,
+        text: String,
+        image_paths: Vec<PathBuf>,
+        agent_tx: &Sender<AgentUiEvent>,
+        plan_mode: bool,
+    ) {
         // 持久化 user 消息（best-effort）。
         self.append_session(SessionRecord::Message {
             id: String::new(),
@@ -194,8 +205,75 @@ impl TurnRuntime {
         let timeout_ms = self.timeout_ms;
         let done_tx = self.turn_done_tx.clone();
         let run_message_id = message_id.clone();
+        // Vision mixer pre-analysis context (only when images are attached). Snapshot the
+        // settings + the placeholder-substituted user text; the async block runs the aux
+        // vision model and injects the textual observations into the per-turn `messages`
+        // CLONE (NOT into `self.runtime_messages`), so the text-only coding model "sees"
+        // the screenshots without the CLI's main request carrying image parts.
+        let vision_settings = self.state.settings_read().clone();
+        let vision_text = text;
+        let vision_tx = agent_tx.clone();
 
         self.handle.spawn(async move {
+            // Step 0: vision mixer pre-analysis (if images attached). Runs inside the spawned
+            // task so the network call never blocks the UI thread; observations are appended
+            // to the per-turn `messages` clone before the loop builds its config.
+            if !image_paths.is_empty() {
+                let labels: Vec<String> = (1..=image_paths.len())
+                    .map(|n| format!("[Image #{n}]"))
+                    .collect();
+                let card_id = format!("kivio-code-vision-{generation}");
+                emit_vision_card(
+                    &vision_tx,
+                    &card_id,
+                    ToolCallStatus::Running,
+                    image_paths.len(),
+                    None,
+                    None,
+                );
+                let outcome = crate::kivio_code::vision::run_vision_mixer(
+                    &state,
+                    &vision_settings,
+                    &labels,
+                    &image_paths,
+                    &vision_text,
+                )
+                .await;
+                match outcome {
+                    crate::kivio_code::vision::VisionMixerOutcome::Analyzed {
+                        provider_name,
+                        model,
+                        observations,
+                    } => {
+                        messages = crate::kivio_code::vision::inject_vision_observations(
+                            messages,
+                            &observations,
+                        );
+                        emit_vision_card(
+                            &vision_tx,
+                            &card_id,
+                            ToolCallStatus::Success,
+                            image_paths.len(),
+                            Some(format!("{provider_name} · {model}")),
+                            None,
+                        );
+                    }
+                    crate::kivio_code::vision::VisionMixerOutcome::NoVisionModel => {
+                        // The synchronous gate in `apply_effect` already pushed a Notice and
+                        // cleared the images, so this branch should be unreachable; mark the
+                        // card skipped defensively rather than leaving it spinning.
+                        emit_vision_card(
+                            &vision_tx,
+                            &card_id,
+                            ToolCallStatus::Skipped,
+                            image_paths.len(),
+                            None,
+                            Some("no vision model configured".to_string()),
+                        );
+                    }
+                }
+            }
+
             let executor = CliToolExecutor::new(
                 &cwd,
                 http,
@@ -833,6 +911,42 @@ fn format_mcp_summary(
     out
 }
 
+/// 发送一条 `mixer_vision` 工具记录到 UI（图片预分析步骤可见，仿 GUI mixer 卡片）。
+/// 同一 `id` 在 Running→Success/Skipped 之间多次发送，App 按 id upsert。
+fn emit_vision_card(
+    tx: &Sender<AgentUiEvent>,
+    id: &str,
+    status: ToolCallStatus,
+    image_count: usize,
+    model_label: Option<String>,
+    error: Option<String>,
+) {
+    let summary = match &model_label {
+        Some(label) => format!("{image_count} image(s) · {label}"),
+        None => format!("analyzing {image_count} image(s)…"),
+    };
+    let record = ToolCallRecord {
+        id: id.to_string(),
+        name: "mixer_vision".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        arguments: json!({ "images": image_count }).to_string(),
+        status,
+        result_preview: Some(summary),
+        error,
+        duration_ms: None,
+        started_at: None,
+        completed_at: None,
+        round: 0,
+        sensitive: false,
+        artifacts: Vec::new(),
+        trace_id: None,
+        span_id: None,
+        structured_content: None,
+    };
+    let _ = tx.send(AgentUiEvent::ToolRecord(Box::new(record)));
+}
+
 /// `apply_effect` 的控制流结果。
 enum EffectFlow {
     /// 退出事件循环。
@@ -862,12 +976,22 @@ fn apply_effect(
                 turn.reset_conversation(app);
             }
         }
-        AppEffect::Submitted(text) => {
+        AppEffect::Submitted { text, images } => {
             if let Some(turn) = turn {
                 if !turn.is_generating() {
+                    // 图片附件但未配置显式视觉模型：推一条 Notice 并丢弃本轮图片（纯文本继续）。
+                    // 同步检查（settings 读），保证 Notice 出现在 transcript 而非异步事件流里。
+                    let images = if !images.is_empty() && !turn.has_vision_model() {
+                        app.push_notice(
+                            "No vision model configured — attach one in the Kivio app's Mixer/vision settings; images skipped this turn.",
+                        );
+                        Vec::new()
+                    } else {
+                        images
+                    };
                     let plan_mode = app.agent_mode() == AgentMode::Plan;
                     app.set_mode(AppMode::Generating);
-                    turn.begin_turn(text, agent_tx, plan_mode);
+                    turn.begin_turn(text, images, agent_tx, plan_mode);
                 }
             } else {
                 app.push_notice("No model configured; cannot run.");
@@ -1162,7 +1286,13 @@ mod tests {
         assert_eq!(app.handle_key("i"), AppEffect::None);
         assert_eq!(app.editor_text(), "hi");
         // enter 提交 → Submitted。
-        assert_eq!(app.handle_key("\r"), AppEffect::Submitted("hi".to_string()));
+        assert_eq!(
+            app.handle_key("\r"),
+            AppEffect::Submitted {
+                text: "hi".to_string(),
+                images: Vec::new(),
+            }
+        );
         assert_eq!(app.last_submitted(), Some("hi"));
     }
 
@@ -2067,7 +2197,12 @@ mod tests {
         let before = rt.runtime_messages.len(); // [system]
         let (agent_tx, _agent_rx) = mpsc::channel::<AgentUiEvent>();
 
-        rt.begin_turn("plan this".to_string(), &agent_tx, /* plan_mode */ true);
+        rt.begin_turn(
+            "plan this".to_string(),
+            Vec::new(),
+            &agent_tx,
+            /* plan_mode */ true,
+        );
 
         // Only the user message was appended to the stored context — the transient
         // plan-mode system note lives on the spawned task's clone, not here.

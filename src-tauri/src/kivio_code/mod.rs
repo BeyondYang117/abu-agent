@@ -18,6 +18,7 @@ pub mod session;
 pub mod settings_loader;
 pub mod skill_setup;
 pub mod tui;
+pub mod vision;
 
 use std::io::Read;
 use std::path::PathBuf;
