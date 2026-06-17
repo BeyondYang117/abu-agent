@@ -136,10 +136,16 @@ pub fn resolve_provider_model(
 }
 
 /// A lean coding-agent system prompt for the terminal. Reuse of the chat
-/// system-prompt builder is possible but it pulls in skills/memory/plan/todo
+/// system-prompt builder is possible but it pulls in memory/plan/todo
 /// scaffolding the print-mode CLI does not use; this MVP prompt keeps the
-/// contract tight (cwd + date + tool guidance).
-pub fn build_system_prompt(cwd: &std::path::Path) -> String {
+/// contract tight (cwd + date + tool guidance + skill catalog).
+///
+/// `skill_registry` is the same registry that drives the per-turn skill tool
+/// definitions (built in [`TurnAssembly::resolve`]). When it is non-empty we
+/// append the GUI's skill catalog (`crate::skills::format_catalog`) so the model
+/// is actually told which skills exist and when to `skill_activate` them — without
+/// it the activation tools are advertised but the model is blind to the catalog.
+pub fn build_system_prompt(cwd: &std::path::Path, skill_registry: &SkillRegistry) -> String {
     let now = chrono::Local::now();
     // Auto-load the project's own instruction files (.kivio/, root AGENTS.md /
     // KIVIO.md, optionally CLAUDE.md + .claude/CLAUDE.md, and global
@@ -154,6 +160,20 @@ pub fn build_system_prompt(cwd: &std::path::Path) -> String {
     } else {
         format!("\n{project_context}\n")
     };
+    // Skill catalog: only when the registry actually holds skills. The registry
+    // is already filtered to enabled skills in `build_skill_registry`, so the
+    // enabled-filter closure is always-true; `active_skill_id` = None (nothing
+    // pre-activated); `tools_available` = true (the CLI runs tool-capable models
+    // and advertises the skill_activate trio). Placed after the project context,
+    // before the date/cwd footer, in a clearly delimited section.
+    let skill_block = {
+        let catalog = crate::skills::format_catalog(skill_registry, None, true, |_| true);
+        if catalog.is_empty() {
+            String::new()
+        } else {
+            format!("\n<skills>\n{catalog}\n</skills>\n")
+        }
+    };
     format!(
         "You are kivio-code, an expert terminal coding assistant operating inside the user's project.\n\
 \n\
@@ -166,10 +186,12 @@ Guidelines:\n\
 - Be concise. Show file paths clearly. Do only what the task requires.\n\
 - When the task is complete, give a short final answer summarizing what you did.\n\
 {project_block}\
+{skill_block}\
 \n\
 Current date: {date}\n\
 Current working directory: {cwd}",
         project_block = project_block,
+        skill_block = skill_block,
         date = now.format("%Y-%m-%d"),
         cwd = cwd.display()
     )
@@ -254,10 +276,17 @@ impl TurnAssembly {
             1
         };
 
+        // Skills are discovered synchronously here so they are available the
+        // moment the assembly exists. Build the registry BEFORE the system prompt
+        // so the same registry instance drives BOTH the prompt's skill catalog
+        // and `into_config`'s skill tool definitions (kept consistent).
+        let skill_registry = skill_setup::build_skill_registry(settings, cwd);
+        let system_prompt = build_system_prompt(cwd, &skill_registry);
+
         Ok(Self {
             provider,
             model,
-            system_prompt: build_system_prompt(cwd),
+            system_prompt,
             effective_chat_tools,
             language,
             thinking_enabled: settings.chat.thinking_enabled,
@@ -266,10 +295,9 @@ impl TurnAssembly {
             retry_attempts,
             settings: settings.clone(),
             // MCP tools are collected asynchronously at startup (see
-            // `set_mcp_tools`); start empty. Skills are discovered synchronously
-            // here so they are available the moment the assembly exists.
+            // `set_mcp_tools`); start empty.
             mcp_tools: Vec::new(),
-            skill_registry: skill_setup::build_skill_registry(settings, cwd),
+            skill_registry,
         })
     }
 
@@ -485,10 +513,59 @@ mod tests {
 
     #[test]
     fn system_prompt_includes_cwd_and_date() {
-        let prompt = build_system_prompt(std::path::Path::new("/tmp/project"));
+        let prompt =
+            build_system_prompt(std::path::Path::new("/tmp/project"), &SkillRegistry::default());
         assert!(prompt.contains("/tmp/project"));
         assert!(prompt.contains("Current working directory"));
         assert!(prompt.contains("kivio-code"));
+    }
+
+    #[test]
+    fn system_prompt_omits_catalog_for_empty_registry() {
+        let prompt =
+            build_system_prompt(std::path::Path::new("/tmp/project"), &SkillRegistry::default());
+        // No skills → no catalog section and no activation hint at all.
+        assert!(!prompt.contains("<skills>"));
+        assert!(!prompt.contains("<available_skills>"));
+        assert!(!prompt.contains("skill_activate"));
+    }
+
+    #[test]
+    fn system_prompt_embeds_skill_catalog_when_registry_non_empty() {
+        use crate::skills::{SkillMeta, SkillRecord};
+        let record = SkillRecord {
+            meta: SkillMeta {
+                id: "pdf".to_string(),
+                name: "pdf-wizard".to_string(),
+                description: "Extract and edit PDF files".to_string(),
+                source: "user".to_string(),
+                path: None,
+                recommended_tools: vec![],
+                disable_model_invocation: false,
+                files: vec![],
+                triggers: vec![],
+                argument_hint: None,
+                arguments: vec![],
+            },
+            location: std::path::PathBuf::from("/skills/pdf/SKILL.md"),
+            base_dir: std::path::PathBuf::from("/skills/pdf"),
+            body: String::new(),
+            allowed_tools: vec![],
+        };
+        let registry = SkillRegistry {
+            records: vec![record],
+            warnings: vec![],
+        };
+
+        let prompt = build_system_prompt(std::path::Path::new("/tmp/project"), &registry);
+        // The catalog names the skill and instructs the model to skill_activate.
+        assert!(prompt.contains("<skills>"));
+        assert!(prompt.contains("pdf-wizard"));
+        assert!(prompt.contains("skill_activate"));
+        // Catalog sits before the date/cwd footer.
+        let pos_catalog = prompt.find("<skills>").unwrap();
+        let pos_cwd = prompt.find("Current working directory").unwrap();
+        assert!(pos_catalog < pos_cwd, "skill catalog must precede the cwd footer");
     }
 
     #[test]
@@ -497,7 +574,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create temp dir");
         std::fs::write(dir.join("AGENTS.md"), "be very careful").expect("write AGENTS.md");
 
-        let prompt = build_system_prompt(&dir);
+        let prompt = build_system_prompt(&dir, &SkillRegistry::default());
         assert!(prompt.contains("<project_context>"));
         assert!(prompt.contains("be very careful"));
         // The date/cwd footer still trails the project context block.
