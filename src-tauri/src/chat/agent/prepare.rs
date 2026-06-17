@@ -457,7 +457,7 @@ pub fn build_chat_system_prompt_with_segments(
         let mut skill_prompt = format!("User pinned skill for this message: {skill_id}");
         if tools_available {
             skill_prompt.push_str(
-                ". Call skill_activate with this name only because the user pinned it; otherwise prefer enabled built-in tools when they fit.",
+                ". Activate it with skill_activate to load its full instructions for this message.",
             );
         } else if matches!(fallback, "skill_md_only" | "legacy_full_body") {
             skill_prompt.push_str(". Follow the Active Skill instructions below.");
@@ -474,31 +474,21 @@ pub fn build_chat_system_prompt_with_segments(
             &skill_prompt,
         );
     } else if tools_available && chat_tools.skill_auto_match {
-        let builtin_hint = if available_builtin_tools.is_empty() {
-            "内置工具".to_string()
-        } else {
-            format!("内置工具（{}）", available_builtin_tools.join(", "))
-        };
         if language.starts_with("zh") {
             append_context_segment(
                 &mut prompt,
                 &mut segments,
                 "skills",
                 "Skills",
-                &format!("Skill 目录仅供参考：仅当用户明确需要某个 Skill 的能力（或点名 Skill 名称）时才 skill_activate。泛泛请求若已启用 {builtin_hint} 能覆盖，应优先使用对应内置工具；不要只因 Skill 描述里提到 Python/脚本/联网就激活无关 Skill。"),
+                "当任务匹配某个 Skill 的描述时，主动用 skill_activate 激活它——无需用户点名，描述对得上就激活。激活后会加载该 Skill 的完整步骤指令，效果明显优于自行发挥。只跳过描述明显与当前任务无关的 Skill。",
             );
         } else {
-            let builtin_hint = if available_builtin_tools.is_empty() {
-                "built-in tools".to_string()
-            } else {
-                format!("built-in tools ({})", available_builtin_tools.join(", "))
-            };
             append_context_segment(
                 &mut prompt,
                 &mut segments,
                 "skills",
                 "Skills",
-                &format!("The skill catalog is optional: call skill_activate only when the user clearly needs that skill (or names it). For generic requests covered by enabled {builtin_hint}, prefer the corresponding built-in tool instead of activating an unrelated skill just because its description mentions Python, scripts, or web access."),
+                "When the task matches a skill's description, call skill_activate for it proactively — you don't need the user to name it; a description match is enough. Activating loads that skill's full step-by-step instructions, which beat improvising. Only skip a skill whose description clearly doesn't fit the current task.",
             );
         }
     }
