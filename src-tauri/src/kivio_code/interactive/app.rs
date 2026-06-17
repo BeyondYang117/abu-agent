@@ -93,6 +93,9 @@ pub enum AppEffect {
     None,
     /// 退出交互模式。
     Quit,
+    /// 开新会话（`/new` / `/clear`）：事件循环清屏 + 重置 [`TurnRuntime`] 上下文
+    /// （runtime_messages / session / ctx gauge），而不仅清掉屏幕 transcript。
+    NewConversation,
     /// 用户提交了一条消息，事件循环应交给 agent loop 跑。
     Submitted(String),
     /// 用户请求中断当前生成（Esc / generating 中的 Ctrl+C）。事件循环翻 cancel flag。
@@ -882,10 +885,7 @@ impl App {
     fn dispatch_slash_command(&mut self, input: &str) -> AppEffect {
         match dispatch_slash(input) {
             SlashOutcome::Quit => AppEffect::Quit,
-            SlashOutcome::ClearTranscript => {
-                self.clear_transcript();
-                AppEffect::None
-            }
+            SlashOutcome::NewConversation => AppEffect::NewConversation,
             SlashOutcome::CopyLastAssistant => {
                 self.copy_last_assistant_to_clipboard();
                 AppEffect::None
@@ -1469,25 +1469,26 @@ mod tests {
     }
 
     #[test]
-    fn slash_new_clears_transcript() {
+    fn slash_new_yields_new_conversation_effect() {
+        // `/new` must NOT clear the transcript in-place anymore — it returns a
+        // NewConversation effect so the event loop can also reset the runtime
+        // (runtime_messages / session / ctx gauge), not just the on-screen text.
         let mut a = app();
         type_str(&mut a, "hi");
         a.handle_key("\r");
         assert!(a.transcript_len() > 0);
         type_str(&mut a, "/new");
         let effect = a.handle_key("\r");
-        assert_eq!(effect, AppEffect::None);
-        assert_eq!(a.transcript_len(), 0);
+        assert_eq!(effect, AppEffect::NewConversation);
     }
 
     #[test]
-    fn slash_clear_clears_transcript() {
+    fn slash_clear_yields_new_conversation_effect() {
         let mut a = app();
         type_str(&mut a, "hi");
         a.handle_key("\r");
         type_str(&mut a, "/clear");
-        a.handle_key("\r");
-        assert_eq!(a.transcript_len(), 0);
+        assert_eq!(a.handle_key("\r"), AppEffect::NewConversation);
     }
 
     #[test]

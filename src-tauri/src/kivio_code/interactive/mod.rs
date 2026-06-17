@@ -352,6 +352,31 @@ impl TurnRuntime {
         true
     }
 
+    /// `/new` · `/clear`：开一段全新对话。把上下文重置到系统提示基线（丢弃历史 user/assistant/tool
+    /// 消息），新建一个 JSONL session 文件，清掉已落盘工具调用记录，并把 footer ctx gauge 拉回到
+    /// 系统提示的小基线（用与压缩同源的估算器）。任何在跑的轮先取消，并把 app 切回 Idle。
+    fn reset_conversation(&mut self, app: &mut App) {
+        // 取消任何在跑的轮，丢弃其 in-flight 状态。
+        self.request_cancel();
+        self.current = None;
+        self.current_message_id = None;
+
+        // 重置上下文到系统提示基线。
+        self.runtime_messages = vec![json!({
+            "role": "system",
+            "content": self.assembly.system_prompt.clone()
+        })];
+        // 起一个全新的 session 文件（失败像启动路径一样静默忽略）。
+        self.session = Session::create(&self.cwd, &self.assembly.model_label()).ok();
+        self.persisted_tool_calls.clear();
+
+        // ctx gauge 回到系统提示的小基线（与 0.85 压缩触发点同源的估算器）。
+        app.set_context_tokens(Some(
+            crate::chat::agent::compaction::estimate_messages_tokens(&self.runtime_messages) as u64,
+        ));
+        app.set_mode(AppMode::Idle);
+    }
+
     /// 处理一轮结束：忽略过期 generation；否则把 assistant 消息 + 工具调用持久化、累积进
     /// runtime_messages，刷新 footer usage，回到 Idle。返回 footer usage 摘要（None = 不变）。
     fn finish_turn(&mut self, done: TurnDone, app: &mut App) {
@@ -594,6 +619,13 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
         app.set_model(turn.model_label());
         app.set_model_display(turn.model_display_label());
         app.set_context_window(turn.context_window());
+        // Seed the footer ctx gauge from the finalized runtime_messages (the fresh
+        // [system] for a new session, or the rebuilt messages on resume) so idle shows
+        // the correct small baseline (system-prompt size) rather than nothing/stale.
+        // (resume_session_path also refreshes this; this covers the fresh-session path.)
+        app.set_context_tokens(Some(
+            crate::chat::agent::compaction::estimate_messages_tokens(&turn.runtime_messages) as u64,
+        ));
     }
 
     // 首帧。
@@ -806,6 +838,16 @@ fn apply_effect(
     match effect {
         AppEffect::Quit => return EffectFlow::Quit,
         AppEffect::None => {}
+        AppEffect::NewConversation => {
+            // Clear the on-screen transcript AND reset the runtime so the next turn
+            // does NOT carry the old conversation, and the ctx gauge drops back to the
+            // system-prompt baseline (the reported bug: /new only cleared the screen).
+            app.clear_transcript();
+            app.set_show_welcome(true);
+            if let Some(turn) = turn {
+                turn.reset_conversation(app);
+            }
+        }
         AppEffect::Submitted(text) => {
             if let Some(turn) = turn {
                 if !turn.is_generating() {
@@ -1599,6 +1641,110 @@ mod tests {
         assert!(ctx < 1_000, "ctx {ctx} must reflect the small conversation, not summed usage");
         // And it must match the compaction estimator over the accumulated transcript.
         assert_eq!(ctx, ctx_estimate(&rt.runtime_messages));
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// `/new` (NewConversation): resetting the conversation must drop the runtime
+    /// back to a single system message, start a fresh session file, clear persisted
+    /// tool calls, and pull the ctx gauge back to the small system-prompt baseline —
+    /// NOT leave it at the prior large value.
+    #[tokio::test]
+    async fn reset_conversation_drops_to_system_baseline() {
+        let cwd = unique_cwd("resetconv");
+        let (mut rt, _done) = turn_runtime(&cwd);
+
+        // Build up a big fake conversation and a stale large ctx value.
+        let old_session_path = rt.session.as_ref().unwrap().path.clone();
+        for i in 0..20 {
+            rt.runtime_messages
+                .push(json!({ "role": "user", "content": "x".repeat(500) }));
+            rt.runtime_messages
+                .push(json!({ "role": "assistant", "content": "y".repeat(500) }));
+            rt.persisted_tool_calls.insert(format!("call_{i}"));
+        }
+        let big = ctx_estimate(&rt.runtime_messages);
+
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.set_context_tokens(Some(big));
+        app.set_mode(AppMode::Generating);
+
+        rt.reset_conversation(&mut app);
+
+        // runtime_messages is back to a single system message.
+        assert_eq!(rt.runtime_messages.len(), 1);
+        assert_eq!(rt.runtime_messages[0]["role"], "system");
+        // persisted tool calls cleared.
+        assert!(rt.persisted_tool_calls.is_empty());
+        // a fresh session file was created (different from the old one).
+        let new_session_path = rt.session.as_ref().unwrap().path.clone();
+        assert_ne!(new_session_path, old_session_path);
+        // mode back to Idle.
+        assert_eq!(app.mode(), AppMode::Idle);
+        // ctx gauge is the small system-prompt baseline, NOT the prior large value.
+        let ctx = app.context_tokens().expect("ctx set after reset");
+        assert_eq!(ctx, ctx_estimate(&rt.runtime_messages));
+        assert!(ctx < big, "ctx {ctx} must drop below the prior large value {big}");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// `apply_effect(AppEffect::NewConversation, …)` clears the transcript, re-shows
+    /// the welcome header, and resets the runtime.
+    #[tokio::test]
+    async fn apply_effect_new_conversation_resets_runtime() {
+        let cwd = unique_cwd("applyreset");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        rt.runtime_messages
+            .push(json!({ "role": "user", "content": "old turn" }));
+
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.push_assistant("old answer");
+        app.set_show_welcome(false);
+        app.set_context_tokens(Some(99_999));
+        let (agent_tx, _agent_rx) = mpsc::channel::<AgentUiEvent>();
+
+        let flow = apply_effect(
+            AppEffect::NewConversation,
+            &mut app,
+            &agent_tx,
+            Some(&mut rt),
+        );
+        assert!(matches!(flow, EffectFlow::Continue));
+        // transcript cleared.
+        assert_eq!(app.transcript_len(), 0);
+        // runtime reset to system-only; ctx back to the small baseline.
+        assert_eq!(rt.runtime_messages.len(), 1);
+        let ctx = app.context_tokens().expect("ctx set");
+        assert_eq!(ctx, ctx_estimate(&rt.runtime_messages));
+        assert!(ctx < 99_999);
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// Startup must seed the ctx gauge from the fresh session's runtime_messages
+    /// (a single system message → a small baseline), not leave it unset/stale.
+    #[tokio::test]
+    async fn startup_seeds_ctx_from_fresh_runtime_messages() {
+        let cwd = unique_cwd("startupctx");
+        let (rt, _done) = turn_runtime(&cwd);
+        // Fresh session: runtime_messages is just [system].
+        assert_eq!(rt.runtime_messages.len(), 1);
+
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        // Mirror what run() does after constructing the TurnRuntime.
+        app.set_context_tokens(Some(ctx_estimate(&rt.runtime_messages)));
+
+        let ctx = app.context_tokens().expect("startup ctx set");
+        assert_eq!(ctx, ctx_estimate(&rt.runtime_messages));
+        // The system-prompt baseline is small (a few k at most), not nothing/huge.
+        assert!(ctx < 5_000, "startup ctx {ctx} should be the small system-prompt baseline");
 
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));

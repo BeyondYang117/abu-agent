@@ -42,8 +42,8 @@ pub const INIT_PROMPT: &str = "Analyze the current project at the working direct
 pub enum SlashOutcome {
     /// 退出。
     Quit,
-    /// 清空 transcript。
-    ClearTranscript,
+    /// 开新会话（`/new` / `/clear`）：清屏 + 重置上下文（runtime_messages / session / ctx）。
+    NewConversation,
     /// 把最近一条助手消息复制到系统剪贴板。
     CopyLastAssistant,
     /// 打开模型选择器（数据由事件循环 / App 从 settings 注入）。
@@ -84,7 +84,7 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
         Some("help") | Some("?") => SlashOutcome::Notice(help_text()),
         Some("model") => SlashOutcome::OpenModelSelector,
         Some("sessions") => SlashOutcome::OpenSessionSelector,
-        Some("new") | Some("clear") => SlashOutcome::ClearTranscript,
+        Some("new") | Some("clear") => SlashOutcome::NewConversation,
         Some("copy") => SlashOutcome::CopyLastAssistant,
         Some("init") => SlashOutcome::RunInit,
         Some("mcp") => SlashOutcome::ShowMcp,
@@ -117,9 +117,9 @@ mod tests {
     }
 
     #[test]
-    fn new_and_clear_clear_transcript() {
-        assert_eq!(dispatch_slash("/new"), SlashOutcome::ClearTranscript);
-        assert_eq!(dispatch_slash("/clear"), SlashOutcome::ClearTranscript);
+    fn new_and_clear_start_new_conversation() {
+        assert_eq!(dispatch_slash("/new"), SlashOutcome::NewConversation);
+        assert_eq!(dispatch_slash("/clear"), SlashOutcome::NewConversation);
     }
 
     #[test]
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn case_insensitive_and_args_ignored() {
         assert_eq!(dispatch_slash("/QUIT"), SlashOutcome::Quit);
-        assert_eq!(dispatch_slash("/new   anything here"), SlashOutcome::ClearTranscript);
+        assert_eq!(dispatch_slash("/new   anything here"), SlashOutcome::NewConversation);
     }
 
     #[test]
