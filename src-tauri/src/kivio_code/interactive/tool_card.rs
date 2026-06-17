@@ -181,6 +181,7 @@ fn body_lines(card: &ToolCard, width: u16) -> Vec<String> {
         ToolKind::Mutation => mutation_body(card, width),
         ToolKind::Bash => bash_body(card, width),
         ToolKind::WebSearch => web_search_body(card, width),
+        ToolKind::SkillActivate => skill_activate_body(card, width),
         ToolKind::Other => preview_body(card, width),
     }
 }
@@ -194,6 +195,7 @@ enum ToolKind {
     Mutation,
     Bash,
     WebSearch,
+    SkillActivate,
     Other,
 }
 
@@ -205,8 +207,35 @@ fn normalize_tool(name: &str) -> ToolKind {
         "write" | "write_file" | "edit" | "edit_file" => ToolKind::Mutation,
         "bash" | "run_command" => ToolKind::Bash,
         "web_search" => ToolKind::WebSearch,
+        "skill_activate" => ToolKind::SkillActivate,
         _ => ToolKind::Other,
     }
+}
+
+/// `skill_activate`: the result is the skill's full body — that text is for the
+/// MODEL, not the terminal. Show a single dim confirmation line naming the skill
+/// instead of dumping the whole SKILL.md.
+fn skill_activate_body(card: &ToolCard, width: u16) -> Vec<String> {
+    let line = match skill_name_from_card(card) {
+        Some(name) => format!("{DIM}loaded skill: {name}{DIM_OFF}"),
+        None => format!("{DIM}skill activated{DIM_OFF}"),
+    };
+    body_line(&line, width)
+}
+
+/// Best-effort skill name for a `skill_activate` card: prefer the call summary
+/// (the skill name), else parse `name="…"` out of the `<skill_content …>` result.
+fn skill_name_from_card(card: &ToolCard) -> Option<String> {
+    let summary = card.summary.trim();
+    if !summary.is_empty() {
+        return Some(summary.to_string());
+    }
+    let detail = card.detail.as_ref()?;
+    let start = detail.find("name=\"")? + "name=\"".len();
+    let rest = &detail[start..];
+    let end = rest.find('"')?;
+    let name = rest[..end].trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// `read_file`: a single dim header `read <path> (N lines)`, preferring the
@@ -867,6 +896,34 @@ mod tests {
         let text = strip_ansi(&joined(&c, 60));
         assert!(text.contains("read"));
         assert!(text.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn skill_activate_card_is_compact_not_a_body_dump() {
+        // Regression: the skill_activate result is the full SKILL.md body (model-facing).
+        // The card must NOT dump it — just a one-line confirmation naming the skill.
+        let mut c = card("skill_activate", ToolCallStatus::Success);
+        c.summary = "frontend-design".to_string();
+        c.detail = Some(
+            "<skill_content name=\"frontend-design\"> This skill guides creation of \
+             distinctive, production-grade frontend interfaces. ## Design Thinking \
+             Before coding, understand the context and commit to a BOLD aesthetic \
+             direction. Purpose, Tone, Constraints, Differentiation, and many more \
+             lines of instructions intended only for the model, not the terminal."
+                .to_string(),
+        );
+        let lines = render_tool_card(&c, 80);
+        let text = strip_ansi(&lines.join("\n"));
+
+        // Header names the skill; body is the single confirmation line.
+        assert!(text.contains("skill_activate"), "{text}");
+        assert!(text.contains("loaded skill: frontend-design"), "{text}");
+        // The full body must be gone.
+        assert!(!text.contains("skill_content"), "raw skill body leaked: {text}");
+        assert!(!text.contains("Design Thinking"), "raw skill body leaked: {text}");
+        assert!(!text.contains("more lines"), "should not need a truncation footer: {text}");
+        // Compact: glyph/header line + one body line (≤ 3 lines total).
+        assert!(lines.len() <= 3, "expected a compact card, got {} lines: {text}", lines.len());
     }
 
     #[test]

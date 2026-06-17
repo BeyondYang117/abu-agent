@@ -1477,6 +1477,16 @@ fn summarize_arguments(tool_name: &str, arguments: &str) -> String {
         Some(obj) => obj,
         None => return String::new(),
     };
+    // skill_activate 用 name/skill 作为代表(直接显示技能名,不加 key= 前缀)。
+    if tool_name == "skill_activate" {
+        if let Some(name) = obj
+            .get("name")
+            .or_else(|| obj.get("skill"))
+            .and_then(|v| v.as_str())
+        {
+            return clip(name, 80);
+        }
+    }
     // 按工具/优先级取一个最具代表性的键。
     for key in ["path", "command", "pattern", "query", "url", "old_string"] {
         if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
