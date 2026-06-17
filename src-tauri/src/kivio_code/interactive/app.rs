@@ -130,8 +130,6 @@ struct Footer {
     /// 但渲染统一用本字段（FIX 2）。为空时退回 `model`（id 形式）。
     model_display: String,
     status: String,
-    /// 上一轮的 token usage 摘要（如 `1.2k in · 340 out`），无则不显示。
-    usage: Option<String>,
     /// 当前模型的上下文窗口大小（tokens）+ 是否可靠（FIX 3）。`None` = 未知（仅显示原始
     /// token 数，不显示占比）。事件循环切模型 / 起轮时回填。
     context_window: Option<usize>,
@@ -179,7 +177,6 @@ impl App {
                 model_display: model.clone(),
                 model,
                 status: "ready".to_string(),
-                usage: None,
                 context_window: None,
                 context_tokens: None,
             },
@@ -427,11 +424,6 @@ impl App {
         self.mode = mode;
     }
 
-    /// 设置上一轮 token usage 摘要（footer 展示）。
-    pub fn set_usage(&mut self, usage: Option<String>) {
-        self.footer.usage = usage;
-    }
-
     /// 设置当前模型的上下文窗口大小（tokens；`None` = 未知，则 footer 只显示原始 token 数）。
     /// 由事件循环在起轮 / 切模型时回填（FIX 3）。
     pub fn set_context_window(&mut self, window: Option<usize>) {
@@ -439,7 +431,8 @@ impl App {
     }
 
     /// 设置当前对话的上下文占用估算（tokens），footer 据此算占比。
-    /// 来源是累积对话规模的估算（见 `interactive::estimate_context_tokens`），**不是**单轮花费。
+    /// 来源是 agent loop 压缩所用的同一估算器（`compaction::estimate_messages_tokens`），
+    /// 与 0.85 压缩触发点对齐，**不是**单轮花费。
     pub fn set_context_tokens(&mut self, tokens: Option<u64>) {
         self.footer.context_tokens = tokens;
     }
@@ -976,11 +969,9 @@ impl App {
             AppMode::Idle => self.footer.status.clone(),
             AppMode::Generating => "generating… (Esc to cancel)".to_string(),
         };
-        // 不在 footer 行展示模型/provider（已在欢迎头里给出）；footer 仅 cwd · 状态 · token · ctx。
+        // 不在 footer 行展示模型/provider（已在欢迎头里给出），也不展示单轮 token usage
+        // （`N in · N out`，用户不需要）；footer 仅 cwd · 状态 · ctx。
         let mut text = format!("{}  ·  {}", self.footer.cwd_display, status);
-        if let Some(usage) = &self.footer.usage {
-            text.push_str(&format!("  ·  {usage}"));
-        }
         if let Some(ctx) = format_context_usage(self.footer.context_tokens, self.footer.context_window) {
             text.push_str(&format!("  ·  {ctx}"));
         }
@@ -1610,11 +1601,25 @@ mod tests {
     }
 
     #[test]
-    fn footer_shows_usage_when_set() {
+    fn footer_omits_per_turn_token_usage() {
+        // The footer must NOT show the per-turn `N in · N out` usage — the user
+        // does not want it. It still carries cwd · status (and ctx when known).
         let mut a = app();
-        a.set_usage(Some("1.2k in · 340 out".to_string()));
-        let joined = a.render(80).join("\n");
-        assert!(joined.contains("1.2k in"));
+        a.set_context_window(Some(128_000));
+        a.set_context_tokens(Some(61_200));
+        let lines = a.render(120);
+        let joined = lines.join("\n");
+        let footer_line = lines
+            .iter()
+            .rfind(|l| l.contains("~/proj"))
+            .expect("footer line present");
+        // no per-turn token usage text anywhere in the footer.
+        assert!(!footer_line.contains(" in "), "footer must not show `… in …` usage");
+        assert!(!footer_line.contains(" out"), "footer must not show `… out` usage");
+        // cwd + status + ctx are still present.
+        assert!(footer_line.contains("~/proj"), "footer cwd present");
+        assert!(footer_line.contains("ready"), "footer status present");
+        assert!(joined.contains("ctx 61.2k/128k (48%)"), "footer ctx present");
     }
 
     // ---- FIX 3: context-window occupancy in footer ----
