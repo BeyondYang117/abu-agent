@@ -8,6 +8,7 @@
 //! No TUI, no run_python, no sessions yet.
 
 pub mod config;
+pub mod errors;
 pub mod executor;
 pub mod host;
 pub mod interactive;
@@ -439,7 +440,13 @@ pub async fn run_print(options: PrintOptions, state: &Arc<AppState>) -> Result<S
         runtime_messages,
     );
 
-    let result = run_agent_loop(config, &host, &executor).await?;
+    // Map the loop error to a concise, actionable message before bubbling it up,
+    // so `-p` mode prints a friendly one-liner (the bin just `eprintln!`s it)
+    // instead of the raw provider JSON / retry-count noise. Cancellation is
+    // passed through unchanged by `friendly_error`.
+    let result = run_agent_loop(config, &host, &executor)
+        .await
+        .map_err(|err| errors::friendly_error(&err))?;
     Ok(result.content)
 }
 

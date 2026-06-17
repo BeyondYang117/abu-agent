@@ -43,6 +43,7 @@ use serde_json::{json, Value};
 use crate::chat::agent::run_agent_loop;
 use crate::chat::agent::types::AgentRunResult;
 use crate::chat::types::{ToolCallRecord, ToolCallStatus};
+use crate::kivio_code::errors;
 use crate::kivio_code::executor::CliToolExecutor;
 use crate::kivio_code::session::{Session, SessionRecord};
 use crate::kivio_code::{build_app_state, load_settings_from_disk, TurnAssembly};
@@ -401,7 +402,9 @@ impl TurnRuntime {
                         message_id: done.message_id.clone(),
                         reason: "error".to_string(),
                     });
-                    app.push_notice(format!("Error: {err}"));
+                    // Surface a concise, actionable notice instead of the raw provider
+                    // JSON / retry-count noise (e.g. a 402 balance error → one Chinese line).
+                    app.push_notice(errors::friendly_error(&err));
                 }
             }
         }
