@@ -174,7 +174,7 @@ impl TurnRuntime {
         let skill_registry = assembly.skill_registry.clone();
         let chat_tools = assembly.effective_chat_tools.clone();
         let messages = self.runtime_messages.clone();
-        let cwd_root = self.cwd.to_string_lossy().into_owned();
+        let cwd = self.cwd.clone();
         let http = self.state.http.clone();
         let timeout_ms = self.timeout_ms;
         let done_tx = self.turn_done_tx.clone();
@@ -182,7 +182,7 @@ impl TurnRuntime {
 
         self.handle.spawn(async move {
             let executor = CliToolExecutor::new(
-                vec![cwd_root],
+                &cwd,
                 http,
                 timeout_ms,
                 state.clone(),

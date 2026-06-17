@@ -388,10 +388,9 @@ pub async fn run_print(options: PrintOptions, state: &Arc<AppState>) -> Result<S
         json!({ "role": "user", "content": options.prompt }),
     ];
 
-    let cwd_root = options.cwd.to_string_lossy().into_owned();
     let host = CliAgentHost::new(options.verbose, !options.no_approve);
     let executor = CliToolExecutor::new(
-        vec![cwd_root],
+        &options.cwd,
         state.http.clone(),
         assembly.effective_chat_tools.tool_timeout_ms,
         state.clone(),

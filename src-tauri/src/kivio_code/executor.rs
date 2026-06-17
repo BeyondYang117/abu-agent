@@ -2,7 +2,11 @@
 //!
 //! Dispatches ONLY the core coding tools by `openai_tool_name()` / `name`,
 //! calling the pure `native_tools::` functions directly (they need no
-//! `AppHandle`) against a `NativeToolWorkspace::global` rooted at the CLI's cwd.
+//! `AppHandle`) against a `NativeToolWorkspace::project` rooted at the CLI's cwd.
+//! A PROJECT workspace makes RELATIVE paths resolve against the project root
+//! (the standard coding-agent convention) — a `global` workspace would instead
+//! join relative paths to the user HOME, so `.agent/AGENTS.md` would land in
+//! `~/.agent/`, not the project. Absolute / `~` paths still go anywhere.
 //! Results are wrapped into `McpToolCallResult` via the same registry helpers
 //! the Tauri path uses, so model-facing tool output is byte-identical.
 //!
@@ -14,6 +18,7 @@
 
 use reqwest::Client;
 use serde_json::Value;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::chat::agent::execute::{ToolExecutionContext, ToolExecutor, ToolExecutorFuture};
@@ -31,6 +36,24 @@ use crate::native_tools::{
 use crate::settings::ChatToolsConfig;
 use crate::skills::{self, SkillRegistry};
 use crate::state::AppState;
+
+/// Build a PROJECT-rooted tool workspace from the CLI's working directory, so
+/// RELATIVE tool paths (e.g. `.agent/AGENTS.md`, `src/x.rs`) resolve against the
+/// project root rather than the user HOME (which is what `global` would do).
+/// `project_id` is a stable synthetic id; `project_name` is the cwd's directory
+/// name (fallback "project"); the root is the absolute cwd.
+fn project_workspace_for_cwd(cwd: &Path) -> NativeToolWorkspace {
+    let project_name = cwd
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "project".to_string());
+    NativeToolWorkspace::project(
+        "kivio-code-cli".to_string(),
+        project_name,
+        Some(cwd.to_string_lossy().into_owned()),
+    )
+}
 
 pub struct CliToolExecutor {
     workspace: NativeToolWorkspace,
@@ -53,7 +76,7 @@ pub struct CliToolExecutor {
 
 impl CliToolExecutor {
     pub fn new(
-        cwd_roots: Vec<String>,
+        cwd: &Path,
         http: Client,
         default_timeout_ms: u64,
         state: Arc<AppState>,
@@ -61,7 +84,7 @@ impl CliToolExecutor {
         chat_tools: ChatToolsConfig,
     ) -> Self {
         Self {
-            workspace: NativeToolWorkspace::global(&cwd_roots),
+            workspace: project_workspace_for_cwd(cwd),
             http,
             default_timeout_ms,
             state,
@@ -284,7 +307,7 @@ mod tests {
         let chat_tools = settings.chat_tools.clone();
         let state = Arc::new(AppState::new_headless(settings, dir.join("usage")));
         let executor = CliToolExecutor::new(
-            vec![dir.to_string_lossy().into_owned()],
+            &dir,
             reqwest::Client::new(),
             120_000,
             state,
@@ -364,6 +387,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_file_relative_path_lands_under_project_not_home() {
+        // Regression guard: a RELATIVE write path must resolve against the CLI's
+        // project cwd, NOT the user HOME. A `global` workspace joins relative
+        // paths to HOME (so `.agent/AGENTS.md` would land in `~/.agent/`); the
+        // project workspace must keep it inside the temp project dir.
+        let (dir, executor) = temp_workspace();
+
+        let result = executor
+            .call(
+                &ctx(),
+                &tool("write_file"),
+                serde_json::json!({ "path": ".agent/AGENTS.md", "content": "project-rooted" }),
+                None,
+            )
+            .await
+            .expect("write_file ok");
+        assert!(!result.is_error);
+
+        // The file exists under the project cwd, and NOT under HOME.
+        let in_project = dir.join(".agent").join("AGENTS.md");
+        assert_eq!(
+            std::fs::read_to_string(&in_project).unwrap(),
+            "project-rooted",
+            "relative write must land under the project cwd"
+        );
+        // The HOME-rooted location a `global` workspace would have used must not
+        // hold this content (the temp project dir lives outside HOME).
+        let in_home = crate::native_tools::user_home_dir()
+            .unwrap()
+            .join(".agent")
+            .join("AGENTS.md");
+        let home_has_our_content = std::fs::read_to_string(&in_home)
+            .map(|content| content == "project-rooted")
+            .unwrap_or(false);
+        assert!(
+            !home_has_our_content || in_home == in_project,
+            "relative write must NOT land under the user HOME"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn relative_read_and_list_resolve_against_project_cwd() {
+        let (dir, executor) = temp_workspace();
+        std::fs::create_dir_all(dir.join("sub")).expect("mkdir sub");
+        std::fs::write(dir.join("sub").join("x.txt"), "relative-read").expect("write x");
+
+        // Relative read resolves against the project cwd.
+        let read = executor
+            .call(
+                &ctx(),
+                &tool("read_file"),
+                serde_json::json!({ "path": "sub/x.txt" }),
+                None,
+            )
+            .await
+            .expect("read_file ok");
+        assert!(!read.is_error);
+        assert!(read.content.contains("relative-read"));
+
+        // Relative list ("." = project root) resolves against the project cwd.
+        let list = executor
+            .call(
+                &ctx(),
+                &tool("list_dir"),
+                serde_json::json!({ "path": ".", "include_hidden": false }),
+                None,
+            )
+            .await
+            .expect("list_dir ok");
+        assert!(!list.is_error);
+        assert!(list.content.contains("sub"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn absolute_path_still_writes_and_reads_at_that_location() {
+        // An absolute path must bypass project-root confinement (the standard
+        // convention: absolute / ~ may go anywhere), so a write to an absolute
+        // path outside the project cwd still lands there.
+        let (dir, executor) = temp_workspace();
+        let other = std::env::temp_dir().join(format!("kivio-code-abs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&other).expect("create other dir");
+        let abs_file = other.join("absolute.txt");
+
+        let write = executor
+            .call(
+                &ctx(),
+                &tool("write_file"),
+                serde_json::json!({ "path": abs_file.to_string_lossy(), "content": "absolute" }),
+                None,
+            )
+            .await
+            .expect("write_file ok");
+        assert!(!write.is_error);
+        assert_eq!(std::fs::read_to_string(&abs_file).unwrap(), "absolute");
+
+        let read = executor
+            .call(
+                &ctx(),
+                &tool("read_file"),
+                serde_json::json!({ "path": abs_file.to_string_lossy() }),
+                None,
+            )
+            .await
+            .expect("read_file ok");
+        assert!(!read.is_error);
+        assert!(read.content.contains("absolute"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[tokio::test]
     async fn unknown_tool_errors() {
         let (dir, executor) = temp_workspace();
         let result = executor
@@ -422,7 +561,7 @@ mod tests {
 
         let state = Arc::new(AppState::new_headless(settings, dir.join("usage")));
         let executor = CliToolExecutor::new(
-            vec![dir.to_string_lossy().into_owned()],
+            &dir,
             reqwest::Client::new(),
             120_000,
             state,
