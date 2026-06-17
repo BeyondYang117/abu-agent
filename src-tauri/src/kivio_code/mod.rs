@@ -209,6 +209,7 @@ Guidelines:\n\
 - Use the tools to inspect and modify files instead of guessing. Prefer read_file over cat, grep over manual scanning.\n\
 - Make edits with edit_file using exact, unique text matches; use write_file only for new files or full rewrites.\n\
 - Run commands with bash (run_command) when you need to build, test, or inspect the environment.\n\
+- Tool paths are relative to the working directory shown below. To inspect the current directory, call ls with no path (or path \".\"). Use a relative path like \"src\" for subdirectories. Do NOT invent or guess an absolute path, and never translate or \"correct\" directory names — copy them verbatim from the working directory below or from earlier tool output.\n\
 - Be concise. Show file paths clearly. Do only what the task requires.\n\
 - When the task is complete, give a short final answer summarizing what you did.\n\
 {project_block}\

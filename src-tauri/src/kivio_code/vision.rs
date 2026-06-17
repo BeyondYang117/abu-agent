@@ -174,23 +174,36 @@ pub(crate) async fn run_vision_mixer(
         provider.name.clone()
     };
 
-    let mut observations = Vec::with_capacity(image_paths.len());
-    for (idx, path) in image_paths.iter().enumerate() {
-        let label = labels
-            .get(idx)
-            .cloned()
-            .unwrap_or_else(|| format!("[Image #{}]", idx + 1));
-        let analysis = match analyze_one_image(state, &provider, &model, path, user_text).await {
-            Ok(text) => text,
-            Err(err) => format!("(vision analysis failed: {err})"),
-        };
-        observations.push(ImageObservation { label, analysis });
-    }
+    // 各图分析彼此独立：构造一组 future 并用 `join_all` 并发驱动（与
+    // `mcp_setup` / `mcp::registry` 同一模式——借用 `&AppState` / `&provider`，
+    // 无需 'static / spawn）。`join_all` **保序**返回，故 observation 顺序仍与
+    // `image_paths` 一致，`[Image #N]` 编号不会错位。串行 await 会让多图变成
+    // 依次阻塞的多次模型调用，并行后墙钟时间降到最慢的单张。
+    let analyses = futures::future::join_all(image_paths.iter().enumerate().map(
+        |(idx, path)| {
+            let provider = &provider;
+            let model = &model;
+            async move {
+                let label = labels
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("[Image #{}]", idx + 1));
+                let analysis = match analyze_one_image(state, provider, model, path, user_text)
+                    .await
+                {
+                    Ok(text) => text,
+                    Err(err) => format!("(vision analysis failed: {err})"),
+                };
+                ImageObservation { label, analysis }
+            }
+        },
+    ))
+    .await;
 
     VisionMixerOutcome::Analyzed {
         provider_name,
         model,
-        observations,
+        observations: analyses,
     }
 }
 

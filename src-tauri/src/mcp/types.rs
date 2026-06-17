@@ -327,14 +327,14 @@ pub fn native_list_dir_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__list_dir".to_string(),
         name: "ls".to_string(),
-        description: "List files and directories. Relative paths resolve from the project root (or home) for convenience; absolute or ~/ paths may point anywhere on disk.".to_string(),
+        description: "List files and directories. Omit path (or pass \".\") to list the current working directory; relative paths resolve from it. Do not guess or invent an absolute path, and never translate/\"correct\" directory names — pass an absolute or ~/ path only when the user gave one or an earlier tool returned it.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Directory path, defaults to project root/current workspace" },
+                "path": { "type": "string", "description": "Directory to list. Defaults to the current working directory; relative paths resolve from it. Do not fabricate an absolute path." },
                 "include_hidden": { "type": "boolean", "description": "Include dotfiles and hidden entries" },
                 "max_entries": { "type": "integer", "description": "Maximum entries to return, default 200, max 500" }
             }

@@ -2152,7 +2152,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_session_path_swaps_runtime_messages() {        let cwd = unique_cwd("resumepath");
+    async fn resume_session_path_swaps_runtime_messages() {
+        let cwd = unique_cwd("resumepath");
         let (mut rt, _done) = turn_runtime_with(test_settings(), &cwd);
 
         // Build a separate session on disk with two messages.
