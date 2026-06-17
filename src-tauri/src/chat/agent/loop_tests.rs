@@ -2075,6 +2075,104 @@
         );
     }
 
+    /// Overflow recovery (success): non-stream synthesis fails with a 400 that
+    /// classifies as ContextOverflow; recovery compacts once and re-sends the
+    /// synthesis call, which succeeds. The retried answer (not the gathered
+    /// fallback) is used, and the loop completes via the "recovered" outcome.
+    #[tokio::test]
+    async fn run_loop_overflow_recovery_compacts_and_retries_success() {
+        let retry_answer = serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "summary after compaction"
+                }
+            }]
+        })
+        .to_string();
+        let server = MockModelServer::start(vec![
+            MockResponse::Json(planning_tool_call_json()),
+            // Synthesis call #1 fails with an overflow-shaped 400.
+            MockResponse::Status(
+                400,
+                r#"{"error":{"message":"This model's maximum context length is 8192 tokens"}}"#
+                    .to_string(),
+            ),
+            // CompactAndRetry re-sends synthesis; this one succeeds.
+            MockResponse::Json(retry_answer),
+        ]);
+        let state = test_app_state();
+        let config = test_run_config(&state, &server.base_url, false);
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("overflow recovery must not bubble Err");
+
+        // The retried summary is used — NOT the gathered fallback.
+        assert_eq!(result.content, "summary after compaction");
+        assert_eq!(result.stream_outcome, "recovered");
+        assert_eq!(result.tool_records.len(), 1);
+        assert!(matches!(
+            result.tool_records[0].status,
+            ToolCallStatus::Success
+        ));
+        // The model was called exactly 3 times: planning, failed synthesis, retry.
+        assert_eq!(server.captured_bodies().len(), 3);
+        assert_eq!(
+            host.recorded_dones(),
+            vec![("done".to_string(), "summary after compaction".to_string())]
+        );
+    }
+
+    /// Overflow recovery (single-attempt guard): both the synthesis call and the
+    /// compact-and-retry call fail with overflow 400. Recovery must NOT loop —
+    /// it degrades to the gathered-results fallback after exactly one retry.
+    #[tokio::test]
+    async fn run_loop_overflow_recovery_retries_once_then_degrades() {
+        let overflow_400 = MockResponse::Status(
+            400,
+            r#"{"error":{"message":"prompt is too long: exceeds the maximum context length"}}"#
+                .to_string(),
+        );
+        let server = MockModelServer::start(vec![
+            MockResponse::Json(planning_tool_call_json()),
+            // Synthesis call #1: overflow.
+            MockResponse::Status(
+                400,
+                r#"{"error":{"message":"prompt is too long: exceeds the maximum context length"}}"#
+                    .to_string(),
+            ),
+            // CompactAndRetry re-send: still overflow → degrade, no further retry.
+            overflow_400,
+        ]);
+        let state = test_app_state();
+        let config = test_run_config(&state, &server.base_url, false);
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("overflow recovery exhaustion must not bubble Err");
+
+        let recovered = crate::chat::agent::recovery::assemble_results_from_tool_records(
+            &result.tool_records,
+            "zh-CN",
+        );
+        assert!(recovered.contains("result:read"));
+        assert_eq!(result.content, recovered);
+        assert_eq!(result.stream_outcome, "recovered");
+        // Single-attempt guard: planning + failed synthesis + ONE retry = 3 calls,
+        // not an unbounded compact→retry loop.
+        assert_eq!(server.captured_bodies().len(), 3);
+        assert_eq!(
+            host.recorded_dones(),
+            vec![("done".to_string(), recovered.clone())]
+        );
+    }
+
     /// Fallback F: non-streamed synthesis returns empty content after tool results;
     /// the bilingual fallback replaces it and reasoning is still passed through.
     #[tokio::test]

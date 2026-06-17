@@ -303,6 +303,11 @@ where
 
 /// 带重试机制的 HTTP 发送函数
 /// 对可重试的错误（限流、服务器错误、超时、连接失败）进行指数退避重试
+///
+/// 职责边界:这里只做**传输层重试**(429 / 5xx / 网络超时连接错误的退避;坏 key 换 key)。
+/// **语义级恢复**(上下文超长 overflow 的「压缩后重试」、内容审核去敏重试、确定性兜底)
+/// 不在此处——归 `chat/agent/recovery.rs`(分类 + 策略中枢)+ `chat/agent/synthesis.rs`
+/// (执行)。不要在这里加 overflow / 去敏判定,避免与上层语义恢复重复退避、放大延迟。
 pub async fn send_with_retry<F, Fut>(
     label: &str,
     attempts: usize,
