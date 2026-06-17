@@ -1485,7 +1485,7 @@
 
         // 框架恢复:合成被拒(400)后不再吐静态"失败"文案,而是用已收集的工具结果兜底。
         let recovered =
-            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN");
+            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN", crate::chat::agent::recovery::FailureKind::Other);
         assert!(recovered.contains("result:read"));
         assert_eq!(result.stream_outcome, "recovered");
         assert_eq!(result.content, recovered);
@@ -1995,7 +1995,7 @@
             .expect("empty synthesis with tool records must not bubble Err");
 
         let recovered =
-            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN");
+            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN", crate::chat::agent::recovery::FailureKind::Empty);
         assert!(recovered.contains("result:read"));
         assert_eq!(result.stream_outcome, "completed");
         assert_eq!(result.content, recovered);
@@ -2048,7 +2048,7 @@
             .expect("non-stream synthesis failure after tool records must not bubble Err");
 
         let recovered =
-            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN");
+            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN", crate::chat::agent::recovery::FailureKind::Other);
         assert!(recovered.contains("result:read"));
         assert_eq!(result.stream_outcome, "recovered");
         assert_eq!(result.content, recovered);
@@ -2160,6 +2160,7 @@
         let recovered = crate::chat::agent::recovery::assemble_results_from_tool_records(
             &result.tool_records,
             "zh-CN",
+            crate::chat::agent::recovery::FailureKind::ContextOverflow,
         );
         assert!(recovered.contains("result:read"));
         assert_eq!(result.content, recovered);
@@ -2202,7 +2203,7 @@
             .expect("non-stream empty synthesis with tool records must not bubble Err");
 
         let recovered =
-            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN");
+            crate::chat::agent::recovery::assemble_results_from_tool_records(&result.tool_records, "zh-CN", crate::chat::agent::recovery::FailureKind::Empty);
         assert!(recovered.contains("result:read"));
         assert_eq!(result.stream_outcome, "completed");
         assert_eq!(result.content, recovered);

@@ -404,10 +404,10 @@ pub(crate) async fn recover_synthesis(
     match recovery::decide(kind, has_results, false, false) {
         RecoveryAction::Surface => String::new(),
         RecoveryAction::DegradeToGathered => {
-            recovery::assemble_results_from_tool_records(&state.tool_records, &config.language)
+            recovery::assemble_results_from_tool_records(&state.tool_records, &config.language, kind)
         }
         RecoveryAction::CompactAndRetry => recover_overflow_compact_and_retry(env, state).await,
-        RecoveryAction::Remediate => recover_remediate(env, state).await,
+        RecoveryAction::Remediate => recover_remediate(env, state, kind).await,
     }
 }
 
@@ -451,13 +451,21 @@ async fn recover_overflow_compact_and_retry(env: &LoopEnv<'_>, state: &mut RunSt
         text
     } else {
         // 压缩重试仍失败 → 确定性兜底(decide 的 overflow_recovery_attempted=true 臂)。
-        recovery::assemble_results_from_tool_records(&state.tool_records, &config.language)
+        recovery::assemble_results_from_tool_records(
+            &state.tool_records,
+            &config.language,
+            recovery::FailureKind::ContextOverflow,
+        )
     }
 }
 
 /// Remediate 执行:用「用户问题 + 工具产出摘要 + 中立指令」去敏精简后重做一次合成。
 /// 仍失败 → 确定性兜底(decide 的 already_remediated 臂)。
-async fn recover_remediate(env: &LoopEnv<'_>, state: &mut RunState) -> String {
+async fn recover_remediate(
+    env: &LoopEnv<'_>,
+    state: &mut RunState,
+    kind: recovery::FailureKind,
+) -> String {
     let config = env.config;
     let reduced = build_neutral_reduced_messages(state, &config.language);
     let result = call_chat_completion_message_with_usage(
@@ -490,7 +498,7 @@ async fn recover_remediate(env: &LoopEnv<'_>, state: &mut RunState) -> String {
         text
     } else {
         // 去敏重试仍失败 → 确定性兜底(decide 的 already_remediated 臂)。
-        recovery::assemble_results_from_tool_records(&state.tool_records, &config.language)
+        recovery::assemble_results_from_tool_records(&state.tool_records, &config.language, kind)
     }
 }
 

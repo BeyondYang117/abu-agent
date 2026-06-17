@@ -182,14 +182,25 @@ pub(crate) fn decide(
     }
 }
 
-/// 不变式实现:从已收集的工具结果确定性拼出可读答复(不经模型,不会被审核)。
-/// 没有任何可用 preview 时返回空串,调用方据此退回静态文案。
+/// 不变式实现:合成失败后,确定性拼出一条**简短**的降级消息(不经模型,不会被审核)。
+///
+/// 形态:一行真实原因(由 `kind` 决定,例如限流 vs 上下文超长——不再笼统甩"可能上下文过长"
+/// 误导用户)+ 已完成工具的**裁剪后**摘要(每条仅首行、限条数)。完整结果已在上方以工具卡片
+/// 呈现,这里再 dump 全文只会刷出几百行,故只留指针式短摘要。没有任何成功 preview → 返回空串
+/// (调用方据此退回静态文案)。
 pub(crate) fn assemble_results_from_tool_records(
     records: &[ToolCallRecord],
     language: &str,
+    kind: FailureKind,
 ) -> String {
+    /// 摘要里最多列几条工具结果(其余折叠为计数)。
+    const MAX_BLOCKS: usize = 8;
+    /// 每条工具结果保留的最大字符数(只取首行)。
+    const MAX_PREVIEW_CHARS: usize = 200;
+
     let zh = language.starts_with("zh");
     let mut blocks: Vec<String> = Vec::new();
+    let mut overflow = 0usize;
     for record in records {
         if record.status != ToolCallStatus::Success {
             continue;
@@ -199,19 +210,89 @@ pub(crate) fn assemble_results_from_tool_records(
             .as_deref()
             .map(str::trim)
             .filter(|p| !p.is_empty());
-        if let Some(preview) = preview {
-            blocks.push(format!("【{}】\n{}", record.name, preview));
+        let Some(preview) = preview else {
+            continue;
+        };
+        if blocks.len() >= MAX_BLOCKS {
+            overflow += 1;
+            continue;
         }
+        // 只取首个非空行并裁剪——避免把整份工具输出再糊一遍。
+        let first_line = preview
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or(preview);
+        let clipped: String = if first_line.chars().count() > MAX_PREVIEW_CHARS {
+            format!("{}…", first_line.chars().take(MAX_PREVIEW_CHARS).collect::<String>())
+        } else {
+            first_line.to_string()
+        };
+        blocks.push(format!("• {} — {}", record.name, clipped));
     }
     if blocks.is_empty() {
         return String::new();
     }
-    let header = if zh {
-        "未能生成总结(模型供应商内容审核拦截或调用失败,可能是上下文过长)。上方工具结果已保存,你可以更换更大上下文的模型、让我重新生成,或精简上下文后再试。以下是已检索到的内容:"
+    let reason = failure_reason_line(kind, zh);
+    let note = if zh {
+        format!("本轮已完成 {} 个工具调用,完整结果见上方卡片:", blocks.len() + overflow)
     } else {
-        "Could not produce a summary (provider content moderation, call failure, or context too long). The tool results below were saved; you can switch to a larger-context model, regenerate, or trim the context and retry. Here is what was gathered:"
+        format!(
+            "Completed {} tool call(s) this round — full results are shown above:",
+            blocks.len() + overflow
+        )
     };
-    format!("{header}\n\n{}", blocks.join("\n\n"))
+    let mut out = format!("{reason}\n\n{note}\n{}", blocks.join("\n"));
+    if overflow > 0 {
+        out.push_str(&if zh {
+            format!("\n…(另有 {overflow} 条见上方)")
+        } else {
+            format!("\n… ({overflow} more above)")
+        });
+    }
+    out
+}
+
+/// 一行人读的失败原因(按 `kind`)。这是修复「降级消息误导」的核心:429 就说限流,
+/// 上下文超长就说上下文,绝不再把限流说成"可能上下文过长"。
+fn failure_reason_line(kind: FailureKind, zh: bool) -> &'static str {
+    match kind {
+        FailureKind::Exhausted => {
+            if zh {
+                "⚠️ 模型调用被限流或配额耗尽(HTTP 429/5xx),多次退避重试后仍失败 —— 这是请求频率/配额问题,与上下文长度无关。请稍后重试,或为该供应商添加备用 key、更换供应商。"
+            } else {
+                "⚠️ The model was rate-limited or quota-exhausted (HTTP 429/5xx) and still failed after several backoff retries. This is a request-rate/quota issue, unrelated to context length. Retry later, add a backup key, or switch providers."
+            }
+        }
+        FailureKind::ContextOverflow => {
+            if zh {
+                "⚠️ 上下文超出模型窗口,压缩后重试仍失败。请改用更大上下文的模型,或精简对话后重试。"
+            } else {
+                "⚠️ The context exceeded the model's window and still failed after compaction. Switch to a larger-context model or trim the conversation."
+            }
+        }
+        FailureKind::ContentModeration => {
+            if zh {
+                "⚠️ 请求被供应商内容审核拦截。换个措辞,或更换供应商后重试。"
+            } else {
+                "⚠️ The request was blocked by the provider's content moderation. Rephrase or switch providers."
+            }
+        }
+        FailureKind::Empty => {
+            if zh {
+                "⚠️ 模型返回了空响应。请重试,或更换模型。"
+            } else {
+                "⚠️ The model returned an empty response. Retry or switch models."
+            }
+        }
+        FailureKind::Other => {
+            if zh {
+                "⚠️ 模型调用失败。请重试,或更换供应商。"
+            } else {
+                "⚠️ The model call failed. Retry or switch providers."
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -356,11 +437,28 @@ mod tests {
             rec("web_search", ToolCallStatus::Error, Some("不该出现")),
             rec("noop", ToolCallStatus::Success, None),
         ];
-        let out = assemble_results_from_tool_records(&records, "zh-CN");
+        let out = assemble_results_from_tool_records(&records, "zh-CN", FailureKind::Exhausted);
         assert!(out.contains("标题A"));
         assert!(!out.contains("不该出现"));
         assert!(out.contains("web_search"));
+        // 真实原因行出现(限流),不再是误导的"可能上下文过长"。
+        assert!(out.contains("限流") || out.contains("429"));
 
-        assert!(assemble_results_from_tool_records(&[], "zh-CN").is_empty());
+        assert!(assemble_results_from_tool_records(&[], "zh-CN", FailureKind::Exhausted).is_empty());
+    }
+
+    #[test]
+    fn assemble_caps_and_clips_to_avoid_wall_of_text() {
+        // 单条超长 + 多行只保留首行裁剪;>8 条折叠为计数 —— 不再刷几百行。
+        let long = "x".repeat(5000);
+        let mut records: Vec<ToolCallRecord> = (0..12)
+            .map(|i| rec("read", ToolCallStatus::Success, Some(Box::leak(format!("行{i}首行\n{long}").into_boxed_str()))))
+            .collect();
+        records.push(rec("read", ToolCallStatus::Success, Some(Box::leak(long.clone().into_boxed_str()))));
+        let out = assemble_results_from_tool_records(&records, "en", FailureKind::Other);
+        let lines = out.lines().count();
+        assert!(lines < 20, "degrade message must stay compact, got {lines} lines");
+        assert!(!out.contains(&long), "must not dump the full long preview");
+        assert!(out.contains("more above"), "overflow tools should be folded into a count");
     }
 }
