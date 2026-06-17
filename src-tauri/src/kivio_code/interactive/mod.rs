@@ -51,6 +51,7 @@ use crate::state::AppState;
 use super::tui::render::{Component, Tui};
 use super::tui::stdin_buffer::StdinBuffer;
 use super::tui::terminal::{CrosstermTerminal, RawModeGuard, Terminal};
+use super::tui::text_width::truncate_to_width;
 
 /// 输入线程发给主循环的事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,11 +293,12 @@ impl TurnRuntime {
         session_items_for_cwd(&self.cwd)
     }
 
-    /// `/mcp`：探测已配置 MCP 服务器，格式化为一段可读摘要文本（推进 transcript Notice）。
+    /// `/mcp`：探测已配置 MCP 服务器，格式化为一段**每服务器一行**的紧凑摘要（推进 transcript Notice）。
     ///
     /// 在交互 UI 线程上 `block_on` 探测（与启动期 `collect_mcp_tools` 同源、同 ~20s 每服务器
-    /// 上限，故不会无限阻塞）。无服务器配置 / chat tools 关闭时给出对应说明。
-    fn mcp_status_summary(&self) -> String {
+    /// 上限，故不会无限阻塞）。无服务器配置 / chat tools 关闭时给出对应说明。`width` 为终端列宽，
+    /// 每行据此截到一行（ANSI-aware）。
+    fn mcp_status_summary(&self, width: usize) -> String {
         let settings = self.state.settings_read().clone();
         if !settings.chat_tools.enabled {
             return "MCP is off (enable chat tools in the Kivio app).".to_string();
@@ -307,43 +309,15 @@ impl TurnRuntime {
                 &self.state,
                 &settings,
             ));
-        if statuses.is_empty() {
-            return "No MCP servers configured.".to_string();
-        }
-        let mut out = format!("MCP servers ({}):", statuses.len());
-        for s in &statuses {
-            let state_str = if !s.enabled {
-                "disabled".to_string()
-            } else if s.connected {
-                format!("connected · {} tools", s.tools.len())
-            } else {
-                format!(
-                    "error: {}",
-                    s.error.as_deref().unwrap_or("connection failed")
-                )
-            };
-            out.push_str(&format!("\n  {} [{}]  {}", s.name, s.transport, state_str));
-            if s.enabled && s.connected && !s.tools.is_empty() {
-                out.push_str(&format!("\n      {}", s.tools.join(", ")));
-            }
-        }
-        out
+        format_mcp_summary(&statuses, width)
     }
 
-    /// `/skill`：从活动 assembly 的 skill_registry 渲染一段可读技能列表（推进 transcript Notice）。
-    /// 无技能时提示用户去 `<app_data>/skills/…` 放 SKILL.md。
-    fn skill_list_summary(&self) -> String {
+    /// `/skill`：从活动 assembly 的 skill_registry 渲染一段**每技能一行**的紧凑技能列表（推进 transcript
+    /// Notice）。无技能时提示用户去 `<app_data>/skills/…` 放 SKILL.md。`width` 为终端列宽，描述据此截到一行。
+    fn skill_list_summary(&self, width: usize) -> String {
         let summaries =
             crate::kivio_code::skill_setup::skill_summaries(&self.assembly.skill_registry);
-        if summaries.is_empty() {
-            return "No skills found (drop a SKILL.md under <app_data>/skills/…).".to_string();
-        }
-        let mut out = format!("Skills ({}):", summaries.len());
-        for (name, description, enabled) in &summaries {
-            let suffix = if *enabled { "" } else { "  [disabled]" };
-            out.push_str(&format!("\n  {name}  — {description}{suffix}"));
-        }
-        out
+        format_skill_summary(&summaries, width)
     }
 
     /// `/sessions` 选定后：加载该会话，替换 session + 重建 runtime_messages，并刷新 UI transcript。
@@ -520,6 +494,7 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
     let cwd_display = options.cwd_display.clone();
     let mut app = App::new(cwd_display, options.model.clone());
     app.set_terminal_rows(rows);
+    app.set_terminal_cols(cols);
     app.set_show_reasoning(options.verbose);
 
     // 输入线程：raw stdin → StdinBuffer → InputEvent channel。
@@ -723,6 +698,92 @@ fn session_items_for_cwd(cwd: &PathBuf) -> Vec<(String, String, Option<String>)>
         .collect()
 }
 
+// ---- compact one-line-per-entry summaries for `/skill` and `/mcp` ----
+
+const DIM: &str = "\x1b[2m";
+const DIM_OFF: &str = "\x1b[22m";
+const BOLD: &str = "\x1b[1m";
+const BOLD_OFF: &str = "\x1b[22m";
+
+/// Hard char cap for a description before width-truncation: keeps a single very wide
+/// terminal from printing a whole paragraph on one line.
+const DESC_CHAR_CAP: usize = 90;
+
+/// First-line + indent budget the Notice renderer eats: `· ` prefix (2) + padding (1 each
+/// side). Subtract it from the terminal width so a formatted line never wraps.
+const NOTICE_OVERHEAD: usize = 4;
+
+/// First sentence of `desc` (up to the first `. ` / `。`), capped at `DESC_CHAR_CAP` chars.
+/// Collapses internal newlines/runs of whitespace to single spaces so the result is one line.
+fn first_sentence(desc: &str) -> String {
+    let flat: String = desc.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Find the first sentence terminator.
+    let mut end = flat.len();
+    if let Some(idx) = flat.find(". ") {
+        end = end.min(idx + 1); // include the period
+    }
+    if let Some(idx) = flat.find('。') {
+        end = end.min(idx + '。'.len_utf8());
+    }
+    let sentence = &flat[..end];
+    // Hard char cap (char-aware, not byte-aware).
+    let capped: String = sentence.chars().take(DESC_CHAR_CAP).collect();
+    capped
+}
+
+/// Compact `/skill` list: a `Skills · N` header (dim count) then ONE line per skill —
+/// bold name + dim first-sentence description, width-truncated (ANSI-aware) to one line.
+/// Disabled skills are marked `(off)`. Empty → a single friendly line.
+fn format_skill_summary(summaries: &[(String, String, bool)], width: usize) -> String {
+    if summaries.is_empty() {
+        return "No skills found (drop a SKILL.md under <app_data>/skills/…).".to_string();
+    }
+    let usable = width.saturating_sub(NOTICE_OVERHEAD).max(20);
+    let mut out = format!("Skills {DIM}· {}{DIM_OFF}", summaries.len());
+    for (name, description, enabled) in summaries {
+        let off = if *enabled {
+            String::new()
+        } else {
+            format!(" {DIM}(off){DIM_OFF}")
+        };
+        let desc = first_sentence(description);
+        // `name  desc` styled, then width-truncate the WHOLE line (ANSI-aware) so it fits.
+        let line = format!("  {BOLD}{name}{BOLD_OFF}{off}  {DIM}{desc}{DIM_OFF}");
+        out.push('\n');
+        out.push_str(&truncate_to_width(&line, usable, "…", false));
+    }
+    out
+}
+
+/// Compact `/mcp` list: a `MCP servers · N` header (dim count) then ONE line per server —
+/// bold name, dim `[transport]`, status, and `N tools`, width-truncated to one line.
+fn format_mcp_summary(
+    statuses: &[crate::kivio_code::mcp_setup::McpServerStatus],
+    width: usize,
+) -> String {
+    if statuses.is_empty() {
+        return "No MCP servers configured.".to_string();
+    }
+    let usable = width.saturating_sub(NOTICE_OVERHEAD).max(20);
+    let mut out = format!("MCP servers {DIM}· {}{DIM_OFF}", statuses.len());
+    for s in statuses {
+        let status = if !s.enabled {
+            "off".to_string()
+        } else if s.connected {
+            format!("connected · {} tools", s.tools.len())
+        } else {
+            format!("error: {}", s.error.as_deref().unwrap_or("connection failed"))
+        };
+        let line = format!(
+            "  {BOLD}{}{BOLD_OFF}  {DIM}[{}]{DIM_OFF}  {DIM}{}{DIM_OFF}",
+            s.name, s.transport, status
+        );
+        out.push('\n');
+        out.push_str(&truncate_to_width(&line, usable, "…", false));
+    }
+    out
+}
+
 /// `apply_effect` 的控制流结果。
 enum EffectFlow {
     /// 退出事件循环。
@@ -800,7 +861,7 @@ fn apply_effect(
         }
         AppEffect::ShowMcp => {
             if let Some(turn) = turn {
-                let summary = turn.mcp_status_summary();
+                let summary = turn.mcp_status_summary(app.terminal_cols() as usize);
                 app.push_notice(summary);
             } else {
                 app.push_notice("No model configured; MCP unavailable.");
@@ -808,7 +869,7 @@ fn apply_effect(
         }
         AppEffect::ShowSkills => {
             if let Some(turn) = turn {
-                let summary = turn.skill_list_summary();
+                let summary = turn.skill_list_summary(app.terminal_cols() as usize);
                 app.push_notice(summary);
             } else {
                 app.push_notice("No model configured; skills unavailable.");
@@ -856,6 +917,7 @@ fn run_loop(
             Ok(InputEvent::Resize(cols, rows)) => {
                 tui.terminal.set_size(cols, rows);
                 app.set_terminal_rows(rows);
+                app.set_terminal_cols(cols);
                 tui.invalidate();
                 dirty = true;
             }
@@ -863,6 +925,7 @@ fn run_loop(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if tui.terminal.refresh_size() {
                     app.set_terminal_rows(tui.terminal.rows());
+                    app.set_terminal_cols(tui.terminal.columns());
                     tui.invalidate();
                     dirty = true;
                 }
@@ -1075,6 +1138,122 @@ mod tests {
         assert_eq!(split_model_label("gpt-4o"), (None, Some("gpt-4o".to_string())));
         assert_eq!(split_model_label("<no model>"), (None, None));
         assert_eq!(split_model_label(""), (None, None));
+    }
+
+    // ---- compact /skill + /mcp summaries (one line per entry) ----
+
+    use crate::kivio_code::mcp_setup::McpServerStatus;
+    use crate::kivio_code::tui::text_width::visible_width;
+
+    fn skill(name: &str, desc: &str, enabled: bool) -> (String, String, bool) {
+        (name.to_string(), desc.to_string(), enabled)
+    }
+
+    /// The visible width of every line must fit the usable budget (no wrap), and there
+    /// must be exactly one line per skill plus the header.
+    #[test]
+    fn skill_summary_is_one_line_per_skill() {
+        let long = "Discovers and injects project-specific coding guidelines from .trellis/spec/ \
+            before implementation begins. Reads spec indexes and resolves the relevant layers, then \
+            composes a context block the agent uses for the rest of the turn.";
+        let summaries = vec![
+            skill("trellis-before-dev", long, true),
+            skill("trellis-brainstorm", long, true),
+            skill("disabled-one", "A short note.", false),
+        ];
+        let out = format_skill_summary(&summaries, 80);
+        let lines: Vec<&str> = out.lines().collect();
+        // header + one line per skill.
+        assert_eq!(lines.len(), 1 + summaries.len());
+        // header carries the styled count.
+        assert!(lines[0].contains("Skills"), "header: {}", lines[0]);
+        assert!(lines[0].contains('3'), "header count: {}", lines[0]);
+        // every line fits the terminal (usable = 80 - overhead); none wrap.
+        let usable = 80usize - NOTICE_OVERHEAD;
+        for l in &lines[1..] {
+            assert!(
+                visible_width(l) <= usable,
+                "line too wide ({}): {l}",
+                visible_width(l)
+            );
+        }
+    }
+
+    /// A long, multi-sentence description must be reduced to one truncated line ending
+    /// with the ellipsis — not the full paragraph.
+    #[test]
+    fn skill_summary_truncates_long_description() {
+        // A long first sentence (no early period) so the char cap + width truncation both bite.
+        let long = "This single very long opening sentence rambles on well past any reasonable \
+            single line width so it must be cut and never shows later sentences. Second one here.";
+        let out = format_skill_summary(&[skill("alpha", long, true)], 60);
+        // No second sentence text survives (first-sentence + cap drop it).
+        assert!(!out.contains("Second one"), "should not keep later sentences:\n{out}");
+        // It was truncated → ellipsis present.
+        assert!(out.contains('…'), "long desc should be truncated with ellipsis:\n{out}");
+    }
+
+    /// Disabled skills are marked `(off)`.
+    #[test]
+    fn skill_summary_marks_disabled() {
+        let out = format_skill_summary(&[skill("beta", "Nope.", false)], 80);
+        assert!(out.contains("(off)"), "disabled marker:\n{out}");
+    }
+
+    #[test]
+    fn skill_summary_empty_is_one_friendly_line() {
+        let out = format_skill_summary(&[], 80);
+        assert_eq!(out.lines().count(), 1);
+        assert!(out.contains("No skills found"));
+    }
+
+    fn mcp_status(name: &str, transport: &str, connected: bool, tools: &[&str]) -> McpServerStatus {
+        McpServerStatus {
+            id: name.to_string(),
+            name: name.to_string(),
+            transport: transport.to_string(),
+            enabled: true,
+            connected,
+            tools: tools.iter().map(|t| t.to_string()).collect(),
+            error: if connected { None } else { Some("boom".to_string()) },
+        }
+    }
+
+    #[test]
+    fn mcp_summary_is_one_line_per_server() {
+        let statuses = vec![
+            mcp_status("fs", "stdio", true, &["read", "write", "list"]),
+            mcp_status("remote", "streamable_http", false, &[]),
+        ];
+        let out = format_mcp_summary(&statuses, 80);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 1 + statuses.len());
+        assert!(lines[0].contains("MCP servers"));
+        let usable = 80usize - NOTICE_OVERHEAD;
+        for l in &lines[1..] {
+            assert!(visible_width(l) <= usable, "line too wide: {l}");
+        }
+        // Connected server reports its tool count; failed one shows the error.
+        assert!(out.contains("3 tools"));
+        assert!(out.contains("error: boom"));
+    }
+
+    #[test]
+    fn mcp_summary_empty_is_one_friendly_line() {
+        let out = format_mcp_summary(&[], 80);
+        assert_eq!(out.lines().count(), 1);
+        assert!(out.contains("No MCP servers configured"));
+    }
+
+    #[test]
+    fn first_sentence_stops_at_period_and_caps() {
+        assert_eq!(first_sentence("Hello world. More text."), "Hello world.");
+        assert_eq!(first_sentence("你好世界。后面还有。"), "你好世界。");
+        // Collapses internal whitespace/newlines.
+        assert_eq!(first_sentence("a\n  b\tc"), "a b c");
+        // Hard char cap.
+        let long = "x".repeat(200);
+        assert_eq!(first_sentence(&long).chars().count(), DESC_CHAR_CAP);
     }
 
     /// The footer ctx gauge MUST use the exact same estimator the agent loop's

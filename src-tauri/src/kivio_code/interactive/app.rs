@@ -165,6 +165,8 @@ pub struct App {
     /// kivio-code 配置 `read_claude_dir` 的内存副本（`/settings` 翻转时同步更新 +
     /// 落盘）。下一轮 `build_system_prompt` 直接读磁盘上的同一值，故无需把它穿透进 TurnRuntime。
     read_claude_dir: bool,
+    /// 最近一次 resize / 初始化时的终端宽度（列）。`/skill`·`/mcp` 等摘要据此把每条截断到一行。
+    terminal_cols: u16,
 }
 
 impl App {
@@ -200,6 +202,7 @@ impl App {
             // Seed from the persisted kivio-code config so `/settings` reflects the
             // saved value; the event loop may override via `set_read_claude_dir`.
             read_claude_dir: crate::kivio_code::config::load().read_claude_dir,
+            terminal_cols: 80,
         }
     }
 
@@ -238,6 +241,17 @@ impl App {
     /// 终端尺寸变化时调用（editor 据此决定可见行数 / 翻页）。
     pub fn set_terminal_rows(&mut self, rows: u16) {
         self.editor.set_terminal_rows(rows as usize);
+    }
+
+    /// 记录终端宽度（列）。`render` 每帧也会刷新它；事件循环在 resize 时可显式设置，
+    /// 让 `/skill`·`/mcp` 之类的摘要在下一帧前已知一个合理宽度。
+    pub fn set_terminal_cols(&mut self, cols: u16) {
+        self.terminal_cols = cols;
+    }
+
+    /// 最近已知的终端宽度（列）。`/skill`·`/mcp` 摘要据此把每条截断到一行。
+    pub fn terminal_cols(&self) -> u16 {
+        self.terminal_cols
     }
 
     pub fn mode(&self) -> AppMode {
@@ -936,6 +950,7 @@ impl App {
     ///
     /// 每次调用重建组件树：transcript 体量在 5a 可控，重建简单可靠；5b 大 transcript 可改增量缓存。
     pub fn render(&mut self, width: u16) -> Vec<String> {
+        self.terminal_cols = width;
         let mut lines: Vec<String> = Vec::new();
 
         // 品牌欢迎头（首屏页眉）。
