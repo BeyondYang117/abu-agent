@@ -27,6 +27,8 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "init", aliases: &[], description: "Analyze the project and write KIVIO.md" },
     SlashCommandSpec { name: "mcp", aliases: &[], description: "List configured MCP servers and their status" },
     SlashCommandSpec { name: "skill", aliases: &["skills"], description: "List discovered skills" },
+    SlashCommandSpec { name: "plan", aliases: &[], description: "Switch to plan mode (read-only research & planning)" },
+    SlashCommandSpec { name: "build", aliases: &[], description: "Switch to build mode (full tools)" },
     SlashCommandSpec { name: "settings", aliases: &["setting", "config"], description: "Toggle kivio-code settings" },
     SlashCommandSpec { name: "quit", aliases: &["exit", "q"], description: "Exit kivio-code" },
 ];
@@ -60,6 +62,10 @@ pub enum SlashOutcome {
     ShowSkills,
     /// `/settings`（别名 `/setting`、`/config`）：打开设置覆盖层（事件循环填充可切换项）。
     OpenSettings,
+    /// `/plan`：切到只读 plan 工作模式（App 据此 gate 工具 + 注入 plan 系统提示）。
+    EnterPlan,
+    /// `/build`：切回 build 工作模式（全工具集）。
+    EnterBuild,
     /// 未知命令（携带去掉前导 `/` 的命令名）。
     Unknown(String),
 }
@@ -89,6 +95,8 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
         Some("init") => SlashOutcome::RunInit,
         Some("mcp") => SlashOutcome::ShowMcp,
         Some("skill") => SlashOutcome::ShowSkills,
+        Some("plan") => SlashOutcome::EnterPlan,
+        Some("build") => SlashOutcome::EnterBuild,
         Some("settings") => SlashOutcome::OpenSettings,
         Some("quit") => SlashOutcome::Quit,
         _ => SlashOutcome::Unknown(name),
@@ -165,6 +173,21 @@ mod tests {
         assert_eq!(dispatch_slash("/settings"), SlashOutcome::OpenSettings);
         assert_eq!(dispatch_slash("/setting"), SlashOutcome::OpenSettings);
         assert_eq!(dispatch_slash("/config"), SlashOutcome::OpenSettings);
+    }
+
+    #[test]
+    fn plan_and_build_set_mode() {
+        assert_eq!(dispatch_slash("/plan"), SlashOutcome::EnterPlan);
+        assert_eq!(dispatch_slash("/build"), SlashOutcome::EnterBuild);
+    }
+
+    #[test]
+    fn help_lists_plan_and_build() {
+        let SlashOutcome::Notice(text) = dispatch_slash("/help") else {
+            panic!("expected notice");
+        };
+        assert!(text.contains("/plan"));
+        assert!(text.contains("/build"));
     }
 
     #[test]

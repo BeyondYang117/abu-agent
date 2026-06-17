@@ -30,7 +30,7 @@ pub mod slash;
 pub mod tool_card;
 
 pub use agent_host::{AgentUiEvent, Generations, InteractiveAgentHost, RunCancel};
-pub use app::{App, AppEffect, AppMode, ToolCard, ToolCardPlaceholder};
+pub use app::{App, AppEffect, AppMode, AgentMode, ToolCard, ToolCardPlaceholder};
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -150,7 +150,11 @@ impl TurnRuntime {
 
     /// 起一轮 agent turn：把 user 消息持久化 + 累积进 runtime_messages，新建 generation/cancel，
     /// 在 tokio runtime 上 spawn 跑 `run_agent_loop`，事件经 `agent_tx` 回到主循环。
-    fn begin_turn(&mut self, text: String, agent_tx: &Sender<AgentUiEvent>) {
+    ///
+    /// `plan_mode`（来自 App 的当前 [`AgentMode`]）gate 本轮工具集为只读，并把一条**临时** plan-mode
+    /// system note 追加到本轮 `runtime_messages` 的 **克隆**（不污染存储的 `self.runtime_messages`），
+    /// 让模型只研究/搜索 + 出方案。
+    fn begin_turn(&mut self, text: String, agent_tx: &Sender<AgentUiEvent>, plan_mode: bool) {
         // 持久化 user 消息（best-effort）。
         self.append_session(SessionRecord::Message {
             id: String::new(),
@@ -175,7 +179,16 @@ impl TurnRuntime {
         let assembly = self.assembly.clone();
         let skill_registry = assembly.skill_registry.clone();
         let chat_tools = assembly.effective_chat_tools.clone();
-        let messages = self.runtime_messages.clone();
+        // Clone the accumulated context for this turn; in plan mode append a TRANSIENT
+        // plan-mode system note to the CLONE only — `self.runtime_messages` is left
+        // unchanged so switching back to build doesn't carry a stale plan instruction.
+        let mut messages = self.runtime_messages.clone();
+        if plan_mode {
+            messages.push(json!({
+                "role": "system",
+                "content": crate::kivio_code::PLAN_SYSTEM_NOTE,
+            }));
+        }
         let cwd = self.cwd.clone();
         let http = self.state.http.clone();
         let timeout_ms = self.timeout_ms;
@@ -200,6 +213,7 @@ impl TurnRuntime {
                 run_message_id.clone(),
                 generation,
                 messages,
+                plan_mode,
             );
             let result = run_agent_loop(config, &host, &executor).await;
             let _ = done_tx.send(TurnDone {
@@ -851,8 +865,9 @@ fn apply_effect(
         AppEffect::Submitted(text) => {
             if let Some(turn) = turn {
                 if !turn.is_generating() {
+                    let plan_mode = app.agent_mode() == AgentMode::Plan;
                     app.set_mode(AppMode::Generating);
-                    turn.begin_turn(text, agent_tx);
+                    turn.begin_turn(text, agent_tx, plan_mode);
                 }
             } else {
                 app.push_notice("No model configured; cannot run.");
@@ -2007,8 +2022,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_session_path_swaps_runtime_messages() {
-        let cwd = unique_cwd("resumepath");
+    async fn resume_session_path_swaps_runtime_messages() {        let cwd = unique_cwd("resumepath");
         let (mut rt, _done) = turn_runtime_with(test_settings(), &cwd);
 
         // Build a separate session on disk with two messages.
@@ -2039,6 +2053,36 @@ mod tests {
             Some(ctx_estimate(&rt.runtime_messages))
         );
 
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// In plan mode, begin_turn appends the plan-mode system note to the PER-TURN
+    /// message clone only — the stored `runtime_messages` must grow by exactly one
+    /// (the user message), NOT by the plan note too.
+    #[tokio::test]
+    async fn begin_turn_plan_mode_does_not_grow_stored_runtime_messages() {
+        let cwd = unique_cwd("planturn");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        let before = rt.runtime_messages.len(); // [system]
+        let (agent_tx, _agent_rx) = mpsc::channel::<AgentUiEvent>();
+
+        rt.begin_turn("plan this".to_string(), &agent_tx, /* plan_mode */ true);
+
+        // Only the user message was appended to the stored context — the transient
+        // plan-mode system note lives on the spawned task's clone, not here.
+        assert_eq!(rt.runtime_messages.len(), before + 1);
+        assert_eq!(rt.runtime_messages.last().unwrap()["content"], "plan this");
+        assert_eq!(rt.runtime_messages.last().unwrap()["role"], "user");
+        // No plan-mode system note leaked into the stored messages.
+        assert!(
+            !rt.runtime_messages
+                .iter()
+                .any(|m| m["content"] == crate::kivio_code::PLAN_SYSTEM_NOTE),
+            "plan note must not be stored in runtime_messages"
+        );
+
+        rt.request_cancel();
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
     }

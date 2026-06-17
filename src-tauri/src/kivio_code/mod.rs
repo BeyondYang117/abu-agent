@@ -39,6 +39,19 @@ use executor::CliToolExecutor;
 use host::CliAgentHost;
 pub use settings_loader::{load_settings_from_disk, load_settings_from_path};
 
+/// Plan-mode system note appended to a turn's message clone (never to the stored
+/// `runtime_messages`) when the interactive App is in [`AgentMode::Plan`]. It tells the
+/// model it is in read-only research/planning mode: research by reading/searching, do NOT
+/// mutate files or run commands or claim to have made changes, and produce a concise,
+/// numbered, executable plan that is implemented only after switching to build mode.
+///
+/// (Tooling already enforces read-only via [`into_config`]'s `plan_mode` filter; this note
+/// is the behavioral half so the model proposes a plan instead of trying to act.)
+///
+/// [`AgentMode::Plan`]: crate::kivio_code::interactive::AgentMode
+/// [`into_config`]: TurnAssembly::into_config
+pub const PLAN_SYSTEM_NOTE: &str = "You are in PLAN mode (read-only). Research the project by reading and searching files; you CANNOT modify files, run commands, or claim to have made any changes. Produce a concise, numbered, executable plan, and state that implementation happens after the user switches to build mode.";
+
 /// Options for a single print-mode run, parsed from CLI args by the bin.
 #[derive(Debug, Clone)]
 pub struct PrintOptions {
@@ -333,6 +346,13 @@ impl TurnAssembly {
     /// is the full conversation context (system + prior turns + new user message);
     /// `message_id`/`run_id` identify this turn; `generation` is the cancel token
     /// the host's `is_generation_active` polls against.
+    ///
+    /// `plan_mode` gates the tool set: when true, the assembled tools are filtered to
+    /// only [`ChatToolDefinition::is_read_only_tool`] entries (drops write/edit/bash;
+    /// keeps read/ls/grep/find/web_fetch + read-only skill tools), so a plan-mode turn
+    /// cannot mutate the workspace. Print mode passes `false` (plan mode is interactive
+    /// only); the plan-mode SYSTEM note is injected by the caller into the per-turn
+    /// `runtime_messages` clone (see [`PLAN_SYSTEM_NOTE`]).
     #[allow(clippy::too_many_arguments)]
     pub fn into_config<'a>(
         &'a self,
@@ -342,6 +362,7 @@ impl TurnAssembly {
         message_id: String,
         generation: u64,
         runtime_messages: Vec<Value>,
+        plan_mode: bool,
     ) -> AgentRunConfig<'a> {
         // Assemble the per-turn tool set from all sources: core coding tools,
         // MCP server tools, and skill-provided tools. Each source owns its own
@@ -350,6 +371,12 @@ impl TurnAssembly {
         let mut tools = core_tool_definitions();
         tools.extend(self.mcp_tools.clone());
         tools.extend(skill_setup::skill_tool_definitions(&self.skill_registry));
+
+        // Plan mode: keep only read-only tools (read/ls/grep/find/web_fetch + read-only
+        // skill tools); drop write/edit/bash so the turn cannot mutate the workspace.
+        if plan_mode {
+            tools.retain(|t| t.is_read_only_tool());
+        }
 
         AgentRunConfig {
             entry: AgentRunEntry::Send,
@@ -438,6 +465,7 @@ pub async fn run_print(options: PrintOptions, state: &Arc<AppState>) -> Result<S
         "kivio-code-msg".to_string(),
         host.generation(),
         runtime_messages,
+        /* plan_mode */ false,
     );
 
     // Map the loop error to a concise, actionable message before bubbling it up,
@@ -639,5 +667,39 @@ mod tests {
     fn provider_model_display_helper() {
         assert_eq!(provider_model_display("OpenAI", "p1", "gpt-4o"), "OpenAI · gpt-4o");
         assert_eq!(provider_model_display("  ", "p1", "gpt-4o"), "p1 · gpt-4o");
+    }
+
+    #[test]
+    fn into_config_plan_mode_drops_mutating_tools() {
+        let assembly = assembly_with("chat", "Chat", "m1");
+        let state = build_app_state(assembly.settings.clone());
+
+        let tool_names = |plan_mode: bool| -> Vec<String> {
+            let cfg = assembly.into_config(
+                &state,
+                "c".to_string(),
+                "r".to_string(),
+                "msg".to_string(),
+                1,
+                Vec::new(),
+                plan_mode,
+            );
+            cfg.tools.iter().map(|t| t.name.clone()).collect()
+        };
+
+        // Build mode keeps the full core set (incl. write/edit/bash).
+        let build = tool_names(false);
+        for expected in ["read", "ls", "grep", "find", "write", "edit", "bash", "web_fetch"] {
+            assert!(build.iter().any(|n| n == expected), "build missing {expected}: {build:?}");
+        }
+
+        // Plan mode drops the mutating tools but keeps the read-only ones.
+        let plan = tool_names(true);
+        for blocked in ["write", "edit", "bash"] {
+            assert!(!plan.iter().any(|n| n == blocked), "plan must drop {blocked}: {plan:?}");
+        }
+        for kept in ["read", "ls", "grep", "find", "web_fetch"] {
+            assert!(plan.iter().any(|n| n == kept), "plan must keep {kept}: {plan:?}");
+        }
     }
 }

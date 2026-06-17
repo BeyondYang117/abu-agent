@@ -85,6 +85,19 @@ pub enum AppMode {
     Generating,
 }
 
+/// agent 的工作模式（与 [`AppMode`] 的 Idle/Generating 正交）：
+/// - [`AgentMode::Build`]（默认）：全工具集（read/write/edit/bash/…）。
+/// - [`AgentMode::Plan`]：只读研究 + 出方案（drop write/edit/bash，仅保留 read/ls/grep/find/web_fetch
+///   + 只读 skill 工具）。对标 Claude Code 的 Plan Mode / opencode 的 plan agent。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AgentMode {
+    /// 默认：完整工具集。
+    #[default]
+    Build,
+    /// 只读研究 + 规划（无变更）。
+    Plan,
+}
+
 /// `handle_key` / `submit` 的副作用，由事件循环消费。保持纯：状态变更在 App 内完成，仅把「需要外部
 /// 做的事」作为枚举返回。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +165,8 @@ pub struct App {
     editor: Editor,
     footer: Footer,
     mode: AppMode,
+    /// build / plan 工作模式（Shift+Tab 切换；plan 为只读研究 + 规划）。默认 Build。
+    agent_mode: AgentMode,
     kitty_active: bool,
     /// 最近一次 submit 留下的待处理回显（5a：让事件循环也能观察到“刚提交了什么”用于断言）。
     last_submitted: Option<String>,
@@ -201,6 +216,7 @@ impl App {
                 context_tokens: None,
             },
             mode: AppMode::Idle,
+            agent_mode: AgentMode::Build,
             kitty_active: false,
             last_submitted: None,
             overlay: None,
@@ -266,6 +282,47 @@ impl App {
 
     pub fn mode(&self) -> AppMode {
         self.mode
+    }
+
+    /// 当前 agent 工作模式（build / plan）。事件循环起轮时据此 gate 工具集 + 注入 plan 系统提示。
+    pub fn agent_mode(&self) -> AgentMode {
+        self.agent_mode
+    }
+
+    /// 设置 agent 工作模式（build / plan），并按切换方向推一条通知。空闲态由 Shift+Tab /
+    /// `/plan` · `/build` 调用；切到同一模式则只刷新通知（幂等友好）。Plan→Build 的切换额外提示
+    /// 用户「say 'proceed' to execute the plan」（显式审批，不自动提交）。
+    pub fn set_agent_mode(&mut self, next: AgentMode) {
+        let prev = self.agent_mode;
+        self.agent_mode = next;
+        match next {
+            AgentMode::Plan => {
+                self.push_notice("Plan mode: read-only research & planning");
+            }
+            AgentMode::Build => {
+                if prev == AgentMode::Plan {
+                    self.push_notice(
+                        "Switched to build. Say 'proceed' to execute the plan, or give new instructions.",
+                    );
+                } else {
+                    self.push_notice("Build mode: full tools");
+                }
+            }
+        }
+    }
+
+    /// Shift+Tab 在空闲态切换 build↔plan（生成中 / 有 overlay 打开时忽略）。返回是否切换了
+    /// （事件循环据此决定重绘——本方法已推通知 + 改状态，故返回值仅供测试 / 调用方参考）。
+    fn toggle_agent_mode(&mut self) -> bool {
+        if self.mode == AppMode::Generating || self.overlay.is_some() {
+            return false;
+        }
+        let next = match self.agent_mode {
+            AgentMode::Build => AgentMode::Plan,
+            AgentMode::Plan => AgentMode::Build,
+        };
+        self.set_agent_mode(next);
+        true
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
@@ -739,6 +796,13 @@ impl App {
             return AppEffect::OpenModelSelector;
         }
 
+        // Shift+Tab：在空闲态切换 build↔plan 工作模式（生成中忽略；overlay 已在上面早返回）。
+        // 切换在 App 内完成（推通知 + 改状态 + 刷 footer），无需事件循环介入。
+        if matches_key(data, "shift+tab", self.kitty_active) {
+            self.toggle_agent_mode();
+            return AppEffect::None;
+        }
+
         // Esc：generating 中请求中断当前 agent 轮次（空闲时透传给 editor，由其处理补全关闭等）。
         if matches_key(data, "escape", self.kitty_active) && self.mode == AppMode::Generating {
             return AppEffect::Cancel;
@@ -908,6 +972,15 @@ impl App {
             SlashOutcome::ShowMcp => AppEffect::ShowMcp,
             SlashOutcome::ShowSkills => AppEffect::ShowSkills,
             SlashOutcome::OpenSettings => AppEffect::OpenSettings,
+            SlashOutcome::EnterPlan => {
+                // Same path as Shift+Tab; mode lives on App so no TurnRuntime needed.
+                self.set_agent_mode(AgentMode::Plan);
+                AppEffect::None
+            }
+            SlashOutcome::EnterBuild => {
+                self.set_agent_mode(AgentMode::Build);
+                AppEffect::None
+            }
             SlashOutcome::Unknown(name) => {
                 self.push_notice(format!("Unknown command: /{name}. Type /help for the list."));
                 AppEffect::None
@@ -1109,9 +1182,21 @@ impl App {
             AppMode::Idle => self.footer.status.clone(),
             AppMode::Generating => "generating… (Esc to cancel)".to_string(),
         };
+        // build / plan 工作模式 chip：放在 status 之前。plan 用 warning 黄醒目（read-only 提醒），
+        // build 用 dim 低调。Shift+Tab 切换。
+        let mode_chip = match self.agent_mode {
+            AgentMode::Build => {
+                let dim: ColorFn = Arc::new(|s: &str| format!("\x1b[2m{s}\x1b[22m"));
+                dim(" build ")
+            }
+            AgentMode::Plan => {
+                let warn: ColorFn = Arc::new(|s: &str| format!("\x1b[33m{s}\x1b[39m"));
+                warn(" plan ")
+            }
+        };
         // 不在 footer 行展示模型/provider（已在欢迎头里给出），也不展示单轮 token usage
-        // （`N in · N out`，用户不需要）；footer 仅 cwd · 状态 · ctx。
-        let mut text = format!("{}  ·  {}", self.footer.cwd_display, status);
+        // （`N in · N out`，用户不需要）；footer 仅 cwd · mode · 状态 · ctx。
+        let mut text = format!("{}  ·  {}  ·  {}", self.footer.cwd_display, mode_chip, status);
         if let Some(ctx) = format_context_usage(self.footer.context_tokens, self.footer.context_window) {
             text.push_str(&format!("  ·  {ctx}"));
         }
@@ -1590,6 +1675,77 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/settings");
         assert_eq!(a.handle_key("\r"), AppEffect::OpenSettings);
+    }
+
+    // ---- plan / build agent mode ----
+
+    #[test]
+    fn shift_tab_toggles_build_and_plan_when_idle() {
+        let mut a = app();
+        // default is build.
+        assert_eq!(a.agent_mode(), AgentMode::Build);
+        // Shift+Tab → plan, and a notice is pushed.
+        let effect = a.handle_key("\x1b[Z");
+        assert_eq!(effect, AppEffect::None);
+        assert_eq!(a.agent_mode(), AgentMode::Plan);
+        assert!(a.render(80).join("\n").contains("Plan mode"));
+        // Shift+Tab again → back to build.
+        a.handle_key("\x1b[Z");
+        assert_eq!(a.agent_mode(), AgentMode::Build);
+        assert!(a.render(80).join("\n").contains("Switched to build"));
+    }
+
+    #[test]
+    fn shift_tab_ignored_while_generating() {
+        let mut a = app();
+        a.set_mode(AppMode::Generating);
+        a.handle_key("\x1b[Z");
+        assert_eq!(a.agent_mode(), AgentMode::Build, "no toggle while generating");
+    }
+
+    #[test]
+    fn shift_tab_ignored_while_overlay_open() {
+        let mut a = app();
+        a.open_model_selector(vec![(
+            "openai:gpt-4o".into(),
+            "gpt-4o".into(),
+            Some("OpenAI".into()),
+        )]);
+        assert!(a.overlay_open());
+        a.handle_key("\x1b[Z");
+        assert_eq!(a.agent_mode(), AgentMode::Build, "no toggle while overlay open");
+    }
+
+    #[test]
+    fn slash_plan_and_build_set_mode() {
+        let mut a = app();
+        type_str(&mut a, "/plan");
+        assert_eq!(a.handle_key("\r"), AppEffect::None);
+        assert_eq!(a.agent_mode(), AgentMode::Plan);
+
+        type_str(&mut a, "/build");
+        assert_eq!(a.handle_key("\r"), AppEffect::None);
+        assert_eq!(a.agent_mode(), AgentMode::Build);
+    }
+
+    #[test]
+    fn footer_renders_mode_chip() {
+        let mut a = app();
+        // build chip by default.
+        let footer_build = a
+            .render(120)
+            .into_iter()
+            .rfind(|l| l.contains("~/proj"))
+            .expect("footer line");
+        assert!(footer_build.contains("build"), "footer shows build chip: {footer_build}");
+        // switch to plan → plan chip.
+        a.set_agent_mode(AgentMode::Plan);
+        let footer_plan = a
+            .render(120)
+            .into_iter()
+            .rfind(|l| l.contains("~/proj"))
+            .expect("footer line");
+        assert!(footer_plan.contains("plan"), "footer shows plan chip: {footer_plan}");
     }
 
     #[test]
