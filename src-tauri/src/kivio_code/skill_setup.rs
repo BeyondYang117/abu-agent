@@ -59,6 +59,28 @@ pub fn skill_tool_definitions(registry: &SkillRegistry) -> Vec<ChatToolDefinitio
     native_skill_tools()
 }
 
+/// Summarize a registry's skills for the interactive `/skill` listing:
+/// `(name, description, enabled)` per record, in registry order.
+///
+/// The registry only ever holds skills the user has NOT disabled in Settings
+/// (see [`build_skill_registry`], which drops disabled ids), so every record
+/// surfaced here is enabled — the `enabled` flag is `true` for each. It is kept
+/// in the tuple so the `/skill` renderer can present an explicit state column
+/// and so the shape stays stable if the registry later carries disabled skills.
+pub fn skill_summaries(registry: &SkillRegistry) -> Vec<(String, String, bool)> {
+    registry
+        .records
+        .iter()
+        .map(|record| {
+            (
+                record.meta.name.clone(),
+                record.meta.description.clone(),
+                true,
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +171,39 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&scan_dir);
+    }
+
+    #[test]
+    fn skill_summaries_reflects_registry_records() {
+        let scan_dir = temp_dir();
+        write_skill(&scan_dir, "alpha", "alpha");
+        write_skill(&scan_dir, "beta", "beta");
+
+        let mut settings = Settings::default();
+        settings.chat_tools.skill_scan_paths = vec![scan_dir.to_string_lossy().into_owned()];
+        // beta is disabled in Settings → dropped from the registry → absent here.
+        settings.chat_tools.disabled_skill_ids = vec!["beta".to_string()];
+
+        let registry = build_skill_registry(&settings, Path::new("/tmp"));
+        let summaries = skill_summaries(&registry);
+        // Only the enabled (non-disabled) skill survives in the registry.
+        assert!(summaries.iter().any(|(name, desc, enabled)| name == "alpha"
+            && desc.contains("test skill")
+            && *enabled));
+        assert!(
+            !summaries.iter().any(|(name, _, _)| name == "beta"),
+            "disabled skill must not appear in the summaries"
+        );
+        // Every surfaced record is enabled (registry only holds enabled skills).
+        assert!(summaries.iter().all(|(_, _, enabled)| *enabled));
+
+        let _ = fs::remove_dir_all(&scan_dir);
+    }
+
+    #[test]
+    fn skill_summaries_empty_for_empty_registry() {
+        let registry = SkillRegistry::default();
+        assert!(skill_summaries(&registry).is_empty());
     }
 
     #[test]

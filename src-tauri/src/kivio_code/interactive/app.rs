@@ -25,7 +25,7 @@ use crate::kivio_code::tui::render::Component;
 use crate::kivio_code::tui::text_width::visible_width;
 
 use super::agent_host::AgentUiEvent;
-use super::slash::{dispatch_slash, SlashOutcome, SlashCommandSpec, SLASH_COMMANDS};
+use super::slash::{dispatch_slash, SlashOutcome, SlashCommandSpec, SLASH_COMMANDS, INIT_PROMPT};
 use super::tool_card::render_tool_card;
 use crate::chat::types::{ToolCallRecord, ToolCallStatus};
 use crate::kivio_code::tui::fuzzy::fuzzy_filter;
@@ -107,6 +107,10 @@ pub enum AppEffect {
     ModelSelected(String),
     /// 用户在会话选择器里选定了一个会话（携带其 `.jsonl` 路径），事件循环加载并重建 transcript。
     SessionSelected(String),
+    /// `/mcp`：事件循环 block_on 探测已配置 MCP 服务器后，把状态摘要推进 transcript。
+    ShowMcp,
+    /// `/skill`：事件循环从活动 runtime 的 skill_registry 渲染技能列表推进 transcript。
+    ShowSkills,
 }
 
 /// 覆盖层（overlay）：当前打开的全屏选择器。打开时拦截输入、渲染在 editor 上方。
@@ -739,9 +743,15 @@ impl App {
         }
 
         // 普通消息：记入 transcript，交给 agent loop。
-        self.transcript.push(TranscriptItem::UserMessage(trimmed.clone()));
-        self.last_submitted = Some(trimmed.clone());
-        AppEffect::Submitted(trimmed)
+        self.submit_message(trimmed)
+    }
+
+    /// 把一条消息记入 transcript + last_submitted，返回 [`AppEffect::Submitted`]，交给 agent loop。
+    /// 普通用户输入与 `/init`（喂入固定 [`INIT_PROMPT`]）共用此路径。调用方负责 generating-gate。
+    fn submit_message(&mut self, text: String) -> AppEffect {
+        self.transcript.push(TranscriptItem::UserMessage(text.clone()));
+        self.last_submitted = Some(text.clone());
+        AppEffect::Submitted(text)
     }
 
     fn dispatch_slash_command(&mut self, input: &str) -> AppEffect {
@@ -761,6 +771,17 @@ impl App {
                 self.push_notice(text);
                 AppEffect::None
             }
+            SlashOutcome::RunInit => {
+                // /init runs a normal agent turn seeded with the canned INIT prompt;
+                // reject while a turn is already generating, exactly like a normal submit.
+                if self.mode == AppMode::Generating {
+                    self.push_notice("(busy — wait for the current turn to finish or press Esc)");
+                    return AppEffect::None;
+                }
+                self.submit_message(INIT_PROMPT.to_string())
+            }
+            SlashOutcome::ShowMcp => AppEffect::ShowMcp,
+            SlashOutcome::ShowSkills => AppEffect::ShowSkills,
             SlashOutcome::Unknown(name) => {
                 self.push_notice(format!("Unknown command: /{name}. Type /help for the list."));
                 AppEffect::None
@@ -1310,6 +1331,39 @@ mod tests {
         assert!(joined.contains("bogus"));
     }
 
+    #[test]
+    fn slash_init_submits_canned_prompt() {
+        let mut a = app();
+        type_str(&mut a, "/init");
+        let effect = a.handle_key("\r");
+        assert_eq!(effect, AppEffect::Submitted(INIT_PROMPT.to_string()));
+        // The INIT prompt is recorded as the turn's user message.
+        assert_eq!(a.last_submitted(), Some(INIT_PROMPT));
+    }
+
+    #[test]
+    fn slash_init_rejected_while_generating() {
+        let mut a = app();
+        a.set_mode(AppMode::Generating);
+        type_str(&mut a, "/init");
+        let effect = a.handle_key("\r");
+        assert_eq!(effect, AppEffect::None);
+        assert_eq!(a.last_submitted(), None);
+    }
+
+    #[test]
+    fn slash_mcp_yields_show_mcp_effect() {
+        let mut a = app();
+        type_str(&mut a, "/mcp");
+        assert_eq!(a.handle_key("\r"), AppEffect::ShowMcp);
+    }
+
+    #[test]
+    fn slash_skill_yields_show_skills_effect() {
+        let mut a = app();
+        type_str(&mut a, "/skill");
+        assert_eq!(a.handle_key("\r"), AppEffect::ShowSkills);
+    }
     #[test]
     fn ctrl_d_quits_when_empty() {
         let mut a = app();

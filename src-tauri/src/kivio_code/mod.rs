@@ -11,6 +11,7 @@ pub mod executor;
 pub mod host;
 pub mod interactive;
 pub mod mcp_setup;
+pub mod project_context;
 pub mod session;
 pub mod settings_loader;
 pub mod skill_setup;
@@ -139,6 +140,16 @@ pub fn resolve_provider_model(
 /// contract tight (cwd + date + tool guidance).
 pub fn build_system_prompt(cwd: &std::path::Path) -> String {
     let now = chrono::Local::now();
+    // Auto-load the project's own instruction files (.agent/, root AGENTS.md /
+    // KIVIO.md / CLAUDE.md, and global <app_data>/agents/AGENTS.md) and splice
+    // them in after the base guidance but before the date/cwd footer. Empty when
+    // nothing relevant is found.
+    let project_context = project_context::load_project_context(cwd);
+    let project_block = if project_context.is_empty() {
+        String::new()
+    } else {
+        format!("\n{project_context}\n")
+    };
     format!(
         "You are kivio-code, an expert terminal coding assistant operating inside the user's project.\n\
 \n\
@@ -150,9 +161,11 @@ Guidelines:\n\
 - Run commands with bash (run_command) when you need to build, test, or inspect the environment.\n\
 - Be concise. Show file paths clearly. Do only what the task requires.\n\
 - When the task is complete, give a short final answer summarizing what you did.\n\
+{project_block}\
 \n\
 Current date: {date}\n\
 Current working directory: {cwd}",
+        project_block = project_block,
         date = now.format("%Y-%m-%d"),
         cwd = cwd.display()
     )
@@ -473,6 +486,23 @@ mod tests {
         assert!(prompt.contains("/tmp/project"));
         assert!(prompt.contains("Current working directory"));
         assert!(prompt.contains("kivio-code"));
+    }
+
+    #[test]
+    fn system_prompt_embeds_project_context_when_present() {
+        let dir = std::env::temp_dir().join(format!("kivio-sysprompt-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("AGENTS.md"), "be very careful").expect("write AGENTS.md");
+
+        let prompt = build_system_prompt(&dir);
+        assert!(prompt.contains("<project_context>"));
+        assert!(prompt.contains("be very careful"));
+        // The date/cwd footer still trails the project context block.
+        let pos_ctx = prompt.find("<project_context>").unwrap();
+        let pos_cwd = prompt.find("Current working directory").unwrap();
+        assert!(pos_ctx < pos_cwd, "project context must precede the cwd footer");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn assembly_with(provider_id: &str, provider_name: &str, model: &str) -> TurnAssembly {

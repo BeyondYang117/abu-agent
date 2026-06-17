@@ -24,8 +24,16 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "new", aliases: &[], description: "Clear the transcript and start fresh" },
     SlashCommandSpec { name: "clear", aliases: &[], description: "Clear the transcript" },
     SlashCommandSpec { name: "copy", aliases: &["cp"], description: "Copy the last assistant message to the clipboard" },
+    SlashCommandSpec { name: "init", aliases: &[], description: "Analyze the project and write .agent/AGENTS.md" },
+    SlashCommandSpec { name: "mcp", aliases: &[], description: "List configured MCP servers and their status" },
+    SlashCommandSpec { name: "skill", aliases: &["skills"], description: "List discovered skills" },
     SlashCommandSpec { name: "quit", aliases: &["exit", "q"], description: "Exit kivio-code" },
 ];
+
+/// `/init` 触发的固定提示词：让模型用现有 read/ls/grep/glob 工具扫描项目，再用 `write_file` 落盘到
+/// `.agent/AGENTS.md`。走普通 agent turn（[`crate::kivio_code::interactive::app::AppEffect::Submitted`]），
+/// 故无需新工具。结构对齐 `research/context-init-commands.md` §2 的模板。
+pub const INIT_PROMPT: &str = "Analyze the current project at the working directory and write a concise context file for future coding-agent sessions. Use the ls, glob, grep, and read tools to inspect the repo: read manifest files (package.json, Cargo.toml, pyproject.toml, go.mod, etc.), the README, lint/test/build config, and the top-level source layout. Then use write_file to create `.agent/AGENTS.md` (create the `.agent` directory if it does not exist) with these sections, in order: Overview, Tech Stack, Project Structure, Build / Run / Test commands, Conventions, Notes. Be factual and derived from what the tools find — no placeholders, no fluff, keep it concise. If a context file already exists, improve it rather than discarding accurate content.";
 
 /// slash 分发结果。App 据此变更状态。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +50,12 @@ pub enum SlashOutcome {
     OpenSessionSelector,
     /// 在 transcript 里追加一条通知（已构造好的文本）。
     Notice(String),
+    /// `/init`：跑一轮 agent 生成项目上下文文件（事件循环映射为提交 [`INIT_PROMPT`]）。
+    RunInit,
+    /// `/mcp`：列出已配置 MCP 服务器及其状态（事件循环 block_on 探测后推进 transcript）。
+    ShowMcp,
+    /// `/skill`：列出已发现的技能（事件循环从活动 runtime 的 skill_registry 渲染）。
+    ShowSkills,
     /// 未知命令（携带去掉前导 `/` 的命令名）。
     Unknown(String),
 }
@@ -68,6 +82,9 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
         Some("sessions") => SlashOutcome::OpenSessionSelector,
         Some("new") | Some("clear") => SlashOutcome::ClearTranscript,
         Some("copy") => SlashOutcome::CopyLastAssistant,
+        Some("init") => SlashOutcome::RunInit,
+        Some("mcp") => SlashOutcome::ShowMcp,
+        Some("skill") => SlashOutcome::ShowSkills,
         Some("quit") => SlashOutcome::Quit,
         _ => SlashOutcome::Unknown(name),
     }
@@ -116,6 +133,31 @@ mod tests {
         assert!(text.contains("/new"));
         assert!(text.contains("/clear"));
         assert!(text.contains("/copy"));
+        assert!(text.contains("/init"));
+        assert!(text.contains("/mcp"));
+        assert!(text.contains("/skill"));
+    }
+
+    #[test]
+    fn init_dispatches_to_run_init() {
+        assert_eq!(dispatch_slash("/init"), SlashOutcome::RunInit);
+    }
+
+    #[test]
+    fn mcp_dispatches_to_show_mcp() {
+        assert_eq!(dispatch_slash("/mcp"), SlashOutcome::ShowMcp);
+    }
+
+    #[test]
+    fn skill_and_skills_alias_dispatch_to_show_skills() {
+        assert_eq!(dispatch_slash("/skill"), SlashOutcome::ShowSkills);
+        assert_eq!(dispatch_slash("/skills"), SlashOutcome::ShowSkills);
+    }
+
+    #[test]
+    fn init_prompt_targets_agents_file() {
+        assert!(INIT_PROMPT.contains(".agent/AGENTS.md"));
+        assert!(INIT_PROMPT.contains("write_file"));
     }
 
     #[test]

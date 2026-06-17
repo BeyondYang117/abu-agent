@@ -86,6 +86,102 @@ pub async fn collect_mcp_tools(state: &AppState, settings: &Settings) -> Vec<Cha
     tools
 }
 
+/// Per-server connection status for the interactive `/mcp` command. A read-only
+/// view over the configured server list + a live connect probe (the same
+/// connect+list path `collect_mcp_tools` uses, with the same 20s wall-clock
+/// cap), so `/mcp` can show each server's transport, enabled flag, connection
+/// outcome, and the tool names it advertises (respecting `enabled_tools`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServerStatus {
+    /// Server id (settings key).
+    pub id: String,
+    /// Human-readable server name.
+    pub name: String,
+    /// Transport (`stdio` / `streamable_http`).
+    pub transport: String,
+    /// Whether the server is enabled in settings.
+    pub enabled: bool,
+    /// `true` if the connect+list probe succeeded; `false` on error/timeout.
+    pub connected: bool,
+    /// Tool names the server advertises (after the `enabled_tools` allow-list).
+    pub tools: Vec<String>,
+    /// Connect/list error message, if the probe failed.
+    pub error: Option<String>,
+}
+
+/// Probe configured & enabled MCP servers for the interactive `/mcp` command.
+///
+/// Like [`collect_mcp_tools`] this reads `settings.chat_tools` (MCP only when
+/// `chat_tools.enabled`) and connects each enabled server concurrently with the
+/// same per-server wall-clock cap, but returns a per-server status (name,
+/// transport, enabled, connected, tool names, error) instead of a flat tool
+/// list. Disabled servers are reported too (as `enabled = false`, not probed)
+/// so the user sees the full configured set. Returns an empty vec when chat
+/// tools are off or no servers are configured.
+pub async fn collect_mcp_status(state: &AppState, settings: &Settings) -> Vec<McpServerStatus> {
+    if !settings.chat_tools.enabled {
+        return Vec::new();
+    }
+    if settings.chat_tools.servers.is_empty() {
+        return Vec::new();
+    }
+
+    let probes = settings.chat_tools.servers.iter().map(|server| async move {
+        // Disabled servers are listed but never connected.
+        if !server.enabled {
+            return McpServerStatus {
+                id: server.id.clone(),
+                name: server.name.clone(),
+                transport: server.transport.clone(),
+                enabled: false,
+                connected: false,
+                tools: Vec::new(),
+                error: None,
+            };
+        }
+        let result = match tokio::time::timeout(
+            COLLECT_PER_SERVER_TIMEOUT,
+            state.mcp_list_tools(&(), server),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "timed out after {}s",
+                COLLECT_PER_SERVER_TIMEOUT.as_secs()
+            )),
+        };
+        match result {
+            Ok(server_tools) => {
+                let tools = tools_from_mcp(server, server_tools)
+                    .into_iter()
+                    .map(|tool| tool.name)
+                    .collect();
+                McpServerStatus {
+                    id: server.id.clone(),
+                    name: server.name.clone(),
+                    transport: server.transport.clone(),
+                    enabled: true,
+                    connected: true,
+                    tools,
+                    error: None,
+                }
+            }
+            Err(err) => McpServerStatus {
+                id: server.id.clone(),
+                name: server.name.clone(),
+                transport: server.transport.clone(),
+                enabled: true,
+                connected: false,
+                tools: Vec::new(),
+                error: Some(err),
+            },
+        }
+    });
+
+    futures::future::join_all(probes).await
+}
+
 /// Filter a server's advertised tools by its `enabled_tools` allow-list (empty
 /// ⇒ allow all) and map each to a `ChatToolDefinition` (`source = "mcp"`,
 /// `server_id` set). Mirrors `chat/commands.rs::tools_from_mcp`.
@@ -207,6 +303,46 @@ mod tests {
         let state = headless_state(settings.clone());
         let tools = collect_mcp_tools(&state, &settings).await;
         assert!(tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collect_status_empty_when_chat_tools_disabled() {
+        let mut settings = Settings::default();
+        settings.chat_tools.enabled = false;
+        settings.chat_tools.servers = vec![stdio_server("srv", true)];
+        let state = headless_state(settings.clone());
+        let status = collect_mcp_status(&state, &settings).await;
+        assert!(status.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collect_status_empty_when_no_servers() {
+        let mut settings = Settings::default();
+        settings.chat_tools.enabled = true;
+        settings.chat_tools.servers = Vec::new();
+        let state = headless_state(settings.clone());
+        let status = collect_mcp_status(&state, &settings).await;
+        assert!(status.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collect_status_lists_disabled_server_without_probing() {
+        // A disabled server is still surfaced (so the user sees the full set),
+        // but is reported as disabled + not connected, never probed.
+        let mut settings = Settings::default();
+        settings.chat_tools.enabled = true;
+        settings.chat_tools.servers = vec![stdio_server("srv", false)];
+        let state = headless_state(settings.clone());
+        let status = collect_mcp_status(&state, &settings).await;
+        assert_eq!(status.len(), 1);
+        let s = &status[0];
+        assert_eq!(s.id, "srv");
+        assert_eq!(s.name, "Server srv");
+        assert_eq!(s.transport, "stdio");
+        assert!(!s.enabled);
+        assert!(!s.connected);
+        assert!(s.tools.is_empty());
+        assert!(s.error.is_none());
     }
 
     #[tokio::test]

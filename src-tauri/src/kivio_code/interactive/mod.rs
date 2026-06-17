@@ -292,6 +292,60 @@ impl TurnRuntime {
         session_items_for_cwd(&self.cwd)
     }
 
+    /// `/mcp`：探测已配置 MCP 服务器，格式化为一段可读摘要文本（推进 transcript Notice）。
+    ///
+    /// 在交互 UI 线程上 `block_on` 探测（与启动期 `collect_mcp_tools` 同源、同 ~20s 每服务器
+    /// 上限，故不会无限阻塞）。无服务器配置 / chat tools 关闭时给出对应说明。
+    fn mcp_status_summary(&self) -> String {
+        let settings = self.state.settings_read().clone();
+        if !settings.chat_tools.enabled {
+            return "MCP is off (enable chat tools in the Kivio app).".to_string();
+        }
+        let statuses = self
+            .handle
+            .block_on(crate::kivio_code::mcp_setup::collect_mcp_status(
+                &self.state,
+                &settings,
+            ));
+        if statuses.is_empty() {
+            return "No MCP servers configured.".to_string();
+        }
+        let mut out = format!("MCP servers ({}):", statuses.len());
+        for s in &statuses {
+            let state_str = if !s.enabled {
+                "disabled".to_string()
+            } else if s.connected {
+                format!("connected · {} tools", s.tools.len())
+            } else {
+                format!(
+                    "error: {}",
+                    s.error.as_deref().unwrap_or("connection failed")
+                )
+            };
+            out.push_str(&format!("\n  {} [{}]  {}", s.name, s.transport, state_str));
+            if s.enabled && s.connected && !s.tools.is_empty() {
+                out.push_str(&format!("\n      {}", s.tools.join(", ")));
+            }
+        }
+        out
+    }
+
+    /// `/skill`：从活动 assembly 的 skill_registry 渲染一段可读技能列表（推进 transcript Notice）。
+    /// 无技能时提示用户去 `<app_data>/skills/…` 放 SKILL.md。
+    fn skill_list_summary(&self) -> String {
+        let summaries =
+            crate::kivio_code::skill_setup::skill_summaries(&self.assembly.skill_registry);
+        if summaries.is_empty() {
+            return "No skills found (drop a SKILL.md under <app_data>/skills/…).".to_string();
+        }
+        let mut out = format!("Skills ({}):", summaries.len());
+        for (name, description, enabled) in &summaries {
+            let suffix = if *enabled { "" } else { "  [disabled]" };
+            out.push_str(&format!("\n  {name}  — {description}{suffix}"));
+        }
+        out
+    }
+
     /// `/sessions` 选定后：加载该会话，替换 session + 重建 runtime_messages，并刷新 UI transcript。
     /// best-effort：加载失败仅通知。返回是否成功。
     fn resume_session_path(&mut self, path: &str, app: &mut App) -> bool {
@@ -745,6 +799,22 @@ fn apply_effect(
                     app.set_model_display(turn.model_display_label());
                     app.set_context_window(turn.context_window());
                 }
+            }
+        }
+        AppEffect::ShowMcp => {
+            if let Some(turn) = turn {
+                let summary = turn.mcp_status_summary();
+                app.push_notice(summary);
+            } else {
+                app.push_notice("No model configured; MCP unavailable.");
+            }
+        }
+        AppEffect::ShowSkills => {
+            if let Some(turn) = turn {
+                let summary = turn.skill_list_summary();
+                app.push_notice(summary);
+            } else {
+                app.push_notice("No model configured; skills unavailable.");
             }
         }
     }
