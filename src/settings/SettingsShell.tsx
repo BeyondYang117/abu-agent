@@ -3,7 +3,7 @@ import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Zap,
   Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
-  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3,
+  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3, Terminal,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -35,6 +35,7 @@ import { ProviderModelsPicker } from './ProviderModelsPicker'
 import { ProviderSortableList } from './ProviderSortableList'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
+import { KivioCodeSettings } from './KivioCodeSettings'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
 import { resolveModelInfo } from '../data/modelMatching'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
@@ -46,7 +47,7 @@ import {
   SettingsGroup,
 } from './components'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 type MemoryLayerKey = 'l1' | 'l2'
@@ -2003,6 +2004,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'chat' as const, label: t.tabChatClient, icon: MessageSquare },
     { id: 'memory' as const, label: t.tabMemory, icon: Brain },
     { id: 'mixer' as const, label: t.tabMixer, icon: SlidersHorizontal },
+    { id: 'kivioCode' as const, label: 'Kivio Code', icon: Terminal },
     { id: 'mcp' as const, label: 'MCP', icon: Wrench },
     { id: 'skill' as const, label: 'Skill', icon: Sparkles },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: Globe },
@@ -2043,6 +2045,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? '按副任务路由模型：视觉、标题总结、上下文压缩、生图。'
         : 'Route models by side task: vision, title summaries, context compression, and image generation.',
+    },
+    kivioCode: {
+      title: 'Kivio Code',
+      subtitle: lang === 'zh'
+        ? '终端编码代理的默认模型、工具审批策略与上下文读取。'
+        : 'Default model, tool approval policy, and context reading for the terminal coding agent.',
     },
     mcp: {
       title: 'MCP',
@@ -3003,10 +3011,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               </>
             )}
 
+            {/* ===== Kivio Code 标签页 ===== */}
+            {activeTab === 'kivioCode' && (
+              <KivioCodeSettings lang={lang} providers={settings.providers} />
+            )}
+
             {/* ===== MCP 标签页 ===== */}
             {activeTab === 'mcp' && (
-              <>
-                <SettingsGroup title={lang === 'zh' ? 'Kivio 内置工具' : 'Kivio built-in tools'}>
+              <>                <SettingsGroup title={lang === 'zh' ? 'Kivio 内置工具' : 'Kivio built-in tools'}>
                   <p className="kv-row-desc mb-2">
                     {lang === 'zh'
                       ? 'Chat 原生工具。启用后，本会话首次使用文件 / 命令工具时会请求一次授权；授权后 Kivio 可读写磁盘任意路径并执行终端命令（不再限制在主目录内，也不再逐次确认）。授权仅本次会话有效，重启后重新请求。'

@@ -113,13 +113,26 @@ pub fn read_stdin_prompt() -> Option<String> {
 }
 
 /// Resolve the (provider, model) pair to run, honoring `--provider` / `--model`
-/// overrides over the settings chat default. `--model` may be `id:model`.
+/// overrides over the kivio-code config default, over the settings chat default.
+/// `--model` may be `id:model`. Precedence (high→low): CLI `--provider` / `--model`'s
+/// `id:` part / `--model`; then `cfg.default_provider_id` / `cfg.default_model`; then
+/// the shared `Settings` chat model. `cfg` is passed in (not loaded here) so this stays
+/// pure and unit-testable; run paths pass `&config::load()`, tests pass a default.
 pub fn resolve_provider_model(
     settings: &Settings,
+    cfg: &config::KivioCodeConfig,
     provider_override: Option<&str>,
     model_override: Option<&str>,
 ) -> Result<(ModelProvider, String), String> {
     let (default_provider_id, default_model) = settings.effective_chat_model();
+
+    // kivio-code-specific defaults sit between CLI flags and the shared chat model.
+    // Empty/whitespace values count as unset.
+    let cfg_provider = cfg
+        .default_provider_id
+        .clone()
+        .filter(|id| !id.trim().is_empty());
+    let cfg_model = cfg.default_model.clone().filter(|m| !m.trim().is_empty());
 
     // `--model providerId:model` splits into both; a bare value is the model.
     let (model_provider_id, model_name) = match model_override {
@@ -134,10 +147,12 @@ pub fn resolve_provider_model(
     let provider_id = provider_override
         .map(str::to_string)
         .or(model_provider_id)
+        .or(cfg_provider)
         .filter(|id| !id.trim().is_empty())
         .unwrap_or(default_provider_id);
 
     let model = model_name
+        .or(cfg_model)
         .filter(|m| !m.trim().is_empty())
         .unwrap_or(default_model);
 
@@ -282,14 +297,25 @@ impl TurnAssembly {
         cwd: &std::path::Path,
         approve_sensitive: bool,
     ) -> Result<Self, String> {
+        let cfg = config::load();
         let (provider, model) =
-            resolve_provider_model(settings, provider_override, model_override)?;
+            resolve_provider_model(settings, &cfg, provider_override, model_override)?;
 
         let mut effective_chat_tools = settings.chat_tools.clone();
-        effective_chat_tools.approval_policy = if approve_sensitive {
-            "auto".to_string()
-        } else {
+        // Approval policy precedence: `--no-approve` (approve_sensitive == false) forces
+        // `always_confirm`; otherwise the kivio-code config's policy applies when set to a
+        // known value; otherwise the existing default (`auto`).
+        effective_chat_tools.approval_policy = if !approve_sensitive {
             "always_confirm".to_string()
+        } else {
+            match cfg.approval_policy.as_deref() {
+                Some("auto") => "auto".to_string(),
+                Some("readonly_auto_sensitive_confirm") => {
+                    "readonly_auto_sensitive_confirm".to_string()
+                }
+                Some("always_confirm") => "always_confirm".to_string(),
+                _ => "auto".to_string(),
+            }
         };
 
         let language = if settings.chat.default_language.trim().is_empty() {
@@ -571,7 +597,9 @@ mod tests {
         settings.default_models.chat.provider_id = "chat".to_string();
         settings.default_models.chat.model = "m1".to_string();
 
-        let (resolved, model) = resolve_provider_model(&settings, None, None).expect("resolves");
+        let cfg = config::KivioCodeConfig::default();
+        let (resolved, model) =
+            resolve_provider_model(&settings, &cfg, None, None).expect("resolves");
         assert_eq!(resolved.id, "chat");
         assert_eq!(model, "m1");
     }
@@ -581,8 +609,9 @@ mod tests {
         let mut settings = Settings::default();
         settings.providers = vec![provider("chat"), provider("other")];
 
+        let cfg = config::KivioCodeConfig::default();
         let (resolved, model) =
-            resolve_provider_model(&settings, None, Some("other:m1")).expect("resolves");
+            resolve_provider_model(&settings, &cfg, None, Some("other:m1")).expect("resolves");
         assert_eq!(resolved.id, "other");
         assert_eq!(model, "m1");
     }
@@ -590,8 +619,34 @@ mod tests {
     #[test]
     fn resolve_provider_model_errors_on_missing_provider() {
         let settings = Settings::default();
-        let err = resolve_provider_model(&settings, Some("nope"), Some("m1")).unwrap_err();
+        let cfg = config::KivioCodeConfig::default();
+        let err = resolve_provider_model(&settings, &cfg, Some("nope"), Some("m1")).unwrap_err();
         assert!(err.contains("not found") || err.contains("No chat provider"));
+    }
+
+    #[test]
+    fn resolve_provider_model_uses_kivio_code_config_default() {
+        // Config default sits below CLI flags but above the shared settings default.
+        let mut settings = Settings::default();
+        settings.providers = vec![provider("chat"), provider("other")];
+        settings.default_models.chat.provider_id = "chat".to_string();
+        settings.default_models.chat.model = "m1".to_string();
+
+        let cfg = config::KivioCodeConfig {
+            default_provider_id: Some("other".to_string()),
+            default_model: Some("m1".to_string()),
+            ..config::KivioCodeConfig::default()
+        };
+        // No CLI override → config default wins over settings default.
+        let (resolved, model) =
+            resolve_provider_model(&settings, &cfg, None, None).expect("resolves");
+        assert_eq!(resolved.id, "other");
+        assert_eq!(model, "m1");
+
+        // CLI --provider/--model still beats the config default.
+        let (resolved, _) =
+            resolve_provider_model(&settings, &cfg, Some("chat"), Some("m1")).expect("resolves");
+        assert_eq!(resolved.id, "chat");
     }
 
     #[test]

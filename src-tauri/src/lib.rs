@@ -322,6 +322,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
+            commands::get_kivio_code_config,
+            commands::set_kivio_code_config,
+            commands::get_kivio_code_global_instructions,
+            commands::set_kivio_code_global_instructions,
             commands::set_chat_window_background,
             commands::get_default_prompt_templates,
             commands::save_settings,

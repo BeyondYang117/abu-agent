@@ -14,11 +14,28 @@ use super::settings_loader;
 
 /// kivio-code's own persisted config (not the shared Kivio `Settings`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KivioCodeConfig {
     /// Read Claude-Code context files (`CLAUDE.md` + `.claude/CLAUDE.md`) for
     /// compatibility. Default ON; the `/settings` command flips it.
     #[serde(default = "default_read_claude_dir")]
     pub read_claude_dir: bool,
+    /// kivio-code-specific default provider id. When unset (None/empty), model
+    /// resolution falls back to the shared `Settings` chat model. A CLI `--provider`
+    /// flag still overrides this.
+    #[serde(default)]
+    pub default_provider_id: Option<String>,
+    /// kivio-code-specific default model name (bare, no provider prefix). Paired with
+    /// `default_provider_id`. Unset → fall back to the shared chat model. A CLI
+    /// `--model` flag still overrides this.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    /// Tool approval policy for kivio-code runs:
+    /// `"auto"` | `"readonly_auto_sensitive_confirm"` | `"always_confirm"`.
+    /// Unset → the existing default (`"auto"`). A CLI `--no-approve` flag forces
+    /// `"always_confirm"` regardless.
+    #[serde(default)]
+    pub approval_policy: Option<String>,
 }
 
 fn default_read_claude_dir() -> bool {
@@ -29,6 +46,9 @@ impl Default for KivioCodeConfig {
     fn default() -> Self {
         Self {
             read_claude_dir: default_read_claude_dir(),
+            default_provider_id: None,
+            default_model: None,
+            approval_policy: None,
         }
     }
 }
@@ -84,9 +104,22 @@ mod tests {
     #[test]
     fn deserialize_missing_field_defaults_true() {
         // An empty object (e.g. a forward/backward-compat config) must default the
-        // toggle to true via serde default.
+        // toggle to true via serde default, and the new optional fields to None.
         let cfg: KivioCodeConfig = serde_json::from_str("{}").unwrap();
         assert!(cfg.read_claude_dir);
+        assert_eq!(cfg.default_provider_id, None);
+        assert_eq!(cfg.default_model, None);
+        assert_eq!(cfg.approval_policy, None);
+    }
+
+    #[test]
+    fn deserialize_legacy_config_keeps_new_fields_none() {
+        // A pre-existing config written before the new fields existed must still load.
+        let cfg: KivioCodeConfig =
+            serde_json::from_str(r#"{"readClaudeDir": false}"#).unwrap();
+        assert!(!cfg.read_claude_dir);
+        assert_eq!(cfg.default_model, None);
+        assert_eq!(cfg.approval_policy, None);
     }
 
     #[test]
@@ -99,10 +132,14 @@ mod tests {
     fn roundtrip_serialize_deserialize() {
         let cfg = KivioCodeConfig {
             read_claude_dir: false,
+            default_provider_id: Some("p1".to_string()),
+            default_model: Some("gemma4:31b".to_string()),
+            approval_policy: Some("always_confirm".to_string()),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: KivioCodeConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back, cfg);
         assert!(!back.read_claude_dir);
+        assert_eq!(back.default_model.as_deref(), Some("gemma4:31b"));
     }
 }

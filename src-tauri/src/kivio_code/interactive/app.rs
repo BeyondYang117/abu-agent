@@ -894,9 +894,10 @@ impl App {
     fn toggle_read_claude_dir(&mut self) {
         let next = !self.read_claude_dir;
         self.read_claude_dir = next;
-        let cfg = crate::kivio_code::config::KivioCodeConfig {
-            read_claude_dir: next,
-        };
+        // Load-modify-save so flipping this toggle preserves the other persisted fields
+        // (default model, approval policy) set from the GUI settings tab.
+        let mut cfg = crate::kivio_code::config::load();
+        cfg.read_claude_dir = next;
         match crate::kivio_code::config::save(&cfg) {
             Ok(()) => self.push_notice(format!(
                 "Read .claude: {}",
