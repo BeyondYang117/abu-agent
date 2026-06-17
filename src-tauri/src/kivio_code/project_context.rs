@@ -1,9 +1,16 @@
 //! Auto-load project context files and wrap them for the system prompt.
 //!
 //! When kivio-code runs inside a project, the model should automatically see the
-//! project's own instruction files (the way Claude Code reads `CLAUDE.md` and PI
-//! reads `AGENTS.md`). This module discovers those files and renders them into a
-//! single `<project_context>` block of `<project_instructions path="…">…` entries,
+//! project's own instruction files. The native layout mirrors Claude Code's
+//! exactly: the canonical native memory file lives at the **project root** as
+//! `KIVIO.md` (analogous to Claude's root `CLAUDE.md`), while the `.kivio/`
+//! folder is purely a **config dir** (skills/agents/commands/settings) — it
+//! structurally mirrors `.claude/` and is NOT scanned for context markdown.
+//! Skill/sub-agent discovery reads `.kivio/skills/`, `.kivio/agents/`, etc. in
+//! their own modules; this module only assembles the context markdown.
+//!
+//! This module discovers the context files and renders them into a single
+//! `<project_context>` block of `<project_instructions path="…">…` entries,
 //! mirroring PI's `system-prompt.ts` wrapping.
 //!
 //! ## Discovery order
@@ -16,23 +23,20 @@
 //!    `read_claude` is on, the user-global `~/.claude/CLAUDE.md` is also loaded
 //!    (Claude-Code compatibility, like opencode).
 //! 2. **Ancestor files**: walk from filesystem root down to (and including)
-//!    `cwd`. For each ancestor directory take the FIRST existing of `AGENTS.md`,
-//!    `KIVIO.md`, and (only when `read_claude` is on) `CLAUDE.md` — one per
-//!    directory. Root-first ordering means the file in `cwd` itself comes after
-//!    its ancestors.
+//!    `cwd`. For each ancestor directory take the FIRST existing of `KIVIO.md`
+//!    (native, highest precedence), `AGENTS.md` (cross-tool), and (only when
+//!    `read_claude` is on) `CLAUDE.md` — one per directory. Root-first ordering
+//!    means the file in `cwd` itself comes after its ancestors. A project-root
+//!    `KIVIO.md` is thus the canonical native memory file (like Claude's root
+//!    `CLAUDE.md`).
 //! 3. **Project `.claude/CLAUDE.md`** (in `cwd` only, when `read_claude` is on):
 //!    the project's Claude-Code context file.
-//! 4. **Project `.kivio/`** (in `cwd` only): `.kivio/AGENTS.md` first, then the
-//!    remaining top-level `.kivio/*.md` files sorted by name. NON-recursive — we
-//!    do not descend into `.kivio/` subdirectories, and the `.kivio/agents/`
-//!    subdir (sub-agent personas, not context) is explicitly skipped.
 //!
 //! De-duplication is by canonical path (a file referenced twice is included
 //! once, at its first occurrence). The combined output is capped at
 //! [`MAX_CONTEXT_BYTES`]; once the cap is hit a truncation marker is appended and
 //! no further files are added.
 
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -45,9 +49,10 @@ pub const MAX_CONTEXT_BYTES: usize = 64 * 1024;
 
 /// Candidate instruction filenames, in priority order, taken per-directory when
 /// walking ancestors. The FIRST one that exists in a directory wins for that dir.
-/// `CLAUDE.md` is only a candidate when `read_claude` is on (see
+/// `KIVIO.md` is the native canonical file (highest precedence), then `AGENTS.md`
+/// (cross-tool). `CLAUDE.md` is only a candidate when `read_claude` is on (see
 /// [`load_project_context`]).
-const ANCESTOR_CANDIDATES_BASE: [&str; 2] = ["AGENTS.md", "KIVIO.md"];
+const ANCESTOR_CANDIDATES_BASE: [&str; 2] = ["KIVIO.md", "AGENTS.md"];
 /// `CLAUDE.md` is appended to the ancestor candidates only when `read_claude` is on.
 const CLAUDE_CANDIDATE: &str = "CLAUDE.md";
 
@@ -56,8 +61,9 @@ const CLAUDE_CANDIDATE: &str = "CLAUDE.md";
 /// `read_claude` toggles Claude-Code compatibility: when true, `CLAUDE.md` is a
 /// per-directory ancestor candidate AND the user-global `~/.claude/CLAUDE.md`
 /// plus the project `<cwd>/.claude/CLAUDE.md` are loaded; when false those are
-/// dropped entirely (only `AGENTS.md`/`KIVIO.md` ancestors + the global
-/// `<app_data>/agents/AGENTS.md` + the project `.kivio/` folder remain).
+/// dropped entirely (only `KIVIO.md`/`AGENTS.md` ancestors + the global
+/// `<app_data>/agents/AGENTS.md` remain). The `.kivio/` folder is a config dir
+/// (skills/agents/commands/settings) and is never scanned for context markdown.
 ///
 /// Returns an empty string when nothing relevant is found; otherwise a
 /// `<project_context>` block ready to splice into the system prompt. See the
@@ -125,41 +131,6 @@ fn discover_context_files(cwd: &Path, read_claude: bool) -> Vec<ContextFile> {
         let project_claude = cwd.join(".claude").join("CLAUDE.md");
         if project_claude.is_file() {
             paths.push(project_claude);
-        }
-    }
-
-    // 4. Project `.kivio/` in cwd: AGENTS.md first, then other top-level *.md
-    //    sorted by name. NON-recursive; the `.kivio/agents/` subdir (sub-agent
-    //    personas, not context) is skipped along with every other subdir.
-    let kivio_dir = cwd.join(".kivio");
-    if kivio_dir.is_dir() {
-        let agents_md = kivio_dir.join("AGENTS.md");
-        if agents_md.is_file() {
-            paths.push(agents_md.clone());
-        }
-        // BTreeMap keyed by filename → sorted by name.
-        let mut others: BTreeMap<String, PathBuf> = BTreeMap::new();
-        if let Ok(entries) = std::fs::read_dir(&kivio_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let name = match path.file_name().and_then(|n| n.to_str()) {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-                if !name.to_lowercase().ends_with(".md") {
-                    continue;
-                }
-                if name == "AGENTS.md" {
-                    continue; // already added first
-                }
-                others.insert(name, path);
-            }
-        }
-        for (_, path) in others {
-            paths.push(path);
         }
     }
 
@@ -245,40 +216,52 @@ mod tests {
     }
 
     #[test]
-    fn kivio_dir_files_loaded_in_order() {
+    fn root_kivio_md_loaded_as_context() {
+        // The native canonical memory file is a project-root KIVIO.md.
         let dir = temp_dir();
-        write(&dir.join(".kivio").join("AGENTS.md"), "agents instructions");
-        write(&dir.join(".kivio").join("zeta.md"), "zeta extra");
-        write(&dir.join(".kivio").join("alpha.md"), "alpha extra");
+        write(&dir.join("KIVIO.md"), "native root memory");
 
-        let out = load_project_context(&dir, true);
+        let out = load_project_context(&dir, false);
         assert!(out.contains("<project_context>"));
-        assert!(out.contains("agents instructions"));
-        assert!(out.contains("alpha extra"));
-        assert!(out.contains("zeta extra"));
-
-        // AGENTS.md first, then alpha (sorted) before zeta.
-        let pos_agents = out.find("agents instructions").unwrap();
-        let pos_alpha = out.find("alpha extra").unwrap();
-        let pos_zeta = out.find("zeta extra").unwrap();
-        assert!(pos_agents < pos_alpha, "AGENTS.md must come first");
-        assert!(pos_alpha < pos_zeta, "alpha must sort before zeta");
+        assert!(out.contains("native root memory"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn kivio_dir_subdirs_not_recursed() {
+    fn kivio_dir_md_not_loaded_as_context() {
+        // `.kivio/` is now a config dir (skills/agents/commands/settings) and is
+        // NEVER scanned for context markdown.
         let dir = temp_dir();
-        write(&dir.join(".kivio").join("top.md"), "top level");
-        write(&dir.join(".kivio").join("nested").join("deep.md"), "deep nested");
-        // The `.kivio/agents/` subdir is sub-agent personas, not context — skipped.
-        write(&dir.join(".kivio").join("agents").join("persona.md"), "persona body");
+        write(&dir.join(".kivio").join("AGENTS.md"), "config dir agents");
+        write(&dir.join(".kivio").join("foo.md"), "config dir foo");
 
-        let out = load_project_context(&dir, true);
-        assert!(out.contains("top level"));
-        assert!(!out.contains("deep nested"), ".kivio subdirs must not be recursed");
-        assert!(!out.contains("persona body"), ".kivio/agents/ must be skipped");
+        // read_claude=false so the developer's real ~/.claude/CLAUDE.md is not
+        // pulled in — with nothing outside `.kivio/`, the result must be empty.
+        let out = load_project_context(&dir, false);
+        assert!(
+            !out.contains("config dir agents"),
+            ".kivio/AGENTS.md must NOT be loaded as context"
+        );
+        assert!(
+            !out.contains("config dir foo"),
+            ".kivio/foo.md must NOT be loaded as context"
+        );
+        assert!(out.is_empty(), "no context markdown outside .kivio/ → empty");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kivio_md_takes_precedence_over_agents() {
+        // In a single dir with both KIVIO.md and AGENTS.md, KIVIO.md wins.
+        let dir = temp_dir();
+        write(&dir.join("KIVIO.md"), "native kivio wins");
+        write(&dir.join("AGENTS.md"), "agents loses");
+
+        let out = load_project_context(&dir, false);
+        assert!(out.contains("native kivio wins"));
+        assert!(!out.contains("agents loses"), "KIVIO.md must win over AGENTS.md");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -357,9 +340,8 @@ mod tests {
 
     #[test]
     fn dedup_by_canonical_path() {
-        // A file reachable both as an ancestor AGENTS.md and as `.kivio/AGENTS.md`
-        // would be distinct paths, so instead test that the same file content
-        // does not appear twice when a single AGENTS.md is the only source.
+        // The same file content must not appear twice when a single AGENTS.md is
+        // the only source.
         let dir = temp_dir();
         write(&dir.join("AGENTS.md"), "unique-marker-xyz");
 
@@ -372,18 +354,20 @@ mod tests {
 
     #[test]
     fn byte_cap_truncates() {
-        let dir = temp_dir();
-        // Two large files; the second should push past the cap.
+        // Two large files (root KIVIO.md + nested cwd KIVIO.md); the second should
+        // push past the cap.
+        let root = temp_dir();
+        let cwd = root.join("sub");
         let big = "x".repeat(MAX_CONTEXT_BYTES);
-        write(&dir.join(".kivio").join("AGENTS.md"), &big);
-        write(&dir.join(".kivio").join("second.md"), &big);
+        write(&root.join("KIVIO.md"), &big);
+        write(&cwd.join("KIVIO.md"), &big);
 
-        let out = load_project_context(&dir, true);
+        let out = load_project_context(&cwd, false);
         assert!(out.contains("truncated"), "truncation marker expected");
         assert!(out.len() <= MAX_CONTEXT_BYTES + 256, "output stays near the cap");
         assert!(out.contains("</project_context>"), "block must still close");
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

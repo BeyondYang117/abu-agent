@@ -24,7 +24,7 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "new", aliases: &[], description: "Clear the transcript and start fresh" },
     SlashCommandSpec { name: "clear", aliases: &[], description: "Clear the transcript" },
     SlashCommandSpec { name: "copy", aliases: &["cp"], description: "Copy the last assistant message to the clipboard" },
-    SlashCommandSpec { name: "init", aliases: &[], description: "Analyze the project and write .kivio/AGENTS.md" },
+    SlashCommandSpec { name: "init", aliases: &[], description: "Analyze the project and write KIVIO.md" },
     SlashCommandSpec { name: "mcp", aliases: &[], description: "List configured MCP servers and their status" },
     SlashCommandSpec { name: "skill", aliases: &["skills"], description: "List discovered skills" },
     SlashCommandSpec { name: "settings", aliases: &["setting", "config"], description: "Toggle kivio-code settings" },
@@ -32,9 +32,10 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
 ];
 
 /// `/init` 触发的固定提示词：让模型用现有 read/ls/grep/glob 工具扫描项目，再用 `write_file` 落盘到
-/// `.kivio/AGENTS.md`。走普通 agent turn（[`crate::kivio_code::interactive::app::AppEffect::Submitted`]），
-/// 故无需新工具。结构对齐 `research/context-init-commands.md` §2 的模板。
-pub const INIT_PROMPT: &str = "Analyze the current project at the working directory and write a concise context file for future coding-agent sessions. Use the ls, glob, grep, and read tools to inspect the repo: read manifest files (package.json, Cargo.toml, pyproject.toml, go.mod, etc.), the README, lint/test/build config, and the top-level source layout. Then use write_file to create `.kivio/AGENTS.md` (create the `.kivio` directory if it does not exist) with these sections, in order: Overview, Tech Stack, Project Structure, Build / Run / Test commands, Conventions, Notes. Be factual and derived from what the tools find — no placeholders, no fluff, keep it concise. If a context file already exists, improve it rather than discarding accurate content.";
+/// 项目根目录的 `KIVIO.md`（对标 Claude Code 根目录的 `CLAUDE.md`）。走普通 agent turn
+/// （[`crate::kivio_code::interactive::app::AppEffect::Submitted`]），故无需新工具。结构对齐
+/// `research/context-init-commands.md` §2 的模板。
+pub const INIT_PROMPT: &str = "Analyze the current project at the working directory and write a concise context file for future coding-agent sessions. Use the ls, glob, grep, and read tools to inspect the repo: read manifest files (package.json, Cargo.toml, pyproject.toml, go.mod, etc.), the README, lint/test/build config, and the top-level source layout. Then use write_file to create `KIVIO.md` at the project root (the same relative path `KIVIO.md`, like Claude Code's root `CLAUDE.md`) with these sections, in order: Overview, Tech Stack, Project Structure, Build / Run / Test commands, Conventions, Notes. Be factual and derived from what the tools find — no placeholders, no fluff, keep it concise. If a `KIVIO.md` already exists, improve it rather than discarding accurate content.";
 
 /// slash 分发结果。App 据此变更状态。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,8 +168,9 @@ mod tests {
     }
 
     #[test]
-    fn init_prompt_targets_agents_file() {
-        assert!(INIT_PROMPT.contains(".kivio/AGENTS.md"));
+    fn init_prompt_targets_root_kivio_file() {
+        assert!(INIT_PROMPT.contains("KIVIO.md"));
+        assert!(!INIT_PROMPT.contains(".kivio/AGENTS.md"));
         assert!(INIT_PROMPT.contains("write_file"));
     }
 
