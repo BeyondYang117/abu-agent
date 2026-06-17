@@ -50,6 +50,10 @@ pub struct AssistantMessage {
     pub content: String,
     pub reasoning: String,
     pub streaming: bool,
+    /// 本轮 reasoning 的耗时（秒），在 finalize 时从 [`App::generating_elapsed`] 快照下来
+    /// （此时 Generating 起点尚未被 `set_mode(Idle)` 清掉）。`Some(n)` ⇒ 折叠摘要显示
+    /// `┄ thought for {n}s`；`None` ⇒ 显示 `┄ thought for a moment`。
+    pub thought_secs: Option<u64>,
 }
 
 /// 工具卡片：从 [`ToolCallRecord`] 投影出渲染所需的字段，按 `id` upsert。
@@ -191,6 +195,10 @@ pub struct App {
     read_claude_dir: bool,
     /// 最近一次 resize / 初始化时的终端宽度（列）。`/skill`·`/mcp` 等摘要据此把每条截断到一行。
     terminal_cols: u16,
+    /// 进入 Generating 态的时刻（`std::time::Instant`，单调时钟）。footer 据此显示
+    /// `generating m:ss · Esc to cancel` 的实时计时；退出 Generating（回到 Idle）时清空。
+    /// 用 `Instant` 而非 wall-clock，确保计时不受系统时间跳变影响。
+    generating_started: Option<std::time::Instant>,
 }
 
 impl App {
@@ -229,6 +237,7 @@ impl App {
             // saved value; the event loop may override via `set_read_claude_dir`.
             read_claude_dir: crate::kivio_code::config::load().read_claude_dir,
             terminal_cols: 80,
+            generating_started: None,
         }
     }
 
@@ -535,6 +544,7 @@ impl App {
             content: text.into(),
             reasoning: String::new(),
             streaming: false,
+            thought_secs: None,
         }));
     }
 
@@ -554,8 +564,28 @@ impl App {
     pub fn set_mode(&mut self, mode: AppMode) {
         if mode == AppMode::Generating && self.mode != AppMode::Generating {
             self.set_phase_label(DEFAULT_PHASE_LABEL.to_string());
+            // 起轮：快照单调时钟起点，footer 据此显示实时计时。
+            self.generating_started = Some(std::time::Instant::now());
+        }
+        if mode == AppMode::Idle {
+            // 收尾：清掉计时起点，footer 回到静态 ready 状态。
+            self.generating_started = None;
         }
         self.mode = mode;
+    }
+
+    /// 当前 Generating 轮次的已用时长（单调时钟）。非 Generating 态或未起轮时为 `None`。
+    /// footer 计时与 reasoning 折叠摘要（`thought for {N}s`）共用此值。
+    pub fn generating_elapsed(&self) -> Option<std::time::Duration> {
+        self.generating_started.map(|start| start.elapsed())
+    }
+
+    /// 测试钩子：把 Generating 起点向过去回拨 `elapsed`，使 [`generating_elapsed`] 返回一个
+    /// 确定值（避免依赖真实时间流逝），从而对 footer 计时做可重复断言。
+    #[cfg(test)]
+    pub fn set_generating_elapsed_for_test(&mut self, elapsed: std::time::Duration) {
+        self.generating_started =
+            std::time::Instant::now().checked_sub(elapsed);
     }
 
     /// 设置 spinner 的相位标签（基础串），并同步到 loader。reasoning 尾巴预览在 render 时叠加。
@@ -688,6 +718,7 @@ impl App {
             content: String::new(),
             reasoning: String::new(),
             streaming: true,
+            thought_secs: None,
         };
         msg.content.push_str(delta);
         msg.reasoning.push_str(reasoning);
@@ -702,11 +733,16 @@ impl App {
             "error" => Some("(error)"),
             _ => None,
         };
+        // 折叠摘要的耗时：在 Generating 起点被清掉之前快照下来（事件循环随后会 set_mode(Idle)）。
+        let thought_secs = self.generating_elapsed().map(|d| d.as_secs());
         let mut last_idx: Option<usize> = None;
         for (idx, item) in self.transcript.iter_mut().enumerate() {
             if let TranscriptItem::AssistantMessage(m) = item {
                 if message_id.is_empty() || m.message_id == message_id {
                     m.streaming = false;
+                    if !m.reasoning.trim().is_empty() {
+                        m.thought_secs = thought_secs;
+                    }
                     last_idx = Some(idx);
                 }
             }
@@ -1087,9 +1123,14 @@ impl App {
                 }
                 TranscriptItem::AssistantMessage(msg) => {
                     // reasoning（thinking）作为次要的 DIM 块呈现在答案之上（BUG 3）：
-                    // 流式中逐行显示完整推理；完成后折叠为一行 dim 摘要，保持其从属于答案的视觉层级。
+                    // 流式中显示最近几行推理（dim+italic，从属于答案）；完成后折叠为一行 dim 摘要。
                     if !msg.reasoning.trim().is_empty() {
-                        lines.extend(render_reasoning(&msg.reasoning, msg.streaming, width));
+                        lines.extend(render_reasoning(
+                            &msg.reasoning,
+                            msg.streaming,
+                            msg.thought_secs,
+                            width,
+                        ));
                     }
                     // 流式中追加一个光标提示，让用户看到「还在写」。
                     let body = if msg.streaming {
@@ -1180,7 +1221,10 @@ impl App {
     fn render_footer(&mut self, width: u16) -> Vec<String> {
         let status = match self.mode {
             AppMode::Idle => self.footer.status.clone(),
-            AppMode::Generating => "generating… (Esc to cancel)".to_string(),
+            AppMode::Generating => {
+                let elapsed = self.generating_elapsed().unwrap_or_default();
+                format_generating_status(elapsed)
+            }
         };
         // build / plan 工作模式 chip：放在 status 之前。plan 用 warning 黄醒目（read-only 提醒），
         // build 用 dim 低调。Shift+Tab 切换。
@@ -1364,6 +1408,24 @@ fn clip(text: &str, max: usize) -> String {
     }
 }
 
+/// footer 在 Generating 态的状态串：`generating m:ss · Esc to cancel`。
+///
+/// 用已用时长（[`App::generating_elapsed`]，单调时钟）格式化为 `m:ss`，让用户在一轮里看到时间
+/// 累加。纯函数，便于用注入的 `elapsed` 做确定性单测（不依赖真实时间流逝）。`Esc to cancel`
+/// 始终保留。
+fn format_generating_status(elapsed: std::time::Duration) -> String {
+    format!("generating {} · Esc to cancel", format_mmss(elapsed))
+}
+
+/// 把时长格式化为 `m:ss`（分:秒，秒补零），如 `0:07` / `1:23` / `12:05`。≥60 分钟时分位自然增大
+/// （`75:00`），不折成小时——一轮生成几乎不会到那个量级。
+fn format_mmss(elapsed: std::time::Duration) -> String {
+    let total = elapsed.as_secs();
+    let minutes = total / 60;
+    let seconds = total % 60;
+    format!("{minutes}:{seconds:02}")
+}
+
 /// footer 的上下文窗口占用指示（FIX 3）。
 ///
 /// - 已知窗口（`window = Some(limit)`）且有最近 input_tokens：`ctx 61.2k/128k (48%)`。
@@ -1452,24 +1514,52 @@ fn slash_candidates(input: &str) -> Option<Vec<(String, String, Option<String>)>
 
 /// 把 reasoning（thinking）渲染成 DIM 次要块（BUG 3）。
 ///
-/// 流式中（`streaming=true`）逐行 dim 显示完整推理，让用户看到模型「在想什么」；完成后折叠为一行
-/// `┄ thought for a moment` dim 摘要（无 emoji），保持其从属于答案的视觉层级。
-fn render_reasoning(reasoning: &str, streaming: bool, width: u16) -> Vec<String> {
+/// - 流式中（`streaming=true`）：`┄ thinking` 头 + 最近 ~3 行推理，整体 dim+italic、按宽折行，
+///   让用户看到模型「在想什么」但视觉上从属于答案（次要）。
+/// - 完成后（`streaming=false`）：折叠为一行 `┄ thought for {N}s`（用 finalize 时快照的耗时），
+///   无耗时则 `┄ thought for a moment`（无 emoji）。
+///
+/// 调用方已 gate「无 reasoning 不渲染」，故此处不再判空。
+fn render_reasoning(
+    reasoning: &str,
+    streaming: bool,
+    thought_secs: Option<u64>,
+    width: u16,
+) -> Vec<String> {
     let dim: ColorFn = Arc::new(|s: &str| format!("\x1b[2;3m{s}\x1b[0m"));
     if streaming {
         let mut lines: Vec<String> = Vec::new();
-        for raw in reasoning.lines() {
-            let mut t = Text::new(format!("· {}", raw.trim_end()), 1, 0, None);
+        // `┄ thinking` 头，标明这是推理（而非答案）。
+        let mut header = Text::new("┄ thinking".to_string(), 1, 0, None);
+        for line in header.render(width) {
+            lines.push(dim(&line));
+        }
+        // 仅显示最近 ~3 行非空推理（保持次要、不喧宾夺主）。
+        let recent: Vec<&str> = reasoning
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        let start = recent.len().saturating_sub(REASONING_TAIL_LINES);
+        for raw in &recent[start..] {
+            let mut t = Text::new(format!("  {raw}"), 1, 0, None);
             for line in t.render(width) {
                 lines.push(dim(&line));
             }
         }
         lines
     } else {
-        let mut t = Text::new("┄ thought for a moment".to_string(), 1, 0, None);
+        let summary = match thought_secs {
+            Some(secs) => format!("┄ thought for {secs}s"),
+            None => "┄ thought for a moment".to_string(),
+        };
+        let mut t = Text::new(summary, 1, 0, None);
         t.render(width).into_iter().map(|l| dim(&l)).collect()
     }
 }
+
+/// 流式 reasoning 块显示的最近行数（保持次要、不喧宾夺主）。
+const REASONING_TAIL_LINES: usize = 3;
 
 /// 一个 ANSI dim 风格的默认 editor 主题（边框灰、补全下拉素色），不依赖完整主题系统（Phase 4f 留待后续）。
 fn default_editor_theme() -> EditorTheme {
@@ -2718,5 +2808,130 @@ mod tests {
         let effect = a.handle_key("\r");
         assert_eq!(effect, AppEffect::None);
         assert!(a.render(80).join("\n").contains("/help"));
+    }
+
+    // ---- B3: live elapsed timer in the footer while generating ----
+
+    #[test]
+    fn format_mmss_pads_seconds_and_grows_minutes() {
+        use std::time::Duration;
+        assert_eq!(format_mmss(Duration::from_secs(0)), "0:00");
+        assert_eq!(format_mmss(Duration::from_secs(7)), "0:07");
+        assert_eq!(format_mmss(Duration::from_secs(72)), "1:12");
+        assert_eq!(format_mmss(Duration::from_secs(725)), "12:05");
+    }
+
+    #[test]
+    fn format_generating_status_shows_elapsed_and_cancel_hint() {
+        use std::time::Duration;
+        let s = format_generating_status(Duration::from_secs(12));
+        assert!(s.contains("0:12"), "elapsed mm:ss present: {s}");
+        assert!(s.contains("Esc to cancel"), "cancel hint retained: {s}");
+        assert!(s.starts_with("generating"), "labelled generating: {s}");
+    }
+
+    #[test]
+    fn footer_counts_up_while_generating_and_reverts_when_idle() {
+        use std::time::Duration;
+        let mut a = app();
+        a.set_mode(AppMode::Generating);
+        // Deterministically pin the elapsed via the test seam (no real waiting).
+        a.set_generating_elapsed_for_test(Duration::from_secs(12));
+        let footer = a
+            .render(120)
+            .into_iter()
+            .rfind(|l| l.contains("~/proj"))
+            .expect("footer line");
+        assert!(footer.contains("0:12"), "footer shows elapsed mm:ss: {footer}");
+        assert!(footer.contains("Esc to cancel"), "footer keeps cancel hint: {footer}");
+
+        // Back to idle → timer cleared, status reverts to the static ready text.
+        a.set_mode(AppMode::Idle);
+        assert!(a.generating_elapsed().is_none(), "timer cleared on idle");
+        let footer_idle = a
+            .render(120)
+            .into_iter()
+            .rfind(|l| l.contains("~/proj"))
+            .expect("footer line");
+        assert!(footer_idle.contains("ready"), "idle footer reverts: {footer_idle}");
+        assert!(!footer_idle.contains("Esc to cancel"), "no cancel hint when idle: {footer_idle}");
+    }
+
+    // ---- B4: streaming reasoning block + collapsed thought line ----
+
+    #[test]
+    fn streaming_reasoning_shows_thinking_block_with_recent_lines() {
+        let mut a = app();
+        a.set_mode(AppMode::Generating);
+        a.apply_agent_event(AgentUiEvent::StreamDelta {
+            message_id: "m1".to_string(),
+            delta: "the answer".to_string(),
+            reasoning: "step one\nstep two\nstep three\nstep four".to_string(),
+        });
+        let joined = a.render(80).join("\n");
+        // `┄ thinking` header + dim/italic + only the most recent ~3 lines.
+        assert!(joined.contains("┄ thinking"), "thinking header shown: {joined}");
+        assert!(joined.contains("\x1b[2;3m"), "reasoning dim/italic");
+        assert!(joined.contains("step four"), "most recent line shown");
+        assert!(joined.contains("step two"), "recent tail shown");
+        // The oldest line is dropped (only the last 3 are shown).
+        assert!(!joined.contains("step one"), "oldest reasoning line trimmed: {joined}");
+        assert!(joined.contains("the answer"), "answer still rendered alongside");
+    }
+
+    #[test]
+    fn finalized_reasoning_collapses_with_elapsed_seconds() {
+        let mut a = app();
+        a.set_mode(AppMode::Generating);
+        a.set_generating_elapsed_for_test(std::time::Duration::from_secs(9));
+        a.apply_agent_event(AgentUiEvent::StreamDelta {
+            message_id: "m1".to_string(),
+            delta: "answer".to_string(),
+            reasoning: "deliberating".to_string(),
+        });
+        // Finalize captures the elapsed BEFORE the event loop flips back to idle.
+        a.apply_agent_event(AgentUiEvent::Done {
+            message_id: "m1".to_string(),
+            reason: "completed".to_string(),
+        });
+        a.set_mode(AppMode::Idle);
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("thought for 9s"), "collapsed with elapsed: {joined}");
+        assert!(!joined.contains("deliberating"), "full reasoning hidden once done");
+    }
+
+    #[test]
+    fn finalized_reasoning_without_timer_falls_back_to_moment() {
+        // No generation timer (set_mode(Generating) never called) → graceful fallback.
+        let mut a = app();
+        a.apply_agent_event(AgentUiEvent::StreamDelta {
+            message_id: "m1".to_string(),
+            delta: "answer".to_string(),
+            reasoning: "thinking it over".to_string(),
+        });
+        a.apply_agent_event(AgentUiEvent::Done {
+            message_id: "m1".to_string(),
+            reason: "completed".to_string(),
+        });
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("thought for a moment"), "fallback summary: {joined}");
+    }
+
+    #[test]
+    fn no_reasoning_block_when_no_reasoning_produced() {
+        let mut a = app();
+        a.apply_agent_event(AgentUiEvent::StreamDelta {
+            message_id: "m1".to_string(),
+            delta: "just an answer".to_string(),
+            reasoning: String::new(),
+        });
+        a.apply_agent_event(AgentUiEvent::Done {
+            message_id: "m1".to_string(),
+            reason: "completed".to_string(),
+        });
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("just an answer"), "answer rendered");
+        assert!(!joined.contains("thinking"), "no thinking block: {joined}");
+        assert!(!joined.contains("thought for"), "no collapsed thought line: {joined}");
     }
 }

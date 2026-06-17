@@ -34,12 +34,22 @@ use crate::kivio_code::tui::components::{Text, Markdown, MarkdownTheme};
 use crate::kivio_code::tui::render::Component;
 use serde_json::Value;
 
-/// Max list entries (ls/find) or match lines (grep) shown before a `+N more`.
-const MAX_LIST_LINES: usize = 12;
-/// Max diff lines shown in a card before clipping.
-const MAX_DIFF_LINES: usize = 40;
-/// Max output (tail) lines shown for bash.
-const MAX_BASH_TAIL_LINES: usize = 16;
+/// Uniform cap on the number of *rendered* body lines (after per-tool shaping +
+/// wrapping) before a single dim `… +N more lines` footer collapses the rest.
+/// Applied to every tool family so no card silently dumps a wall of output, and
+/// the per-tool source caps below are sized to sit within it (their own `+N more`
+/// markers are what the user normally sees; [`cap_body`] is the backstop that
+/// also catches a single source line wrapping into many physical rows).
+const MAX_BODY_LINES: usize = 14;
+/// Max list entries (ls/find) or match lines (grep) shown before a `+N more`
+/// (room for the trailing marker within the uniform body cap).
+const MAX_LIST_LINES: usize = MAX_BODY_LINES - 1;
+/// Max diff lines shown in a card before clipping (room for the trailing marker).
+const MAX_DIFF_LINES: usize = MAX_BODY_LINES - 1;
+/// Max output (tail) lines shown for bash (room for the `$ cmd` line + marker).
+const MAX_BASH_TAIL_LINES: usize = MAX_BODY_LINES - 2;
+/// Max web_search results shown in a card before a `… +N more results` footer.
+const MAX_WEB_RESULTS: usize = 5;
 /// Hard cap on a single rendered detail line's source length before the Text
 /// component word-wraps it (keeps very long lines from dominating the card).
 const MAX_DETAIL_CHARS: usize = 4000;
@@ -108,9 +118,11 @@ pub fn render_tool_card(card: &ToolCard, width: u16) -> Vec<String> {
     // An error result is shown the same way for every tool: a red, guttered block.
     if matches!(card.status, ToolCallStatus::Error) {
         if let Some(detail) = &card.detail {
+            let mut body = Vec::new();
             for raw in clip_lines(detail, MAX_BASH_TAIL_LINES) {
-                lines.extend(body_line(&format!("{RED}{}{COLOR_OFF}", raw), width));
+                body.extend(body_line(&format!("{RED}{}{COLOR_OFF}", raw), width));
             }
+            lines.extend(cap_body(body, width));
         }
         return lines;
     }
@@ -120,8 +132,26 @@ pub fn render_tool_card(card: &ToolCard, width: u16) -> Vec<String> {
         return lines;
     }
 
-    lines.extend(body_lines(card, width));
+    lines.extend(cap_body(body_lines(card, width), width));
     lines
+}
+
+/// Uniformly cap a tool card's *rendered* body to [`MAX_BODY_LINES`] physical
+/// lines, appending a dim `… +N more lines` footer (itself guttered + width-safe)
+/// when content was dropped. Per-tool shaping already happened; this is the final
+/// consistency pass so every card collapses long output the same way and no card
+/// silently dumps a wall of lines.
+fn cap_body(body: Vec<String>, width: u16) -> Vec<String> {
+    if body.len() <= MAX_BODY_LINES {
+        return body;
+    }
+    let hidden = body.len() - MAX_BODY_LINES;
+    let mut out: Vec<String> = body.into_iter().take(MAX_BODY_LINES).collect();
+    out.extend(body_line(
+        &format!("{DIM}… +{hidden} more lines{DIM_OFF}"),
+        width,
+    ));
+    out
 }
 
 /// The card header line(s): `<glyph> <name>  <summary>`.
@@ -150,6 +180,7 @@ fn body_lines(card: &ToolCard, width: u16) -> Vec<String> {
         ToolKind::Grep => grep_body(card, width),
         ToolKind::Mutation => mutation_body(card, width),
         ToolKind::Bash => bash_body(card, width),
+        ToolKind::WebSearch => web_search_body(card, width),
         ToolKind::Other => preview_body(card, width),
     }
 }
@@ -162,6 +193,7 @@ enum ToolKind {
     Grep,
     Mutation,
     Bash,
+    WebSearch,
     Other,
 }
 
@@ -172,6 +204,7 @@ fn normalize_tool(name: &str) -> ToolKind {
         "grep" | "search_files" => ToolKind::Grep,
         "write" | "write_file" | "edit" | "edit_file" => ToolKind::Mutation,
         "bash" | "run_command" => ToolKind::Bash,
+        "web_search" => ToolKind::WebSearch,
         _ => ToolKind::Other,
     }
 }
@@ -577,6 +610,88 @@ fn bash_body(card: &ToolCard, width: u16) -> Vec<String> {
     lines
 }
 
+/// `web_search`: the result is the text produced by `web_search::format_web_context`
+/// — a header line, then per-result `[N] Title` / `URL: …` / optional
+/// `Published:` / `Score:` / `Snippet:` lines. Render it as a compact list: each
+/// result's title on one line, its URL dim on the next, capped to the first
+/// [`MAX_WEB_RESULTS`] with a dim `… +N more results` footer. If the body
+/// doesn't parse as a result list, fall back to the clipped-text preview.
+fn web_search_body(card: &ToolCard, width: u16) -> Vec<String> {
+    let Some(detail) = card.detail.as_deref() else {
+        return Vec::new();
+    };
+    let Some(results) = parse_web_results(detail) else {
+        return preview_body(card, width);
+    };
+    if results.is_empty() {
+        return preview_body(card, width);
+    }
+
+    let total = results.len();
+    let shown = total.min(MAX_WEB_RESULTS);
+    let mut lines = Vec::new();
+    for r in &results[..shown] {
+        // Title on its own line (normal weight); URL dim underneath. body_line
+        // wraps/clips each to the card width, so long titles/URLs stay safe.
+        lines.extend(body_line(&r.title, width));
+        if !r.url.is_empty() {
+            lines.extend(body_line(&format!("{DIM}{}{DIM_OFF}", r.url), width));
+        }
+    }
+    if total > shown {
+        let more = total - shown;
+        lines.extend(body_line(
+            &format!("{DIM}… +{more} more results{DIM_OFF}"),
+            width,
+        ));
+    }
+    lines
+}
+
+/// One parsed web search result: its title and (possibly empty) URL.
+struct WebResult {
+    title: String,
+    url: String,
+}
+
+/// Parse `web_search::format_web_context` output into a list of `(title, url)`.
+/// Recognizes `[N] Title` title lines and the following `URL: …` line; ignores
+/// the header / `Published:` / `Score:` / `Snippet:` lines. Returns `None` when
+/// no `[N]`-style title line is found (so the caller falls back to the preview).
+fn parse_web_results(text: &str) -> Option<Vec<WebResult>> {
+    let mut results: Vec<WebResult> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(title) = parse_numbered_title(line) {
+            results.push(WebResult { title, url: String::new() });
+        } else if let Some(url) = line.strip_prefix("URL:") {
+            if let Some(last) = results.last_mut() {
+                if last.url.is_empty() {
+                    last.url = url.trim().to_string();
+                }
+            }
+        }
+    }
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
+    }
+}
+
+/// Recognize a `[N] Title` line (the shape `format_web_context` emits per
+/// result) and return its title text. `None` for any other line.
+fn parse_numbered_title(line: &str) -> Option<String> {
+    let rest = line.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let num = &rest[..close];
+    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let title = rest[close + 1..].trim();
+    Some(title.to_string())
+}
+
 /// Fallback: a single collapsed preview line (newlines → spaces), clipped. Used
 /// for `web_fetch` and any unrecognized tool. Rendered through Markdown (so
 /// fenced/inline formatting reads cleanly) at the gutter-reduced width, then
@@ -820,8 +935,8 @@ mod tests {
 
     #[test]
     fn listing_body_truncates_large_real_listing_with_correct_count() {
-        // 30 real files → 12 shown, "+18 more" — and the count is the REAL entry
-        // count, not an artifact of where a JSON string was clipped.
+        // 30 real files → MAX_LIST_LINES shown, "+N more" — and the count is the
+        // REAL entry count, not an artifact of where a JSON string was clipped.
         let (dir, ws) = scratch();
         for i in 0..30 {
             std::fs::write(dir.join(format!("f{i:02}.rs")), "x").expect("write");
@@ -835,7 +950,11 @@ mod tests {
 
         let text = strip_ansi(&joined(&c, 80));
         assert!(text.contains("f00.rs"), "{text}");
-        assert!(text.contains("+18 more"), "expected real count +18 more: {text}");
+        assert!(
+            text.contains(&format!("+{} more", 30 - MAX_LIST_LINES)),
+            "expected real count +{} more: {text}",
+            30 - MAX_LIST_LINES
+        );
         assert!(!text.contains("\"entries\""), "must not dump raw JSON: {text}");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -904,7 +1023,7 @@ mod tests {
     #[test]
     fn grep_body_truncates_large_real_match_set_with_correct_count() {
         let (dir, ws) = scratch();
-        // One file, 20 matching lines → 20 matches, 12 shown, "+8 more".
+        // One file, 20 matching lines → 20 matches, MAX_LIST_LINES shown, "+N more".
         let body: String = (0..20).map(|_| "TODO line\n").collect();
         std::fs::write(dir.join("big.rs"), body).expect("write big");
         let out = crate::native_tools::search_files(
@@ -916,7 +1035,11 @@ mod tests {
 
         let text = strip_ansi(&joined(&c, 100));
         assert!(text.contains("big.rs:1"), "{text}");
-        assert!(text.contains("+8 more"), "expected real count +8 more: {text}");
+        assert!(
+            text.contains(&format!("+{} more", 20 - MAX_LIST_LINES)),
+            "expected real count +{} more: {text}",
+            20 - MAX_LIST_LINES
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -987,7 +1110,8 @@ mod tests {
         c.structured_content = Some(serde_json::json!({ "diff": big.join("\n") }));
         let text = strip_ansi(&joined(&c, 80));
         assert!(text.contains("more diff line(s)"), "{text}");
-        assert!(text.contains("40 of 100 shown"), "{text}");
+        // The diff's own marker reflects MAX_DIFF_LINES of 100 shown.
+        assert!(text.contains(&format!("{MAX_DIFF_LINES} of 100 shown")), "{text}");
     }
 
     #[test]
@@ -1214,5 +1338,96 @@ mod tests {
             .expect("command line present");
         assert!(strip_ansi(cmd_line).starts_with('│'), "command line guttered: {cmd_line:?}");
         assert!(strip_ansi(cmd_line).contains('$'), "shows $ prompt: {cmd_line:?}");
+    }
+
+    // ---- web_search card (result list) ----
+
+    /// A `web_search` result (the `format_web_context` text) renders as a compact
+    /// list: each title on a line, its URL dim underneath — not a raw text dump.
+    #[test]
+    fn web_search_card_renders_result_list() {
+        let mut c = card("web_search", ToolCallStatus::Success);
+        c.detail = Some(
+            "Web search context:\n\
+             Use only these sources for current web facts.\n\
+             [1] Rust 2024 release notes\n\
+             URL: https://blog.rust-lang.org/2024\n\
+             Snippet: lots of detail here\n\
+             [2] Tokio async runtime\n\
+             URL: https://tokio.rs\n\
+             Score: 0.900"
+                .to_string(),
+        );
+        let text = strip_ansi(&joined(&c, 80));
+        assert!(text.contains("Rust 2024 release notes"), "title 1: {text}");
+        assert!(text.contains("https://blog.rust-lang.org/2024"), "url 1: {text}");
+        assert!(text.contains("Tokio async runtime"), "title 2: {text}");
+        assert!(text.contains("https://tokio.rs"), "url 2: {text}");
+        // The instructional header / snippet body is NOT dumped as-is.
+        assert!(!text.contains("Use only these sources"), "header omitted: {text}");
+        assert!(!text.contains("lots of detail here"), "snippet omitted: {text}");
+        // URLs are dim.
+        let raw = joined(&c, 80);
+        assert!(raw.contains(DIM), "urls dim");
+    }
+
+    /// More than [`MAX_WEB_RESULTS`] results cap with a `… +N more results` footer.
+    #[test]
+    fn web_search_card_caps_results_with_more_footer() {
+        let mut c = card("web_search", ToolCallStatus::Success);
+        let mut body = String::from("Web search context:\n");
+        for i in 1..=8 {
+            body.push_str(&format!("[{i}] Result {i}\nURL: https://example.com/{i}\n"));
+        }
+        c.detail = Some(body);
+        let text = strip_ansi(&joined(&c, 80));
+        assert!(text.contains("Result 1"), "first result shown: {text}");
+        assert!(text.contains("Result 5"), "fifth result shown: {text}");
+        assert!(!text.contains("Result 6"), "sixth result hidden: {text}");
+        assert!(text.contains("+3 more results"), "more footer: {text}");
+        for line in render_tool_card(&c, 80) {
+            assert!(visible_width(&line) <= 80, "line exceeds width: {line:?}");
+        }
+    }
+
+    /// Non-result text (no `[N]` titles) falls back to the clipped-text preview.
+    #[test]
+    fn web_search_card_falls_back_to_preview_for_non_result_text() {
+        let mut c = card("web_search", ToolCallStatus::Success);
+        c.detail = Some("No results found for the query.".to_string());
+        let text = strip_ansi(&joined(&c, 80));
+        assert!(text.contains("No results found"), "preview fallback: {text}");
+    }
+
+    // ---- unified long-output collapse ----
+
+    /// Any tool body longer than [`MAX_BODY_LINES`] caps to that many lines plus a
+    /// single `… +N more lines` footer; every emitted line stays within width.
+    #[test]
+    fn long_tool_body_caps_with_more_lines_marker() {
+        // A narrow width forces each error-body source line to wrap into several
+        // physical rows, so the rendered body far exceeds the uniform cap even
+        // though the per-tool source clip is small — exercising the backstop.
+        let width = 28u16;
+        let mut c = card("read", ToolCallStatus::Error);
+        let out: Vec<String> = (0..12)
+            .map(|i| format!("error detail line {i} with plenty of extra words to force wrapping"))
+            .collect();
+        c.detail = Some(out.join("\n"));
+        let rendered = render_tool_card(&c, width);
+        // Count guttered body lines (header + blank separator are not body).
+        let body_count = rendered
+            .iter()
+            .filter(|l| strip_ansi(l).starts_with('│'))
+            .count();
+        assert!(
+            body_count <= MAX_BODY_LINES + 1,
+            "body capped to ~{MAX_BODY_LINES} (+marker): got {body_count}"
+        );
+        let text = strip_ansi(&rendered.join("\n"));
+        assert!(text.contains("more lines"), "uniform +N more lines marker: {text}");
+        for line in &rendered {
+            assert!(visible_width(line) <= width as usize, "line exceeds width: {line:?}");
+        }
     }
 }
