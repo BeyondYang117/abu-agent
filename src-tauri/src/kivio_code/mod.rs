@@ -7,6 +7,7 @@
 //! synthesis) through the unmodified agent loop, streaming the answer to stdout.
 //! No TUI, no run_python, no sessions yet.
 
+pub mod config;
 pub mod executor;
 pub mod host;
 pub mod interactive;
@@ -140,11 +141,14 @@ pub fn resolve_provider_model(
 /// contract tight (cwd + date + tool guidance).
 pub fn build_system_prompt(cwd: &std::path::Path) -> String {
     let now = chrono::Local::now();
-    // Auto-load the project's own instruction files (.agent/, root AGENTS.md /
-    // KIVIO.md / CLAUDE.md, and global <app_data>/agents/AGENTS.md) and splice
-    // them in after the base guidance but before the date/cwd footer. Empty when
-    // nothing relevant is found.
-    let project_context = project_context::load_project_context(cwd);
+    // Auto-load the project's own instruction files (.kivio/, root AGENTS.md /
+    // KIVIO.md, optionally CLAUDE.md + .claude/CLAUDE.md, and global
+    // <app_data>/agents/AGENTS.md) and splice them in after the base guidance but
+    // before the date/cwd footer. The `read_claude_dir` toggle (persisted in
+    // kivio-code's own config) gates the Claude-Code compatibility files; reading
+    // the config per turn is cheap. Empty when nothing relevant is found.
+    let read_claude = config::load().read_claude_dir;
+    let project_context = project_context::load_project_context(cwd, read_claude);
     let project_block = if project_context.is_empty() {
         String::new()
     } else {

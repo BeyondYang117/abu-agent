@@ -814,6 +814,13 @@ fn apply_effect(
                 app.push_notice("No model configured; skills unavailable.");
             }
         }
+        AppEffect::OpenSettings => {
+            // The settings overlay toggles kivio-code's own config (e.g.
+            // read_claude_dir). It does not need the TurnRuntime — the App seeds
+            // from the persisted config and re-saves on toggle; the next turn's
+            // build_system_prompt reads the saved value.
+            app.open_settings_selector();
+        }
     }
     EffectFlow::Continue
 }

@@ -111,6 +111,9 @@ pub enum AppEffect {
     ShowMcp,
     /// `/skill`：事件循环从活动 runtime 的 skill_registry 渲染技能列表推进 transcript。
     ShowSkills,
+    /// `/settings`：请求打开设置覆盖层（事件循环把当前持久化的 toggle 值取出，调
+    /// [`App::open_settings_selector`]）。
+    OpenSettings,
 }
 
 /// 覆盖层（overlay）：当前打开的全屏选择器。打开时拦截输入、渲染在 editor 上方。
@@ -119,6 +122,9 @@ enum Overlay {
     Model(SelectList),
     /// 会话选择器：选定后发 [`AppEffect::SessionSelected`]（item.value = 会话路径）。
     Session(SelectList),
+    /// 设置开关列表：选定一项**就地翻转**对应 toggle（不发 Selected 效果），保存到
+    /// kivio-code 配置，并关层 + 推一条通知。`item.value` 是设置键（如 `read_claude_dir`）。
+    Settings(SelectList),
 }
 
 /// footer 数据模型（cwd / model / status；token 统计在一轮结束后由事件循环填入）。
@@ -156,6 +162,9 @@ pub struct App {
     show_welcome: bool,
     /// slash 命令补全弹窗（编辑器内容以 `/` 开头且为整行时显示；BUG 4）。None = 不显示。
     slash_popup: Option<SelectList>,
+    /// kivio-code 配置 `read_claude_dir` 的内存副本（`/settings` 翻转时同步更新 +
+    /// 落盘）。下一轮 `build_system_prompt` 直接读磁盘上的同一值，故无需把它穿透进 TurnRuntime。
+    read_claude_dir: bool,
 }
 
 impl App {
@@ -188,6 +197,9 @@ impl App {
             show_reasoning: false,
             show_welcome: true,
             slash_popup: None,
+            // Seed from the persisted kivio-code config so `/settings` reflects the
+            // saved value; the event loop may override via `set_read_claude_dir`.
+            read_claude_dir: crate::kivio_code::config::load().read_claude_dir,
         }
     }
 
@@ -311,10 +323,46 @@ impl App {
         self.overlay = None;
     }
 
+    /// 设置 `read_claude_dir` 的内存值（事件循环可在启动时同步实际持久化值）。
+    pub fn set_read_claude_dir(&mut self, value: bool) {
+        self.read_claude_dir = value;
+    }
+
+    /// 当前 `read_claude_dir` 内存值（测试用）。
+    #[cfg(test)]
+    pub fn read_claude_dir(&self) -> bool {
+        self.read_claude_dir
+    }
+
+    /// 打开设置开关覆盖层（`/settings`）。当前仅一项：Read .claude / CLAUDE.md context，
+    /// 展示其 on/off 状态。选定后就地翻转 + 保存（见 [`App::handle_overlay_key`]）。
+    pub fn open_settings_selector(&mut self) {
+        let on = self.read_claude_dir;
+        let label = format!(
+            "Read .claude / CLAUDE.md context  [{}]",
+            if on { "on" } else { "off" }
+        );
+        let select_items = vec![SelectItem::new(
+            "read_claude_dir".to_string(),
+            label,
+            None,
+        )];
+        let mut list = SelectList::new(
+            select_items,
+            10,
+            default_select_theme(),
+            SelectListLayoutOptions::default(),
+        );
+        list.set_kitty_active(self.kitty_active);
+        self.overlay = Some(Overlay::Settings(list));
+    }
+
     /// 取覆盖层内 SelectList 可变引用（无论种类）。
     fn overlay_select_mut(&mut self) -> Option<&mut SelectList> {
         match &mut self.overlay {
-            Some(Overlay::Model(list)) | Some(Overlay::Session(list)) => Some(list),
+            Some(Overlay::Model(list))
+            | Some(Overlay::Session(list))
+            | Some(Overlay::Settings(list)) => Some(list),
             None => None,
         }
     }
@@ -595,6 +643,24 @@ impl App {
         self.transcript.clear();
     }
 
+    /// 翻转 `read_claude_dir` 并持久化到 kivio-code 配置（`/settings` 选定时调用）。更新内存值，
+    /// 保存失败时把错误作为通知（不 panic），成功时推一条 `Read .claude: on/off` 通知。
+    /// 下一轮 `build_system_prompt` 读磁盘上的同一值，故无需重启即生效。
+    fn toggle_read_claude_dir(&mut self) {
+        let next = !self.read_claude_dir;
+        self.read_claude_dir = next;
+        let cfg = crate::kivio_code::config::KivioCodeConfig {
+            read_claude_dir: next,
+        };
+        match crate::kivio_code::config::save(&cfg) {
+            Ok(()) => self.push_notice(format!(
+                "Read .claude: {}",
+                if next { "on" } else { "off" }
+            )),
+            Err(err) => self.push_notice(format!("Could not save settings: {err}")),
+        }
+    }
+
     /// 处理一段已解码的输入序列（一个按键 / 转义序列的原始字节串，由事件循环从 StdinBuffer 喂入）。
     ///
     /// 返回 [`AppEffect`]。app 级按键（提交 / Ctrl+C / Ctrl+D）优先于 editor；其余转发给 editor。
@@ -782,6 +848,7 @@ impl App {
             }
             SlashOutcome::ShowMcp => AppEffect::ShowMcp,
             SlashOutcome::ShowSkills => AppEffect::ShowSkills,
+            SlashOutcome::OpenSettings => AppEffect::OpenSettings,
             SlashOutcome::Unknown(name) => {
                 self.push_notice(format!("Unknown command: /{name}. Type /help for the list."));
                 AppEffect::None
@@ -802,6 +869,13 @@ impl App {
         }
 
         if matches_key(data, "enter", self.kitty_active) {
+            // Settings overlay: flip the toggle in place + persist, then close +
+            // notice (does NOT emit a Selected effect like model/session do).
+            if matches!(self.overlay, Some(Overlay::Settings(_))) {
+                self.close_overlay();
+                self.toggle_read_claude_dir();
+                return AppEffect::None;
+            }
             let selected = self
                 .overlay_select_mut()
                 .and_then(|l| l.get_selected_item())
@@ -927,6 +1001,9 @@ impl App {
                 Overlay::Model(list) => ("Select a model (Enter to choose · Esc to cancel)", list),
                 Overlay::Session(list) => {
                     ("Resume a session (Enter to choose · Esc to cancel)", list)
+                }
+                Overlay::Settings(list) => {
+                    ("Settings (Enter to toggle · Esc to close)", list)
                 }
             };
             let mut h = Text::new(heading.to_string(), 1, 0, None);
@@ -1361,6 +1438,54 @@ mod tests {
         let mut a = app();
         type_str(&mut a, "/skill");
         assert_eq!(a.handle_key("\r"), AppEffect::ShowSkills);
+    }
+
+    #[test]
+    fn slash_settings_yields_open_settings_effect() {
+        let mut a = app();
+        type_str(&mut a, "/settings");
+        assert_eq!(a.handle_key("\r"), AppEffect::OpenSettings);
+    }
+
+    #[test]
+    fn open_settings_selector_renders_toggle_state() {
+        let mut a = app();
+        a.set_read_claude_dir(true);
+        a.open_settings_selector();
+        assert!(a.overlay_open());
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("Settings"), "settings heading present");
+        assert!(joined.contains("Read .claude"), "toggle item present");
+        assert!(joined.contains("[on]"), "reflects current on state");
+        // Esc closes without flipping.
+        let effect = a.handle_key("\x1b");
+        assert_eq!(effect, AppEffect::None);
+        assert!(!a.overlay_open());
+        assert!(a.read_claude_dir(), "Esc must not flip the toggle");
+    }
+
+    #[test]
+    fn settings_toggle_flips_in_memory_value_and_persists() {
+        // The toggle writes kivio-code's real config; snapshot + restore it so the
+        // test never clobbers the developer's machine config.
+        let before = crate::kivio_code::config::load();
+
+        let mut a = app();
+        a.set_read_claude_dir(true);
+        a.open_settings_selector();
+        // Enter on the (single) toggle item flips it off, closes the overlay, and
+        // pushes a "Read .claude: off" notice.
+        let effect = a.handle_key("\r");
+        assert_eq!(effect, AppEffect::None);
+        assert!(!a.overlay_open(), "overlay closed after toggle");
+        assert!(!a.read_claude_dir(), "in-memory value flipped to off");
+        let joined = a.render(80).join("\n");
+        assert!(joined.contains("Read .claude: off"), "notice reflects new state");
+        // The new value is persisted so the next turn's system prompt honors it.
+        assert!(!crate::kivio_code::config::load().read_claude_dir);
+
+        // Restore the developer's original config.
+        let _ = crate::kivio_code::config::save(&before);
     }
     #[test]
     fn ctrl_d_quits_when_empty() {
