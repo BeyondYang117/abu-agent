@@ -310,6 +310,19 @@ impl TurnAssembly {
         let skill_registry = skill_setup::build_skill_registry(settings, cwd);
         let system_prompt = build_system_prompt(cwd, &skill_registry);
 
+        // Single source of truth: the resolved model's configured max output
+        // (provider override → built-in model database → fallback). The global
+        // `settings.chat.max_output_tokens` is ONLY the fallback when this model
+        // has no metadata — never the primary value. This keeps the CLI in lock-
+        // step with the GUI "model details" panel (`chat::model_metadata`).
+        // Computed before the struct literal because `provider`/`model` are moved
+        // into it below.
+        let max_output_tokens = crate::chat::model_metadata::chat_max_output_tokens_for_model(
+            Some(&provider),
+            &model,
+            settings.chat.max_output_tokens,
+        );
+
         Ok(Self {
             provider,
             model,
@@ -318,7 +331,7 @@ impl TurnAssembly {
             language,
             thinking_enabled: settings.chat.thinking_enabled,
             stream_enabled: settings.chat.stream_enabled,
-            max_output_tokens: settings.chat.max_output_tokens,
+            max_output_tokens,
             retry_attempts,
             settings: settings.clone(),
             // MCP tools are collected asynchronously at startup (see
@@ -569,6 +582,42 @@ mod tests {
     }
 
     #[test]
+    fn resolve_max_output_comes_from_model_metadata_not_global_chat_setting() {
+        // Single-source-of-truth check: the assembled `max_output_tokens` must be
+        // the model's configured max (deepseek-v4-flash → 131_072 from the built-in
+        // model database), NOT the global `settings.chat.max_output_tokens`.
+        let mut p = provider("chat");
+        p.available_models = vec!["deepseek-v4-flash".to_string()];
+        p.enabled_models = vec!["deepseek-v4-flash".to_string()];
+        let mut settings = Settings::default();
+        settings.providers = vec![p];
+        settings.default_models.chat.provider_id = "chat".to_string();
+        settings.default_models.chat.model = "deepseek-v4-flash".to_string();
+        // Deliberately set the global chat max to a distinct sentinel so we can
+        // prove it is NOT the value that ends up on the assembly.
+        settings.chat.max_output_tokens = 4096;
+
+        let assembly = TurnAssembly::resolve(
+            &settings,
+            None,
+            None,
+            std::path::Path::new("/tmp/project"),
+            true,
+        )
+        .expect("resolves");
+
+        assert_eq!(assembly.model, "deepseek-v4-flash");
+        assert_eq!(
+            assembly.max_output_tokens, 131_072,
+            "max_output must come from the model's metadata (database), not the global chat setting"
+        );
+        assert_ne!(
+            assembly.max_output_tokens, settings.chat.max_output_tokens,
+            "the global chat setting must only be a fallback, not the primary value"
+        );
+    }
+
+    #[test]
     fn system_prompt_includes_cwd_and_date() {
         let prompt =
             build_system_prompt(std::path::Path::new("/tmp/project"), &SkillRegistry::default());
@@ -648,14 +697,21 @@ mod tests {
         let mut settings = Settings::default();
         settings.providers = vec![p.clone()];
         TurnAssembly {
-            provider: p,
+            provider: p.clone(),
             model: model.to_string(),
             system_prompt: String::new(),
             effective_chat_tools: settings.chat_tools.clone(),
             language: "en".to_string(),
             thinking_enabled: false,
             stream_enabled: true,
-            max_output_tokens: 4096,
+            // Mirror real `resolve()`: derive max output from the model's metadata
+            // (override → database → global chat setting fallback) rather than
+            // hardcoding a value, so the stub exercises the same source of truth.
+            max_output_tokens: crate::chat::model_metadata::chat_max_output_tokens_for_model(
+                Some(&p),
+                model,
+                settings.chat.max_output_tokens,
+            ),
             retry_attempts: 1,
             settings,
             mcp_tools: Vec::new(),
