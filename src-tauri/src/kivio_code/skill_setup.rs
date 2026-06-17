@@ -40,7 +40,7 @@ use std::path::Path;
 /// root-composition + precedence logic is unit-testable without touching the
 /// machine-global config file).
 pub fn build_skill_registry(settings: &Settings, cwd: &Path) -> SkillRegistry {
-    let read_claude = super::config::load().read_claude_dir;
+    let read_claude = super::config::load_merged(cwd).read_claude_dir;
     build_skill_registry_with(settings, cwd, read_claude)
 }
 

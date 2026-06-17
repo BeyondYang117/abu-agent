@@ -82,6 +82,95 @@ pub fn save(config: &KivioCodeConfig) -> Result<(), String> {
     std::fs::write(&path, json).map_err(|e| e.to_string())
 }
 
+/// A project-level config patch (`<project>/.kivio/config.json`). EVERY field is
+/// optional — including `read_claude_dir` (unlike [`KivioCodeConfig`] where it is a
+/// plain bool) — so an absent key inherits the global value rather than silently
+/// overriding it with a serde default. Project settings layer over the global config
+/// per key (see [`load_merged`]).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KivioCodeConfigPatch {
+    pub read_claude_dir: Option<bool>,
+    pub default_provider_id: Option<String>,
+    pub default_model: Option<String>,
+    pub approval_policy: Option<String>,
+}
+
+/// Strictness rank for an approval policy (higher = stricter). Unknown / unset → 0
+/// (`auto`, the loosest). Used to enforce the "project can only tighten" rule.
+fn approval_rank(policy: Option<&str>) -> u8 {
+    match policy {
+        Some("always_confirm") => 2,
+        Some("readonly_auto_sensitive_confirm") => 1,
+        _ => 0, // "auto" or unset/unknown
+    }
+}
+
+/// Canonical policy string for a rank.
+fn approval_for_rank(rank: u8) -> &'static str {
+    match rank {
+        2 => "always_confirm",
+        1 => "readonly_auto_sensitive_confirm",
+        _ => "auto",
+    }
+}
+
+/// Merge a project patch over the global config, per key. Project wins for model /
+/// provider / read_claude_dir; `approval_policy` is **tighten-only** — the effective
+/// value is the stricter of {global, project}, so a project can never loosen the
+/// user's global approval policy (clone-and-run can't silently auto-approve tools).
+/// Empty/whitespace string overrides are treated as unset.
+pub fn merge_config(mut base: KivioCodeConfig, patch: KivioCodeConfigPatch) -> KivioCodeConfig {
+    if let Some(read_claude_dir) = patch.read_claude_dir {
+        base.read_claude_dir = read_claude_dir;
+    }
+    if let Some(provider) = patch
+        .default_provider_id
+        .filter(|value| !value.trim().is_empty())
+    {
+        base.default_provider_id = Some(provider);
+    }
+    if let Some(model) = patch.default_model.filter(|value| !value.trim().is_empty()) {
+        base.default_model = Some(model);
+    }
+    if let Some(project_policy) = patch.approval_policy.filter(|p| !p.trim().is_empty()) {
+        let effective = approval_rank(base.approval_policy.as_deref())
+            .max(approval_rank(Some(&project_policy)));
+        base.approval_policy = Some(approval_for_rank(effective).to_string());
+    }
+    base
+}
+
+/// Find the nearest project config patch by walking from `cwd` up to the filesystem
+/// root, returning the first `.kivio/config.json` found (closest to `cwd` wins).
+/// Missing/unreadable/malformed files are skipped (never fatal).
+fn find_project_patch(cwd: &std::path::Path) -> Option<KivioCodeConfigPatch> {
+    let mut dir: Option<&std::path::Path> = Some(cwd);
+    while let Some(d) = dir {
+        let path = d.join(".kivio").join("config.json");
+        if path.is_file() {
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if let Ok(patch) = serde_json::from_str::<KivioCodeConfigPatch>(&raw) {
+                    return Some(patch);
+                }
+            }
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// Load the effective config for a run rooted at `cwd`: the global config with the
+/// nearest project `.kivio/config.json` (if any) merged over it per [`merge_config`].
+/// When no project config exists this equals [`load`].
+pub fn load_merged(cwd: &std::path::Path) -> KivioCodeConfig {
+    let global = load();
+    match find_project_patch(cwd) {
+        Some(patch) => merge_config(global, patch),
+        None => global,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +230,99 @@ mod tests {
         assert_eq!(back, cfg);
         assert!(!back.read_claude_dir);
         assert_eq!(back.default_model.as_deref(), Some("gemma4:31b"));
+    }
+
+    fn patch(json: &str) -> KivioCodeConfigPatch {
+        serde_json::from_str(json).expect("patch parses")
+    }
+
+    #[test]
+    fn merge_project_overrides_model_and_provider() {
+        let global = KivioCodeConfig {
+            default_provider_id: Some("ds".to_string()),
+            default_model: Some("deepseek-v4-flash".to_string()),
+            ..KivioCodeConfig::default()
+        };
+        let merged = merge_config(global, patch(r#"{"defaultModel": "gpt-5.5"}"#));
+        // model overridden by project; provider inherited from global.
+        assert_eq!(merged.default_model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(merged.default_provider_id.as_deref(), Some("ds"));
+    }
+
+    #[test]
+    fn merge_absent_field_inherits_global() {
+        // read_claude_dir absent in the patch must NOT reset the global value to the
+        // serde default — it inherits global (false here).
+        let global = KivioCodeConfig {
+            read_claude_dir: false,
+            ..KivioCodeConfig::default()
+        };
+        let merged = merge_config(global, patch("{}"));
+        assert!(!merged.read_claude_dir);
+    }
+
+    #[test]
+    fn merge_read_claude_dir_overridable() {
+        let global = KivioCodeConfig::default(); // true
+        let merged = merge_config(global, patch(r#"{"readClaudeDir": false}"#));
+        assert!(!merged.read_claude_dir);
+    }
+
+    #[test]
+    fn merge_approval_policy_tightens_only() {
+        // Project may tighten: global auto + project always_confirm → always_confirm.
+        let global = KivioCodeConfig {
+            approval_policy: Some("auto".to_string()),
+            ..KivioCodeConfig::default()
+        };
+        let merged = merge_config(global, patch(r#"{"approvalPolicy": "always_confirm"}"#));
+        assert_eq!(merged.approval_policy.as_deref(), Some("always_confirm"));
+
+        // Project may NOT loosen: global always_confirm + project auto → stays strict.
+        let global = KivioCodeConfig {
+            approval_policy: Some("always_confirm".to_string()),
+            ..KivioCodeConfig::default()
+        };
+        let merged = merge_config(global, patch(r#"{"approvalPolicy": "auto"}"#));
+        assert_eq!(merged.approval_policy.as_deref(), Some("always_confirm"));
+
+        // Unset global (= auto) + project sensitive → sensitive.
+        let merged = merge_config(
+            KivioCodeConfig::default(),
+            patch(r#"{"approvalPolicy": "readonly_auto_sensitive_confirm"}"#),
+        );
+        assert_eq!(
+            merged.approval_policy.as_deref(),
+            Some("readonly_auto_sensitive_confirm")
+        );
+    }
+
+    #[test]
+    fn load_merged_picks_up_project_config_from_disk() {
+        // Real filesystem path: a project dir's .kivio/config.json overrides the global
+        // config per key, proving find_project_patch (walk) + parse + merge end-to-end.
+        let dir = std::env::temp_dir().join(format!("kivio-cfg-{}", uuid::Uuid::new_v4()));
+        let kivio = dir.join(".kivio");
+        std::fs::create_dir_all(&kivio).expect("mkdir .kivio");
+        std::fs::write(
+            kivio.join("config.json"),
+            r#"{"defaultModel": "project-only-model", "readClaudeDir": false}"#,
+        )
+        .expect("write project config");
+
+        // Project values win regardless of whatever the machine's global config holds.
+        let merged = load_merged(&dir);
+        assert_eq!(merged.default_model.as_deref(), Some("project-only-model"));
+        assert!(!merged.read_claude_dir);
+
+        // A nested working directory still finds the ancestor .kivio/config.json.
+        let sub = dir.join("a").join("b");
+        std::fs::create_dir_all(&sub).expect("mkdir sub");
+        assert_eq!(
+            load_merged(&sub).default_model.as_deref(),
+            Some("project-only-model")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

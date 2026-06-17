@@ -147,7 +147,7 @@ fn main() -> ExitCode {
 /// runs the event loop.
 fn run_interactive(cli: &Cli, cwd: &Path) -> ExitCode {
     let settings = load_settings_from_disk();
-    let cfg = kivio::kivio_code::config::load();
+    let cfg = kivio::kivio_code::config::load_merged(cwd);
     let model = match resolve_provider_model(
         &settings,
         &cfg,

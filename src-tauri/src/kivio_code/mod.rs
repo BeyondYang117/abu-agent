@@ -127,12 +127,19 @@ pub fn resolve_provider_model(
     let (default_provider_id, default_model) = settings.effective_chat_model();
 
     // kivio-code-specific defaults sit between CLI flags and the shared chat model.
-    // Empty/whitespace values count as unset.
+    // Empty/whitespace values count as unset. The config default is SOFT: if it names a
+    // provider that doesn't exist in the current settings (e.g. a stale pick after the
+    // provider was removed), drop both provider AND model from the config contribution so
+    // the run gracefully falls back to the shared chat model instead of hard-failing.
     let cfg_provider = cfg
         .default_provider_id
         .clone()
         .filter(|id| !id.trim().is_empty());
     let cfg_model = cfg.default_model.clone().filter(|m| !m.trim().is_empty());
+    let (cfg_provider, cfg_model) = match &cfg_provider {
+        Some(id) if settings.get_provider(id).is_none() => (None, None),
+        _ => (cfg_provider, cfg_model),
+    };
 
     // `--model providerId:model` splits into both; a bare value is the model.
     let (model_provider_id, model_name) = match model_override {
@@ -194,7 +201,7 @@ pub fn build_system_prompt(cwd: &std::path::Path, skill_registry: &SkillRegistry
     // before the date/cwd footer. The `read_claude_dir` toggle (persisted in
     // kivio-code's own config) gates the Claude-Code compatibility files; reading
     // the config per turn is cheap. Empty when nothing relevant is found.
-    let read_claude = config::load().read_claude_dir;
+    let read_claude = config::load_merged(cwd).read_claude_dir;
     let project_context = project_context::load_project_context(cwd, read_claude);
     let project_block = if project_context.is_empty() {
         String::new()
@@ -297,7 +304,7 @@ impl TurnAssembly {
         cwd: &std::path::Path,
         approve_sensitive: bool,
     ) -> Result<Self, String> {
-        let cfg = config::load();
+        let cfg = config::load_merged(cwd);
         let (provider, model) =
             resolve_provider_model(settings, &cfg, provider_override, model_override)?;
 
@@ -613,6 +620,26 @@ mod tests {
         let (resolved, model) =
             resolve_provider_model(&settings, &cfg, None, Some("other:m1")).expect("resolves");
         assert_eq!(resolved.id, "other");
+        assert_eq!(model, "m1");
+    }
+
+    #[test]
+    fn resolve_provider_model_ignores_stale_config_provider() {
+        // A config default pointing at a provider absent from settings must NOT hard-fail;
+        // it falls back to the shared chat model (keeps the CLI bootable and tests hermetic).
+        let mut settings = Settings::default();
+        settings.providers = vec![provider("chat")];
+        settings.default_models.chat.provider_id = "chat".to_string();
+        settings.default_models.chat.model = "m1".to_string();
+
+        let cfg = config::KivioCodeConfig {
+            default_provider_id: Some("removed-provider".to_string()),
+            default_model: Some("ghost".to_string()),
+            ..config::KivioCodeConfig::default()
+        };
+        let (resolved, model) =
+            resolve_provider_model(&settings, &cfg, None, None).expect("falls back");
+        assert_eq!(resolved.id, "chat");
         assert_eq!(model, "m1");
     }
 
