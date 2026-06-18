@@ -12,12 +12,11 @@
 //! Contract notes (see `.trellis/spec/backend/agent-runtime.md` and
 //! `.trellis/spec/backend/file-tools.md`):
 //! - The `parallel_safe` set is intentionally narrow: web_search/web_fetch/
-//!   read_file plus the read-side project tools (list_dir/search_files/
-//!   glob_files/stat_path), and only when approval-free. Do not widen or
-//!   narrow it here without a spec change. memory_read is read-only and
-//!   approval-free but deliberately NOT parallel-safe. `agent` is also
-//!   parallel-safe (multi-agent fan-out): each spawn runs isolated and is
-//!   Semaphore(3)-capped.
+//!   read plus the read-side project tools (ls/grep/find), and only when
+//!   approval-free. Do not widen or narrow it here without a spec change.
+//!   memory_read is read-only and approval-free but deliberately NOT
+//!   parallel-safe. `agent` is also parallel-safe (multi-agent fan-out): each
+//!   spawn runs isolated and is Semaphore(3)-capped.
 //! - Table order is the model-facing tool list order; keep it stable.
 
 use std::future::Future;
@@ -32,13 +31,11 @@ use crate::state::AppState;
 
 use super::registry::NativeToolContext;
 use super::types::{
-    native_copy_path_tool, native_create_dir_tool, native_delete_path_tool, native_edit_file_tool,
-    native_glob_files_tool, native_list_dir_tool, native_memory_modify_tool,
-    native_memory_read_tool, native_memory_search_tool, native_move_path_tool, native_read_file_tool,
+    native_edit_file_tool, native_glob_files_tool, native_list_dir_tool, native_memory_modify_tool,
+    native_memory_read_tool, native_memory_search_tool, native_read_file_tool,
     native_run_command_tool, native_run_python_tool, native_save_assistant_tool,
-    native_search_files_tool, native_stat_path_tool,
-    native_web_fetch_tool, native_web_search_tool, native_write_file_tool, ChatToolDefinition,
-    McpToolCallResult,
+    native_search_files_tool, native_web_fetch_tool, native_web_search_tool, native_write_file_tool,
+    ChatToolDefinition, McpToolCallResult,
 };
 
 /// Gate signature mirrors `list_native_builtin_tool_defs(native,
@@ -102,6 +99,10 @@ pub struct NativeToolEntry {
     pub parallel_safe: bool,
     pub bypasses_approval: bool,
     pub read_only: bool,
+    /// File/shell tools (read/write/edit/bash/grep/find/ls) gated by one-time
+    /// per-conversation session consent. The flag lives on the entry so a rename
+    /// or a newly-added tool can't silently bypass the consent gate.
+    pub requires_session_consent: bool,
     pub call: NativeToolCall,
 }
 
@@ -116,6 +117,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: true,
         bypasses_approval: false,
         read_only: true,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_web_search),
     },
     NativeToolEntry {
@@ -125,116 +127,77 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: true,
         bypasses_approval: false,
         read_only: true,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_web_fetch),
     },
     NativeToolEntry {
-        name: "read_file",
+        name: "read",
         def: native_read_file_tool,
         enabled: |native, _, _| native.read_file,
         parallel_safe: true,
         bypasses_approval: false,
         read_only: true,
+        requires_session_consent: true,
         call: NativeToolCall::SyncResult(call_read_file),
     },
     NativeToolEntry {
-        name: "list_dir",
+        name: "ls",
         def: native_list_dir_tool,
         enabled: |native, _, _| native.read_file,
         parallel_safe: true,
         bypasses_approval: false,
         read_only: true,
+        requires_session_consent: true,
         call: NativeToolCall::SyncText(crate::native_tools::list_dir),
     },
     NativeToolEntry {
-        name: "search_files",
+        name: "grep",
         def: native_search_files_tool,
         enabled: |native, _, _| native.read_file,
         parallel_safe: true,
         bypasses_approval: false,
         read_only: true,
+        requires_session_consent: true,
         call: NativeToolCall::SyncText(crate::native_tools::search_files),
     },
     NativeToolEntry {
-        name: "glob_files",
+        name: "find",
         def: native_glob_files_tool,
         enabled: |native, _, _| native.read_file,
         parallel_safe: true,
         bypasses_approval: false,
         read_only: true,
+        requires_session_consent: true,
         call: NativeToolCall::SyncText(crate::native_tools::glob_files),
     },
     NativeToolEntry {
-        name: "stat_path",
-        def: native_stat_path_tool,
-        enabled: |native, _, _| native.read_file,
-        parallel_safe: true,
-        bypasses_approval: false,
-        read_only: true,
-        call: NativeToolCall::SyncText(crate::native_tools::stat_path),
-    },
-    NativeToolEntry {
-        name: "write_file",
+        name: "write",
         def: native_write_file_tool,
         enabled: |native, _, _| native.write_file,
         parallel_safe: false,
         bypasses_approval: false,
         read_only: false,
+        requires_session_consent: true,
         call: NativeToolCall::BlockingMutation(crate::native_tools::write_file),
     },
     NativeToolEntry {
-        name: "create_dir",
-        def: native_create_dir_tool,
-        enabled: |native, _, _| native.write_file,
-        parallel_safe: false,
-        bypasses_approval: false,
-        read_only: false,
-        // Intentionally synchronous (not spawn_blocking), matching the
-        // legacy dispatch: directory creation has no path-lock waits.
-        call: NativeToolCall::SyncText(crate::native_tools::create_dir),
-    },
-    NativeToolEntry {
-        name: "delete_path",
-        def: native_delete_path_tool,
-        enabled: |native, _, _| native.write_file,
-        parallel_safe: false,
-        bypasses_approval: false,
-        read_only: false,
-        call: NativeToolCall::BlockingText(crate::native_tools::delete_path),
-    },
-    NativeToolEntry {
-        name: "move_path",
-        def: native_move_path_tool,
-        enabled: |native, _, _| native.write_file,
-        parallel_safe: false,
-        bypasses_approval: false,
-        read_only: false,
-        call: NativeToolCall::BlockingText(crate::native_tools::move_path),
-    },
-    NativeToolEntry {
-        name: "copy_path",
-        def: native_copy_path_tool,
-        enabled: |native, _, _| native.write_file,
-        parallel_safe: false,
-        bypasses_approval: false,
-        read_only: false,
-        call: NativeToolCall::BlockingText(crate::native_tools::copy_path),
-    },
-    NativeToolEntry {
-        name: "edit_file",
+        name: "edit",
         def: native_edit_file_tool,
         enabled: |native, _, _| native.edit_file,
         parallel_safe: false,
         bypasses_approval: false,
         read_only: false,
+        requires_session_consent: true,
         call: NativeToolCall::BlockingMutation(crate::native_tools::edit_file),
     },
     NativeToolEntry {
-        name: "run_command",
+        name: "bash",
         def: native_run_command_tool,
         enabled: |native, _, _| native.run_command,
         parallel_safe: false,
         bypasses_approval: false,
         read_only: false,
+        requires_session_consent: true,
         call: NativeToolCall::Async(call_run_command),
     },
     NativeToolEntry {
@@ -246,6 +209,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: false,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_save_assistant),
     },
     NativeToolEntry {
@@ -255,6 +219,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: false,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_run_python),
     },
     NativeToolEntry {
@@ -264,6 +229,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: true,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_memory_read),
     },
     NativeToolEntry {
@@ -273,6 +239,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_memory_modify),
     },
     NativeToolEntry {
@@ -282,6 +249,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: true,
+        requires_session_consent: false,
         call: NativeToolCall::Async(call_memory_search),
     },
     // Conversation-level tools below are appended in chat/commands.rs and
@@ -293,6 +261,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::Conversation(crate::chat::todo::handle_conversation_tool_call),
     },
     NativeToolEntry {
@@ -302,6 +271,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::Conversation(crate::chat::todo::handle_conversation_tool_call),
     },
     NativeToolEntry {
@@ -311,6 +281,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false, // spec: ask_user is forced serial with batch flush
         bypasses_approval: true,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::HostMediated,
     },
     // Sub-agent management tools (P3). Appended in chat/commands.rs
@@ -330,6 +301,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: true,
         bypasses_approval: true,
         read_only: false,
+        requires_session_consent: false,
         call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_agent_spawn),
     },
     NativeToolEntry {
@@ -339,6 +311,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: true,
+        requires_session_consent: false,
         call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_check_agent_result),
     },
     NativeToolEntry {
@@ -348,6 +321,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         parallel_safe: false,
         bypasses_approval: true,
         read_only: true,
+        requires_session_consent: false,
         call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_list_agent_tasks),
     },
 ];
@@ -356,7 +330,17 @@ pub fn find_entry(name: &str) -> Option<&'static NativeToolEntry> {
     NATIVE_TOOLS.iter().find(|entry| entry.name == name)
 }
 
-pub(super) fn text_tool_result(content: String) -> McpToolCallResult {
+/// The native file/shell tools (Pi's 7) are gated by a single one-time
+/// per-conversation **session consent** prompt — granting one authorizes
+/// full-disk read/write and arbitrary command execution for the rest of that
+/// conversation. Everything else (web/python/memory/todo/sub-agent/...) keeps
+/// its own gating and is NOT behind this consent. Driven by the per-entry
+/// `requires_session_consent` flag so a rename or new tool can't drift.
+pub fn native_tool_requires_session_consent(name: &str) -> bool {
+    find_entry(name).is_some_and(|entry| entry.requires_session_consent)
+}
+
+pub fn text_tool_result(content: String) -> McpToolCallResult {
     McpToolCallResult {
         content,
         is_error: false,
@@ -485,18 +469,13 @@ mod tests {
     const EXPECTED_ORDER: &[&str] = &[
         "web_search",
         "web_fetch",
-        "read_file",
-        "list_dir",
-        "search_files",
-        "glob_files",
-        "stat_path",
-        "write_file",
-        "create_dir",
-        "delete_path",
-        "move_path",
-        "copy_path",
-        "edit_file",
-        "run_command",
+        "read",
+        "ls",
+        "grep",
+        "find",
+        "write",
+        "edit",
+        "bash",
         "save_assistant",
         "run_python",
         "memory_read",
@@ -509,6 +488,27 @@ mod tests {
         "check_agent_result",
         "list_agent_tasks",
     ];
+
+    #[test]
+    fn session_consent_set_is_exactly_the_seven_file_shell_tools() {
+        let consent: Vec<&str> = NATIVE_TOOLS
+            .iter()
+            .filter(|entry| entry.requires_session_consent)
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(
+            consent,
+            ["read", "ls", "grep", "find", "write", "edit", "bash"],
+            "session-consent set must be exactly Pi's 7 file/shell tools; a new \
+             file/shell tool MUST set requires_session_consent or it silently \
+             bypasses the consent gate"
+        );
+        // The predicate agrees with the flag, and non-file tools are excluded.
+        assert!(native_tool_requires_session_consent("bash"));
+        assert!(!native_tool_requires_session_consent("web_search"));
+        assert!(!native_tool_requires_session_consent("run_python"));
+        assert!(!native_tool_requires_session_consent("memory_read"));
+    }
 
     #[test]
     fn registry_order_and_names_match_legacy_exposure_order() {
@@ -537,11 +537,10 @@ mod tests {
             [
                 "web_search",
                 "web_fetch",
-                "read_file",
-                "list_dir",
-                "search_files",
-                "glob_files",
-                "stat_path",
+                "read",
+                "ls",
+                "grep",
+                "find",
                 "agent",
             ],
             "parallel-safe set is intentionally narrow per agent-runtime spec; \
@@ -586,11 +585,10 @@ mod tests {
             [
                 "web_search",
                 "web_fetch",
-                "read_file",
-                "list_dir",
-                "search_files",
-                "glob_files",
-                "stat_path",
+                "read",
+                "ls",
+                "grep",
+                "find",
                 "memory_read",
                 "memory_search",
                 "check_agent_result",
@@ -673,28 +671,13 @@ mod tests {
         read_only.read_file = true;
         assert_eq!(
             names(&read_only, false, false),
-            [
-                "read_file",
-                "list_dir",
-                "search_files",
-                "glob_files",
-                "stat_path"
-            ]
+            ["read", "ls", "grep", "find"]
         );
 
-        // write gate exposes exactly the whole-file and path tools.
+        // write gate exposes the whole-file write tool.
         let mut write_only = off.clone();
         write_only.write_file = true;
-        assert_eq!(
-            names(&write_only, false, false),
-            [
-                "write_file",
-                "create_dir",
-                "delete_path",
-                "move_path",
-                "copy_path"
-            ]
-        );
+        assert_eq!(names(&write_only, false, false), ["write"]);
 
         // memory gate is independent of native toggles.
         assert_eq!(
@@ -719,18 +702,13 @@ mod tests {
             [
                 "web_search",
                 "web_fetch",
-                "read_file",
-                "list_dir",
-                "search_files",
-                "glob_files",
-                "stat_path",
-                "write_file",
-                "create_dir",
-                "delete_path",
-                "move_path",
-                "copy_path",
-                "edit_file",
-                "run_command",
+                "read",
+                "ls",
+                "grep",
+                "find",
+                "write",
+                "edit",
+                "bash",
                 "run_python",
                 "memory_read",
                 "memory_modify",

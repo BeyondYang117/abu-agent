@@ -3,7 +3,7 @@ import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Zap,
   Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
-  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3,
+  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3, Terminal,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -35,6 +35,7 @@ import { ProviderModelsPicker } from './ProviderModelsPicker'
 import { ProviderSortableList } from './ProviderSortableList'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
+import { KivioCodeSettings } from './KivioCodeSettings'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
 import { resolveModelInfo } from '../data/modelMatching'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
@@ -46,7 +47,7 @@ import {
   SettingsGroup,
 } from './components'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 type MemoryLayerKey = 'l1' | 'l2'
@@ -2003,6 +2004,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'chat' as const, label: t.tabChatClient, icon: MessageSquare },
     { id: 'memory' as const, label: t.tabMemory, icon: Brain },
     { id: 'mixer' as const, label: t.tabMixer, icon: SlidersHorizontal },
+    { id: 'kivioCode' as const, label: 'Kivio Code', icon: Terminal },
     { id: 'mcp' as const, label: 'MCP', icon: Wrench },
     { id: 'skill' as const, label: 'Skill', icon: Sparkles },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: Globe },
@@ -2043,6 +2045,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? '按副任务路由模型：视觉、标题总结、上下文压缩、生图。'
         : 'Route models by side task: vision, title summaries, context compression, and image generation.',
+    },
+    kivioCode: {
+      title: 'Kivio Code',
+      subtitle: lang === 'zh'
+        ? '终端编码代理的默认模型、工具审批策略与上下文读取。'
+        : 'Default model, tool approval policy, and context reading for the terminal coding agent.',
     },
     mcp: {
       title: 'MCP',
@@ -3003,34 +3011,38 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               </>
             )}
 
+            {/* ===== Kivio Code 标签页 ===== */}
+            {activeTab === 'kivioCode' && (
+              <KivioCodeSettings lang={lang} providers={settings.providers} />
+            )}
+
             {/* ===== MCP 标签页 ===== */}
             {activeTab === 'mcp' && (
-              <>
-                <SettingsGroup title={lang === 'zh' ? 'Kivio 内置工具' : 'Kivio built-in tools'}>
+              <>                <SettingsGroup title={lang === 'zh' ? 'Kivio 内置工具' : 'Kivio built-in tools'}>
                   <p className="kv-row-desc mb-2">
                     {lang === 'zh'
-                      ? 'Chat 原生工具。read_file 可读取 Kivio 能访问的本地文本文件；写入和编辑仍限制在用户主目录内，终端命令可在任意已存在目录中运行并会请求确认。'
-                      : 'Native Chat tools. read_file can read local text files Kivio can access; write and edit stay limited to the user home, while shell commands can run in any existing directory with approval.'}
+                      ? 'Chat 原生工具。启用后，本会话首次使用文件 / 命令工具时会请求一次授权；授权后 Kivio 可读写磁盘任意路径并执行终端命令（不再限制在主目录内，也不再逐次确认）。授权仅本次会话有效，重启后重新请求。'
+                      : 'Native Chat tools. When first used in a conversation, file/command tools ask for one-time consent; once granted, Kivio can read/write anywhere on disk and run shell commands (no home-directory limit, no per-call prompts). Consent lasts for that conversation only and is re-requested after restart.'}
                   </p>
-                  <SettingRow label={lang === 'zh' ? '读取文件' : 'Read file'} description={lang === 'zh' ? 'read_file，无需确认' : 'read_file, no approval'}>
+                  <SettingRow label={lang === 'zh' ? '读取文件' : 'Read file'} description={lang === 'zh' ? 'read' : 'read'}>
                     <Toggle
                       checked={chatTools.nativeTools?.readFile === true}
                       onChange={(readFile) => updateNativeTools({ readFile })}
                     />
                   </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '写入文件' : 'Write file'} description={lang === 'zh' ? 'write_file，需确认' : 'write_file, approval required'}>
+                  <SettingRow label={lang === 'zh' ? '写入文件' : 'Write file'} description={lang === 'zh' ? 'write' : 'write'}>
                     <Toggle
                       checked={chatTools.nativeTools?.writeFile === true}
                       onChange={(writeFile) => updateNativeTools({ writeFile })}
                     />
                   </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '编辑文件' : 'Edit file'} description={lang === 'zh' ? 'edit_file，需确认' : 'edit_file, approval required'}>
+                  <SettingRow label={lang === 'zh' ? '编辑文件' : 'Edit file'} description={lang === 'zh' ? 'edit' : 'edit'}>
                     <Toggle
                       checked={chatTools.nativeTools?.editFile === true}
                       onChange={(editFile) => updateNativeTools({ editFile })}
                     />
                   </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '终端命令' : 'Terminal command'} description={lang === 'zh' ? 'run_command，需确认' : 'run_command, approval required'}>
+                  <SettingRow label={lang === 'zh' ? '终端命令' : 'Terminal command'} description={lang === 'zh' ? 'bash' : 'bash'}>
                     <Toggle
                       checked={chatTools.nativeTools?.runCommand === true}
                       onChange={(runCommand) => updateNativeTools({ runCommand })}
@@ -3193,7 +3205,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     <div className="flex h-full flex-col">
                       <div className="mb-2">
                         <div className="kv-row-label">{lang === 'zh' ? '审批策略' : 'Approval policy'}</div>
-                        <p className="kv-row-desc">{lang === 'zh' ? '控制工具调用是否需要人工确认。' : 'Controls whether tool calls require manual approval.'}</p>
+                        <p className="kv-row-desc">{lang === 'zh' ? '文件/命令工具的授权方式；MCP 工具仍按其只读/敏感属性逐次判定。' : 'How file/command tools are authorized; MCP tools still follow their read-only/sensitive hints per call.'}</p>
                       </div>
                       <div className="mt-auto">
                         <Select
@@ -3203,10 +3215,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                           options={[
                             {
                               value: 'readonly_auto_sensitive_confirm',
-                              label: lang === 'zh' ? '读类自动，敏感确认' : 'Read auto, sensitive confirm',
+                              label: lang === 'zh' ? '会话授权一次（推荐）' : 'Session consent (once)',
                             },
-                            { value: 'always_confirm', label: lang === 'zh' ? '每次确认' : 'Always confirm' },
-                            { value: 'auto', label: lang === 'zh' ? '全部自动' : 'Auto approve' },
+                            { value: 'always_confirm', label: lang === 'zh' ? '授权后仍逐次确认' : 'Confirm every call' },
+                            { value: 'auto', label: lang === 'zh' ? '全部自动（不弹授权）' : 'Auto (no prompt)' },
                           ]}
                         />
                       </div>
@@ -3963,6 +3975,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                 onChange={(apiFormat) => updateProvider(provider.id, { apiFormat })}
                                 options={[
                                   { value: 'openai_chat', label: 'OpenAI Chat' },
+                                  { value: 'openai_responses', label: 'OpenAI Responses' },
                                   { value: 'anthropic_messages', label: 'Anthropic' },
                                 ]}
                               />

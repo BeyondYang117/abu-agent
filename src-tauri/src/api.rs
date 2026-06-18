@@ -133,6 +133,10 @@ const RETRY_MAX_DELAY_MS: u64 = 30_000;
 /// 同一个 key 上连续 429 退避重试达到该次数后，若存在未冷却的备用 key，
 /// 则交回外层切 key（在新 key 上重新计数 / 重试）；无备用 key 时继续退避到总次数上限。
 const RATE_LIMIT_KEY_SWITCH_THRESHOLD: usize = 2;
+/// 限流（429）专用的最小重试次数。限流是「等一会就能恢复」的暂时性错误（QPM/配额按时间桶
+/// 刷新），值得比通用 `retry_attempts` 更耐心地退避重试——对标 Claude Code 对 rate-limit 的
+/// 多次退避。仅在**无备用 key**（无法换 key 规避）时生效；有备用 key 时仍按阈值优先换 key。
+const RATE_LIMIT_MAX_ATTEMPTS: usize = 8;
 
 /// 获取实际的重试次数
 /// 如果重试功能被禁用，则返回 1（即只尝试一次）
@@ -303,6 +307,11 @@ where
 
 /// 带重试机制的 HTTP 发送函数
 /// 对可重试的错误（限流、服务器错误、超时、连接失败）进行指数退避重试
+///
+/// 职责边界:这里只做**传输层重试**(429 / 5xx / 网络超时连接错误的退避;坏 key 换 key)。
+/// **语义级恢复**(上下文超长 overflow 的「压缩后重试」、内容审核去敏重试、确定性兜底)
+/// 不在此处——归 `chat/agent/recovery.rs`(分类 + 策略中枢)+ `chat/agent/synthesis.rs`
+/// (执行)。不要在这里加 overflow / 去敏判定,避免与上层语义恢复重复退避、放大延迟。
 pub async fn send_with_retry<F, Fut>(
     label: &str,
     attempts: usize,
@@ -379,11 +388,19 @@ where
     Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
     let attempts = attempts.max(1);
+    // 限流（429）在无备用 key 时用更高的重试上限耐心退避；有备用 key 时维持通用上限
+    // （阈值处会冒泡换 key，换 key 比干等更优）。其它错误（5xx/网络）仍走通用 `attempts`。
+    let rate_limit_max = if policy.rate_limit_cap.is_none() {
+        attempts.max(RATE_LIMIT_MAX_ATTEMPTS)
+    } else {
+        attempts
+    };
+    let loop_max = attempts.max(rate_limit_max);
     let mut last_error: Option<String> = None;
     // 同一 key 上累计的 429 次数，用于阈值化换 key。
     let mut rate_limit_attempts: usize = 0;
 
-    for attempt in 1..=attempts {
+    for attempt in 1..=loop_max {
         match send().await {
             Ok(response) => {
                 let status = response.status();
@@ -407,26 +424,30 @@ where
                 let text = response.text().await.unwrap_or_default();
                 let err_msg = format!("{} Error: {} - {}", label, status, text);
 
-                // 429：受阈值约束（有备用 key 时达到阈值即冒泡换 key）；
-                // 5xx：退避重试到总次数；其它确定性 4xx：不重试快速失败。
-                let should_retry = if is_rate_limit {
-                    policy.should_retry_rate_limit(rate_limit_attempts)
+                // 429：受 key-switch 阈值约束 + 限流专用上限耐心退避；
+                // 5xx：退避重试到通用次数；其它确定性 4xx：不重试快速失败。
+                let (should_retry, shown_max) = if is_rate_limit {
+                    (
+                        policy.should_retry_rate_limit(rate_limit_attempts)
+                            && attempt < rate_limit_max,
+                        rate_limit_max,
+                    )
                 } else {
-                    status.is_server_error()
+                    (status.is_server_error() && attempt < attempts, attempts)
                 };
 
-                if should_retry && attempt < attempts {
+                if should_retry {
                     last_error = Some(err_msg);
                     let delay = retry_delay_ms(attempt, retry_after);
                     eprintln!(
                         "{} retrying in {}ms (attempt {}/{})",
-                        label, delay, attempt, attempts
+                        label, delay, attempt, shown_max
                     );
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     continue;
                 }
 
-                return Err(format!("{} (attempt {}/{})", err_msg, attempt, attempts));
+                return Err(format!("{} (attempt {}/{})", err_msg, attempt, shown_max));
             }
             Err(err) => {
                 let err_msg = format!("{} Error: {}", label, err);
@@ -446,8 +467,8 @@ where
     }
 
     Err(last_error
-        .map(|msg| format!("{} (attempt {}/{})", msg, attempts, attempts))
-        .unwrap_or_else(|| format!("{} Error: exceeded retry attempts ({})", label, attempts)))
+        .map(|msg| format!("{} (attempt {}/{})", msg, loop_max, loop_max))
+        .unwrap_or_else(|| format!("{} Error: exceeded retry attempts ({})", label, loop_max)))
 }
 
 fn record_api_usage_success(
@@ -2177,7 +2198,8 @@ data: [DONE]
 
     #[tokio::test(start_paused = true)]
     async fn rate_limit_backs_off_on_same_key_when_no_backup() {
-        // 无备用 key：429 在同一 key 上退避重试到总次数上限，不提前停。
+        // 无备用 key：429 在同一 key 上退避重试到**限流专用上限**（耐心重试，不受较小的
+        // 通用 attempts 限制），不提前停。
         let attempts = 5;
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_inner = Arc::clone(&calls);
@@ -2199,7 +2221,7 @@ data: [DONE]
         .await;
 
         assert!(result.is_err());
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), attempts);
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), RATE_LIMIT_MAX_ATTEMPTS);
     }
 
     #[tokio::test(start_paused = true)]
@@ -2256,8 +2278,8 @@ data: [DONE]
         .await;
 
         assert!(result.is_err());
-        // 退避重试到上限（paused 时钟让 retry-after 的 sleep 瞬时跳过）。
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 3);
+        // 退避重试到限流专用上限（paused 时钟让 retry-after 的 sleep 瞬时跳过）。
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), RATE_LIMIT_MAX_ATTEMPTS);
     }
 
     #[tokio::test(start_paused = true)]
@@ -2340,7 +2362,7 @@ data: [DONE]
         .await;
 
         assert!(result.is_err());
-        // 无备用 key → 退避到总次数 5。
-        assert_eq!(calls.load(AtomicOrdering::SeqCst), 5);
+        // 无备用 key → 退避到限流专用上限。
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), RATE_LIMIT_MAX_ATTEMPTS);
     }
 }

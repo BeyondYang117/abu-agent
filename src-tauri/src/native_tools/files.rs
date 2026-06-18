@@ -9,11 +9,12 @@ use std::{
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use super::{
-    assert_writable_path, resolve_tool_read_path, resolve_tool_write_entry_path,
-    resolve_tool_write_path, workspace_display_path, NativeToolWorkspace, MAX_READ_FILE_BYTES,
+    resolve_tool_read_path, resolve_tool_write_path, workspace_display_path, NativeToolWorkspace,
+    MAX_READ_FILE_BYTES,
 };
 
 const MAX_LIST_ENTRIES: usize = 500;
@@ -21,6 +22,8 @@ const MAX_GLOB_RESULTS: usize = 500;
 const MAX_SEARCH_FILES: usize = 5_000;
 const MAX_SEARCH_MATCHES: usize = 1_000;
 const MAX_SEARCH_FILE_BYTES: u64 = 1024 * 1024;
+/// Cap each emitted grep line at this many chars; longer lines get a marker.
+const MAX_GREP_LINE_CHARS: usize = 500;
 const UTF8_BOM: &str = "\u{feff}";
 const DEFAULT_IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -262,17 +265,8 @@ pub fn write_file(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "write_file requires content".to_string())?;
     let full = resolve_tool_write_path(workspace, path)?;
-    if !workspace.has_project() {
-        assert_writable_path(&full)?;
-    }
     let _guard = acquire_file_mutation_locks([full.clone()])?;
     let existed = full.is_file();
-    // Placeholder phrases ("rest of file unchanged", "省略") are a real hazard
-    // only when a model lazily overwrites existing code; prose like meeting
-    // notes legitimately contains them, so new files and non-code files pass.
-    if existed && is_code_like_path(&full) && looks_like_placeholder_content(content) {
-        return Err("write_file rejected placeholder/lazy content; target untouched".to_string());
-    }
     // The existing content is only needed for the diff; degrade gracefully on non-UTF-8.
     let before = if existed {
         fs::read_to_string(&full).ok()
@@ -311,24 +305,32 @@ pub fn edit_file(
     let path = arguments
         .get("path")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "edit_file requires path".to_string())?;
-    let old_string = arguments
-        .get("old_string")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "edit_file requires old_string".to_string())?;
-    let new_string = arguments
-        .get("new_string")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "edit_file requires new_string".to_string())?;
-    let replace_all = arguments
-        .get("replace_all")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .ok_or_else(|| "edit requires path".to_string())?;
+    let edits_value = arguments
+        .get("edits")
+        .and_then(|v| v.as_array())
+        .filter(|edits| !edits.is_empty())
+        .ok_or_else(|| {
+            "edit requires `edits`: a non-empty array of {old_string, new_string}".to_string()
+        })?;
+    // Parse the edits up front so a malformed entry fails before we touch disk.
+    let parsed: Vec<(String, String)> = edits_value
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let old = e
+                .get("old_string")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("edits[{i}] requires old_string"))?;
+            let new = e
+                .get("new_string")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("edits[{i}] requires new_string"))?;
+            Ok((old.to_string(), new.to_string()))
+        })
+        .collect::<Result<_, String>>()?;
 
     let full = resolve_tool_write_path(workspace, path)?;
-    if !workspace.has_project() {
-        assert_writable_path(&full)?;
-    }
     let _guard = acquire_file_mutation_locks([full.clone()])?;
     if !full.is_file() {
         return Err(format!("不是可编辑的文件: {path}"));
@@ -336,15 +338,74 @@ pub fn edit_file(
 
     let content = fs::read_to_string(&full).map_err(|err| format!("Read file failed: {err}"))?;
     // 行尾归一后再匹配：模型给的 old_string 通常是 LF，而文件可能是 CRLF（Windows 高频），
-    // 直接字面 `contains` 会 0 命中。统一归一到 LF 做匹配/计数/替换；写回时
-    // atomic_write_text 依据原文件把 LF 还原成 CRLF（并保留 BOM），磁盘行尾风格不变。
-    // diff 用归一后的 before 比对，避免 CRLF→LF 让每行都被算成变更。
+    // 直接字面 `contains` 会 0 命中。统一归一到 LF 做匹配/替换；写回时 atomic_write_text
+    // 依据原文件把 LF 还原成 CRLF（并保留 BOM），磁盘行尾风格不变。
     let normalized_content = normalize_line_endings(&content, "\n");
-    let normalized_old = normalize_line_endings(old_string, "\n");
-    let normalized_new = normalize_line_endings(new_string, "\n");
+    // Apply edits in order. Each old_string must occur exactly once in the
+    // current working text (no replace_all): a model that wants to change every
+    // occurrence lists them as separate, context-extended edits — same safety as
+    // the old single-edit uniqueness check, now per edit.
+    let mut working = normalized_content.clone();
+    let mut warnings = Vec::new();
+    let mut applied = 0usize;
+    for (i, (old, new)) in parsed.iter().enumerate() {
+        let normalized_old = normalize_line_endings(old, "\n");
+        let normalized_new = normalize_line_endings(new, "\n");
+        if normalized_old == normalized_new {
+            warnings.push(format!(
+                "edits[{i}]: old_string and new_string are identical; skipped."
+            ));
+            continue;
+        }
+        if normalized_old.is_empty() {
+            return Err(format!("edits[{i}]: old_string is empty."));
+        }
+        let count = working.matches(&normalized_old).count();
+        if count > 1 {
+            return Err(format!(
+                "edits[{i}]: old_string appears {count} times; extend it with surrounding context \
+                 so it matches exactly one location (replace_all is no longer supported — list each \
+                 occurrence as its own edit)."
+            ));
+        }
+        if count == 1 {
+            working = working.replacen(&normalized_old, &normalized_new, 1);
+            applied += 1;
+            continue;
+        }
 
-    if normalized_old == normalized_new {
+        // Exact match found nothing. Fall back to fuzzy matching: cosmetic unicode
+        // differences (NFKC, smart quotes/dashes, whitespace runs) are normalized on
+        // BOTH sides, the match is located in normalized space, then mapped back to an
+        // ORIGINAL byte range via an alignment table so the replacement preserves the
+        // file's real bytes everywhere except the matched span.
+        match fuzzy_find_unique(&working, &normalized_old) {
+            Ok(range) => {
+                working.replace_range(range, &normalized_new);
+                applied += 1;
+            }
+            Err(FuzzyMatchError::NotFound) => {
+                return Err(format!(
+                    "edits[{i}]: old_string not found in file. Re-read the file and copy an exact, \
+                     contiguous snippet including its leading whitespace/indentation. Line endings are \
+                     normalized automatically, so a CRLF vs LF mismatch is not the cause."
+                ));
+            }
+            Err(FuzzyMatchError::Ambiguous(n)) => {
+                return Err(format!(
+                    "edits[{i}]: old_string appears {n} times; extend it with surrounding context \
+                     so it matches exactly one location (replace_all is no longer supported — list each \
+                     occurrence as its own edit)."
+                ));
+            }
+        }
+    }
+
+    if applied == 0 {
         let display_path = workspace_display_path(workspace, &full);
+        if warnings.is_empty() {
+            warnings.push("No edits changed the file.".to_string());
+        }
         return Ok(FileMutationResult {
             ok: true,
             operation: "edit".to_string(),
@@ -362,48 +423,180 @@ pub fn edit_file(
             additions: 0,
             removals: 0,
             diff: String::new(),
-            warnings: vec!["old_string and new_string are identical; no changes made.".to_string()],
+            warnings,
             diagnostics: Vec::new(),
         });
     }
-    if !normalized_content.contains(&normalized_old) {
-        return Err(
-            "old_string not found in file. Re-read the file and copy an exact, contiguous snippet \
-             including its leading whitespace/indentation. Line endings are normalized \
-             automatically, so a CRLF vs LF mismatch is not the cause."
-                .to_string(),
-        );
-    }
-    let count = normalized_content.matches(&normalized_old).count();
-    if !replace_all && count > 1 {
-        return Err(format!(
-            "old_string appears {count} times; set replace_all=true, or extend old_string with \
-             surrounding context so it matches exactly one location."
-        ));
-    }
 
-    let updated = if replace_all {
-        normalized_content.replace(&normalized_old, &normalized_new)
-    } else {
-        normalized_content.replacen(&normalized_old, &normalized_new, 1)
-    };
-    atomic_write_text(&full, &updated, Some(&content))
+    atomic_write_text(&full, &working, Some(&content))
         .map_err(|err| format!("Write file failed: {err}"))?;
-    Ok(file_mutation_result(
+    let mut result = file_mutation_result(
         "edit",
         vec![planned_file_result(
             workspace,
             full,
             "edit",
             Some(&normalized_content),
-            Some(&updated),
+            Some(&working),
         )?],
-    ))
+    );
+    result.warnings.extend(warnings);
+    Ok(result)
 }
 
 struct FileMutationLocks {
     active: Mutex<HashSet<PathBuf>>,
     ready: Condvar,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FuzzyMatchError {
+    NotFound,
+    Ambiguous(usize),
+}
+
+/// One normalized character produced from the original text, plus the original
+/// byte range it came from. Whitespace runs collapse to a single space whose
+/// range spans the whole run, so a normalized-space match maps cleanly back to
+/// the original byte offsets.
+struct NormChar {
+    ch: char,
+    start: usize,
+    end: usize,
+}
+
+/// Normalize a single original char for fuzzy matching: smart quotes/dashes →
+/// ASCII, then NFKC. Returns the resulting (usually one) chars. Whitespace is
+/// handled by the caller (run collapsing), so this never emits a space here for
+/// non-space input.
+fn fuzzy_normalize_char(ch: char) -> Vec<char> {
+    let mapped = match ch {
+        // Smart single quotes / prime → '
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' | '\u{2032}' => '\'',
+        // Smart double quotes / double prime → "
+        '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' | '\u{2033}' => '"',
+        // Dashes (hyphen/non-breaking-hyphen/figure/en/em/horizontal-bar/minus) → -
+        '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+        | '\u{2212}' => '-',
+        other => other,
+    };
+    mapped.to_string().nfkc().collect()
+}
+
+/// Treat any unicode whitespace (incl. NBSP, narrow NBSP, ideographic space) as
+/// collapsible whitespace.
+fn is_fuzzy_whitespace(ch: char) -> bool {
+    ch.is_whitespace()
+}
+
+/// Build the normalized form of `text` alongside an alignment table back to the
+/// ORIGINAL byte offsets. Whitespace runs collapse to one space spanning the run.
+fn build_normalized(text: &str) -> (String, Vec<NormChar>) {
+    let mut norm = String::new();
+    let mut table: Vec<NormChar> = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((byte_idx, ch)) = chars.next() {
+        if is_fuzzy_whitespace(ch) {
+            let start = byte_idx;
+            let mut end = byte_idx + ch.len_utf8();
+            // Consume the rest of the whitespace run.
+            while let Some(&(next_idx, next_ch)) = chars.peek() {
+                if is_fuzzy_whitespace(next_ch) {
+                    end = next_idx + next_ch.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            norm.push(' ');
+            table.push(NormChar {
+                ch: ' ',
+                start,
+                end,
+            });
+            continue;
+        }
+        let end = byte_idx + ch.len_utf8();
+        for mapped in fuzzy_normalize_char(ch) {
+            norm.push(mapped);
+            table.push(NormChar {
+                ch: mapped,
+                start: byte_idx,
+                end,
+            });
+        }
+    }
+    (norm, table)
+}
+
+/// Find a unique fuzzy match of `needle` inside `haystack` and return the
+/// ORIGINAL byte range in `haystack` it corresponds to. Leading/trailing
+/// whitespace of the needle (in normalized space) is trimmed so cosmetic edge
+/// whitespace doesn't block the match; the mapped original range still covers
+/// exactly the matched original bytes.
+fn fuzzy_find_unique(
+    haystack: &str,
+    needle: &str,
+) -> Result<std::ops::Range<usize>, FuzzyMatchError> {
+    let (norm_hay, hay_table) = build_normalized(haystack);
+    let (norm_needle, _needle_table) = build_normalized(needle);
+    let needle_trimmed = norm_needle.trim();
+    if needle_trimmed.is_empty() {
+        return Err(FuzzyMatchError::NotFound);
+    }
+
+    // Collect all non-overlapping occurrences in normalized space.
+    let mut occurrences: Vec<(usize, usize)> = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(rel) = norm_hay[search_from..].find(needle_trimmed) {
+        let start = search_from + rel;
+        let end = start + needle_trimmed.len();
+        occurrences.push((start, end));
+        // Advance past this match so overlapping matches aren't double-counted.
+        search_from = end;
+    }
+
+    match occurrences.len() {
+        0 => Err(FuzzyMatchError::NotFound),
+        1 => {
+            let (norm_start, norm_end) = occurrences[0];
+            Ok(map_norm_range_to_original(&hay_table, norm_start, norm_end))
+        }
+        n => Err(FuzzyMatchError::Ambiguous(n)),
+    }
+}
+
+/// Map a byte range in the normalized string to the spanning original byte range
+/// using the per-normalized-char alignment table.
+fn map_norm_range_to_original(
+    table: &[NormChar],
+    norm_start: usize,
+    norm_end: usize,
+) -> std::ops::Range<usize> {
+    let mut byte = 0usize;
+    let mut first: Option<usize> = None;
+    let mut last: Option<usize> = None;
+    for (idx, nc) in table.iter().enumerate() {
+        let ch_len = nc.ch.len_utf8();
+        let ch_start = byte;
+        let ch_end = byte + ch_len;
+        // Overlap test against [norm_start, norm_end).
+        if ch_start < norm_end && ch_end > norm_start {
+            if first.is_none() {
+                first = Some(idx);
+            }
+            last = Some(idx);
+        }
+        byte = ch_end;
+        if byte >= norm_end {
+            break;
+        }
+    }
+    match (first, last) {
+        (Some(f), Some(l)) => table[f].start..table[l].end,
+        // Should not happen for a non-empty match; fall back to a no-op range.
+        _ => 0..0,
+    }
 }
 
 struct FileMutationLockGuard {
@@ -496,74 +689,6 @@ fn atomic_write_text(
         }
     }
     atomic_write_bytes(target, text.as_bytes(), existing_text)
-}
-
-fn looks_like_placeholder_content(content: &str) -> bool {
-    let normalized = content.to_ascii_lowercase();
-    [
-        "original code here",
-        "rest of file unchanged",
-        "same as before",
-        "remaining code unchanged",
-        "unchanged code",
-        "原代码",
-        "其余不变",
-        "保持不变",
-        "省略",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-}
-
-/// Extensions where placeholder phrases indicate a lazily truncated overwrite
-/// rather than legitimate document text.
-fn is_code_like_path(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-        return false;
-    };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "rs" | "ts"
-            | "tsx"
-            | "js"
-            | "jsx"
-            | "mjs"
-            | "cjs"
-            | "py"
-            | "rb"
-            | "go"
-            | "java"
-            | "kt"
-            | "swift"
-            | "c"
-            | "h"
-            | "cpp"
-            | "hpp"
-            | "cc"
-            | "cs"
-            | "php"
-            | "sh"
-            | "bash"
-            | "zsh"
-            | "fish"
-            | "ps1"
-            | "sql"
-            | "html"
-            | "css"
-            | "scss"
-            | "less"
-            | "vue"
-            | "svelte"
-            | "json"
-            | "yaml"
-            | "yml"
-            | "toml"
-            | "xml"
-            | "lua"
-            | "zig"
-            | "dart"
-            | "scala"
-    )
 }
 
 fn normalize_line_endings(content: &str, target: &str) -> String {
@@ -946,109 +1071,6 @@ pub fn list_dir(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<St
     }))
 }
 
-pub fn stat_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
-    let path = required_string(arguments, "path")?;
-    let full = resolve_tool_read_path(workspace, path)?;
-    let metadata = fs::metadata(&full).map_err(|err| format!("Read metadata failed: {err}"))?;
-    format_json(path_info(workspace, &full, &metadata)?)
-}
-
-pub fn create_dir(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
-    let path = required_string(arguments, "path")?;
-    let full = resolve_tool_write_path(workspace, path)?;
-    if !workspace.has_project() {
-        assert_writable_path(&full)?;
-    }
-    fs::create_dir_all(&full).map_err(|err| format!("Create directory failed: {err}"))?;
-    Ok(format!(
-        "Created directory {}",
-        workspace_display_path(workspace, &full)
-    ))
-}
-
-pub fn delete_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
-    let path = required_string(arguments, "path")?;
-    let recursive = arguments
-        .get("recursive")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let full = resolve_tool_write_entry_path(workspace, path)?;
-    if !workspace.has_project() {
-        assert_writable_path(&full)?;
-    }
-    let _guard = acquire_file_mutation_locks([full.clone()])?;
-    reject_workspace_root_delete(workspace, &full)?;
-
-    let metadata = fs::symlink_metadata(&full).map_err(|_| format!("路径不存在: {path}"))?;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() || metadata.is_file() {
-        fs::remove_file(&full).map_err(|err| format!("Delete file failed: {err}"))?;
-    } else if metadata.is_dir() {
-        if recursive {
-            fs::remove_dir_all(&full).map_err(|err| format!("Delete directory failed: {err}"))?;
-        } else {
-            fs::remove_dir(&full).map_err(|err| format!("Delete directory failed: {err}"))?;
-        }
-    } else {
-        return Err(format!("不是可删除的文件或文件夹: {path}"));
-    }
-
-    Ok(format!(
-        "Deleted {}",
-        workspace_display_path(workspace, &full)
-    ))
-}
-
-pub fn move_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
-    let from = required_string(arguments, "from")?;
-    let to = required_string(arguments, "to")?;
-    let source = resolve_tool_write_entry_path(workspace, from)?;
-    let destination = resolve_tool_write_path(workspace, to)?;
-    if !workspace.has_project() {
-        assert_writable_path(&source)?;
-        assert_writable_path(&destination)?;
-    }
-    let _guard = acquire_file_mutation_locks([source.clone(), destination.clone()])?;
-    reject_workspace_root_delete(workspace, &source)?;
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("Create parent dirs failed: {err}"))?;
-    }
-    fs::rename(&source, &destination).map_err(|err| format!("Move path failed: {err}"))?;
-    Ok(format!(
-        "Moved {} to {}",
-        workspace_display_path(workspace, &source),
-        workspace_display_path(workspace, &destination)
-    ))
-}
-
-pub fn copy_path(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
-    let from = required_string(arguments, "from")?;
-    let to = required_string(arguments, "to")?;
-    let source = resolve_tool_read_path(workspace, from)?;
-    let destination = resolve_tool_write_path(workspace, to)?;
-    if !workspace.has_project() {
-        assert_writable_path(&destination)?;
-    }
-    let _guard = acquire_file_mutation_locks([destination.clone()])?;
-    if source.is_dir() {
-        reject_recursive_directory_copy(&source, &destination)?;
-        copy_dir_recursive(&source, &destination)?;
-    } else if source.is_file() {
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Create parent dirs failed: {err}"))?;
-        }
-        fs::copy(&source, &destination).map_err(|err| format!("Copy file failed: {err}"))?;
-    } else {
-        return Err(format!("不是可复制的文件或文件夹: {from}"));
-    }
-    Ok(format!(
-        "Copied {} to {}",
-        workspace_display_path(workspace, &source),
-        workspace_display_path(workspace, &destination)
-    ))
-}
-
 pub fn glob_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<String, String> {
     let pattern = required_string(arguments, "pattern")?;
     validate_glob_pattern(pattern)?;
@@ -1149,6 +1171,12 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
             "output_mode must be one of: content, files_with_matches, count".to_string(),
         );
     }
+    // Optional context lines emitted before/after each content match (default 0).
+    let context = arguments
+        .get("context")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(0);
     let glob = arguments
         .get("glob")
         .and_then(|v| v.as_str())
@@ -1219,17 +1247,31 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
         files_scanned += 1;
         let display = workspace_display_path(workspace, &path);
         let mut file_count = 0usize;
-        for (idx, line) in content.lines().enumerate() {
+        let lines: Vec<&str> = content.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
             if !is_match(line) {
                 continue;
             }
             file_count += 1;
             if output_mode == "content" {
-                content_matches.push(json!({
+                let mut entry = json!({
                     "path": display,
                     "line": idx + 1,
-                    "text": line
-                }));
+                    "text": cap_grep_line(line),
+                });
+                if context > 0 {
+                    let before_start = idx.saturating_sub(context);
+                    let after_end = (idx + 1 + context).min(lines.len());
+                    let before: Vec<Value> = (before_start..idx)
+                        .map(|i| json!({ "line": i + 1, "text": cap_grep_line(lines[i]) }))
+                        .collect();
+                    let after: Vec<Value> = ((idx + 1)..after_end)
+                        .map(|i| json!({ "line": i + 1, "text": cap_grep_line(lines[i]) }))
+                        .collect();
+                    entry["before"] = json!(before);
+                    entry["after"] = json!(after);
+                }
+                content_matches.push(entry);
                 if content_matches.len() >= max_results {
                     limit_hit = true;
                     break 'outer;
@@ -1282,6 +1324,16 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
         }
     }
     format_json(out)
+}
+
+/// Cap a single grep output line at MAX_GREP_LINE_CHARS chars, appending a marker
+/// when truncated. Counts by chars (not bytes) and respects char boundaries.
+fn cap_grep_line(line: &str) -> String {
+    if line.chars().count() <= MAX_GREP_LINE_CHARS {
+        return line.to_string();
+    }
+    let truncated: String = line.chars().take(MAX_GREP_LINE_CHARS).collect();
+    format!("{truncated}... [line truncated to {MAX_GREP_LINE_CHARS} chars]")
 }
 
 fn required_string<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -1347,37 +1399,63 @@ fn is_hidden_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Walk a directory tree, honoring `.gitignore` (and `.ignore`, global gitignore,
+/// parent ignores) via the `ignore` crate — the same engine ripgrep uses — so
+/// grep/find skip `node_modules`, `target`, `dist`, etc. automatically. A small
+/// hardcoded floor (`DEFAULT_IGNORED_DIRS`) is always skipped too, so repos with
+/// no `.gitignore` still avoid the obvious noise. `include_hidden` toggles
+/// dotfile visibility (gitignore is still respected either way, like `rg --hidden`).
 fn walk_paths(
     root: &Path,
     recursive: bool,
     include_hidden: bool,
     max_paths: usize,
 ) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir).map_err(|err| format!("Read directory failed: {err}"))? {
-            let entry = entry.map_err(|err| format!("Read directory entry failed: {err}"))?;
-            let path = entry.path();
-            let name = path
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .hidden(!include_hidden)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        // Honor .gitignore even when the directory isn't inside a git repo.
+        .require_git(false)
+        .max_depth(if recursive { None } else { Some(1) })
+        .filter_entry(|entry| {
+            // Never prune the search root itself (depth 0) — the `ignore` crate
+            // applies this predicate to the root too, so without this guard a
+            // search rooted at a dir literally named `build`/`dist`/`target`/…
+            // would return nothing. Only prune DIRECTORIES whose name is in the
+            // floor list; a regular file that happens to share the name stays.
+            if entry.depth() == 0 {
+                return true;
+            }
+            let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+            if !is_dir {
+                return true;
+            }
+            entry
                 .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("");
-            if !include_hidden && name.starts_with('.') {
-                continue;
-            }
-            let metadata = entry
-                .metadata()
-                .map_err(|err| format!("Read entry metadata failed: {err}"))?;
-            if metadata.is_dir() {
-                if recursive && !DEFAULT_IGNORED_DIRS.contains(&name) {
-                    stack.push(path.clone());
-                }
-            }
-            out.push(path);
-            if out.len() >= max_paths {
-                return Ok(out);
-            }
+                .to_str()
+                .map(|name| !DEFAULT_IGNORED_DIRS.contains(&name))
+                .unwrap_or(true)
+        });
+
+    let mut out = Vec::new();
+    for result in builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            // Skip unreadable entries (permissions, races) rather than failing
+            // the whole walk.
+            Err(_) => continue,
+        };
+        // The walk yields the root itself at depth 0; callers want its contents.
+        if entry.depth() == 0 {
+            continue;
+        }
+        out.push(entry.into_path());
+        if out.len() >= max_paths {
+            break;
         }
     }
     Ok(out)
@@ -1458,53 +1536,113 @@ fn segment_match(pattern: &str, value: &str) -> bool {
     pi == p.len()
 }
 
-fn reject_workspace_root_delete(
-    workspace: &NativeToolWorkspace,
-    path: &Path,
-) -> Result<(), String> {
-    if let Some(project) = &workspace.project {
-        if let Some(root) = project.root_path.as_ref() {
-            if let Ok(root) = fs::canonicalize(root) {
-                if path == root {
-                    return Err("不能删除、移动或覆盖项目根目录。".to_string());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn reject_recursive_directory_copy(source: &Path, destination: &Path) -> Result<(), String> {
-    if destination == source || destination.starts_with(source) {
-        return Err("不能将文件夹复制到自身或自身的子目录。".to_string());
-    }
-    Ok(())
-}
-
-fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination)
-        .map_err(|err| format!("Create destination dir failed: {err}"))?;
-    for entry in fs::read_dir(source).map_err(|err| format!("Read source dir failed: {err}"))? {
-        let entry = entry.map_err(|err| format!("Read source entry failed: {err}"))?;
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        let metadata = entry
-            .metadata()
-            .map_err(|err| format!("Read source metadata failed: {err}"))?;
-        if metadata.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else if metadata.is_file() {
-            fs::copy(&from, &to).map_err(|err| format!("Copy file failed: {err}"))?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
+
+    /// End-to-end simulation of an agent session using the Pi-style tool set.
+    /// Exercises the new behaviors together: gitignore-aware grep/find, no-boundary
+    /// writes outside the project root, read-back, and bash large-output offload.
+    /// Run with: cargo test --bin kivio simulated_agent_session -- --nocapture
+    #[tokio::test]
+    async fn simulated_agent_session_exercises_pi_style_tools() {
+        // ---- set up a realistic mini project ----
+        let proj = std::env::temp_dir().join(format!("kivio_sim_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(proj.join("src")).expect("mkdir src");
+        fs::create_dir_all(proj.join("node_modules/leftpad")).expect("mkdir node_modules");
+        fs::write(proj.join(".gitignore"), "node_modules/\ndist/\n").expect("write gitignore");
+        fs::write(proj.join("src/app.rs"), "fn main() {\n    // TODO: wire up the CLI\n}\n")
+            .expect("write app.rs");
+        fs::write(proj.join("src/util.rs"), "pub fn helper() -> u32 { 42 }\n").expect("write util.rs");
+        fs::write(
+            proj.join("node_modules/leftpad/index.js"),
+            "// TODO: vendored junk that must NOT show up\n",
+        )
+        .expect("write vendored js");
+        let ws = NativeToolWorkspace::project(
+            "sim".into(),
+            "Sim".into(),
+            Some(proj.to_string_lossy().into_owned()),
+        );
+        println!("\n=== Simulated agent session in {} ===", proj.display());
+
+        // 1) registry exposes exactly Pi's 7 file/shell short names.
+        let names: Vec<&str> = crate::mcp::native_registry::NATIVE_TOOLS
+            .iter()
+            .map(|e| e.name)
+            .filter(|n| matches!(*n, "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls"))
+            .collect();
+        println!("\n[1] file/shell tools in registry: {names:?}");
+        assert_eq!(names.len(), 7, "exactly Pi's 7 short-named tools");
+
+        // 2) grep "TODO" — finds src/app.rs, skips gitignored node_modules.
+        let grep = search_files(&ws, &json!({ "query": "TODO" })).expect("grep");
+        println!("\n[2] grep TODO:\n{grep}");
+        assert!(grep.contains("app.rs"), "grep finds the source TODO");
+        assert!(
+            !grep.contains("node_modules") && !grep.contains("leftpad"),
+            "gitignored node_modules is skipped"
+        );
+
+        // 3) find "*.rs" finds sources; find "*.js" skips gitignored vendor js.
+        let find_rs = glob_files(&ws, &json!({ "pattern": "*.rs" })).expect("find rs");
+        println!("\n[3a] find *.rs:\n{find_rs}");
+        assert!(find_rs.contains("app.rs") && find_rs.contains("util.rs"));
+        let find_js = glob_files(&ws, &json!({ "pattern": "*.js" })).expect("find js");
+        println!("\n[3b] find *.js:\n{find_js}");
+        assert!(!find_js.contains("leftpad"), "gitignored js is skipped");
+
+        // 4) no-boundary: write to an absolute path OUTSIDE the project root.
+        let outside =
+            std::env::temp_dir().join(format!("kivio_sim_outside_{}.txt", uuid::Uuid::new_v4()));
+        let written = write_file(
+            &ws,
+            &json!({ "path": outside.to_string_lossy(), "content": "escaped the project root\n" }),
+        )
+        .expect("write outside project (no boundary)");
+        println!(
+            "\n[4] write outside project -> ok (operation={}, path={})",
+            written.operation,
+            outside.display()
+        );
+        assert!(outside.is_file(), "file written outside project root");
+
+        // 5) read it back.
+        let read = read_file(&ws, &json!({ "path": outside.to_string_lossy() })).expect("read back");
+        println!("[5] read back content: {:?}", read.content.trim());
+        assert_eq!(read.content, "escaped the project root\n");
+
+        // 6) bash: a large output is offloaded to a temp log with a path note.
+        let bash = crate::native_tools::run_command(
+            &ws,
+            30_000,
+            &json!({
+                "command": "for i in $(seq 1 4000); do echo \"line $i ----------------------------------------------------------------\"; done"
+            }),
+        )
+        .await
+        .expect("bash large output");
+        let first_line = bash.lines().next().unwrap_or("");
+        println!("\n[6] bash large output, first line:\n{first_line}");
+        assert!(
+            bash.contains("complete log saved to"),
+            "large bash output is offloaded to a temp log"
+        );
+
+        // cleanup
+        let _ = fs::remove_dir_all(&proj);
+        let _ = fs::remove_file(&outside);
+        if let Some(rest) = first_line.strip_prefix("[full output:") {
+            if let Some(idx) = rest.find("saved to ") {
+                if let Some(path) = rest[idx + "saved to ".len()..].split('.').next() {
+                    let _ = fs::remove_file(path.trim());
+                }
+            }
+        }
+        println!("\n=== simulation complete: all assertions passed ===\n");
+    }
 
     #[test]
     fn read_file_allows_temp_paths() {
@@ -1594,43 +1732,7 @@ mod tests {
     }
 
     #[test]
-    fn write_file_allows_placeholder_phrases_in_new_and_prose_files() {
-        let root = std::env::temp_dir().join(format!("kivio_prose_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("mkdir");
-        let workspace = NativeToolWorkspace::project(
-            "proj_test".to_string(),
-            "Test".to_string(),
-            Some(root.to_string_lossy().into_owned()),
-        );
-
-        // New code file containing a placeholder phrase: allowed (nothing to lazily truncate).
-        write_file(
-            &workspace,
-            &json!({ "path": "fresh.rs", "content": "// 省略 demo\nfn main() {}\n" }),
-        )
-        .expect("new code file with placeholder phrase");
-
-        // Existing prose file: phrases like 省略 are normal text, allowed.
-        write_file(&workspace, &json!({ "path": "notes.md", "content": "v1" })).expect("seed");
-        write_file(
-            &workspace,
-            &json!({ "path": "notes.md", "content": "会议纪要：以下内容省略，详情保持不变。" }),
-        )
-        .expect("prose overwrite with placeholder phrase");
-
-        // Existing code file: placeholder phrase means a lazy overwrite, rejected.
-        let err = write_file(
-            &workspace,
-            &json!({ "path": "fresh.rs", "content": "fn main() {}\n// rest of file unchanged\n" }),
-        )
-        .unwrap_err();
-        assert!(err.contains("placeholder"));
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn edit_file_requires_unique_match_by_default() {
+    fn edit_file_requires_unique_match_and_supports_multiple_edits() {
         let home = super::super::user_home_dir().expect("home");
         let dir = home.join(format!(".kivio_test_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("mkdir");
@@ -1639,27 +1741,28 @@ mod tests {
 
         let rel = file.to_string_lossy().to_string();
         let workspace = NativeToolWorkspace::global(&[]);
+
+        // A non-unique old_string is rejected (replace_all no longer exists).
         let err = edit_file(
             &workspace,
-            &json!({
-                "path": rel,
-                "old_string": "alpha",
-                "new_string": "gamma"
-            }),
+            &json!({ "path": rel, "edits": [{ "old_string": "alpha", "new_string": "gamma" }] }),
         )
         .unwrap_err();
         assert!(err.contains("appears"));
 
+        // Multiple edits in one call, applied in order: disambiguate the first with
+        // surrounding context, then the remaining occurrence becomes unique.
         edit_file(
             &workspace,
             &json!({
                 "path": rel,
-                "old_string": "alpha",
-                "new_string": "gamma",
-                "replace_all": true
+                "edits": [
+                    { "old_string": "alpha\nbeta", "new_string": "gamma\nbeta" },
+                    { "old_string": "alpha", "new_string": "gamma" }
+                ]
             }),
         )
-        .expect("replace all");
+        .expect("two edits in one call");
 
         let content = fs::read_to_string(&file).expect("read");
         assert_eq!(content, "gamma\nbeta\ngamma\n");
@@ -1680,8 +1783,7 @@ mod tests {
             &workspace,
             &json!({
                 "path": rel,
-                "old_string": "hello world",
-                "new_string": "hello world"
+                "edits": [{ "old_string": "hello world", "new_string": "hello world" }]
             }),
         )
         .expect("noop edit");
@@ -1689,7 +1791,7 @@ mod tests {
         assert!(result
             .warnings
             .iter()
-            .any(|warning| warning.contains("no changes made")));
+            .any(|warning| warning.contains("identical")));
         assert_eq!(fs::read_to_string(&file).expect("read"), "hello world");
 
         let _ = fs::remove_dir_all(&dir);
@@ -1707,13 +1809,12 @@ mod tests {
         let file = root.join("crlf.txt");
         fs::write(&file, "line one\r\nline two\r\nline three\r\n").expect("write");
 
-        // 模型给的是 LF old_string；文件是 CRLF —— 旧实现会 0 命中。
+        // 模型给的是 LF old_string；文件是 CRLF —— 归一化后仍命中。
         let result = edit_file(
             &workspace,
             &json!({
                 "path": "crlf.txt",
-                "old_string": "line two\n",
-                "new_string": "line 2\n",
+                "edits": [{ "old_string": "line two\n", "new_string": "line 2\n" }]
             }),
         )
         .expect("LF old_string must match a CRLF file");
@@ -1746,8 +1847,7 @@ mod tests {
             &workspace,
             &json!({
                 "path": "file.txt",
-                "old_string": "alpha\r\nbeta",
-                "new_string": "alpha\nbeta",
+                "edits": [{ "old_string": "alpha\r\nbeta", "new_string": "alpha\nbeta" }]
             }),
         )
         .expect("line-ending-only change is a noop");
@@ -1776,8 +1876,7 @@ mod tests {
             &workspace,
             &json!({
                 "path": "lf.txt",
-                "old_string": "y\n",
-                "new_string": "Y\n",
+                "edits": [{ "old_string": "y\n", "new_string": "Y\n" }]
             }),
         )
         .expect("LF file edit");
@@ -1789,6 +1888,228 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn edit_file_fuzzy_matches_smart_quotes() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_q_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("q.txt");
+        // File uses curly single + double quotes (e.g. pasted from a doc).
+        fs::write(&file, "say \u{201C}hello\u{201D} and don\u{2019}t stop\n").expect("write");
+
+        // Model supplies ASCII quotes — exact match fails, fuzzy must succeed.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "q.txt",
+                "edits": [{ "old_string": "say \"hello\" and don't stop", "new_string": "say BYE and quit" }]
+            }),
+        )
+        .expect("fuzzy smart-quote match");
+        assert!(result.ok);
+        assert_eq!(result.files[0].operation, "edit");
+        let on_disk = fs::read_to_string(&file).expect("read");
+        assert_eq!(on_disk, "say BYE and quit\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_matches_dashes_and_nfkc() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_d_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("d.txt");
+        // File: em-dash + a NFKC-decomposable ligature (ﬁ U+FB01 -> "fi").
+        fs::write(&file, "range A\u{2014}B \u{FB01}le\n").expect("write");
+
+        // Model: ASCII hyphen + plain "file" — only fuzzy (NFKC + dash) matches.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "d.txt",
+                "edits": [{ "old_string": "range A-B file", "new_string": "range done" }]
+            }),
+        )
+        .expect("fuzzy dash + nfkc match");
+        assert!(result.ok);
+        let on_disk = fs::read_to_string(&file).expect("read");
+        assert_eq!(on_disk, "range done\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_matches_whitespace_runs() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_ws_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("ws.txt");
+        // File uses multiple spaces + a tab between tokens.
+        fs::write(&file, "let   x\t=  1;\n").expect("write");
+
+        // Model uses single spaces — whitespace-run normalization makes it match.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "ws.txt",
+                "edits": [{ "old_string": "let x = 1;", "new_string": "let y = 2;" }]
+            }),
+        )
+        .expect("fuzzy whitespace match");
+        assert!(result.ok);
+        let on_disk = fs::read_to_string(&file).expect("read");
+        // The matched run is replaced wholesale; surrounding bytes preserved.
+        assert_eq!(on_disk, "let y = 2;\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_rejects_ambiguous_match() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_amb_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("amb.txt");
+        // Two curly-quote occurrences; an ASCII-quote needle fuzzily hits both.
+        fs::write(&file, "a \u{201C}x\u{201D} b\na \u{201C}x\u{201D} b\n").expect("write");
+
+        let err = edit_file(
+            &workspace,
+            &json!({
+                "path": "amb.txt",
+                "edits": [{ "old_string": "a \"x\" b", "new_string": "z" }]
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("appears"), "ambiguous fuzzy match must error: {err}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_exact_match_still_preferred_over_fuzzy() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_exact_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("exact.txt");
+        fs::write(&file, "plain ascii line\n").expect("write");
+
+        // Exact match path: identical bytes, no normalization needed.
+        let result = edit_file(
+            &workspace,
+            &json!({
+                "path": "exact.txt",
+                "edits": [{ "old_string": "plain ascii line", "new_string": "changed line" }]
+            }),
+        )
+        .expect("exact match still works");
+        assert!(result.ok);
+        assert_eq!(fs::read_to_string(&file).expect("read"), "changed line\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_file_fuzzy_not_found_errors() {
+        let root = std::env::temp_dir().join(format!("kivio_fuzzy_nf_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("nf.txt");
+        fs::write(&file, "alpha beta\n").expect("write");
+
+        let err = edit_file(
+            &workspace,
+            &json!({
+                "path": "nf.txt",
+                "edits": [{ "old_string": "gamma delta", "new_string": "z" }]
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("not found"), "no fuzzy match must error: {err}");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cap_grep_line_truncates_long_lines() {
+        let short = "abc";
+        assert_eq!(cap_grep_line(short), short);
+        let long: String = "x".repeat(MAX_GREP_LINE_CHARS + 50);
+        let capped = cap_grep_line(&long);
+        assert!(capped.starts_with(&"x".repeat(MAX_GREP_LINE_CHARS)));
+        assert!(capped.contains("line truncated"));
+        assert_eq!(capped.chars().filter(|c| *c == 'x').count(), MAX_GREP_LINE_CHARS);
+    }
+
+    #[test]
+    fn search_files_context_and_long_line_cap() {
+        let root = std::env::temp_dir().join(format!("kivio_grep_ctx_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        // 5 lines; match on line 3 (index 2). Line 3 itself is very long.
+        let long_match = format!("NEEDLE {}", "y".repeat(MAX_GREP_LINE_CHARS + 100));
+        let body = format!("l1\nl2\n{long_match}\nl4\nl5\n");
+        fs::write(root.join("ctx.txt"), &body).expect("write");
+
+        let parse = |s: String| serde_json::from_str::<Value>(&s).expect("json");
+        let out = parse(
+            search_files(&workspace, &json!({ "query": "NEEDLE", "context": 1 }))
+                .expect("context grep"),
+        );
+        let matches = out["matches"].as_array().expect("matches");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(m["line"], 3);
+        // Long matching line is capped.
+        let text = m["text"].as_str().unwrap();
+        assert!(text.contains("line truncated"), "long line must be capped: {text}");
+        // context=1 → one before (l2) + one after (l4).
+        let before = m["before"].as_array().expect("before");
+        let after = m["after"].as_array().expect("after");
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0]["text"], "l2");
+        assert_eq!(before[0]["line"], 2);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0]["text"], "l4");
+        assert_eq!(after[0]["line"], 4);
+
+        // Default context=0 → no before/after keys emitted.
+        let out0 = parse(search_files(&workspace, &json!({ "query": "NEEDLE" })).expect("no ctx"));
+        let m0 = &out0["matches"].as_array().unwrap()[0];
+        assert!(m0.get("before").is_none());
+        assert!(m0.get("after").is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
     #[test]
     fn search_files_regex_output_modes_and_glob() {
         let root = std::env::temp_dir().join(format!("kivio_search_{}", uuid::Uuid::new_v4()));
@@ -1872,6 +2193,47 @@ mod tests {
     }
 
     #[test]
+    fn search_respects_gitignore_and_walks_root_named_like_ignored_dir() {
+        // Regression: filter_entry must not prune the search root itself, and must
+        // skip gitignored dirs (node_modules) without hiding same-named files.
+        let root = std::env::temp_dir().join(format!("kivio_gi_build_{}", uuid::Uuid::new_v4()));
+        // Root is literally named like an ignored dir ("build") — must still walk.
+        let root = root.join("build");
+        fs::create_dir_all(root.join("src")).expect("mkdir src");
+        fs::create_dir_all(root.join("node_modules/pkg")).expect("mkdir node_modules");
+        fs::write(root.join(".gitignore"), "node_modules/\n").expect("write gitignore");
+        fs::write(root.join("src/app.rs"), "let needle = 1;\n").expect("write app");
+        fs::write(root.join("node_modules/pkg/index.js"), "needle vendored\n").expect("write vendor");
+        // A regular FILE named "build" must not be pruned by the dir floor list.
+        fs::write(root.join("build"), "needle in a file named build\n").expect("write build file");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let parse = |s: String| serde_json::from_str::<Value>(&s).expect("json");
+        let out = parse(
+            search_files(&workspace, &json!({ "query": "needle", "output_mode": "files_with_matches" }))
+                .expect("search"),
+        );
+        let files: Vec<String> = out["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f.as_str().map(str::to_string))
+            .collect();
+        // Root walked (not pruned by its "build" name): src/app.rs found.
+        assert!(files.iter().any(|f| f.ends_with("app.rs")), "root must be walked: {files:?}");
+        // The file literally named "build" is found (only DIRS are floor-pruned).
+        assert!(files.iter().any(|f| f.ends_with("build")), "same-named file kept: {files:?}");
+        // node_modules is gitignored → its file is skipped.
+        assert!(!files.iter().any(|f| f.contains("node_modules")), "gitignored dir skipped: {files:?}");
+
+        let _ = fs::remove_dir_all(root.parent().unwrap());
+    }
+
+    #[test]
     fn expand_glob_braces_splits_alternatives() {
         assert_eq!(
             expand_glob_braces("*.{py,ts}"),
@@ -1941,7 +2303,7 @@ mod tests {
     }
 
     #[test]
-    fn project_workspace_allows_explicit_home_write_outside_root() {
+    fn project_workspace_no_boundary_writes_anywhere() {
         let root = std::env::temp_dir().join(format!("kivio_project_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("mkdir");
         let workspace = NativeToolWorkspace::project(
@@ -1950,7 +2312,7 @@ mod tests {
             Some(root.to_string_lossy().into_owned()),
         );
 
-        // Explicit home path escapes the project via global write rules.
+        // No-boundary: an explicit absolute path outside the project writes fine.
         let home = super::super::user_home_dir().expect("home");
         let dir = home.join(format!(".kivio_escape_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("mkdir home target");
@@ -1965,58 +2327,19 @@ mod tests {
             "<html></html>"
         );
 
-        // Relative paths still cannot escape, and blocked dirs stay blocked.
-        let err = write_file(
+        // No-boundary: a relative `..` path now escapes the project root instead
+        // of being rejected (it resolves against the parent of the root).
+        let escape_name = format!("kivio_escape_{}.txt", uuid::Uuid::new_v4());
+        write_file(
             &workspace,
-            &json!({ "path": "../escape.txt", "content": "x" }),
+            &json!({ "path": format!("../{escape_name}"), "content": "x" }),
         )
-        .unwrap_err();
-        assert!(err.contains(".."));
-        let blocked = home.join(".ssh/kivio_test_blocked.txt");
-        let err = write_file(
-            &workspace,
-            &json!({ "path": blocked.to_string_lossy(), "content": "x" }),
-        )
-        .unwrap_err();
-        assert!(err.contains(".ssh"));
+        .expect("relative `..` write is allowed under no-boundary");
+        let escaped = root.parent().expect("root parent").join(&escape_name);
+        assert_eq!(fs::read_to_string(&escaped).expect("read escaped"), "x");
 
+        let _ = fs::remove_file(&escaped);
         let _ = fs::remove_dir_all(&dir);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn copy_path_rejects_directory_copy_into_self_or_child() {
-        let root = std::env::temp_dir().join(format!("kivio_copy_{}", uuid::Uuid::new_v4()));
-        let source = root.join("src");
-        fs::create_dir_all(&source).expect("mkdir source");
-        fs::write(source.join("file.txt"), "hello").expect("write source file");
-        let workspace = NativeToolWorkspace::project(
-            "proj_test".to_string(),
-            "Test".to_string(),
-            Some(root.to_string_lossy().into_owned()),
-        );
-
-        let same_err = copy_path(
-            &workspace,
-            &json!({
-                "from": "src",
-                "to": "src"
-            }),
-        )
-        .unwrap_err();
-        assert!(same_err.contains("自身"));
-
-        let child_err = copy_path(
-            &workspace,
-            &json!({
-                "from": "src",
-                "to": "src/backup"
-            }),
-        )
-        .unwrap_err();
-        assert!(child_err.contains("自身"));
-        assert!(!source.join("backup").exists());
-
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2049,33 +2372,6 @@ mod tests {
         .unwrap_err();
         assert!(parent_err.contains(".."));
 
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn delete_path_removes_project_symlink_without_following_target() {
-        let root = std::env::temp_dir().join(format!("kivio_link_root_{}", uuid::Uuid::new_v4()));
-        let outside =
-            std::env::temp_dir().join(format!("kivio_link_target_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("mkdir root");
-        fs::write(&outside, "outside").expect("write outside");
-        let link = root.join("outside-link.txt");
-        std::os::unix::fs::symlink(&outside, &link).expect("symlink");
-        let workspace = NativeToolWorkspace::project(
-            "proj_test".to_string(),
-            "Test".to_string(),
-            Some(root.to_string_lossy().into_owned()),
-        );
-
-        let result = delete_path(&workspace, &json!({ "path": "outside-link.txt" }))
-            .expect("delete symlink");
-
-        assert!(result.contains("outside-link.txt"));
-        assert!(!link.exists());
-        assert!(outside.exists());
-
-        let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2116,7 +2412,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_file_replace_all_reports_exact_stats_with_multiple_hunks() {
+    fn edit_file_multiple_edits_report_exact_stats_with_multiple_hunks() {
         let root = std::env::temp_dir().join(format!("kivio_hunks_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("mkdir");
         let mut lines = vec!["needle old".to_string()];
@@ -2132,16 +2428,18 @@ mod tests {
             Some(root.to_string_lossy().into_owned()),
         );
 
+        // Two scattered occurrences, each disambiguated with one line of context.
         let result = edit_file(
             &workspace,
             &json!({
                 "path": "scatter.txt",
-                "old_string": "old",
-                "new_string": "new",
-                "replace_all": true
+                "edits": [
+                    { "old_string": "needle old\nunchanged line 0", "new_string": "needle new\nunchanged line 0" },
+                    { "old_string": "unchanged line 19\nneedle old", "new_string": "unchanged line 19\nneedle new" }
+                ]
             }),
         )
-        .expect("replace all");
+        .expect("two scattered edits");
 
         assert_eq!(result.additions, 2);
         assert_eq!(result.removals, 2);
@@ -2159,46 +2457,6 @@ mod tests {
         assert_eq!(removed_lines, 2);
         assert_eq!(added_lines, 2);
 
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn move_path_moves_project_symlink_without_following_target() {
-        let root =
-            std::env::temp_dir().join(format!("kivio_move_link_root_{}", uuid::Uuid::new_v4()));
-        let outside =
-            std::env::temp_dir().join(format!("kivio_move_link_target_{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("mkdir root");
-        fs::write(&outside, "outside").expect("write outside");
-        let link = root.join("outside-link.txt");
-        std::os::unix::fs::symlink(&outside, &link).expect("symlink");
-        let workspace = NativeToolWorkspace::project(
-            "proj_test".to_string(),
-            "Test".to_string(),
-            Some(root.to_string_lossy().into_owned()),
-        );
-
-        let result = move_path(
-            &workspace,
-            &json!({
-                "from": "outside-link.txt",
-                "to": "moved-link.txt"
-            }),
-        )
-        .expect("move symlink");
-
-        assert!(result.contains("moved-link.txt"));
-        assert!(!link.exists() && fs::symlink_metadata(&link).is_err());
-        let moved = root.join("moved-link.txt");
-        let metadata = fs::symlink_metadata(&moved).expect("moved metadata");
-        assert!(metadata.file_type().is_symlink());
-        assert_eq!(
-            fs::read_to_string(&outside).expect("read outside"),
-            "outside"
-        );
-
-        let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 }

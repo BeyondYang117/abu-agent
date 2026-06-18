@@ -40,6 +40,7 @@ import type {
 import {
   api,
   type ChatExternalSendRequest,
+  type ChatSessionConsentPayload,
   type ChatStreamPayload,
   type ChatToolConfirmPayload,
   type ChatToolDefinition,
@@ -498,6 +499,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [toolsRequested, setToolsRequested] = useState(false)
   const [approvalPolicy, setApprovalPolicy] = useState('readonly_auto_sensitive_confirm')
   const [pendingToolConfirm, setPendingToolConfirm] = useState<ChatToolConfirmPayload | null>(null)
+  const [pendingSessionConsent, setPendingSessionConsent] = useState<ChatSessionConsentPayload | null>(null)
   const [contextState, setContextState] = useState<ConversationContextState | null>(null)
   const [contextLoading, setContextLoading] = useState(false)
   const [contextCompressing, setContextCompressing] = useState(false)
@@ -515,6 +517,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const streamSnapshotsRef = useRef<Record<string, ConversationStreamSnapshot>>({})
   const streamErrorsRef = useRef<Record<string, string>>({})
   const pendingToolConfirmsRef = useRef<Record<string, ChatToolConfirmPayload>>({})
+  const pendingSessionConsentsRef = useRef<Record<string, ChatSessionConsentPayload>>({})
   const streamStartedAtRef = useRef<number | null>(null)
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
@@ -551,6 +554,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     inFlightConversationsRef.current.delete(conversationId)
     delete streamSnapshotsRef.current[conversationId]
     delete pendingToolConfirmsRef.current[conversationId]
+    delete pendingSessionConsentsRef.current[conversationId]
     delete pendingStreamDoneRef.current[conversationId]
     delete streamErrorsRef.current[conversationId]
     // 若该会话还挂着待刷新的合帧，连带取消，避免被剔除的 ghost 还闪一帧。
@@ -650,6 +654,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (!conversationId) {
       clearStreamingPreview()
       setPendingToolConfirm(null)
+      setPendingSessionConsent(null)
       setStreamError('')
       return
     }
@@ -674,6 +679,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
     setStreamError(streamErrorsRef.current[conversationId] ?? '')
     setPendingToolConfirm(pendingToolConfirmsRef.current[conversationId] ?? null)
+    setPendingSessionConsent(pendingSessionConsentsRef.current[conversationId] ?? null)
   }, [clearStreamingPreview])
 
   const applyStreamSnapshotToState = useCallback((snapshot: ConversationStreamSnapshot) => {
@@ -743,9 +749,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (!conversationId) return
     delete streamSnapshotsRef.current[conversationId]
     delete pendingToolConfirmsRef.current[conversationId]
+    delete pendingSessionConsentsRef.current[conversationId]
     syncGeneratingConversationIds()
     if (currentConversationIdRef.current === conversationId) {
       setPendingToolConfirm(null)
+      setPendingSessionConsent(null)
       clearStreamingPreview()
     }
   }, [clearStreamingPreview, syncGeneratingConversationIds])
@@ -763,8 +771,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const conversationId = currentConversationIdRef.current
     if (conversationId) {
       delete pendingToolConfirmsRef.current[conversationId]
+      delete pendingSessionConsentsRef.current[conversationId]
     }
     setPendingToolConfirm(null)
+    setPendingSessionConsent(null)
   }, [])
 
   const resetLocalCancellation = useCallback(() => {
@@ -1210,10 +1220,12 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       if (conversationId) {
         delete streamSnapshotsRef.current[conversationId]
         delete pendingToolConfirmsRef.current[conversationId]
+        delete pendingSessionConsentsRef.current[conversationId]
         syncGeneratingConversationIds()
       }
       if (conversationId && currentConversationIdRef.current === conversationId) {
         setPendingToolConfirm(null)
+        setPendingSessionConsent(null)
         clearStreamingPreview()
       }
     },
@@ -1245,9 +1257,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (currentConversationIdRef.current === conversationId) {
       applyConversation(conversation)
       setPendingToolConfirm(null)
+      setPendingSessionConsent(null)
     }
     delete streamSnapshotsRef.current[conversationId]
     delete pendingToolConfirmsRef.current[conversationId]
+    delete pendingSessionConsentsRef.current[conversationId]
     syncGeneratingConversationIds()
     if (currentConversationIdRef.current === conversationId) {
       clearStreamingPreview()
@@ -1604,6 +1618,37 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     let unlisten: (() => void) | undefined
 
     const setupListener = async () => {
+      unlisten = await api.onChatSessionConsent((payload) => {
+        if (cancelled) return
+        pendingSessionConsentsRef.current[payload.conversationId] = payload
+        if (currentConversationIdRef.current === payload.conversationId) {
+          setPendingSessionConsent(payload)
+        }
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
+  const resolvePendingSessionConsent = useCallback((granted: boolean) => {
+    if (!pendingSessionConsent) return
+    delete pendingSessionConsentsRef.current[pendingSessionConsent.conversationId]
+    void api.chatRespondSessionConsent(pendingSessionConsent.conversationId, granted)
+    setPendingSessionConsent(null)
+  }, [pendingSessionConsent])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
       unlisten = await api.onChatRunPython((payload) => {
         if (cancelled) return
         void (async () => {
@@ -1809,6 +1854,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
       delete streamSnapshotsRef.current[conversationId]
       delete pendingToolConfirmsRef.current[conversationId]
+      delete pendingSessionConsentsRef.current[conversationId]
       delete streamErrorsRef.current[conversationId]
       clearConversationInFlight(conversationId)
       forgetRememberedChatRoute()
@@ -2802,6 +2848,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     <>
                   <Suspense fallback={<MessageListLoading />}>
                     <MessageList
+                      key={currentConversation?.id ?? 'empty'}
                       conversationId={currentConversation?.id}
                       messages={displayMessages}
                       agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
@@ -2899,6 +2946,47 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 onClick={() => resolvePendingToolConfirm(true)}
               >
                 允许
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingSessionConsent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4" data-tauri-drag-region="false">
+          <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+            <div className="mb-3 flex items-start gap-2">
+              <Wrench size={17} className="mt-0.5 shrink-0 text-[#C56646] dark:text-[#E39A78]" />
+              <div className="min-w-0 flex-1">
+                <div className="text-[14px] font-semibold text-neutral-900 dark:text-neutral-100">
+                  允许本次会话使用文件和命令工具？
+                </div>
+                <div className="mt-1 text-[12px] text-neutral-500 dark:text-neutral-400">
+                  授权后，本会话内 Kivio 可读取、写入、删除磁盘上的任意文件，并执行任意终端命令（包括项目目录之外的位置）。仅本次会话有效，应用重启后需重新授权。
+                </div>
+              </div>
+              <button
+                type="button"
+                className="rounded-md p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                aria-label="拒绝"
+                onClick={() => resolvePendingSessionConsent(false)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md px-3 py-1.5 text-[12px] font-medium text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                onClick={() => resolvePendingSessionConsent(false)}
+              >
+                拒绝
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
+                onClick={() => resolvePendingSessionConsent(true)}
+              >
+                允许本次会话
               </button>
             </div>
           </div>

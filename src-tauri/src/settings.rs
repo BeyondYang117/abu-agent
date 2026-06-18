@@ -154,12 +154,16 @@ pub struct ModelProvider {
 pub enum ProviderApiFormat {
     OpenAiChat,
     AnthropicMessages,
+    /// OpenAI Responses API (`POST /v1/responses`). Used by Codex / Responses-native
+    /// models and proxies that only emit tool-call arguments over this protocol.
+    OpenAiResponses,
 }
 
 impl ProviderApiFormat {
     pub fn from_raw(raw: &str) -> Self {
         match raw.trim() {
             "anthropic" | "anthropic_messages" => Self::AnthropicMessages,
+            "openai_responses" | "responses" => Self::OpenAiResponses,
             _ => Self::OpenAiChat,
         }
     }
@@ -168,6 +172,7 @@ impl ProviderApiFormat {
         match self {
             Self::OpenAiChat => "openai_chat",
             Self::AnthropicMessages => "anthropic_messages",
+            Self::OpenAiResponses => "openai_responses",
         }
     }
 }
@@ -855,6 +860,11 @@ pub struct Settings {
     /// 防止 v2.3.x ↔ v2.4 反复切换时重复抹掉钥匙串
     #[serde(default)]
     pub legacy_keyring_migrated: bool,
+    /// 一次性迁移标记：内置专家（写作/编程/研究/数据）已 seed 进 assistants.json 后置 true。
+    /// 该迁移会清空整个助手索引（含用户自建——用户明确选择）再装入这 4 个内置专家，
+    /// 仅在首次启动跑一次；之后用户新建/删除专家不受影响。
+    #[serde(default)]
+    pub builtin_assistants_seeded_v1: bool,
     /// 启动时静默检查 GitHub Releases 是否有新版（默认 true）
     /// 仅做"提示 + 跳转 GH 下载页"，不集成 auto-installer，避免签名密钥那套
     #[serde(default = "default_true")]
@@ -969,6 +979,7 @@ impl Default for Settings {
             retry_enabled: default_retry_enabled(),
             retry_attempts: default_retry_attempts(),
             legacy_keyring_migrated: false,
+            builtin_assistants_seeded_v1: false,
             auto_check_update: true,
             image_archive_enabled: false,
             image_archive_path: String::new(),

@@ -5,8 +5,10 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod responses;
 pub mod types;
 
 pub use anthropic::AnthropicMessagesProvider;
 pub use openai::OpenAiChatProvider;
+pub use responses::OpenAiResponsesProvider;
 pub use types::*;

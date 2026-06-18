@@ -5,7 +5,10 @@ mod runtime;
 mod types;
 
 pub use catalog::format_catalog;
-pub use discover::{build_registry, build_registry_metadata, user_skills_dir};
+pub use discover::{
+    build_registry, build_registry_headless, build_registry_metadata, user_skills_dir,
+    user_skills_dir_headless,
+};
 pub use parse::parse_skill_markdown;
 pub use runtime::{
     activate_skill, extract_relative_path, extract_script_args, extract_skill_name, lookup_skill,

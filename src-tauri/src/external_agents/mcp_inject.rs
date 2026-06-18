@@ -37,7 +37,7 @@ pub fn inject_claude_mcp_json(
                 "env": server.env,
             }),
             "http" | "sse" if !server.url.trim().is_empty() => {
-                let mut headers = server.headers.clone();
+                let headers = server.headers.clone();
                 json!({
                     "url": server.url.trim(),
                     "headers": headers,

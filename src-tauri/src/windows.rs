@@ -1,3 +1,7 @@
+// macOS cocoa interop below uses the legacy `cocoa` crate (objc, not objc2),
+// which is deprecated. Migrating to objc2 is out of scope; suppress the lint here.
+#![allow(deprecated)]
+
 use tauri::{
     window::Color, AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
@@ -126,8 +130,10 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
         let _ = window.set_decorations(false);
         #[cfg(target_os = "windows")]
         {
-            // 不透明窗口：填白底即可（前端 shell 会铺满覆盖），圆角 / 描边 / 阴影交给 DWM。
-            let _ = window.set_background_color(Some(Color(255, 255, 255, 255)));
+            // 不透明窗口：原生背景随主题（暗色 #212121 / 浅色白）。这是 WebView 之下的原生清屏色，
+            // 伸缩时新暴露区域会先用它绘制，必须与主题一致，否则暗色下会先闪一下白。
+            // 圆角 / 描边 / 阴影交给 DWM；前端 shell 仍会铺满覆盖。
+            apply_chat_window_theme_background(window, chat_window_is_dark(window));
             let _ = window.set_shadow(true);
             apply_windows_chat_window_frame(window);
         }
@@ -136,6 +142,38 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
             let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             let _ = window.set_shadow(false);
         }
+    }
+}
+
+/// 让 Windows 不透明 chat 窗口的原生背景随主题：暗色用 #212121、浅色用白。
+/// 这是 WebView 之下的原生清屏色——伸缩时新暴露区域会先用它绘制，故必须与主题一致，
+/// 否则暗色下会先闪一下白。macOS / Linux 为透明窗口，保持透明、不在此设置。
+pub fn apply_chat_window_theme_background(window: &WebviewWindow, is_dark: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        let color = if is_dark {
+            Color(33, 33, 33, 255)
+        } else {
+            Color(255, 255, 255, 255)
+        };
+        let _ = window.set_background_color(Some(color));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, is_dark);
+    }
+}
+
+/// 解析 chat 窗口当前是否深色：settings.theme 为 light/dark 直接取，system 跟随窗口的 OS 主题。
+#[cfg(target_os = "windows")]
+fn chat_window_is_dark(window: &WebviewWindow) -> bool {
+    let app = window.app_handle();
+    let state = app.state::<crate::state::AppState>();
+    let mode = state.settings_read().theme.clone();
+    match mode.as_str() {
+        "dark" => true,
+        "light" => false,
+        _ => matches!(window.theme(), Ok(tauri::Theme::Dark)),
     }
 }
 

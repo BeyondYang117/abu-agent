@@ -131,13 +131,80 @@ pub async fn run_command(
         .max(default_timeout_ms);
 
     let output = run_shell_command(&command, cwd, timeout_ms).await?;
-    let formatted = format_command_output(&output);
+    let formatted = offload_large_output(format_command_output(&output));
     if let Some(code) = output.status_code {
         if code != 0 {
             return Err(formatted);
         }
     }
     Ok(formatted)
+}
+
+/// Above this size, a command's full output is written to a temp file and the
+/// returned text is tail-truncated. The full log path is noted in the head of
+/// the returned text so the model can read the complete output if needed.
+const MAX_INLINE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024;
+
+/// Tail-truncation caps for the inline body: keep the END of the output (where
+/// errors and final results live), bounded by both a line count and a byte size,
+/// whichever hits first.
+const TAIL_MAX_LINES: usize = 2_000;
+const TAIL_MAX_BYTES: usize = 50 * 1024;
+
+/// Keep the LAST `TAIL_MAX_LINES` lines / `TAIL_MAX_BYTES` bytes of `text`,
+/// dropping earlier lines. Returns `(kept_text, dropped_line_count)` where a
+/// non-zero count means truncation happened. Whole lines only (never a partial
+/// line), and the byte budget is applied after the line budget.
+fn tail_truncate(text: &str) -> (String, usize) {
+    let lines: Vec<&str> = text.lines().collect();
+    let total = lines.len();
+    // First, cap by line count (keep the tail).
+    let mut start = total.saturating_sub(TAIL_MAX_LINES);
+    // Then walk backward dropping leading lines until the kept tail fits the byte
+    // budget (counting the trailing newline each line contributes).
+    let mut kept_bytes: usize = lines[start..]
+        .iter()
+        .map(|line| line.len() + 1)
+        .sum();
+    while kept_bytes > TAIL_MAX_BYTES && start < total {
+        kept_bytes -= lines[start].len() + 1;
+        start += 1;
+    }
+    if start == 0 {
+        return (text.to_string(), 0);
+    }
+    let kept = lines[start..].join("\n");
+    (kept, start)
+}
+
+fn offload_large_output(formatted: String) -> String {
+    if formatted.len() <= MAX_INLINE_COMMAND_OUTPUT_BYTES {
+        return formatted;
+    }
+    let lines = formatted.lines().count();
+    let bytes = formatted.len();
+    let path = std::env::temp_dir().join(format!("kivio-bash-{}.log", uuid::Uuid::new_v4()));
+    let log_note = match std::fs::write(&path, &formatted) {
+        Ok(()) => Some(format!(
+            "[full output: {lines} lines, {bytes} bytes — complete log saved to {}. Read it with the `read` tool (use offset/limit or grep it) if the tail below is not enough.]",
+            path.display()
+        )),
+        // Best-effort: if the temp write fails, still tail-truncate inline.
+        Err(_) => None,
+    };
+
+    // Keep the END of the output — errors and final results live there.
+    let (tail, dropped) = tail_truncate(&formatted);
+    let mut out = String::new();
+    if let Some(note) = log_note {
+        out.push_str(&note);
+        out.push('\n');
+    }
+    if dropped > 0 {
+        out.push_str(&format!("[... {dropped} earlier lines truncated ...]\n"));
+    }
+    out.push_str(&tail);
+    out
 }
 
 fn resolve_command_cwd(
@@ -319,6 +386,10 @@ async fn run_shell_command(
         }
     };
     cmd.current_dir(cwd)
+        // stdin 必须为 null:coding-agent 的 shell 命令绝不能读交互终端的 stdin。
+        // 否则子进程会继承父进程(TUI 的 pty)stdin,抢占/消费它 → TUI 输入线程 EOF → 会话中途退出。
+        // null stdin 意味着任何尝试读 stdin 的命令立即得到 EOF,而非偷走 TUI 输入。
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     #[cfg(target_os = "windows")]
@@ -443,6 +514,33 @@ mod tests {
         assert!(formatted.contains("stderr:\nboom"));
     }
 
+    #[test]
+    fn offload_large_output_passes_small_output_through() {
+        let small = "exit_code: 0\nstdout:\nhello\n".to_string();
+        assert_eq!(offload_large_output(small.clone()), small);
+    }
+
+    #[test]
+    fn offload_large_output_writes_temp_file_and_notes_path() {
+        let big = "x".repeat(MAX_INLINE_COMMAND_OUTPUT_BYTES + 1);
+        let result = offload_large_output(big.clone());
+        assert!(result.starts_with("[full output:"));
+        assert!(result.contains("kivio-bash-"));
+        assert!(result.contains("complete log saved to"));
+        // The full body is still present inline (the loop truncates the middle).
+        assert!(result.contains(&big));
+        // The referenced temp file exists and holds the full output; clean up.
+        let path = result
+            .lines()
+            .next()
+            .and_then(|line| line.find("saved to ").map(|i| &line[i + "saved to ".len()..]))
+            .and_then(|rest| rest.split(". Read it").next())
+            .map(|p| p.to_string())
+            .expect("temp path in note");
+        assert_eq!(std::fs::read_to_string(&path).expect("read temp log"), big);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_run_command_preserves_embedded_quotes() {
@@ -516,5 +614,108 @@ mod tests {
         .expect_err("pip installs should be blocked");
 
         assert!(err.contains("allow_host_python_package_install"));
+    }
+
+    // A coding-agent shell command must never read the interactive terminal's stdin.
+    // The child is spawned with Stdio::null() for stdin, so a command that reads stdin
+    // (e.g. `cat` with no file args) gets immediate EOF and returns promptly instead of
+    // blocking forever waiting on the parent's terminal. If stdin were inherited, this
+    // test would hang (and in the TUI would steal the input thread, exiting the session).
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn run_command_stdin_is_null_so_readers_get_eof() {
+        let dir = std::env::temp_dir().join(format!("kivio_stdin_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let workspace =
+            NativeToolWorkspace::global(&[dir.to_string_lossy().into_owned()]);
+
+        // `cat` with no args reads stdin to EOF. With null stdin this returns immediately.
+        // Wrap in tokio::time::timeout as a hard backstop so a regression fails fast
+        // instead of hanging the test suite.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_command(
+                &workspace,
+                2_000,
+                &serde_json::json!({ "command": "cat" }),
+            ),
+        )
+        .await
+        .expect("cat should return promptly because stdin is null (EOF), not hang");
+
+        let output = result.expect("cat with null stdin should succeed");
+        // No stdin content → empty captured stdout.
+        assert!(
+            !output.contains("Command timed out"),
+            "command must not time out: {output}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tail_truncate_keeps_end_under_line_budget() {
+        let mut body = String::new();
+        for i in 0..(TAIL_MAX_LINES + 500) {
+            body.push_str(&format!("line {i}\n"));
+        }
+        let (kept, dropped) = tail_truncate(&body);
+        assert_eq!(dropped, 500, "first 500 lines dropped, tail kept");
+        let kept_lines: Vec<&str> = kept.lines().collect();
+        assert_eq!(kept_lines.len(), TAIL_MAX_LINES);
+        // The LAST line (where errors/results live) is preserved.
+        assert_eq!(
+            *kept_lines.last().unwrap(),
+            format!("line {}", TAIL_MAX_LINES + 500 - 1)
+        );
+        // The first kept line is line 500 (earlier lines were dropped).
+        assert_eq!(kept_lines[0], "line 500");
+    }
+
+    #[test]
+    fn tail_truncate_keeps_end_under_byte_budget() {
+        // Few lines but each huge → byte budget (not line budget) forces truncation.
+        let big_line = "z".repeat(20 * 1024);
+        let body = format!("{big_line}\n{big_line}\n{big_line}\nFINAL ERROR LINE\n");
+        let (kept, dropped) = tail_truncate(&body);
+        assert!(dropped > 0, "byte budget should drop leading huge lines");
+        assert!(kept.len() <= TAIL_MAX_BYTES + 32);
+        // The final line is always retained.
+        assert!(kept.ends_with("FINAL ERROR LINE"));
+    }
+
+    #[test]
+    fn tail_truncate_passes_small_output_through() {
+        let small = "a\nb\nc\n";
+        let (kept, dropped) = tail_truncate(small);
+        assert_eq!(dropped, 0);
+        assert_eq!(kept, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn offload_large_output_tail_truncates_and_marks() {
+        let mut body = String::new();
+        for i in 0..(TAIL_MAX_LINES + 1000) {
+            body.push_str(&format!("row {i} ----------------------------------------\n"));
+        }
+        assert!(body.len() > MAX_INLINE_COMMAND_OUTPUT_BYTES);
+        let result = offload_large_output(body);
+        // Full log path noted in the head.
+        assert!(result.contains("complete log saved to"));
+        // Tail-truncation marker present.
+        assert!(result.contains("earlier lines truncated"));
+        // The END of the output is kept (last row), not the head (row 0 dropped).
+        assert!(result.contains(&format!("row {}", TAIL_MAX_LINES + 1000 - 1)));
+        assert!(!result.contains("\nrow 0 -"));
+
+        // Clean up the temp log referenced in the note.
+        if let Some(path) = result
+            .lines()
+            .find(|l| l.contains("complete log saved to"))
+            .and_then(|line| line.find("saved to ").map(|i| &line[i + "saved to ".len()..]))
+            .and_then(|rest| rest.split(". Read it").next())
+        {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

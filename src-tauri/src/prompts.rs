@@ -102,18 +102,29 @@ pub fn build_screenshot_translation_prompt(
     )
 }
 
-/// 构建 OCR 直接翻译提示词
-/// 将截图翻译模板嵌入到 OCR 指令中，让模型一次性完成识别和翻译
+/// 构建 OCR 直接翻译提示词（CloudVision 多模态直连：模型直接读图识别+翻译）
+/// 与本地 OCR 文本翻译不同，这里模型能看到原始版式，故要求用 Markdown 保留结构。
 pub fn build_ocr_direct_translation_prompt(lang_name: &str, template: Option<&str>) -> String {
-    let instruction = build_screenshot_translation_prompt(
-        "the text content recognized from this image",
-        lang_name,
-        template,
-    );
+    const DEFAULT_RULES: &str = "- Mirror the source layout in Markdown: render headings as Markdown headings, bullet/numbered lists as lists, tables as Markdown tables, and code as fenced code blocks; keep bold/italic emphasis where the original uses it.\n\
+     - Separate distinct paragraphs and blocks with a blank line so Markdown renders them as separate blocks. Never put blank lines between items of the same list.\n\
+     - Preserve LaTeX formulas exactly (keep $...$ inline and $$...$$ block); normalize formula-like plain text to LaTeX where natural.\n\
+     - Translate faithfully and correct obvious recognition errors from context; omit unreadable fragments rather than guess. Do not invent content, and add no headings, labels, or commentary that are not in the source.";
+
+    let rules = template
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(|t| {
+            t.replace("{lang}", lang_name)
+                .replace("{text}", "the recognized text")
+        })
+        .unwrap_or_else(|| DEFAULT_RULES.to_string());
+
     format!(
-    "Read all text in this image, then follow this instruction exactly:\n{}\n\nOutput only the final translated text. Do not output blank lines; keep lists and paragraphs compact. For mathematical formulas, keep LaTeX notation ($...$ or $$...$$).",
-    instruction
-  )
+        "Read all text in this image and translate it to {lang}. Output only the translation, no commentary.\n\n\
+         Rules:\n{rules}",
+        lang = lang_name,
+        rules = rules,
+    )
 }
 
 /// 构建合并模式提示词：模型在一次调用中先输出译文、再 `<<<ORIGINAL>>>` 分隔符、再输出原文
@@ -123,11 +134,11 @@ pub fn build_ocr_direct_translation_prompt(lang_name: &str, template: Option<&st
 /// "Translation rules" 块注入；空则使用默认规则。{lang} 占位符替换为目标语言；{text}
 /// 在合并模式不存在外部参数 → 替换为占位说明 "the recognized text"。
 pub fn build_combined_translate_prompt(lang_name: &str, template: Option<&str>) -> String {
-    const DEFAULT_RULES: &str = "- Preserve LaTeX formulas exactly ($...$ inline, $$...$$ block).\n\
-     - Keep the translation tight: do not output blank lines. Use a single newline only for necessary list items, table rows, code/math blocks, or clear paragraph boundaries.\n\
-     - Do not use Markdown's loose paragraph style. Never put an empty line between numbered or bulleted list items.\n\
-     - Correct obvious OCR mistakes using context; for unreadable fragments omit rather than guess.\n\
-     - No commentary, no section headers, no labels.";
+    const DEFAULT_RULES: &str = "- Mirror the source layout in Markdown: render headings as Markdown headings, bullet/numbered lists as lists, tables as Markdown tables, and code as fenced code blocks; keep bold/italic emphasis where the original uses it.\n\
+     - Separate distinct paragraphs and blocks with a blank line so Markdown renders them as separate blocks. Never put blank lines between items of the same list.\n\
+     - Preserve LaTeX formulas exactly ($...$ inline, $$...$$ block).\n\
+     - Correct obvious recognition mistakes using context; for unreadable fragments omit rather than guess.\n\
+     - Add no commentary, and no section headers or labels that are not part of the source content.";
 
     let rules = template
         .map(str::trim)
@@ -144,10 +155,10 @@ pub fn build_combined_translate_prompt(lang_name: &str, template: Option<&str>) 
      2. Original recognized text exactly as it appears in the screenshot.\n\n\
      Translation rules:\n{rules}\n\n\
      Format guard:\n\
-     - The line `{sep}` must appear exactly once on its own line, between the two sections.\n\
-     - Do not add blank lines before or after `{sep}`. Do not add blank lines inside the translation.\n\
-     - Keep the original recognized text compact too: preserve line breaks when useful, but collapse empty lines.\n\
-     - No commentary, no labels like 'Translation:' or 'Original:'.\n\n\
+     - The line `{sep}` must appear exactly once, on its own line, between the two sections. Never emit `{sep}` anywhere inside the translation or the original text.\n\
+     - Inside the translation, blank lines are allowed only to separate Markdown blocks (paragraphs, lists, tables); never between items of the same list.\n\
+     - Keep the original recognized text faithful to the screenshot: preserve meaningful line breaks and collapse runs of empty lines.\n\
+     - No labels like 'Translation:' or 'Original:'.\n\n\
      Output format (replace placeholders):\n\
      <translation>\n\
      {sep}\n\
@@ -190,5 +201,30 @@ mod tests {
         // 单个空行(段落分隔)保留
         let input = "para 1\n\npara 2";
         assert_eq!(compact_ocr_text(input), "para 1\n\npara 2");
+    }
+
+    #[test]
+    fn direct_translation_prompt_requests_markdown_structure() {
+        let prompt = build_ocr_direct_translation_prompt("Chinese", None);
+        assert!(prompt.contains("Markdown"));
+        assert!(prompt.contains("translate it to Chinese"));
+    }
+
+    #[test]
+    fn direct_translation_prompt_injects_custom_template() {
+        let prompt =
+            build_ocr_direct_translation_prompt("Chinese", Some("Be very literal. {lang}"));
+        assert!(prompt.contains("Be very literal. Chinese"));
+        // 自定义模板注入时不应附带默认结构规则
+        assert!(!prompt.contains("Mirror the source layout in Markdown"));
+    }
+
+    #[test]
+    fn combined_prompt_requests_markdown_and_keeps_separator() {
+        let prompt = build_combined_translate_prompt("Chinese", None);
+        assert!(prompt.contains("Markdown"));
+        // 分隔符必须出现且仅作为协议标记：示例输出块 + Format guard 提及 2 次
+        assert_eq!(prompt.matches(COMBINED_TRANSLATE_SEPARATOR).count(), 4);
+        assert!(prompt.contains("Output format (replace placeholders)"));
     }
 }

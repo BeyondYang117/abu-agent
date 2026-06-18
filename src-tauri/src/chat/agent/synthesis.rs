@@ -384,54 +384,121 @@ fn build_neutral_reduced_messages(state: &RunState, language: &str) -> Vec<Value
     ]
 }
 
-/// 统一恢复入口:按 `recovery::decide` 走「去敏重做 → 确定性兜底」阶梯。
+/// 统一恢复入口(恢复策略中枢的执行端):按 `recovery::decide` 走
+/// 「overflow 压缩重发 → 去敏重做 → 确定性兜底」阶梯。
 /// 返回非空内容即视为已恢复;返回空串表示无可恢复(调用方退回静态文案)。
 /// planning 阶段中途失败也复用此入口,保证两条路径同一恢复策略。
+///
+/// 取 `&mut RunState`:overflow 分支需要调用 `maybe_compact_send_view` 压缩历史
+/// (会写回 `state.runtime_messages` 工作副本)。其它分支不修改 state。
 pub(crate) async fn recover_synthesis(
     env: &LoopEnv<'_>,
-    state: &RunState,
+    state: &mut RunState,
     failure_message: &str,
 ) -> String {
     let config = env.config;
     let kind = recovery::classify(failure_message);
     let has_results = !state.tool_records.is_empty();
-    match recovery::decide(kind, has_results, false) {
+    // 恢复中枢只在此处被调用一次/次失败,故 already_remediated / overflow_recovery_attempted
+    // 都从 false 起算;真正的「只重试一次」守门在各分支内部用本地标志实现。
+    match recovery::decide(kind, has_results, false, false) {
         RecoveryAction::Surface => String::new(),
         RecoveryAction::DegradeToGathered => {
-            recovery::assemble_results_from_tool_records(&state.tool_records, &config.language)
+            recovery::assemble_results_from_tool_records(&state.tool_records, &config.language, kind)
         }
-        RecoveryAction::Remediate => {
-            let reduced = build_neutral_reduced_messages(state, &config.language);
-            let result = call_chat_completion_message_with_usage(
-                config.state,
-                &config.provider,
-                &config.model,
-                reduced,
-                None,
-                config.retry_attempts,
-                config.thinking_enabled,
-                config.max_output_tokens,
-                &config.conversation_id,
-                &config.message_id,
-                "Chat synthesis recovery",
+        RecoveryAction::CompactAndRetry => recover_overflow_compact_and_retry(env, state).await,
+        RecoveryAction::Remediate => recover_remediate(env, state, kind).await,
+    }
+}
+
+/// CompactAndRetry 执行:压缩一次历史 → 用压缩后的发送视图重发一次合成。
+/// 成功 → 用其结果;仍失败 → 降级到确定性兜底(对应 decide 的 overflow_recovery_attempted 臂)。
+/// 单次守门:本函数只压缩-重试一次,绝不递归,杜绝「压完仍超 → 再压」死循环。
+async fn recover_overflow_compact_and_retry(env: &LoopEnv<'_>, state: &mut RunState) -> String {
+    let config = env.config;
+    // 压缩一次(L1 snip → L2 摘要);返回压缩后的发送视图,并已写回 state.runtime_messages。
+    let compacted = super::compaction::maybe_compact_send_view(env, state).await;
+    let result = call_chat_completion_message_with_usage(
+        config.state,
+        &config.provider,
+        &config.model,
+        compacted,
+        None,
+        config.retry_attempts,
+        config.thinking_enabled,
+        config.max_output_tokens,
+        &config.conversation_id,
+        &config.message_id,
+        "Chat synthesis overflow recovery",
+    )
+    .await;
+    let text = match result {
+        Ok((message, usage)) => {
+            state.merge_usage(usage);
+            sanitize_assistant_text_response(
+                message
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default(),
             )
-            .await;
-            let text = match result {
-                Ok((message, _usage)) => sanitize_assistant_text_response(
-                    message
-                        .get("content")
-                        .and_then(|c| c.as_str())
-                        .unwrap_or_default(),
-                ),
-                Err(_) => String::new(),
-            };
-            if !text.trim().is_empty() {
-                text
-            } else {
-                // 去敏重试仍失败 → 确定性兜底(decide 的 already_remediated 臂)。
-                recovery::assemble_results_from_tool_records(&state.tool_records, &config.language)
-            }
         }
+        Err(err) => {
+            eprintln!("Chat synthesis overflow compact-and-retry failed: {err}");
+            String::new()
+        }
+    };
+    if !text.trim().is_empty() {
+        text
+    } else {
+        // 压缩重试仍失败 → 确定性兜底(decide 的 overflow_recovery_attempted=true 臂)。
+        recovery::assemble_results_from_tool_records(
+            &state.tool_records,
+            &config.language,
+            recovery::FailureKind::ContextOverflow,
+        )
+    }
+}
+
+/// Remediate 执行:用「用户问题 + 工具产出摘要 + 中立指令」去敏精简后重做一次合成。
+/// 仍失败 → 确定性兜底(decide 的 already_remediated 臂)。
+async fn recover_remediate(
+    env: &LoopEnv<'_>,
+    state: &mut RunState,
+    kind: recovery::FailureKind,
+) -> String {
+    let config = env.config;
+    let reduced = build_neutral_reduced_messages(state, &config.language);
+    let result = call_chat_completion_message_with_usage(
+        config.state,
+        &config.provider,
+        &config.model,
+        reduced,
+        None,
+        config.retry_attempts,
+        config.thinking_enabled,
+        config.max_output_tokens,
+        &config.conversation_id,
+        &config.message_id,
+        "Chat synthesis recovery",
+    )
+    .await;
+    let text = match result {
+        Ok((message, usage)) => {
+            state.merge_usage(usage);
+            sanitize_assistant_text_response(
+                message
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or_default(),
+            )
+        }
+        Err(_) => String::new(),
+    };
+    if !text.trim().is_empty() {
+        text
+    } else {
+        // 去敏重试仍失败 → 确定性兜底(decide 的 already_remediated 臂)。
+        recovery::assemble_results_from_tool_records(&state.tool_records, &config.language, kind)
     }
 }
 

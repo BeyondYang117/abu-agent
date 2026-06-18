@@ -96,12 +96,17 @@ export function MessageList({
   const prevCountRef = useRef(0)
   const lastScrollTopRef = useRef(0)
   const pendingPrependScrollHeightRef = useRef<number | null>(null)
-  const [visibleLimit, setVisibleLimit] = useState(() => computeInitialVisible(messages))
+  // 记录"从顶部隐藏的条数"而非"从底部显示的条数"。后者会在追加新消息时膨胀
+  // hidden,导致刚发出的消息被推到"加载更早"按钮后面(尤其首条消息)。隐藏数应在
+  // 追加新消息时保持不变,新消息总是落在可见尾部。
+  const [hiddenCount, setHiddenCount] = useState(() =>
+    Math.max(0, messages.length - computeInitialVisible(messages)),
+  )
   // 切换会话的重置 effect 需要最新 messages,但不应把 messages 列进依赖(否则每次流式更新都重置窗口)。
   const messagesRef = useRef(messages)
   messagesRef.current = messages
 
-  const hiddenMessageCount = Math.max(0, messages.length - visibleLimit)
+  const hiddenMessageCount = Math.max(0, Math.min(hiddenCount, messages.length))
   const visibleMessages = hiddenMessageCount > 0
     ? messages.slice(hiddenMessageCount)
     : messages
@@ -119,11 +124,11 @@ export function MessageList({
       pendingPrependScrollHeightRef.current = el.scrollHeight
       stickToBottomRef.current = false
     }
-    setVisibleLimit((limit) => {
-      const hidden = Math.max(0, messages.length - limit)
-      if (hidden === 0) return limit
-      const more = countByWeight(messages, hidden, LOAD_MORE_WEIGHT_BUDGET, MIN_LOAD_MORE, MAX_LOAD_MORE)
-      return Math.min(messages.length, limit + more)
+    setHiddenCount((hidden) => {
+      const currentHidden = Math.min(hidden, messages.length)
+      if (currentHidden === 0) return 0
+      const more = countByWeight(messages, currentHidden, LOAD_MORE_WEIGHT_BUDGET, MIN_LOAD_MORE, MAX_LOAD_MORE)
+      return Math.max(0, currentHidden - more)
     })
   }, [messages])
 
@@ -150,7 +155,8 @@ export function MessageList({
 
   // 切换会话：重置跟随并瞬间定位到底部
   useLayoutEffect(() => {
-    setVisibleLimit(computeInitialVisible(messagesRef.current))
+    const latest = messagesRef.current
+    setHiddenCount(Math.max(0, latest.length - computeInitialVisible(latest)))
     pendingPrependScrollHeightRef.current = null
     stickToBottomRef.current = true
     scrollToBottom()
@@ -167,7 +173,7 @@ export function MessageList({
       el.scrollTop += delta
       lastScrollTopRef.current = el.scrollTop
     }
-  }, [visibleLimit])
+  }, [hiddenCount])
 
   // 自己发出新消息时强制回到底部（即使刚才正往上翻历史）
   useLayoutEffect(() => {
@@ -219,7 +225,7 @@ export function MessageList({
   }, [scrollToBottom])
 
   return (
-    <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="custom-scrollbar flex-1 overflow-y-auto">
+    <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto">
       <div ref={innerRef} className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
         <AgentPlanPanel planState={agentPlanState} />
 

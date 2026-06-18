@@ -299,6 +299,12 @@ export type ChatToolConfirmPayload = {
   sensitivity?: string
 }
 
+export type ChatSessionConsentPayload = {
+  conversationId: string
+  runId: string
+  messageId?: string
+}
+
 export type ChatToolDefinition = {
   id: string
   name: string
@@ -642,6 +648,18 @@ export type Settings = {
   imageArchivePath?: string
 }
 
+/** kivio-code CLI 的独立配置(存于 <app_data>/kivio-code/config.json,与共享 Settings 分开)。 */
+export type KivioCodeConfig = {
+  /** 读取 CLAUDE.md / .claude 上下文文件(默认 true)。 */
+  readClaudeDir: boolean
+  /** kivio-code 专属默认 provider id;空/缺省时回退到共享 Chat 模型。 */
+  defaultProviderId?: string | null
+  /** kivio-code 专属默认模型名(裸名,无 provider 前缀);与 defaultProviderId 搭配。 */
+  defaultModel?: string | null
+  /** 工具审批策略:'auto' | 'readonly_auto_sensitive_confirm' | 'always_confirm';缺省为 auto。 */
+  approvalPolicy?: string | null
+}
+
 export type UsageRange = '7d' | '30d' | '90d' | 'all'
 
 export type UsageStatsQuery = {
@@ -780,6 +798,7 @@ function normalizeProvider(provider: ModelProvider): ModelProvider {
 
 export function normalizeProviderApiFormat(apiFormat?: string): string {
   if (apiFormat === 'anthropic' || apiFormat === 'anthropic_messages') return 'anthropic_messages'
+  if (apiFormat === 'openai_responses' || apiFormat === 'responses') return 'openai_responses'
   return 'openai_chat'
 }
 
@@ -999,6 +1018,18 @@ async function on<T>(event: string, handler: (payload: T) => void): Promise<Unli
 export const api = {
   // 设置相关
   getSettings: async () => normalizeSettings(await invoke<Settings>('get_settings')),
+  // kivio-code 的独立配置（与共享 Settings 分开存储，走专用命令读写）。
+  getKivioCodeConfig: () => invoke<KivioCodeConfig>('get_kivio_code_config'),
+  saveKivioCodeConfig: (config: KivioCodeConfig) =>
+    invoke<void>('set_kivio_code_config', { config }),
+  // kivio-code 全局指令文件(<app_data>/agents/AGENTS.md),每轮注入系统提示。
+  getKivioCodeGlobalInstructions: () =>
+    invoke<string>('get_kivio_code_global_instructions'),
+  saveKivioCodeGlobalInstructions: (content: string) =>
+    invoke<void>('set_kivio_code_global_instructions', { content }),
+  // 把（Windows 不透明）chat 窗口的原生背景设为当前主题色，避免伸缩时闪白。其他窗口/平台为 no-op。
+  setChatWindowBackground: (isDark: boolean) =>
+    invoke('set_chat_window_background', { isDark }).catch(() => {}),
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
   saveSettings: async (settings: Settings) =>
     normalizeSettings(await invoke<Settings>('save_settings', { settings: prepareSettingsForSave(settings) })),
@@ -1114,6 +1145,10 @@ export const api = {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatToolConfirmPayload>('chat-tool-confirm', (payload) => listener(payload))
   },
+  onChatSessionConsent: (listener: (payload: ChatSessionConsentPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatSessionConsentPayload>('chat-session-consent', (payload) => listener(payload))
+  },
   onChatOpenConversation: (listener: (payload: { conversationId: string; reload?: boolean | null; error?: string | null }) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<{ conversationId: string; reload?: boolean | null; error?: string | null }>('chat-open-conversation', (payload) => listener(payload))
@@ -1185,6 +1220,8 @@ export const api = {
     invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>
     invoke<void>('chat_confirm_tool_call', { toolCallId, approved }),
+  chatRespondSessionConsent: (conversationId: string, granted: boolean) =>
+    invoke<void>('chat_respond_session_consent', { conversationId, granted }),
   chatSubmitUserChoice: (
     toolCallId: string,
     answers: Record<string, AskUserAnswer>,

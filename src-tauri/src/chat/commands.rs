@@ -23,7 +23,7 @@ use crate::chat::model::{
     generate_request_from_openai_messages, model_messages_from_openai_messages,
     openai_messages_from_model_messages, AnthropicMessagesProvider, GenerateOptions,
     GenerateOutput, GenerateRequestContext, LanguageModelProvider, MessagePart, ModelMessage,
-    ModelRole, OpenAiChatProvider,
+    ModelRole, OpenAiChatProvider, OpenAiResponsesProvider,
 };
 use crate::chat::model_metadata::{
     chat_max_output_tokens_for_model, context_window_for_model, model_can_generate_images_directly,
@@ -942,6 +942,24 @@ pub(crate) fn chat_confirm_tool_call(
         .remove(&tool_call_id);
     if let Some(sender) = sender {
         let _ = sender.send(approved);
+    }
+    Ok(())
+}
+
+/// 响应会话级文件/命令工具授权请求(按 conversation_id)。
+#[tauri::command]
+pub(crate) fn chat_respond_session_consent(
+    state: State<AppState>,
+    conversation_id: String,
+    granted: bool,
+) -> Result<(), String> {
+    let sender = state
+        .pending_chat_session_consents
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&conversation_id);
+    if let Some(sender) = sender {
+        let _ = sender.send(granted);
     }
     Ok(())
 }
@@ -2801,6 +2819,12 @@ fn auxiliary_vision_model_for_images(
         return None;
     }
 
+    // 主模型自身支持视觉时，图片永远直接交给主模型——即便配置了独立视觉模型。
+    // 独立视觉模型只是给「纯文本主模型」补视觉的兜底，不应把会看图的主模型降级走 mixer。
+    if model_supports_vision(main_provider, main_model) == Some(true) {
+        return None;
+    }
+
     if settings.has_explicit_vision_model() {
         let (provider_id, model) = settings.effective_vision_model();
         return auxiliary_vision_model_from_selection(settings, &provider_id, &model);
@@ -3384,7 +3408,7 @@ fn apply_inline_code_request_tool_filter(
     if !should_answer_inline_without_file_write(last_user_api_content) {
         return;
     }
-    tools.retain(|tool| !(tool.source == "native" && tool.name == "write_file"));
+    tools.retain(|tool| !(tool.source == "native" && tool.name == "write"));
 }
 
 fn should_answer_inline_without_file_write(last_user_api_content: Option<&str>) -> bool {
@@ -3779,6 +3803,23 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         })
     }
 
+    fn request_session_consent<'a>(
+        &'a self,
+        ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
+    ) -> crate::chat::agent::AgentHostFuture<'a, bool> {
+        Box::pin(async move {
+            request_session_consent(
+                &self.app,
+                self.state,
+                ctx.tool_conversation_id,
+                ctx.run_id,
+                ctx.message_id,
+                ctx.generation,
+            )
+            .await
+        })
+    }
+
     fn request_user_response<'a>(
         &'a self,
         ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
@@ -3899,6 +3940,11 @@ async fn generate_with_chat_provider(
                 .generate(request)
                 .await
         }
+        ProviderApiFormat::OpenAiResponses => {
+            OpenAiResponsesProvider::new(state, provider, retry_attempts)
+                .generate(request)
+                .await
+        }
     }
     .map_err(|err| err.to_string())
 }
@@ -3986,6 +4032,70 @@ fn looks_like_inline_image_base64(value: &str) -> bool {
         || value.starts_with("UklGR")
         || value.starts_with("PHN2Zy")
         || value.starts_with("PD94bWwg")
+}
+
+async fn request_session_consent(
+    app: &AppHandle,
+    state: &AppState,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+) -> bool {
+    // Already granted for this conversation — no prompt.
+    if state.has_chat_consent(conversation_id) {
+        return true;
+    }
+    // Serialize prompts so concurrent first-round tools (read/grep/find/ls run
+    // in parallel) don't each insert a pending sender and clobber one another.
+    // Whoever wins the lock prompts once; the rest re-check consent and reuse
+    // the grant without a second dialog.
+    let _prompt_guard = state.chat_consent_prompt_lock.lock().await;
+    if state.has_chat_consent(conversation_id) {
+        return true;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut pending = state
+            .pending_chat_session_consents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Only one outstanding consent prompt per conversation.
+        pending.insert(conversation_id.to_string(), tx);
+    }
+    let _ = app.emit(
+        "chat-session-consent",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+        }),
+    );
+    let result = tokio::select! {
+        result = timeout(Duration::from_secs(60), rx) => result,
+        _ = wait_for_chat_cancel(state, conversation_id, generation) => {
+            state
+                .pending_chat_session_consents
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(conversation_id);
+            return false;
+        }
+    };
+    match result {
+        Ok(Ok(true)) => {
+            state.grant_chat_consent(conversation_id);
+            true
+        }
+        _ => {
+            state
+                .pending_chat_session_consents
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(conversation_id);
+            false
+        }
+    }
 }
 
 async fn request_tool_approval(
@@ -4242,7 +4352,7 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
     let parsed = serde_json::from_str::<Value>(&record.arguments).ok();
     let mut lines = Vec::new();
     match record.name.as_str() {
-        "run_command" => {
+        "bash" => {
             if let Some(command) = parsed
                 .as_ref()
                 .and_then(|value| value.get("command"))
@@ -4262,7 +4372,7 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
                 lines.push(format!("Working directory: {cwd}"));
             }
         }
-        "write_file" | "edit_file" | "read_file" => {
+        "write" | "edit" | "read" => {
             if let Some(path) = parsed
                 .as_ref()
                 .and_then(|value| value.get("path"))
@@ -4272,14 +4382,25 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
             {
                 lines.push(format!("Path: {path}"));
             }
-            if record.name == "edit_file" {
-                if let Some(old) = parsed
+            if record.name == "edit" {
+                // Current shape: edits: [{old_string, new_string}, ...]. Preview the
+                // first edit's old_string; fall back to the legacy single-edit field.
+                let first_old = parsed
                     .as_ref()
-                    .and_then(|value| value.get("old_string").or_else(|| value.get("old")))
+                    .and_then(|value| value.get("edits"))
+                    .and_then(|value| value.as_array())
+                    .and_then(|edits| edits.first())
+                    .and_then(|edit| edit.get("old_string"))
                     .and_then(|value| value.as_str())
+                    .or_else(|| {
+                        parsed
+                            .as_ref()
+                            .and_then(|value| value.get("old_string").or_else(|| value.get("old")))
+                            .and_then(|value| value.as_str())
+                    })
                     .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
+                    .filter(|value| !value.is_empty());
+                if let Some(old) = first_old {
                     lines.push(format!("Replace: {}", truncate_chars(old, 180)));
                 }
             }
@@ -4753,6 +4874,43 @@ mod tests {
     }
 
     #[test]
+    fn explicit_vision_model_does_not_hijack_vision_capable_main_model() {
+        // 用户给主模型在 model_overrides 里手动开了 vision=true，同时设置里又配了独立视觉模型。
+        // 期望：图片直接发给会看图的主模型，不走 mixer。回归 #vision-mixer-hijack。
+        use crate::settings::{ModelCapabilities, ModelInfo};
+
+        let mut main_provider = test_provider("main", "Main", vec!["models/gemini-3.1-flash-lite"]);
+        main_provider.model_overrides.insert(
+            "models/gemini-3.1-flash-lite".to_string(),
+            ModelInfo {
+                capabilities: Some(ModelCapabilities {
+                    vision: Some(true),
+                    ..ModelCapabilities::default()
+                }),
+                ..ModelInfo::default()
+            },
+        );
+        let vision_provider = test_provider("vision", "Vision", vec!["gpt-4o"]);
+
+        let mut settings = Settings::default();
+        settings.providers = vec![main_provider.clone(), vision_provider];
+        // 显式配置一个独立视觉模型（旧逻辑会因此把所有图片都劫持到 mixer）。
+        settings.default_models.vision.provider_id = "vision".to_string();
+        settings.default_models.vision.model = "gpt-4o".to_string();
+
+        assert_eq!(
+            auxiliary_vision_model_for_images(
+                &settings,
+                Some(&main_provider),
+                "models/gemini-3.1-flash-lite",
+                &[PathBuf::from("image.png")],
+            ),
+            None,
+            "vision-capable main model should keep images, not route to the mixer"
+        );
+    }
+
+    #[test]
     fn inline_code_request_filter_removes_file_creation_tools_for_fenced_code() {
         let mut tools = vec![
             crate::mcp::types::native_read_file_tool(),
@@ -4765,9 +4923,9 @@ mod tests {
             Some("生成一个完整的 HTML demo，用 ```html 代码块包起来。"),
         );
 
-        assert!(tools.iter().any(|tool| tool.name == "read_file"));
-        assert!(!tools.iter().any(|tool| tool.name == "write_file"));
-        assert!(tools.iter().any(|tool| tool.name == "edit_file"));
+        assert!(tools.iter().any(|tool| tool.name == "read"));
+        assert!(!tools.iter().any(|tool| tool.name == "write"));
+        assert!(tools.iter().any(|tool| tool.name == "edit"));
     }
 
     #[test]
@@ -4779,7 +4937,7 @@ mod tests {
 
         apply_inline_code_request_tool_filter(&mut tools, Some("生成一个完整的 HTML demo"));
 
-        assert!(tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(tools.iter().any(|tool| tool.name == "write"));
     }
 
     #[test]
@@ -4791,7 +4949,7 @@ mod tests {
 
         apply_inline_code_request_tool_filter(&mut tools, Some("把完整 HTML 放到代码块里给我"));
 
-        assert!(!tools.iter().any(|tool| tool.name == "write_file"));
+        assert!(!tools.iter().any(|tool| tool.name == "write"));
     }
 
     #[test]
@@ -4807,8 +4965,8 @@ mod tests {
             Some("生成一个完整的 HTML demo，保存为 ~/news-demo.html。"),
         );
 
-        assert!(tools.iter().any(|tool| tool.name == "write_file"));
-        assert!(tools.iter().any(|tool| tool.name == "edit_file"));
+        assert!(tools.iter().any(|tool| tool.name == "write"));
+        assert!(tools.iter().any(|tool| tool.name == "edit"));
     }
 
     #[test]
@@ -4865,7 +5023,7 @@ mod tests {
             .iter()
             .map(|tool| tool.openai_tool_name())
             .collect::<Vec<_>>();
-        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"memory_read".to_string()));
         assert!(names.contains(&"skill_activate".to_string()));
         assert!(names.contains(&"skill_read_file".to_string()));
@@ -4873,15 +5031,15 @@ mod tests {
         assert!(names.contains(&"todo_write".to_string()));
         assert!(names.contains(&"todo_update".to_string()));
         assert!(names.contains(&"mcp__docs__search".to_string()));
-        assert!(!names.contains(&"write_file".to_string()));
-        assert!(!names.contains(&"run_command".to_string()));
+        assert!(!names.contains(&"write".to_string()));
+        assert!(!names.contains(&"bash".to_string()));
         assert!(!names.contains(&"run_python".to_string()));
         assert!(!names.contains(&"memory_modify".to_string()));
         assert!(!names.contains(&"mixer_generate_image".to_string()));
         assert!(!names.contains(&"skill_run_script".to_string()));
         assert!(!names.contains(&"mcp__fs__write".to_string()));
-        assert!(blocked_names.contains(&"write_file".to_string()));
-        assert!(blocked_names.contains(&"run_command".to_string()));
+        assert!(blocked_names.contains(&"write".to_string()));
+        assert!(blocked_names.contains(&"bash".to_string()));
         assert!(blocked_names.contains(&"run_python".to_string()));
         assert!(blocked_names.contains(&"memory_modify".to_string()));
         assert!(blocked_names.contains(&"mixer_generate_image".to_string()));
@@ -4899,9 +5057,9 @@ mod tests {
 
         let blocked = apply_agent_plan_tool_filter(&mut tools, false);
 
-        assert!(tools.iter().any(|tool| tool.name == "read_file"));
-        assert!(tools.iter().any(|tool| tool.name == "write_file"));
-        assert!(tools.iter().any(|tool| tool.name == "run_command"));
+        assert!(tools.iter().any(|tool| tool.name == "read"));
+        assert!(tools.iter().any(|tool| tool.name == "write"));
+        assert!(tools.iter().any(|tool| tool.name == "bash"));
         assert!(blocked.is_empty());
     }
 
@@ -4991,7 +5149,7 @@ mod tests {
     fn format_tool_approval_summary_highlights_run_command() {
         let record = ToolCallRecord {
             id: "call_1".to_string(),
-            name: "run_command".to_string(),
+            name: "bash".to_string(),
             source: "native".to_string(),
             server_id: None,
             arguments: r#"{"command":"npm test","cwd":"/tmp/project"}"#.to_string(),
@@ -5019,7 +5177,7 @@ mod tests {
     fn format_tool_approval_summary_highlights_file_path() {
         let record = ToolCallRecord {
             id: "call_1".to_string(),
-            name: "write_file".to_string(),
+            name: "write".to_string(),
             source: "native".to_string(),
             server_id: None,
             arguments: r#"{"path":"/tmp/project/out.txt","content":"hello"}"#.to_string(),

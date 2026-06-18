@@ -32,6 +32,7 @@ import {
 import { ChatAttachments } from './ChatAttachments'
 import { api, type ChatToolDefinition } from '../api/tauri'
 import { chatApi } from './api'
+import { builtinAssistantGlyph } from './assistantIcons'
 import type { AgentPlanMode, AgentPlanState, ChatProject, PendingAttachment } from './types'
 import {
   buildSlashCommands,
@@ -1705,18 +1706,8 @@ export function InputBar({
               </div>
             )}
 
-            {cancelVisible && onCancel ? (
-              <button
-                type="button"
-                onClick={onCancel}
-                disabled={cancelling}
-                className="chat-motion-fade-up mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-white shadow-sm transition-all hover:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
-                title={cancelling ? '正在停止' : '停止生成'}
-                aria-label={cancelling ? '正在停止' : '停止生成'}
-              >
-                <Square size={13} strokeWidth={2.4} fill="currentColor" />
-              </button>
-            ) : (
+            {/* 发送 / 停止：两按钮共存于同一槽位，按 cancelVisible 做 opacity+scale crossfade */}
+            <div className="relative mb-0.5 h-9 w-9 shrink-0">
               <button
                 type="button"
                 onClick={handleSend}
@@ -1724,15 +1715,38 @@ export function InputBar({
                 tabIndex={-1}
                 title={sendDisabledReason || (canSend ? '发送' : '输入消息后发送')}
                 aria-label={sendDisabledReason || '发送'}
-                className={`mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all ${
+                aria-hidden={cancelVisible && !!onCancel}
+                className={`absolute inset-0 flex items-center justify-center rounded-full transition-all duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-standard)] ${
+                  cancelVisible && onCancel
+                    ? 'pointer-events-none scale-90 opacity-0'
+                    : 'opacity-100'
+                } ${
                   canSend
-                    ? 'chat-motion-soft-pulse bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585]'
+                    ? `bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585]${
+                        cancelVisible && onCancel ? '' : ' chat-motion-soft-pulse'
+                      }`
                     : 'bg-neutral-200 text-neutral-400 dark:bg-neutral-700 dark:text-neutral-500'
                 }`}
               >
                 <ArrowUp size={18} strokeWidth={2.25} />
               </button>
-            )}
+              {onCancel ? (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  disabled={cancelling}
+                  tabIndex={cancelVisible ? undefined : -1}
+                  aria-hidden={!cancelVisible}
+                  className={`absolute inset-0 flex items-center justify-center rounded-full bg-neutral-900 text-white shadow-sm transition-all duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-standard)] hover:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500 ${
+                    cancelVisible ? 'opacity-100' : 'pointer-events-none scale-90 opacity-0'
+                  }`}
+                  title={cancelling ? '正在停止' : '停止生成'}
+                  aria-label={cancelling ? '正在停止' : '停止生成'}
+                >
+                  <Square size={13} strokeWidth={2.4} fill="currentColor" />
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
         {(projectEntryEnabled || showAssistantEntry) && (
@@ -1778,7 +1792,11 @@ export function InputBar({
                     className="inline-flex min-w-0 items-center gap-1"
                     title={currentAssistant.name}
                   >
-                    <Bot size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
+                    <span className="grid size-[15px] shrink-0 place-items-center text-neutral-500 dark:text-neutral-300">
+                      {builtinAssistantGlyph(currentAssistant.id, 14) ?? (
+                        <Bot size={13} strokeWidth={1.75} />
+                      )}
+                    </span>
                     <span className="min-w-0 max-w-[150px] truncate">{currentAssistant.name}</span>
                   </button>
                   {onClearAssistant && (

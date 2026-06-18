@@ -606,10 +606,16 @@ fn handle_openai_stream_tool_calls(
         if let Some(delta) = call
             .get("function")
             .and_then(|function| function.get("arguments"))
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.is_empty())
+            .and_then(|value| match value {
+                // 标准：参数以字符串分片流式到达，逐片累加。
+                Value::String(text) => (!text.is_empty()).then(|| text.clone()),
+                // 兼容：部分 OpenAI 兼容网关把 arguments 作为完整 JSON **对象**一次性发来
+                // （非分片）。序列化成字符串当作整段累加，否则参数会被静默丢弃。
+                Value::Null => None,
+                other => serde_json::to_string(other).ok(),
+            })
         {
-            partial.arguments_raw.push_str(delta);
+            partial.arguments_raw.push_str(&delta);
             if partial.started {
                 let Some(id) = partial.id.as_deref() else {
                     continue;
@@ -762,6 +768,37 @@ mod tests {
             parts.last(),
             Some(StreamPart::ToolCallDone { .. })
         ));
+    }
+
+    #[test]
+    fn stream_tool_call_accepts_object_form_arguments() {
+        // 部分 OpenAI 兼容网关（如 codex/spark 代理）把 function.arguments 作为完整 JSON
+        // 对象一次性发来，而非字符串分片。回归：旧逻辑只认字符串会丢成 `{}`，使必填参数缺失。
+        let mut parts = Vec::new();
+        let mut sink = |part| {
+            parts.push(part);
+            Ok(())
+        };
+        let mut partials = Vec::new();
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_1",
+                        "function": { "name": "web_search", "arguments": { "query": "吉林市 明天 天气" } }
+                    }]
+                }
+            }]
+        });
+
+        handle_openai_stream_tool_calls(&chunk, &mut partials, &mut sink).expect("chunk");
+        let calls = finish_tool_call_partials(&mut partials, &mut sink).expect("finish");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function_name, "web_search");
+        assert_eq!(calls[0].arguments["query"], "吉林市 明天 天气");
+        assert!(calls[0].arguments_parse_error.is_none());
     }
 
     #[test]

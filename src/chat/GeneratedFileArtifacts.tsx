@@ -220,7 +220,7 @@ function GeneratedFileCard({
               className={`${menuButtonClass} disabled:cursor-not-allowed disabled:opacity-40`}
               onClick={() => void handleCopyPath()}
             >
-              {copied ? <Check className={menuIconClass} strokeWidth={2} /> : <Clipboard className={menuIconClass} strokeWidth={1.9} />}
+              {copied ? <Check className={`${menuIconClass} chat-motion-pop`} strokeWidth={2} /> : <Clipboard className={menuIconClass} strokeWidth={1.9} />}
               <span>{copied ? '已复制路径' : '复制路径'}</span>
             </button>
           </div>

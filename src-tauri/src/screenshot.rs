@@ -25,7 +25,7 @@ pub fn cleanup_temp_file(path: &Path) {
 ///
 /// 这里只删 24 小时之前的文件，避免误删可能正在被另一个 Kivio 实例使用的新文件。
 pub fn cleanup_orphan_temp_files() {
-    const PREFIXES: &[&str] = &["lens-", "lens-region-", "screenshot-"];
+    const PNG_PREFIXES: &[&str] = &["lens-", "lens-region-", "screenshot-"];
     const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
     let temp_dir = std::env::temp_dir();
@@ -46,7 +46,11 @@ pub fn cleanup_orphan_temp_files() {
             Some(n) => n,
             None => continue,
         };
-        if !PREFIXES.iter().any(|p| name.starts_with(p)) || !name.ends_with(".png") {
+        // Capture PNGs (lens/screenshot) and large-command output logs
+        // (kivio-bash-*.log) both live in temp; GC either when stale.
+        let is_orphan = (PNG_PREFIXES.iter().any(|p| name.starts_with(p)) && name.ends_with(".png"))
+            || (name.starts_with("kivio-bash-") && name.ends_with(".log"));
+        if !is_orphan {
             continue;
         }
         let metadata = match entry.metadata() {
