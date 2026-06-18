@@ -56,6 +56,10 @@ pub enum SlashStrategy {
     /// `session/update` notifications for the `available_commands_update` payload the agent
     /// pushes. Works for any ACP-speaking CLI (cursor / gemini / opencode).
     Acp,
+    /// Discover via codex `app-server` `skills/list` merged with a curated built-in command set.
+    CodexAppServer,
+    /// Discover via the Pi RPC `get_commands` request.
+    PiRpc,
     /// No discoverable slash commands for this CLI in headless mode.
     None,
 }

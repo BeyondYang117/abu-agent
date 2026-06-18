@@ -10,7 +10,7 @@ use tokio::time::timeout;
 
 use crate::external_agents::session::live::SessionCommand;
 use crate::external_agents::stream::usage_from_numbers;
-use crate::external_agents::types::UnifiedAgentEvent;
+use crate::external_agents::types::{ExternalCliSlashCommand, UnifiedAgentEvent};
 
 /// Codex `app-server` speaks newline-delimited JSON-RPC over stdio (one JSON object per line,
 /// no `Content-Length` framing). Responses omit the `jsonrpc` field, so we never require it.
@@ -655,6 +655,104 @@ async fn read_until_response(
     }
 }
 
+/// Curated codex built-in slash commands (not exposed via any list RPC). Merged with the
+/// dynamic `skills/list` results for the slash popover.
+const CODEX_BUILTIN_COMMANDS: &[(&str, &str)] = &[
+    ("compact", "压缩对话历史"),
+    ("diff", "查看改动 diff"),
+    ("init", "生成 AGENTS.md"),
+    ("model", "切换模型"),
+    ("approvals", "审批策略"),
+    ("review", "审查改动"),
+    ("status", "会话状态"),
+    ("mcp", "MCP server 状态"),
+    ("new", "新会话"),
+    ("undo", "撤销上一步"),
+];
+
+/// Discover codex slash commands: curated built-ins + dynamic skills from `skills/list`.
+pub async fn detect_codex_commands(
+    resolved_bin: &Path,
+    cwd: &Path,
+    timeout_secs: u64,
+) -> Option<Vec<ExternalCliSlashCommand>> {
+    let mut out: Vec<ExternalCliSlashCommand> = CODEX_BUILTIN_COMMANDS
+        .iter()
+        .map(|(name, desc)| ExternalCliSlashCommand {
+            slash: format!("/{name}"),
+            name: (*name).to_string(),
+            description: Some((*desc).to_string()),
+            argument_hint: None,
+        })
+        .collect();
+
+    // Best-effort: pull skills via the app-server. Failure leaves just the built-ins.
+    if let Ok(mut child) = tokio::process::Command::new(resolved_bin)
+        .arg("app-server")
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        if let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) {
+            let mut reader = BufReader::new(stdout).lines();
+            let overall = Duration::from_secs(timeout_secs);
+            let ok = write_rpc(
+                &mut stdin,
+                1,
+                "initialize",
+                json!({ "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" } }),
+            )
+            .await
+            .is_ok()
+                && read_until_response(&mut reader, &mut stdin, 1, overall).await.is_ok()
+                && write_rpc(&mut stdin, 2, "skills/list", json!({})).await.is_ok();
+            if ok {
+                if let Ok(result) = read_until_response(&mut reader, &mut stdin, 2, overall).await {
+                    let mut seen: HashSet<String> =
+                        out.iter().map(|c| c.name.clone()).collect();
+                    if let Some(groups) = result.get("data").and_then(|v| v.as_array()) {
+                        for group in groups {
+                            let Some(skills) = group.get("skills").and_then(|v| v.as_array()) else {
+                                continue;
+                            };
+                            for skill in skills {
+                                let Some(name) = skill
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                else {
+                                    continue;
+                                };
+                                if seen.insert(name.to_string()) {
+                                    out.push(ExternalCliSlashCommand {
+                                        slash: format!("/{name}"),
+                                        name: name.to_string(),
+                                        description: skill
+                                            .get("description")
+                                            .and_then(|v| v.as_str())
+                                            .map(|d| d.trim().to_string())
+                                            .filter(|d| !d.is_empty()),
+                                        argument_hint: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(out)
+}
+
 /// Spawn the actor task that owns a connected session and serves `SessionCommand`s.
 pub fn spawn_codex_session_actor(mut session: CodexAppServerSession) -> mpsc::Sender<SessionCommand> {
     let (tx, mut rx) = mpsc::channel::<SessionCommand>(8);
@@ -763,6 +861,21 @@ mod tests {
         } else {
             Some(std::path::PathBuf::from(p))
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live codex CLI on PATH"]
+    async fn live_detect_codex_commands() {
+        let bin = which_codex().expect("codex on PATH");
+        let cmds = detect_codex_commands(&bin, &std::env::temp_dir(), 12)
+            .await
+            .expect("codex commands");
+        eprintln!("codex commands: {}", cmds.len());
+        for c in cmds.iter().take(12) {
+            eprintln!("  {}", c.slash);
+        }
+        // At least the curated built-ins must be present.
+        assert!(cmds.iter().any(|c| c.name == "compact"));
     }
 
     #[test]

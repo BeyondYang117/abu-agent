@@ -198,10 +198,54 @@ pub async fn list_external_cli_slash_commands(
                 .await
                 .unwrap_or_default()
         }
+        SlashStrategy::CodexAppServer => {
+            let resolved_bin = resolve_binary(def)
+                .await
+                .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
+            crate::external_agents::session::codex_app_server::detect_codex_commands(
+                &resolved_bin,
+                Path::new(&cwd),
+                12,
+            )
+            .await
+            .unwrap_or_default()
+        }
+        SlashStrategy::PiRpc => {
+            let resolved_bin = resolve_binary(def)
+                .await
+                .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
+            let runtime_ctx = RuntimeContext {
+                cwd: Some(cwd.clone()),
+                extra_allowed_dirs: Vec::new(),
+                resume_session_id: None,
+                new_session_id: Some(Uuid::new_v4().to_string()),
+                include_partial_messages: false,
+            };
+            let build_options = RuntimeBuildOptions {
+                model: None,
+                reasoning: None,
+                sandbox: None,
+            };
+            let args = (def.build_args)(&runtime_ctx, &build_options, None);
+            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+            crate::external_agents::session::pi_rpc::detect_pi_commands(
+                &resolved_bin,
+                &args_ref,
+                Path::new(&cwd),
+                10,
+            )
+            .await
+            .unwrap_or_default()
+        }
         SlashStrategy::None => unreachable!("None handled above"),
     };
 
-    if commands.is_empty() && def.slash_strategy == SlashStrategy::Acp {
+    if commands.is_empty()
+        && matches!(
+            def.slash_strategy,
+            SlashStrategy::Acp | SlashStrategy::CodexAppServer | SlashStrategy::PiRpc
+        )
+    {
         return Ok((
             true,
             Vec::new(),

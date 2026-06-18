@@ -65,7 +65,7 @@ pub const CODEX_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     models_from_stderr: false,
     model_probe: None,
     model_probe_args: None,
-    slash_strategy: super::super::types::SlashStrategy::None,
+    slash_strategy: super::super::types::SlashStrategy::CodexAppServer,
     env: &[],
     max_prompt_arg_bytes: None,
     prompt_via_stdin: false,

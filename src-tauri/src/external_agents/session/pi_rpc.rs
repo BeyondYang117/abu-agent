@@ -1,18 +1,108 @@
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Child;
+use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use crate::external_agents::context::parse_context_window_label;
 use crate::external_agents::stream::usage_from_numbers;
-use crate::external_agents::types::{RuntimeModelOption, UnifiedAgentEvent, default_model_option};
+use crate::external_agents::types::{
+    default_model_option, ExternalCliSlashCommand, RuntimeModelOption, UnifiedAgentEvent,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PiRpcOutcome {
     Continue,
     AgentEnd,
+}
+
+/// Discover Pi slash commands via the RPC `get_commands` request.
+/// Response shape: `{type:"response", command:"get_commands", data:{commands:[{name, description}]}}`.
+pub async fn detect_pi_commands(
+    bin: &Path,
+    args: &[&str],
+    cwd: &Path,
+    timeout_secs: u64,
+) -> Option<Vec<ExternalCliSlashCommand>> {
+    let mut child = Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
+    let mut stdin = child.stdin.take()?;
+    let stdout = child.stdout.take()?;
+    let mut reader = BufReader::new(stdout).lines();
+
+    let req = json!({ "id": 1, "type": "get_commands" }).to_string();
+    stdin.write_all(format!("{req}\n").as_bytes()).await.ok()?;
+
+    let started = std::time::Instant::now();
+    let mut commands: Option<Vec<ExternalCliSlashCommand>> = None;
+    loop {
+        if started.elapsed() > Duration::from_secs(timeout_secs) {
+            break;
+        }
+        let line = match timeout(Duration::from_millis(200), reader.next_line()).await {
+            Ok(Ok(Some(l))) => l,
+            Ok(Ok(None)) => break,
+            Ok(Err(_)) => break,
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let is_get_commands = value.get("type").and_then(|v| v.as_str()) == Some("response")
+            && value.get("command").and_then(|v| v.as_str()) == Some("get_commands");
+        if !is_get_commands {
+            continue;
+        }
+        let list = value
+            .get("data")
+            .and_then(|d| d.get("commands"))
+            .and_then(|v| v.as_array());
+        if let Some(list) = list {
+            let mut out = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for raw in list {
+                let Some(name) = raw
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                else {
+                    continue;
+                };
+                if seen.insert(name.to_string()) {
+                    out.push(ExternalCliSlashCommand {
+                        slash: format!("/{name}"),
+                        name: name.to_string(),
+                        description: raw
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(|d| d.trim().to_string())
+                            .filter(|d| !d.is_empty()),
+                        argument_hint: None,
+                    });
+                }
+            }
+            out.sort_by(|a, b| a.name.cmp(&b.name));
+            commands = Some(out);
+        }
+        break;
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    commands.filter(|c| !c.is_empty())
 }
 
 const FIRE_AND_FORGET: &[&str] = &[
@@ -358,6 +448,28 @@ pub async fn run_pi_rpc_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires live pi CLI on PATH"]
+    async fn live_detect_pi_commands() {
+        let bin = std::process::Command::new("which")
+            .arg("pi")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .expect("pi on PATH");
+        let cmds = detect_pi_commands(&bin, &["--mode", "rpc"], &std::env::temp_dir(), 10)
+            .await
+            .expect("pi get_commands");
+        eprintln!("pi commands: {}", cmds.len());
+        for c in cmds.iter().take(8) {
+            eprintln!("  {}", c.slash);
+        }
+        assert!(!cmds.is_empty());
+    }
 
     #[test]
     fn parse_pi_models_from_tsv() {
