@@ -213,7 +213,12 @@ export function ExternalModelSelector({
   const currentReasoning = agentRuntime.externalReasoning ?? 'default'
   const displayName = useMemo(() => {
     const selected = models.find((item) => item.id === (agentRuntime.externalModel || 'default'))
-    const base = selected ? formatModelLabel(selected) : (agentRuntime.externalModel || 'default')
+    // On the pill, show the model name only — drop the provider prefix (e.g.
+    // "zmfooogreencloud/mimo-v2.5-pro" → "mimo-v2.5-pro") so the meaningful tail isn't truncated.
+    // The dropdown keeps the full id.
+    const rawLabel = selected?.label ?? (agentRuntime.externalModel || 'default')
+    const slash = rawLabel.lastIndexOf('/')
+    const base = slash >= 0 ? rawLabel.slice(slash + 1) : rawLabel
     // Append the active thinking level (when set to a non-default level) so it's visible on the pill.
     const reasoning = reasoningOptions.find((o) => o.id === currentReasoning)
     if (reasoning && currentReasoning !== 'default') {
