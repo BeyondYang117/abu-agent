@@ -1,7 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use tauri::AppHandle;
 use uuid::Uuid;
@@ -154,6 +154,43 @@ pub fn managed_session_path(_app: &AppHandle, _conversation_id: &str) -> Option<
     None
 }
 
-pub fn is_managed_session_file(_path: &Path) -> bool {
-    false
+// ---------------------------------------------------------------------------------------------
+// Phase 2: persisted handle for a live rich-protocol session, so a conversation can RESUME its
+// native thread/session after an app restart. Stored separately from ExternalAgentSession (which
+// drives claude's CLI `--resume`) to avoid clobbering it.
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LiveSessionHandle {
+    pub agent_id: String,
+    /// `"codex_app_server"` | `"acp_json_rpc"`.
+    pub protocol: String,
+    /// Native thread id (codex) / session id (ACP).
+    pub native_id: String,
+    pub cwd: String,
+}
+
+fn live_handle_path(app: &AppHandle, conversation_id: &str) -> Result<PathBuf, String> {
+    Ok(sessions_dir(app)?.join(format!("live-{conversation_id}.json")))
+}
+
+pub fn load_live_handle(app: &AppHandle, conversation_id: &str) -> Option<LiveSessionHandle> {
+    let raw = fs::read_to_string(live_handle_path(app, conversation_id).ok()?).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+pub fn save_live_handle(
+    app: &AppHandle,
+    conversation_id: &str,
+    handle: &LiveSessionHandle,
+) -> Result<(), String> {
+    let path = live_handle_path(app, conversation_id)?;
+    let raw = serde_json::to_string_pretty(handle).map_err(|e| e.to_string())?;
+    fs::write(path, raw).map_err(|e| e.to_string())
+}
+
+pub fn clear_live_handle(app: &AppHandle, conversation_id: &str) {
+    if let Ok(path) = live_handle_path(app, conversation_id) {
+        let _ = fs::remove_file(path);
+    }
 }

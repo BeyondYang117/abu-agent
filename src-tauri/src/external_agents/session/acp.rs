@@ -3,10 +3,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use crate::external_agents::session::live::SessionCommand;
 use crate::external_agents::stream::usage_from_numbers;
 use crate::external_agents::types::{
     ExternalCliSlashCommand, RuntimeModelOption, UnifiedAgentEvent, default_model_option,
@@ -851,9 +853,456 @@ pub async fn run_acp_session(
     Ok(())
 }
 
+// ===========================================================================================
+// Persistent ACP session (Phase 2): keep the agent process alive across turns. Reuses the
+// same `apply_acp_session_update` mapping + permission/usage helpers as the one-shot driver.
+// ===========================================================================================
+
+/// A live ACP connection: one `session/new` (or `session/load`) + `set_model`, then many
+/// `session/prompt` turns over the same process. Owned exclusively by its actor task.
+pub struct AcpSession {
+    child: Child,
+    stdin: ChildStdin,
+    reader: Lines<BufReader<ChildStdout>>,
+    session_id: String,
+    next_id: u64,
+}
+
+impl AcpSession {
+    pub async fn connect(
+        resolved_bin: &Path,
+        args: &[String],
+        cwd: &Path,
+        model: Option<&str>,
+        mcp_servers: &[AcpMcpServer],
+        resume_session: Option<&str>,
+    ) -> Result<Self, String> {
+        let mut child = Command::new(resolved_bin)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("spawn acp agent: {e}"))?;
+        let mut stdin = child.stdin.take().ok_or_else(|| "stdin unavailable".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "stdout unavailable".to_string())?;
+        let mut reader = BufReader::new(stdout).lines();
+
+        write_rpc(
+            &mut stdin,
+            1,
+            "initialize",
+            json!({
+                "protocolVersion": ACP_PROTOCOL_VERSION,
+                "clientCapabilities": { "terminal": false },
+                "clientInfo": { "name": "kivio", "version": "external-agents" },
+            }),
+        )
+        .await?;
+        acp_read_until_id(&mut reader, &mut stdin, 1, Duration::from_secs(15)).await?;
+
+        // session/new for a fresh session, session/load to resume a prior one.
+        let mut next_id: u64 = 2;
+        let (method, params) = match resume_session.filter(|s| !s.is_empty()) {
+            Some(sid) => {
+                let mut p = build_session_new_params(cwd, mcp_servers);
+                p["sessionId"] = json!(sid);
+                ("session/load", p)
+            }
+            None => ("session/new", build_session_new_params(cwd, mcp_servers)),
+        };
+        write_rpc(&mut stdin, next_id, method, params).await?;
+        let result =
+            acp_read_until_id(&mut reader, &mut stdin, next_id, Duration::from_secs(20)).await?;
+        next_id += 1;
+
+        let session_id = match resume_session.filter(|s| !s.is_empty()) {
+            Some(sid) => sid.to_string(),
+            None => result
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| "invalid session/new response".to_string())?,
+        };
+
+        // Optional model selection (set_config_option / set_model), mirroring run_acp_session.
+        if let Some(chosen) = model.filter(|m| !m.is_empty() && *m != "default") {
+            let mut model_config_id: Option<String> = None;
+            if let Some(config_options) = result.get("configOptions").and_then(|v| v.as_array()) {
+                for raw in config_options {
+                    if let Some(option) = raw.as_object() {
+                        let id = option.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        if id == "model"
+                            || option.get("category").and_then(|v| v.as_str()) == Some("model")
+                        {
+                            model_config_id = Some(id.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+            let (set_method, set_params) = match &model_config_id {
+                Some(cfg) => (
+                    "session/set_config_option",
+                    json!({ "sessionId": session_id, "configId": cfg, "value": chosen }),
+                ),
+                None => (
+                    "session/set_model",
+                    json!({ "sessionId": session_id, "modelId": chosen }),
+                ),
+            };
+            write_rpc(&mut stdin, next_id, set_method, set_params).await?;
+            // Best-effort: wait for the ack but don't fail the session if the agent ignores it.
+            let _ = acp_read_until_id(&mut reader, &mut stdin, next_id, Duration::from_secs(10)).await;
+            next_id += 1;
+        }
+
+        Ok(Self {
+            child,
+            stdin,
+            reader,
+            session_id,
+            next_id,
+        })
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Run one prompt turn over the live session. Emits events into `events`; an incoming
+    /// `Cancel` on `control` sends `session/cancel` without killing the process.
+    pub async fn run_turn(
+        &mut self,
+        prompt: &str,
+        events: &mpsc::Sender<UnifiedAgentEvent>,
+        control: &mut mpsc::Receiver<SessionCommand>,
+    ) -> Result<(), String> {
+        let prompt_id = self.next_id;
+        self.next_id += 1;
+        write_rpc(
+            &mut self.stdin,
+            prompt_id,
+            "session/prompt",
+            json!({
+                "sessionId": self.session_id,
+                "prompt": [{ "type": "text", "text": prompt }],
+            }),
+        )
+        .await?;
+        let _ = events
+            .send(UnifiedAgentEvent::Status {
+                label: "waiting_for_first_output".to_string(),
+                model: None,
+            })
+            .await;
+
+        let mut emitted_text = String::new();
+        let mut emitted_tools: HashSet<String> = HashSet::new();
+
+        loop {
+            match control.try_recv() {
+                Ok(SessionCommand::Cancel) => {
+                    let cid = self.next_id;
+                    self.next_id += 1;
+                    let _ = write_rpc(
+                        &mut self.stdin,
+                        cid,
+                        "session/cancel",
+                        json!({ "sessionId": self.session_id }),
+                    )
+                    .await;
+                    return Err("cancelled".to_string());
+                }
+                Ok(SessionCommand::Close) => return Err("closed".to_string()),
+                Ok(SessionCommand::RunTurn { done, .. }) => {
+                    let _ = done.send(Err("session busy".to_string()));
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    return Err("control channel closed".to_string())
+                }
+            }
+
+            let line = match timeout(Duration::from_millis(200), self.reader.next_line()).await {
+                Ok(Ok(Some(l))) => l,
+                Ok(Ok(None)) => return Err("ACP session exited mid-turn".to_string()),
+                Ok(Err(e)) => return Err(e.to_string()),
+                Err(_) => continue,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if let Some(method) = value.get("method").and_then(|v| v.as_str()) {
+                if method == "session/request_permission" {
+                    let option_id = choose_permission_outcome(
+                        value.get("params").and_then(|p| p.get("options")),
+                    );
+                    if let (Some(id), Some(option_id)) = (value.get("id"), option_id) {
+                        write_rpc_result(
+                            &mut self.stdin,
+                            id,
+                            json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
+                        )
+                        .await?;
+                    }
+                    continue;
+                }
+                if method == "session/update" {
+                    if let Some(update) = value
+                        .get("params")
+                        .and_then(|p| p.get("update"))
+                        .and_then(|v| v.as_object())
+                    {
+                        let mut buf: Vec<UnifiedAgentEvent> = Vec::new();
+                        acp_apply_turn_update(update, &mut emitted_text, &mut emitted_tools, &mut |e| {
+                            buf.push(e)
+                        });
+                        for e in buf {
+                            let _ = events.send(e).await;
+                        }
+                    }
+                    continue;
+                }
+                continue;
+            }
+
+            if let Some(err) = rpc_error_message(&value) {
+                if value.get("id").and_then(|v| v.as_u64()) == Some(prompt_id) {
+                    return Err(err);
+                }
+                continue;
+            }
+
+            if value.get("id").and_then(|v| v.as_u64()) == Some(prompt_id) {
+                if let Some(usage) = value
+                    .get("result")
+                    .and_then(|r| r.get("usage"))
+                    .and_then(format_acp_usage)
+                {
+                    let _ = events.send(UnifiedAgentEvent::Usage { usage }).await;
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    pub async fn close(mut self) {
+        let _ = self.stdin.shutdown().await;
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
+    }
+}
+
+/// Map one ACP `session/update` to events (text / thought / tool), shared by the persistent
+/// turn loop. Mirrors the inline handling in `run_acp_session`.
+fn acp_apply_turn_update(
+    update: &serde_json::Map<String, Value>,
+    emitted_text: &mut String,
+    emitted_tools: &mut HashSet<String>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+) {
+    let session_update = update.get("sessionUpdate").and_then(|v| v.as_str()).unwrap_or("");
+    if session_update == "agent_thought_chunk" {
+        if let Some(text) = update.get("content").and_then(|c| c.get("text")).and_then(|v| v.as_str())
+        {
+            if !text.is_empty() {
+                sink(UnifiedAgentEvent::ThinkingDelta { delta: text.to_string() });
+            }
+        }
+        return;
+    }
+    if session_update == "agent_message_chunk" {
+        if let Some(text) = update.get("content").and_then(|c| c.get("text")).and_then(|v| v.as_str())
+        {
+            if !text.is_empty() {
+                let delta = if text.starts_with(emitted_text.as_str()) {
+                    text[emitted_text.len()..].to_string()
+                } else {
+                    text.to_string()
+                };
+                if !delta.is_empty() {
+                    emitted_text.push_str(&delta);
+                    sink(UnifiedAgentEvent::TextDelta { delta });
+                }
+            }
+        }
+        return;
+    }
+    if apply_acp_session_update(update, emitted_tools, &mut |e| sink(e)) {
+        return;
+    }
+    sink(UnifiedAgentEvent::Status {
+        label: session_update.to_string(),
+        model: None,
+    });
+}
+
+/// Read ACP JSON-RPC lines until the response for `target_id`, auto-answering permission
+/// requests and skipping notifications.
+async fn acp_read_until_id(
+    reader: &mut Lines<BufReader<ChildStdout>>,
+    stdin: &mut ChildStdin,
+    target_id: u64,
+    overall: Duration,
+) -> Result<Value, String> {
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > overall {
+            return Err("ACP handshake timeout".to_string());
+        }
+        let line = match timeout(Duration::from_millis(200), reader.next_line()).await {
+            Ok(Ok(Some(l))) => l,
+            Ok(Ok(None)) => return Err("ACP agent exited during handshake".to_string()),
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(method) = value.get("method").and_then(|v| v.as_str()) {
+            if method == "session/request_permission" {
+                let option_id =
+                    choose_permission_outcome(value.get("params").and_then(|p| p.get("options")));
+                if let (Some(id), Some(option_id)) = (value.get("id"), option_id) {
+                    write_rpc_result(
+                        stdin,
+                        id,
+                        json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
+                    )
+                    .await?;
+                }
+            }
+            continue; // notification or handled request
+        }
+        if let Some(err) = rpc_error_message(&value) {
+            if value.get("id").and_then(|v| v.as_u64()) == Some(target_id) {
+                return Err(err);
+            }
+            continue;
+        }
+        if value.get("id").and_then(|v| v.as_u64()) == Some(target_id) {
+            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+}
+
+/// Spawn the actor task owning a connected ACP session.
+pub fn spawn_acp_session_actor(mut session: AcpSession) -> mpsc::Sender<SessionCommand> {
+    let (tx, mut rx) = mpsc::channel::<SessionCommand>(8);
+    tokio::spawn(async move {
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                SessionCommand::RunTurn {
+                    prompt,
+                    events,
+                    done,
+                    ..
+                } => {
+                    let result = session.run_turn(&prompt, &events, &mut rx).await;
+                    let _ = done.send(result);
+                }
+                SessionCommand::Cancel => {}
+                SessionCommand::Close => {
+                    session.close().await;
+                    return;
+                }
+            }
+        }
+        session.close().await;
+    });
+    tx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Live cross-turn continuity over ACP: connect once to `cursor-agent acp`, run two prompt
+    /// turns on the SAME process, and confirm turn 2 recalls a fact from turn 1 — proving the ACP
+    /// session persists between turns (Phase 2). Requires a logged-in `cursor-agent` + network.
+    #[tokio::test]
+    #[ignore = "requires live cursor-agent login + network"]
+    async fn acp_persistent_session_remembers_across_turns() {
+        use crate::external_agents::session::live::SessionCommand;
+        use tokio::sync::{mpsc, oneshot};
+
+        let bin = which_bin("cursor-agent").expect("cursor-agent on PATH");
+        let cwd = std::env::temp_dir();
+        let session = AcpSession::connect(&bin, &["acp".to_string()], &cwd, None, &[], None)
+            .await
+            .expect("connect cursor-agent acp");
+        let sid = session.session_id().to_string();
+        assert!(!sid.is_empty());
+        let control = spawn_acp_session_actor(session);
+
+        async fn one_turn(control: &mpsc::Sender<SessionCommand>, prompt: &str) -> String {
+            let (etx, mut erx) = mpsc::channel::<UnifiedAgentEvent>(64);
+            let (dtx, drx) = oneshot::channel();
+            control
+                .send(SessionCommand::RunTurn {
+                    prompt: prompt.to_string(),
+                    model: None,
+                    reasoning: None,
+                    events: etx,
+                    done: dtx,
+                })
+                .await
+                .unwrap();
+            let mut text = String::new();
+            let mut drx = drx;
+            loop {
+                tokio::select! {
+                    biased;
+                    r = &mut drx => {
+                        while let Ok(e) = erx.try_recv() {
+                            if let UnifiedAgentEvent::TextDelta { delta } = e { text.push_str(&delta); }
+                        }
+                        r.unwrap().unwrap();
+                        break;
+                    }
+                    ev = erx.recv() => {
+                        if let Some(UnifiedAgentEvent::TextDelta { delta }) = ev { text.push_str(&delta); }
+                    }
+                }
+            }
+            text
+        }
+
+        let _t1 = one_turn(&control, "Remember this secret number: 42. Just reply OK.").await;
+        let t2 = one_turn(
+            &control,
+            "What was the secret number I just gave you? Reply with only the digits.",
+        )
+        .await;
+        eprintln!("acp turn2 reply: {t2:?}");
+        assert!(t2.contains("42"), "turn 2 should recall 42 from turn 1, got: {t2:?}");
+        let _ = control.send(SessionCommand::Close).await;
+    }
+
+    fn which_bin(name: &str) -> Option<std::path::PathBuf> {
+        let out = std::process::Command::new("which").arg(name).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if p.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(p))
+        }
+    }
 
     #[test]
     fn apply_acp_session_update_emits_tool_use_and_result() {

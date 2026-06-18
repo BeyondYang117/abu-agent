@@ -23,7 +23,7 @@ use crate::external_agents::prompt::{
     compose_external_prompt, compose_external_prompt_passthrough, cwd_hint, is_cli_slash_input,
 };
 use crate::external_agents::registry::get_agent_def;
-use crate::external_agents::session::acp::{build_acp_mcp_servers, run_acp_session};
+use crate::external_agents::session::acp::{build_acp_mcp_servers, run_acp_session, AcpMcpServer};
 use crate::external_agents::session::codex_app_server::run_codex_app_server_session;
 use crate::external_agents::session::pi_rpc::run_pi_rpc_session;
 use crate::external_agents::session::{persist_delivered_session, resolve_agent_resume_context};
@@ -213,9 +213,12 @@ pub async fn run_external_cli_reply(
     let run_id = format!("ext-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
 
-    // Phase 2: codex app-server keeps the process alive across turns via the live-session
-    // registry. Other protocols still spawn one child per turn.
-    let persistent = matches!(def.stream_format, StreamFormat::CodexAppServer);
+    // Phase 2: codex app-server and ACP-family agents keep the process alive across turns via
+    // the live-session registry. Other protocols still spawn one child per turn.
+    let persistent = matches!(
+        def.stream_format,
+        StreamFormat::CodexAppServer | StreamFormat::AcpJsonRpc
+    );
     let mut spawned_opt = if persistent {
         None
     } else {
@@ -258,15 +261,23 @@ pub async fn run_external_cli_reply(
     let cancel_check = || !state.is_chat_generation_active(&conversation_id, run_generation);
 
     let read_result = if persistent {
+        let persistent_mcp = if def.external_mcp_injection == Some(ExternalMcpInjection::AcpMerge) {
+            build_acp_mcp_servers(&settings.chat_tools.servers)
+        } else {
+            vec![]
+        };
         run_persistent_turn(
+            app,
             state,
             &conversation_id,
             &agent_id,
+            def.stream_format,
             &resolved_bin,
             &args,
             &cwd,
             conversation.agent_runtime.external_model.clone(),
             conversation.agent_runtime.external_reasoning.clone(),
+            persistent_mcp,
             &composed.full_prompt,
             latest_user_message,
             &mut emit_event,
@@ -513,19 +524,22 @@ impl StreamSegmentTracker {
 }
 
 /// Phase 2: run one turn against a persistent live session, reusing the conversation's existing
-/// session or connecting a new one. The CLI process is kept alive in the registry between turns,
-/// so a reused session sends only the latest user message (the server holds prior context),
-/// while a fresh session gets the full composed prompt (instructions + first message).
+/// session, resuming a persisted one after a restart, or connecting fresh. The CLI process is kept
+/// alive in the registry between turns, so a reused/resumed session sends only the latest user
+/// message (the server holds prior context), while a fresh session gets the full composed prompt.
 #[allow(clippy::too_many_arguments)]
 async fn run_persistent_turn<E, C>(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     conversation_id: &str,
     agent_id: &str,
+    protocol: StreamFormat,
     resolved_bin: &std::path::Path,
     args: &[String],
     cwd: &std::path::Path,
     model: Option<String>,
     reasoning: Option<String>,
+    mcp_servers: Vec<AcpMcpServer>,
     first_prompt: &str,
     reuse_prompt: &str,
     emit: &mut E,
@@ -535,40 +549,62 @@ where
     E: FnMut(UnifiedAgentEvent),
     C: Fn() -> bool,
 {
-    use crate::external_agents::session::codex_app_server::{
-        spawn_codex_session_actor, CodexAppServerSession,
-    };
     use crate::external_agents::session::live::{LiveSession, SessionCommand};
+    use crate::external_agents::session::{
+        clear_live_handle, load_live_handle, save_live_handle, LiveSessionHandle,
+    };
     use tokio::sync::{mpsc, oneshot};
 
     let cwd_str = cwd.to_string_lossy().to_string();
+    let protocol_tag = persistent_protocol_tag(protocol);
 
-    // Reuse an existing live session, or connect a new one.
+    // 1. Reuse a live session already in the registry; 2. resume a persisted one; 3. fresh.
     let (control, prompt) =
         match state.external_live_session_control(conversation_id, agent_id, &cwd_str) {
             Some(control) => (control, reuse_prompt.to_string()),
             None => {
-                let session = CodexAppServerSession::connect(
+                let resume_native = load_live_handle(app, conversation_id)
+                    .filter(|h| {
+                        h.agent_id == agent_id && h.cwd == cwd_str && h.protocol == protocol_tag
+                    })
+                    .map(|h| h.native_id);
+                let (control, native_id, resumed) = connect_persistent_session(
+                    protocol,
                     resolved_bin,
                     args,
                     cwd,
                     model.as_deref(),
-                    None,
+                    &mcp_servers,
+                    resume_native,
                 )
                 .await?;
-                let native_id = Some(session.thread_id().to_string());
-                let control = spawn_codex_session_actor(session);
+                let _ = save_live_handle(
+                    app,
+                    conversation_id,
+                    &LiveSessionHandle {
+                        agent_id: agent_id.to_string(),
+                        protocol: protocol_tag.to_string(),
+                        native_id: native_id.clone(),
+                        cwd: cwd_str.clone(),
+                    },
+                );
                 state.register_external_live_session(
                     conversation_id.to_string(),
                     LiveSession {
                         control: control.clone(),
-                        protocol: StreamFormat::CodexAppServer,
+                        protocol,
                         agent_id: agent_id.to_string(),
                         cwd: cwd_str.clone(),
-                        native_id,
+                        native_id: Some(native_id),
                     },
                 );
-                (control, first_prompt.to_string())
+                // A resumed session already holds history → send only the latest message.
+                let prompt = if resumed {
+                    reuse_prompt.to_string()
+                } else {
+                    first_prompt.to_string()
+                };
+                (control, prompt)
             }
         };
 
@@ -586,6 +622,7 @@ where
         .is_err()
     {
         state.remove_external_live_session(conversation_id);
+        clear_live_handle(app, conversation_id);
         return Err("外部 CLI 会话已结束，请重试".to_string());
     }
 
@@ -600,8 +637,13 @@ where
                     emit(event);
                 }
                 let outcome = result.unwrap_or_else(|_| Err("session actor dropped".to_string()));
-                if outcome.is_err() {
+                // A non-cancel failure means the process likely died — drop the live session and
+                // its persisted handle so the next turn connects fresh.
+                if let Err(ref e) = outcome {
                     state.remove_external_live_session(conversation_id);
+                    if e != "cancelled" {
+                        clear_live_handle(app, conversation_id);
+                    }
                 }
                 return outcome;
             }
@@ -617,6 +659,70 @@ where
             cancel_sent = true;
             let _ = control.send(SessionCommand::Cancel).await;
         }
+    }
+}
+
+fn persistent_protocol_tag(protocol: StreamFormat) -> &'static str {
+    match protocol {
+        StreamFormat::CodexAppServer => "codex_app_server",
+        StreamFormat::AcpJsonRpc => "acp_json_rpc",
+        _ => "unknown",
+    }
+}
+
+/// Connect (or resume) a persistent protocol session, returning its control channel, native id,
+/// and whether a resume actually succeeded. Falls back to a fresh session if resume fails.
+async fn connect_persistent_session(
+    protocol: StreamFormat,
+    resolved_bin: &std::path::Path,
+    args: &[String],
+    cwd: &std::path::Path,
+    model: Option<&str>,
+    mcp_servers: &[AcpMcpServer],
+    resume_native: Option<String>,
+) -> Result<
+    (
+        tokio::sync::mpsc::Sender<crate::external_agents::session::live::SessionCommand>,
+        String,
+        bool,
+    ),
+    String,
+> {
+    use crate::external_agents::session::acp::{spawn_acp_session_actor, AcpSession};
+    use crate::external_agents::session::codex_app_server::{
+        spawn_codex_session_actor, CodexAppServerSession,
+    };
+
+    match protocol {
+        StreamFormat::CodexAppServer => {
+            if let Some(tid) = resume_native.as_deref() {
+                if let Ok(session) =
+                    CodexAppServerSession::connect(resolved_bin, args, cwd, model, Some(tid)).await
+                {
+                    let id = session.thread_id().to_string();
+                    return Ok((spawn_codex_session_actor(session), id, true));
+                }
+            }
+            let session =
+                CodexAppServerSession::connect(resolved_bin, args, cwd, model, None).await?;
+            let id = session.thread_id().to_string();
+            Ok((spawn_codex_session_actor(session), id, false))
+        }
+        StreamFormat::AcpJsonRpc => {
+            if let Some(sid) = resume_native.as_deref() {
+                if let Ok(session) =
+                    AcpSession::connect(resolved_bin, args, cwd, model, mcp_servers, Some(sid)).await
+                {
+                    let id = session.session_id().to_string();
+                    return Ok((spawn_acp_session_actor(session), id, true));
+                }
+            }
+            let session =
+                AcpSession::connect(resolved_bin, args, cwd, model, mcp_servers, None).await?;
+            let id = session.session_id().to_string();
+            Ok((spawn_acp_session_actor(session), id, false))
+        }
+        _ => Err("protocol does not support persistent sessions".to_string()),
     }
 }
 
