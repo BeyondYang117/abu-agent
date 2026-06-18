@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
 
+mod external_agents;
 mod api;
 mod agents;
 mod capture_geometry;
@@ -377,6 +378,8 @@ fn main() {
             chat::commands::chat_update_message,
             chat::commands::chat_delete_message,
             chat::commands::chat_regenerate_message,
+            external_agents::commands::chat_detect_external_agents,
+            external_agents::commands::chat_set_agent_runtime,
             chat::memory::chat_memory_get,
             chat::memory::chat_memory_save,
             chat::memory::chat_memory_open_folder,

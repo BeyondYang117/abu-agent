@@ -261,6 +261,7 @@ pub(crate) fn create_chat_conversation_internal(
                 context_state: ConversationContextState::default(),
                 agent_todo_state: AgentTodoState::default(),
                 agent_plan_state: AgentPlanState::default(),
+                agent_runtime: settings.chat.default_agent_runtime.clone(),
             };
 
             save_conversation(&app, &conversation)?;
@@ -498,6 +499,7 @@ pub(crate) fn chat_create_builder_conversation(
         context_state: ConversationContextState::default(),
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
+        agent_runtime: crate::chat::AgentRuntimeConfig::default(),
     };
     save_conversation(&app, &conversation)?;
     Ok(serde_json::json!({
@@ -1152,6 +1154,26 @@ async fn complete_assistant_reply(
     active_skill_id: Option<&str>,
     entry: crate::chat::agent::AgentRunEntry,
 ) -> Result<(), String> {
+    if conversation.agent_runtime.is_external() {
+        let latest_user = conversation
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        return crate::external_agents::run_external_cli_reply(
+            app,
+            state,
+            conversation,
+            title_from_first_user,
+            &latest_user,
+            active_skill_id,
+            entry,
+        )
+        .await;
+    }
+
     let settings = state.settings_read().clone();
     let provider = settings
         .get_provider(&conversation.provider_id)
@@ -1675,7 +1697,7 @@ fn direct_image_generation_prompt(
     Ok(truncate_chars(prompt, 8000))
 }
 
-async fn push_assistant_message(
+pub(crate) async fn push_assistant_message(
     app: &AppHandle,
     state: &State<'_, AppState>,
     settings: &Settings,
@@ -4105,7 +4127,7 @@ async fn wait_for_chat_cancel(state: &AppState, conversation_id: &str, generatio
     }
 }
 
-fn emit_chat_tool_record(
+pub(crate) fn emit_chat_tool_record(
     app: &AppHandle,
     conversation_id: &str,
     run_id: &str,
@@ -4140,7 +4162,7 @@ fn emit_chat_tool_record(
     );
 }
 
-fn emit_chat_stream_delta(
+pub(crate) fn emit_chat_stream_delta(
     app: &AppHandle,
     conversation_id: &str,
     run_id: &str,
@@ -4171,7 +4193,7 @@ fn emit_chat_stream_delta(
     );
 }
 
-fn emit_chat_stream_done(
+pub(crate) fn emit_chat_stream_done(
     app: &AppHandle,
     conversation_id: &str,
     run_id: &str,
@@ -5460,6 +5482,7 @@ mod tests {
             },
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
+            agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         }
     }
 
@@ -5510,6 +5533,7 @@ mod tests {
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
+            agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
         let result = AuxiliaryVisionResult {
             provider_name: "Vision Provider".to_string(),
@@ -5635,6 +5659,7 @@ mod tests {
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
+            agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 
         let messages = build_chat_api_messages("system", &conversation, None, None, &[])
@@ -5749,6 +5774,7 @@ mod tests {
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
+            agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 
         let messages = build_chat_api_messages("system", &conversation, None, None, &[])

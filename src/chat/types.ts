@@ -361,6 +361,31 @@ export interface AgentPlanState {
   updatedAt?: number
 }
 
+export interface AgentRuntimeConfig {
+  kind: 'builtin' | 'external'
+  externalAgentId?: string | null
+  external_agent_id?: string | null
+  externalModel?: string | null
+  external_model?: string | null
+  externalReasoning?: string | null
+  external_reasoning?: string | null
+}
+
+export interface DetectedExternalAgent {
+  id: string
+  name: string
+  available: boolean
+  path?: string | null
+  version?: string | null
+  models: Array<{ id: string; label: string }>
+  reasoningOptions?: Array<{ id: string; label: string }>
+  reasoning_options?: Array<{ id: string; label: string }>
+  authStatus?: string | null
+  auth_status?: string | null
+  externalMcpInjection?: string | null
+  external_mcp_injection?: string | null
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -385,6 +410,8 @@ export interface Conversation {
   agentTodoState?: AgentTodoState
   agent_plan_state?: AgentPlanState
   agentPlanState?: AgentPlanState
+  agent_runtime?: AgentRuntimeConfig
+  agentRuntime?: AgentRuntimeConfig
 }
 
 export interface ConversationListItem {

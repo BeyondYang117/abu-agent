@@ -280,6 +280,50 @@ pub struct Attachment {
     pub path: String, // 相对于对话附件目录的路径
 }
 
+/// Agent 运行时种类：内置 loop 或外部 CLI。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRuntimeKind {
+    #[default]
+    Builtin,
+    External,
+}
+
+/// 对话级 Agent 运行时配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentRuntimeConfig {
+    #[serde(default)]
+    pub kind: AgentRuntimeKind,
+    #[serde(default)]
+    pub external_agent_id: Option<String>,
+    #[serde(default)]
+    pub external_model: Option<String>,
+    #[serde(default)]
+    pub external_reasoning: Option<String>,
+}
+
+impl Default for AgentRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            kind: AgentRuntimeKind::Builtin,
+            external_agent_id: None,
+            external_model: None,
+            external_reasoning: None,
+        }
+    }
+}
+
+impl AgentRuntimeConfig {
+    pub fn is_external(&self) -> bool {
+        self.kind == AgentRuntimeKind::External
+            && self
+                .external_agent_id
+                .as_ref()
+                .is_some_and(|id| !id.trim().is_empty())
+    }
+}
+
 /// 完整对话数据（存储在 conversations/{id}.json）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
@@ -288,6 +332,8 @@ pub struct Conversation {
     pub provider_id: String,
     pub model: String,
     pub messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub agent_runtime: AgentRuntimeConfig,
     #[serde(default)]
     pub active_skill_id: Option<String>,
     #[serde(default)]
@@ -331,6 +377,8 @@ pub struct ConversationListItem {
     pub assistant_id: Option<String>,
     #[serde(default)]
     pub assistant_name: Option<String>,
+    #[serde(default)]
+    pub agent_runtime: AgentRuntimeConfig,
 }
 
 /// 对话索引文件结构
@@ -476,6 +524,7 @@ impl From<&Conversation> for ConversationListItem {
                 .assistant_snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.name.clone()),
+            agent_runtime: conv.agent_runtime.clone(),
         }
     }
 }

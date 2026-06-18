@@ -6,10 +6,17 @@ import { ChatTitlebarActions } from './ChatTitlebarActions'
 import type { AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
+import { ExternalModelSelector, RuntimePicker } from './RuntimePicker'
 import { WindowControls } from './WindowControls'
 import { ContextIndicator } from './ContextIndicator'
 import { AgentTodoIndicator } from './AgentTodoIndicator'
-import { chatApi } from './api'
+import {
+  agentRuntimesEqual,
+  BUILTIN_AGENT_RUNTIME,
+  chatApi,
+  normalizeAgentRuntime,
+  type AgentRuntimeConfig,
+} from './api'
 import {
   chatTitlebarMacInsetClass,
   chatTitlebarRowClass,
@@ -477,6 +484,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [sidebarProfileRefreshKey, setSidebarProfileRefreshKey] = useState(0)
   const [draftProviderId, setDraftProviderId] = useState('')
   const [draftModel, setDraftModel] = useState('')
+  const [draftAgentRuntime, setDraftAgentRuntime] = useState<AgentRuntimeConfig>(
+    BUILTIN_AGENT_RUNTIME,
+  )
   const [skills, setSkills] = useState<SkillMeta[]>([])
   const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('chat')
@@ -762,6 +772,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     locallyCancelledRunIdRef.current = null
   }, [])
 
+  const activeAgentRuntime = currentConversation
+    ? normalizeAgentRuntime(currentConversation)
+    : draftAgentRuntime
+  const usesExternalRuntime = activeAgentRuntime.kind === 'external' && !!activeAgentRuntime.externalAgentId
   const currentConversationIsBlank = isPlainBlankConversation(currentConversation)
   const activeProviderId = currentConversation && !currentConversationIsBlank
     ? currentConversation.provider_id
@@ -1744,6 +1758,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setAssistantStreamStatsByMessageId({})
     setDraftProviderId(activeProviderId)
     setDraftModel(activeModel)
+    setDraftAgentRuntime(activeAgentRuntime)
     currentConversationIdRef.current = null
     forgetRememberedChatRoute()
     applyConversation(null)
@@ -1756,6 +1771,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     setContextCompressing(false)
     setStreamError('')
   }, [
+    activeAgentRuntime,
     activeModel,
     activeProviderId,
     applyConversation,
@@ -1874,18 +1890,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const ensureConversationForAgentPlan = useCallback(async () => {
     if (currentConversation) return currentConversation
-    const conversation = await chatApi.createConversation(
+    let conversation = await chatApi.createConversation(
       activeProviderId || undefined,
       activeModel || undefined,
       selectedProject?.name,
       selectedProject?.id ?? null,
     )
+    if (!agentRuntimesEqual(normalizeAgentRuntime(conversation), draftAgentRuntime)) {
+      conversation = await chatApi.setAgentRuntime(conversation.id, draftAgentRuntime)
+    }
     currentConversationIdRef.current = conversation.id
     applyConversation(conversation)
     syncConversationRoute(conversation.id)
     refreshSidebar()
     return conversation
-  }, [activeModel, activeProviderId, applyConversation, currentConversation, refreshSidebar, selectedProject?.id, selectedProject?.name, syncConversationRoute])
+  }, [activeModel, activeProviderId, applyConversation, currentConversation, draftAgentRuntime, refreshSidebar, selectedProject?.id, selectedProject?.name, syncConversationRoute])
 
   const handleAgentPlanModeChange = useCallback(async (mode: AgentPlanMode) => {
     try {
@@ -1996,6 +2015,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       } catch (err) {
         console.error('Failed to create conversation before send:', err)
         setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
+        return false
+      }
+    }
+
+    if (!agentRuntimesEqual(normalizeAgentRuntime(conversation), draftAgentRuntime)) {
+      try {
+        conversation = await chatApi.setAgentRuntime(conversation.id, draftAgentRuntime)
+        applyConversation(conversation)
+      } catch (err) {
+        console.error('Failed to apply agent runtime before send:', err)
+        setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Agent 切换失败')
         return false
       }
     }
@@ -2118,6 +2148,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     clearConversationInFlight,
     clearStreamSnapshot,
     currentConversation,
+    draftAgentRuntime,
     effectiveSkillId,
     enabledSkills,
     ensureStreamSnapshot,
@@ -2398,6 +2429,29 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     [applyAssistantStreamStats, applyConversation, clearConversationInFlight, clearStreamSnapshot, currentConversation, ensureStreamSnapshot, finishStreamingRunWithConversation, flushPendingStreamDone, markConversationInFlight, refreshSidebar, reloadConversation, resetLocalCancellation, setStreamErrorForConversation, syncGeneratingConversationIds],
   )
 
+  const handleRuntimeChange = async (runtime: AgentRuntimeConfig) => {
+    setDraftAgentRuntime(runtime)
+    if (!currentConversation) return
+    try {
+      const updated = await chatApi.setAgentRuntime(currentConversation.id, runtime)
+      applyConversation(updated)
+    } catch (err) {
+      console.error('Failed to change agent runtime:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || 'Agent 切换失败')
+    }
+  }
+
+  const handleExternalModelChange = async (model: string, reasoning?: string | null) => {
+    if (!currentConversation) return
+    const next: AgentRuntimeConfig = {
+      ...activeAgentRuntime,
+      kind: 'external',
+      externalModel: model,
+      externalReasoning: reasoning ?? activeAgentRuntime.externalReasoning ?? null,
+    }
+    await handleRuntimeChange(next)
+  }
+
   const handleModelChange = async (providerId: string, model: string) => {
     setDraftProviderId(providerId)
     setDraftModel(model)
@@ -2649,11 +2703,24 @@ export default function Chat({ onSettingsChange }: ChatProps) {
               )}
               <div className="flex min-w-0 items-center gap-1.5">
                 <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
-                  <ModelSelector
-                    currentProviderId={activeProviderId}
-                    currentModel={activeModel}
-                    onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
+                  <RuntimePicker
+                    agentRuntime={activeAgentRuntime}
+                    onRuntimeChange={(runtime) => void handleRuntimeChange(runtime)}
                   />
+                </div>
+                <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
+                  {usesExternalRuntime ? (
+                    <ExternalModelSelector
+                      agentRuntime={activeAgentRuntime}
+                      onModelChange={(model, reasoning) => void handleExternalModelChange(model, reasoning)}
+                    />
+                  ) : (
+                    <ModelSelector
+                      currentProviderId={activeProviderId}
+                      currentModel={activeModel}
+                      onModelChange={(providerId, model) => void handleModelChange(providerId, model)}
+                    />
+                  )}
                 </div>
                 <div className="shrink-0" data-tauri-drag-region="false">
                   <ContextIndicator

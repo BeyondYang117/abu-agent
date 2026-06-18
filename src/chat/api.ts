@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { estimateTokens } from '../utils/tokens'
 import type {
+  AgentRuntimeConfig,
   ChatAssistant,
   ChatAssistantSnapshot,
   ChatProject,
@@ -9,8 +10,49 @@ import type {
   ConversationContextState,
   ConversationListItem,
   AgentPlanMode,
+  DetectedExternalAgent,
   PendingAttachment,
 } from './types'
+
+export type { DetectedExternalAgent, AgentRuntimeConfig }
+
+export const BUILTIN_AGENT_RUNTIME: AgentRuntimeConfig = {
+  kind: 'builtin',
+  externalAgentId: null,
+  externalModel: null,
+  externalReasoning: null,
+}
+
+export function normalizeAgentRuntime(
+  conversation?: Conversation | null,
+): AgentRuntimeConfig {
+  const raw = conversation?.agent_runtime ?? conversation?.agentRuntime
+  if (!raw || raw.kind === 'builtin') {
+    return { ...BUILTIN_AGENT_RUNTIME }
+  }
+  return {
+    kind: 'external',
+    externalAgentId: raw.externalAgentId ?? raw.external_agent_id ?? null,
+    externalModel: raw.externalModel ?? raw.external_model ?? 'default',
+    externalReasoning: raw.externalReasoning ?? raw.external_reasoning ?? null,
+  }
+}
+
+export function agentRuntimesEqual(
+  left: AgentRuntimeConfig,
+  right: AgentRuntimeConfig,
+): boolean {
+  const a = left.kind === 'external'
+    ? left
+    : BUILTIN_AGENT_RUNTIME
+  const b = right.kind === 'external'
+    ? right
+    : BUILTIN_AGENT_RUNTIME
+  return a.kind === b.kind
+    && (a.externalAgentId ?? null) === (b.externalAgentId ?? null)
+    && (a.externalModel ?? 'default') === (b.externalModel ?? 'default')
+    && (a.externalReasoning ?? null) === (b.externalReasoning ?? null)
+}
 
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -1136,5 +1178,55 @@ export const chatApi = {
   async cancelStream(conversationId: string): Promise<void> {
     if (!isTauriRuntime()) return
     await invoke<void>('chat_cancel_stream', { conversationId })
+  },
+
+  async detectExternalAgents(): Promise<DetectedExternalAgent[]> {
+    if (!isTauriRuntime()) {
+      return [
+        {
+          id: 'claude',
+          name: 'Claude Code',
+          available: false,
+          models: [{ id: 'default', label: 'Default' }],
+        },
+      ]
+    }
+    const result = await invoke<{ success: boolean; agents: DetectedExternalAgent[] }>(
+      'chat_detect_external_agents',
+    )
+    return result.agents ?? []
+  },
+
+  async setAgentRuntime(
+    conversationId: string,
+    agentRuntime: AgentRuntimeConfig,
+  ): Promise<Conversation> {
+    if (!isTauriRuntime()) {
+      const conversations = loadMockConversations()
+      const index = conversations.findIndex((item) => item.id === conversationId)
+      if (index < 0) throw new Error('Conversation not found')
+      conversations[index] = {
+        ...conversations[index],
+        agent_runtime: agentRuntime,
+        agentRuntime: agentRuntime,
+        updated_at: nowSeconds(),
+      }
+      saveMockConversations(conversations)
+      return conversations[index]
+    }
+    const payload = {
+      kind: agentRuntime.kind,
+      externalAgentId: agentRuntime.externalAgentId ?? null,
+      externalModel: agentRuntime.externalModel ?? null,
+      externalReasoning: agentRuntime.externalReasoning ?? null,
+    }
+    const result = await invoke<{ success: boolean; conversation: Conversation }>(
+      'chat_set_agent_runtime',
+      { conversationId, agentRuntime: payload },
+    )
+    if (!result.success) {
+      throw new Error('Failed to set agent runtime')
+    }
+    return result.conversation
   },
 }
