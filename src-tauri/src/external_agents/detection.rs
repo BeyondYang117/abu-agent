@@ -12,9 +12,18 @@ use crate::external_agents::types::{
 pub const EXTERNAL_AGENT_MODELS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 pub async fn detect_all_agents() -> Vec<DetectedAgent> {
-    let mut out = Vec::new();
-    for def in AGENT_DEFS {
-        out.push(detect_single_agent(def).await);
+    // Probe every CLI concurrently — each detection does a binary lookup + version + auth
+    // (5s timeout) + model probe, so serial detection stacked those latencies. Order is
+    // preserved by collecting the join handles in registry order.
+    let handles: Vec<_> = AGENT_DEFS
+        .iter()
+        .map(|def| tokio::spawn(detect_single_agent(def)))
+        .collect();
+    let mut out = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if let Ok(agent) = handle.await {
+            out.push(agent);
+        }
     }
     out
 }

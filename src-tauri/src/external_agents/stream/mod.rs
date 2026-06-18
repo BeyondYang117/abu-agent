@@ -17,7 +17,7 @@ pub fn create_stream_handler(
         StreamFormat::JsonEventStream => StreamHandler::Json(json_events::JsonEventStreamState::new(
             parser.unwrap_or(JsonEventParser::Codex),
         )),
-        StreamFormat::PiRpc | StreamFormat::AcpJsonRpc => {
+        StreamFormat::PiRpc | StreamFormat::AcpJsonRpc | StreamFormat::CodexAppServer => {
             StreamHandler::Json(json_events::JsonEventStreamState::new(JsonEventParser::Codex))
         }
     }

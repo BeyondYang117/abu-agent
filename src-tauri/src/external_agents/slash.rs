@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -10,9 +10,10 @@ use uuid::Uuid;
 use crate::chat::storage::load_conversation;
 use crate::external_agents::detection::detect_single_agent;
 use crate::external_agents::registry::get_agent_def;
+use crate::external_agents::session::acp::detect_acp_commands;
 use crate::external_agents::spawn::{parse_json_line, resolve_binary, spawn_agent, write_probe_stdin};
 use crate::external_agents::types::{
-    ExternalCliSlashCommand, RuntimeBuildOptions, RuntimeContext, StreamFormat, UnifiedAgentEvent,
+    ExternalCliSlashCommand, RuntimeBuildOptions, RuntimeContext, SlashStrategy, UnifiedAgentEvent,
 };
 use crate::external_agents::workspace::resolve_effective_cwd;
 use crate::state::AppState;
@@ -21,10 +22,6 @@ pub const SLASH_COMMANDS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 pub fn cache_key(agent_id: &str, cwd: &str) -> String {
     format!("{agent_id}:{cwd}")
-}
-
-pub fn agent_supports_slash_probe(stream_format: StreamFormat) -> bool {
-    matches!(stream_format, StreamFormat::ClaudeStreamJson)
 }
 
 pub fn parse_slash_commands_from_init(value: &Value) -> Vec<ExternalCliSlashCommand> {
@@ -126,64 +123,105 @@ pub async fn list_external_cli_slash_commands(
     conversation_id: Option<&str>,
 ) -> Result<(bool, Vec<ExternalCliSlashCommand>, Option<String>), String> {
     let def = get_agent_def(agent_id).ok_or_else(|| format!("未知外部 Agent: {agent_id}"))?;
-    if !agent_supports_slash_probe(def.stream_format) {
+
+    // Cheap, dependency-free strategies first — no CLI availability check needed.
+    if def.slash_strategy == SlashStrategy::None {
         return Ok((
             false,
             Vec::new(),
             Some(format!(
-                "{} 不支持从 CLI 探测斜杠命令，请直接输入 /命令",
+                "{} 以一次性模式运行，斜杠命令仅在其交互式终端中可用；可直接输入指令。",
                 def.name
             )),
         ));
     }
 
-    let detected = detect_single_agent(def).await;
-    if !detected.available {
-        return Err(format!(
-            "{} 未安装或不可用，请确认 CLI 在 PATH 中。",
-            def.name
-        ));
-    }
-
-    let resolved_bin = resolve_binary(def)
-        .await
-        .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
-
-    let cwd = if let Some(conversation_id) = conversation_id.filter(|id| !id.trim().is_empty()) {
-        let conversation = load_conversation(app, conversation_id)?;
-        let workspace = resolve_effective_cwd(
-            app,
-            conversation_id,
-            conversation.project_id.as_deref(),
-        )?;
-        workspace.cwd.to_string_lossy().into_owned()
-    } else {
-        std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| ".".to_string())
-    };
-
+    let cwd = resolve_slash_cwd(app, conversation_id)?;
     let key = cache_key(agent_id, &cwd);
     if let Some(cached) = state.get_cached_external_slash_commands(&key, SLASH_COMMANDS_CACHE_TTL) {
         return Ok((true, cached, None));
     }
 
-    let runtime_ctx = RuntimeContext {
-        cwd: Some(cwd.clone()),
-        extra_allowed_dirs: Vec::new(),
-        resume_session_id: None,
-        new_session_id: Some(Uuid::new_v4().to_string()),
-        include_partial_messages: false,
+    let commands = match def.slash_strategy {
+        SlashStrategy::ClaudeInit => {
+            let detected = detect_single_agent(def).await;
+            if !detected.available {
+                return Err(format!(
+                    "{} 未安装或不可用，请确认 CLI 在 PATH 中。",
+                    def.name
+                ));
+            }
+            let resolved_bin = resolve_binary(def)
+                .await
+                .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
+            let runtime_ctx = RuntimeContext {
+                cwd: Some(cwd.clone()),
+                extra_allowed_dirs: Vec::new(),
+                resume_session_id: None,
+                new_session_id: Some(Uuid::new_v4().to_string()),
+                include_partial_messages: false,
+            };
+            let build_options = RuntimeBuildOptions {
+                model: None,
+                reasoning: None,
+            };
+            let args = (def.build_args)(&runtime_ctx, &build_options, None);
+            probe_claude_slash_commands(&resolved_bin, Path::new(&cwd), &args).await?
+        }
+        SlashStrategy::Acp => {
+            let detected = detect_single_agent(def).await;
+            if !detected.available {
+                return Err(format!(
+                    "{} 未安装或不可用，请确认 CLI 在 PATH 中。",
+                    def.name
+                ));
+            }
+            let resolved_bin = resolve_binary(def)
+                .await
+                .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
+            let runtime_ctx = RuntimeContext {
+                cwd: Some(cwd.clone()),
+                extra_allowed_dirs: Vec::new(),
+                resume_session_id: None,
+                new_session_id: Some(Uuid::new_v4().to_string()),
+                include_partial_messages: false,
+            };
+            let build_options = RuntimeBuildOptions {
+                model: None,
+                reasoning: None,
+            };
+            let args = (def.build_args)(&runtime_ctx, &build_options, None);
+            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+            detect_acp_commands(&resolved_bin, &args_ref, Path::new(&cwd), 10)
+                .await
+                .unwrap_or_default()
+        }
+        SlashStrategy::None => unreachable!("None handled above"),
     };
-    let build_options = RuntimeBuildOptions {
-        model: None,
-        reasoning: None,
-    };
-    let args = (def.build_args)(&runtime_ctx, &build_options, None);
-    let cwd_path = PathBuf::from(&cwd);
-    let commands = probe_claude_slash_commands(&resolved_bin, &cwd_path, &args).await?;
+
+    if commands.is_empty() && def.slash_strategy == SlashStrategy::Acp {
+        return Ok((
+            true,
+            Vec::new(),
+            Some(format!("{} 未上报任何斜杠命令。", def.name)),
+        ));
+    }
+
     state.set_cached_external_slash_commands(key, commands.clone());
     Ok((true, commands, None))
+}
+
+fn resolve_slash_cwd(app: &AppHandle, conversation_id: Option<&str>) -> Result<String, String> {
+    if let Some(conversation_id) = conversation_id.filter(|id| !id.trim().is_empty()) {
+        let conversation = load_conversation(app, conversation_id)?;
+        let workspace =
+            resolve_effective_cwd(app, conversation_id, conversation.project_id.as_deref())?;
+        Ok(workspace.cwd.to_string_lossy().into_owned())
+    } else {
+        Ok(std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string()))
+    }
 }
 
 pub fn slash_commands_from_event(event: &UnifiedAgentEvent) -> Option<Vec<ExternalCliSlashCommand>> {

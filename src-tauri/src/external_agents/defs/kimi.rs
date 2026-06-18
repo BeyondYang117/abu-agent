@@ -42,6 +42,7 @@ pub const KIMI_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     models_from_stderr: false,
     model_probe: None,
     model_probe_args: None,
+    slash_strategy: super::super::types::SlashStrategy::None,
     env: &[],
     max_prompt_arg_bytes: Some(30_000),
     prompt_via_stdin: false,

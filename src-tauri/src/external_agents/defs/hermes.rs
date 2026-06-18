@@ -45,6 +45,7 @@ pub const HERMES_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     models_from_stderr: false,
     model_probe: Some(ModelProbeStrategy::Acp),
     model_probe_args: Some(&["acp", "--accept-hooks"]),
+    slash_strategy: super::super::types::SlashStrategy::None,
     env: &[],
     max_prompt_arg_bytes: None,
     prompt_via_stdin: false,

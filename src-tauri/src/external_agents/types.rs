@@ -10,6 +10,7 @@ pub enum StreamFormat {
     JsonEventStream,
     PiRpc,
     AcpJsonRpc,
+    CodexAppServer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +42,22 @@ pub enum PromptInputFormat {
 pub enum ModelProbeStrategy {
     Acp,
     ClaudeInit,
+}
+
+/// How a CLI's `/commands` are discovered for the slash popover. We only advertise commands
+/// that the CLI genuinely honors in our (headless) invocation, so most one-shot CLIs are
+/// `None` rather than carrying a fabricated list the CLI would ignore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashStrategy {
+    /// Probe the Claude `system/init` event — yields built-ins + the user's custom commands
+    /// and skills, exactly as the `claude` CLI resolves them for this cwd.
+    ClaudeInit,
+    /// Discover commands natively over ACP: run `initialize` → `session/new`, then read
+    /// `session/update` notifications for the `available_commands_update` payload the agent
+    /// pushes. Works for any ACP-speaking CLI (cursor / gemini / opencode).
+    Acp,
+    /// No discoverable slash commands for this CLI in headless mode.
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +113,7 @@ pub struct RuntimeAgentDef {
     pub models_from_stderr: bool,
     pub model_probe: Option<ModelProbeStrategy>,
     pub model_probe_args: Option<&'static [&'static str]>,
+    pub slash_strategy: SlashStrategy,
     pub env: &'static [(&'static str, &'static str)],
     pub max_prompt_arg_bytes: Option<usize>,
     pub prompt_via_stdin: bool,

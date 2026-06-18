@@ -1,6 +1,6 @@
 use super::super::types::{
-    ExternalMcpInjection, JsonEventParser, PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions,
-    RuntimeContext, StreamFormat,
+    ExternalMcpInjection, ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
+    RuntimeBuildOptions, RuntimeContext, SlashStrategy, StreamFormat,
 };
 
 const FALLBACK_MODELS: &[(&str, &str)] = &[
@@ -15,19 +15,11 @@ const FALLBACK_MODELS: &[(&str, &str)] = &[
 
 pub fn build_opencode_args(
     _ctx: &RuntimeContext,
-    options: &RuntimeBuildOptions,
+    _options: &RuntimeBuildOptions,
     _prompt: Option<&str>,
 ) -> Vec<String> {
-    let mut args = vec![
-        "run".to_string(),
-        "--format".to_string(),
-        "json".to_string(),
-    ];
-    if let Some(model) = options.model.as_ref().filter(|m| *m != "default" && !m.is_empty()) {
-        args.push("-m".to_string());
-        args.push(model.clone());
-    }
-    args
+    // ACP launch: the model is set via `session/set_model` inside run_acp_session, not flags.
+    vec!["acp".to_string()]
 }
 
 pub const OPENCODE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
@@ -39,18 +31,19 @@ pub const OPENCODE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     auth_probe_args: None,
     fallback_models: FALLBACK_MODELS,
     reasoning_options: &[],
-    list_models_args: Some(&["models"]),
+    list_models_args: None,
     list_models_timeout_secs: Some(15),
     models_from_stderr: false,
-    model_probe: None,
-    model_probe_args: None,
+    model_probe: Some(ModelProbeStrategy::Acp),
+    model_probe_args: Some(&["acp"]),
+    slash_strategy: SlashStrategy::Acp,
     env: &[],
     max_prompt_arg_bytes: None,
-    prompt_via_stdin: true,
+    prompt_via_stdin: false,
     prompt_input_format: PromptInputFormat::Text,
-    stream_format: StreamFormat::JsonEventStream,
-    json_event_parser: Some(JsonEventParser::OpenCode),
-    external_mcp_injection: Some(ExternalMcpInjection::OpenCodeEnvContent),
+    stream_format: StreamFormat::AcpJsonRpc,
+    json_event_parser: None,
+    external_mcp_injection: Some(ExternalMcpInjection::AcpMerge),
     resumes_session_via_cli: false,
     build_args: build_opencode_args,
 };
@@ -60,7 +53,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opencode_build_args_includes_model() {
+    fn opencode_build_args_acp_mode() {
         let args = build_opencode_args(
             &RuntimeContext {
                 cwd: None,
@@ -75,7 +68,7 @@ mod tests {
             },
             None,
         );
-        assert!(args.contains(&"run".to_string()));
-        assert!(args.contains(&"-m".to_string()));
+        assert!(args.contains(&"acp".to_string()));
+        assert!(!args.contains(&"run".to_string()));
     }
 }

@@ -12,6 +12,7 @@ use crate::external_agents::types::ExternalAgentSession;
 
 pub mod acp;
 pub mod claude_init;
+pub mod codex_app_server;
 pub mod pi_rpc;
 
 fn sessions_dir(app: &AppHandle) -> Result<PathBuf, String> {

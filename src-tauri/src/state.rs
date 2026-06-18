@@ -92,6 +92,10 @@ pub struct AppState {
     pub external_agent_models_cache: Mutex<
         HashMap<String, (Instant, Vec<crate::external_agents::types::RuntimeModelOption>)>,
     >,
+    /// 外部 CLI 全量检测结果缓存（available/version/auth/models）。避免 RuntimePicker / 设置页
+    /// 每次打开都串行重探 8 个 CLI（含 auth 探测超时）。force_refresh 时跳过。
+    pub external_detected_agents_cache:
+        Mutex<Option<(Instant, Vec<crate::external_agents::types::DetectedAgent>)>>,
     /// 外部入口（例如 Lens）交给 Chat 前端发送的待处理消息。
     /// 后端只负责保存请求和打开窗口，实际发送必须走 Chat 前端的手动发送状态机。
     pub pending_chat_external_sends: Mutex<Vec<PendingChatExternalSend>>,
@@ -155,6 +159,7 @@ impl AppState {
             chat_tool_list_cache: Mutex::new(HashMap::new()),
             external_slash_commands_cache: Mutex::new(HashMap::new()),
             external_agent_models_cache: Mutex::new(HashMap::new()),
+            external_detected_agents_cache: Mutex::new(None),
             pending_chat_external_sends: Mutex::new(Vec::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),
@@ -402,6 +407,33 @@ impl AppState {
             .insert(agent_id, (Instant::now(), models));
     }
 
+    pub fn get_cached_detected_agents(
+        &self,
+        ttl: Duration,
+    ) -> Option<Vec<crate::external_agents::types::DetectedAgent>> {
+        let mut cache = self
+            .external_detected_agents_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((created_at, agents)) = cache.as_ref() {
+            if created_at.elapsed() <= ttl {
+                return Some(agents.clone());
+            }
+        }
+        *cache = None;
+        None
+    }
+
+    pub fn set_cached_detected_agents(
+        &self,
+        agents: Vec<crate::external_agents::types::DetectedAgent>,
+    ) {
+        *self
+            .external_detected_agents_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), agents));
+    }
+
     /// 标记某个 key 失败：进入冷却 + 不变更 active_key_idx
     pub fn mark_key_failed(&self, provider_id: &str, idx: usize) {
         let mut cooldowns = self.key_cooldowns.lock().unwrap_or_else(|e| e.into_inner());
@@ -448,6 +480,7 @@ pub(crate) fn test_app_state() -> AppState {
         chat_tool_list_cache: Mutex::new(HashMap::new()),
         external_slash_commands_cache: Mutex::new(HashMap::new()),
         external_agent_models_cache: Mutex::new(HashMap::new()),
+        external_detected_agents_cache: Mutex::new(None),
         pending_chat_external_sends: Mutex::new(Vec::new()),
         pending_selection: Mutex::new(None),
         lens_freeze_frame_image_id: Mutex::new(None),

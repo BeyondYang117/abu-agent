@@ -1,6 +1,6 @@
 use super::super::types::{
-    PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions, RuntimeContext, StreamFormat,
-    JsonEventParser,
+    ExternalMcpInjection, ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
+    RuntimeBuildOptions, RuntimeContext, SlashStrategy, StreamFormat,
 };
 
 const FALLBACK_MODELS: &[(&str, &str)] = &[
@@ -11,27 +11,12 @@ const FALLBACK_MODELS: &[(&str, &str)] = &[
 ];
 
 pub fn build_cursor_args(
-    ctx: &RuntimeContext,
-    options: &RuntimeBuildOptions,
+    _ctx: &RuntimeContext,
+    _options: &RuntimeBuildOptions,
     _prompt: Option<&str>,
 ) -> Vec<String> {
-    let mut args = vec![
-        "--print".to_string(),
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-        "--stream-partial-output".to_string(),
-        "--force".to_string(),
-        "--trust".to_string(),
-    ];
-    if let Some(cwd) = ctx.cwd.as_ref().filter(|c| !c.is_empty()) {
-        args.push("--workspace".to_string());
-        args.push(cwd.clone());
-    }
-    if let Some(model) = options.model.as_ref().filter(|m| *m != "default" && !m.is_empty()) {
-        args.push("--model".to_string());
-        args.push(model.clone());
-    }
-    args
+    // ACP launch: the model is set via `session/set_model` inside run_acp_session, not flags.
+    vec!["acp".to_string()]
 }
 
 pub const CURSOR_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
@@ -43,18 +28,19 @@ pub const CURSOR_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     auth_probe_args: Some(&["status"]),
     fallback_models: FALLBACK_MODELS,
     reasoning_options: &[],
-    list_models_args: Some(&["models"]),
-    list_models_timeout_secs: None,
+    list_models_args: None,
+    list_models_timeout_secs: Some(15),
     models_from_stderr: false,
-    model_probe: None,
-    model_probe_args: None,
+    model_probe: Some(ModelProbeStrategy::Acp),
+    model_probe_args: Some(&["acp"]),
+    slash_strategy: SlashStrategy::Acp,
     env: &[],
     max_prompt_arg_bytes: None,
-    prompt_via_stdin: true,
+    prompt_via_stdin: false,
     prompt_input_format: PromptInputFormat::Text,
-    stream_format: StreamFormat::JsonEventStream,
-    json_event_parser: Some(JsonEventParser::CursorAgent),
-    external_mcp_injection: None,
+    stream_format: StreamFormat::AcpJsonRpc,
+    json_event_parser: None,
+    external_mcp_injection: Some(ExternalMcpInjection::AcpMerge),
     resumes_session_via_cli: false,
     build_args: build_cursor_args,
 };
@@ -64,7 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_build_args_includes_workspace() {
+    fn cursor_build_args_acp_mode() {
         let args = build_cursor_args(
             &RuntimeContext {
                 cwd: Some("/proj".to_string()),
@@ -79,8 +65,6 @@ mod tests {
             },
             None,
         );
-        assert!(args.contains(&"--workspace".to_string()));
-        assert!(args.contains(&"/proj".to_string()));
-        assert!(!args.iter().any(|a| a == "-"));
+        assert_eq!(args, vec!["acp"]);
     }
 }

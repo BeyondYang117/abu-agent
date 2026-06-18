@@ -24,6 +24,7 @@ use crate::external_agents::prompt::{
 };
 use crate::external_agents::registry::get_agent_def;
 use crate::external_agents::session::acp::{build_acp_mcp_servers, run_acp_session};
+use crate::external_agents::session::codex_app_server::run_codex_app_server_session;
 use crate::external_agents::session::pi_rpc::run_pi_rpc_session;
 use crate::external_agents::session::{persist_delivered_session, resolve_agent_resume_context};
 use crate::external_agents::skill_stage::{skill_cwd_alias_segment, stage_active_skill};
@@ -256,6 +257,20 @@ pub async fn run_external_cli_reply(
                 &mut spawned.child,
                 &composed.full_prompt,
                 model,
+                |event| emit_event(event),
+                cancel_check,
+            )
+            .await
+        }
+        StreamFormat::CodexAppServer => {
+            let model = conversation.agent_runtime.external_model.as_deref();
+            let reasoning = conversation.agent_runtime.external_reasoning.as_deref();
+            run_codex_app_server_session(
+                &mut spawned.child,
+                &composed.full_prompt,
+                model,
+                reasoning,
+                &cwd,
                 |event| emit_event(event),
                 cancel_check,
             )

@@ -474,6 +474,7 @@
             chat_tool_list_cache: Mutex::new(std::collections::HashMap::new()),
             external_slash_commands_cache: Mutex::new(std::collections::HashMap::new()),
             external_agent_models_cache: Mutex::new(std::collections::HashMap::new()),
+            external_detected_agents_cache: Mutex::new(None),
             pending_chat_external_sends: Mutex::new(Vec::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),

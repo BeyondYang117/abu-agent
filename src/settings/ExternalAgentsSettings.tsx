@@ -57,10 +57,10 @@ export function ExternalAgentsSettings({
   )
   const usesExternal = runtime.kind === 'external'
 
-  const loadAgents = useCallback(async () => {
+  const loadAgents = useCallback(async (force = false) => {
     setScanning(true)
     try {
-      const list = await chatApi.detectExternalAgents()
+      const list = await chatApi.detectExternalAgents(force)
       setAgents(list)
     } catch (err) {
       console.error('[ExternalAgentsSettings] detect failed:', err)
@@ -213,7 +213,7 @@ export function ExternalAgentsSettings({
           <button
             type="button"
             className="kv-btn sm"
-            onClick={() => void loadAgents()}
+            onClick={() => void loadAgents(true)}
             disabled={scanning}
             data-tauri-drag-region="false"
           >

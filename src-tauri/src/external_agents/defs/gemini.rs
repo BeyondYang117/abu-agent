@@ -1,6 +1,6 @@
 use super::super::types::{
-    JsonEventParser, PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions, RuntimeContext,
-    StreamFormat,
+    ExternalMcpInjection, ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
+    RuntimeBuildOptions, RuntimeContext, SlashStrategy, StreamFormat,
 };
 
 const GEMINI_ENV: &[(&str, &str)] = &[("GEMINI_CLI_TRUST_WORKSPACE", "true")];
@@ -16,19 +16,11 @@ const FALLBACK_MODELS: &[(&str, &str)] = &[
 
 pub fn build_gemini_args(
     _ctx: &RuntimeContext,
-    options: &RuntimeBuildOptions,
+    _options: &RuntimeBuildOptions,
     _prompt: Option<&str>,
 ) -> Vec<String> {
-    let mut args = vec![
-        "--output-format".to_string(),
-        "stream-json".to_string(),
-        "--yolo".to_string(),
-    ];
-    if let Some(model) = options.model.as_ref().filter(|m| *m != "default" && !m.is_empty()) {
-        args.push("--model".to_string());
-        args.push(model.clone());
-    }
-    args
+    // ACP launch: the model is set via `session/set_model` inside run_acp_session, not flags.
+    vec!["--experimental-acp".to_string()]
 }
 
 pub const GEMINI_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
@@ -41,17 +33,18 @@ pub const GEMINI_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     fallback_models: FALLBACK_MODELS,
     reasoning_options: &[],
     list_models_args: None,
-    list_models_timeout_secs: None,
+    list_models_timeout_secs: Some(15),
     models_from_stderr: false,
-    model_probe: None,
-    model_probe_args: None,
+    model_probe: Some(ModelProbeStrategy::Acp),
+    model_probe_args: Some(&["--experimental-acp"]),
+    slash_strategy: SlashStrategy::Acp,
     env: GEMINI_ENV,
     max_prompt_arg_bytes: None,
-    prompt_via_stdin: true,
+    prompt_via_stdin: false,
     prompt_input_format: PromptInputFormat::Text,
-    stream_format: StreamFormat::JsonEventStream,
-    json_event_parser: Some(JsonEventParser::Gemini),
-    external_mcp_injection: None,
+    stream_format: StreamFormat::AcpJsonRpc,
+    json_event_parser: None,
+    external_mcp_injection: Some(ExternalMcpInjection::AcpMerge),
     resumes_session_via_cli: false,
     build_args: build_gemini_args,
 };
@@ -61,7 +54,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gemini_build_args_yolo_and_model() {
+    fn gemini_build_args_acp_mode() {
         let args = build_gemini_args(
             &RuntimeContext {
                 cwd: None,
@@ -76,7 +69,6 @@ mod tests {
             },
             None,
         );
-        assert!(args.contains(&"--yolo".to_string()));
-        assert!(args.contains(&"gemini-2.5-pro".to_string()));
+        assert_eq!(args, vec!["--experimental-acp"]);
     }
 }

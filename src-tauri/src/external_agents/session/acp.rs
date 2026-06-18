@@ -8,7 +8,9 @@ use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 use crate::external_agents::stream::usage_from_numbers;
-use crate::external_agents::types::{RuntimeModelOption, UnifiedAgentEvent, default_model_option};
+use crate::external_agents::types::{
+    ExternalCliSlashCommand, RuntimeModelOption, UnifiedAgentEvent, default_model_option,
+};
 use crate::settings::ChatMcpServer;
 
 const ACP_PROTOCOL_VERSION: i64 = 1;
@@ -260,6 +262,175 @@ pub async fn detect_acp_models(
     }
 
     models.filter(|m| m.len() > 1)
+}
+
+fn parse_available_commands(update: &serde_json::Map<String, Value>) -> Vec<ExternalCliSlashCommand> {
+    let list = update
+        .get("availableCommands")
+        .or_else(|| update.get("available_commands"))
+        .and_then(|v| v.as_array());
+    let Some(list) = list else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for raw in list {
+        let Some(obj) = raw.as_object() else {
+            continue;
+        };
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(name) = name else {
+            continue;
+        };
+        let description = obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        out.push(ExternalCliSlashCommand {
+            slash: format!("/{name}"),
+            name: name.to_string(),
+            description,
+            argument_hint: None,
+        });
+    }
+    out
+}
+
+/// Discover an ACP agent's slash commands. Mirrors `detect_acp_models`: run `initialize`
+/// → `session/new`, then keep reading `session/update` *notifications* and capture the one
+/// whose `sessionUpdate == "available_commands_update"` (cursor pushes this asynchronously,
+/// up to ~10s after the session is created). Returns the deduped, sorted command list.
+pub async fn detect_acp_commands(
+    bin: &Path,
+    args: &[&str],
+    cwd: &Path,
+    timeout_secs: u64,
+) -> Option<Vec<ExternalCliSlashCommand>> {
+    let mut child = Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
+
+    let mut stdin = child.stdin.take()?;
+    let stdout = child.stdout.take()?;
+    let mut reader = BufReader::new(stdout).lines();
+
+    let mut expected_id: u64 = 1;
+    let mut next_id: u64 = 2;
+    let mut commands: Option<Vec<ExternalCliSlashCommand>> = None;
+    let deadline = Duration::from_secs(timeout_secs);
+
+    write_rpc(&mut stdin, 1, "initialize", json!({
+        "protocolVersion": ACP_PROTOCOL_VERSION,
+        "clientCapabilities": { "terminal": false },
+        "clientInfo": { "name": "kivio", "version": "external-agents" },
+    }))
+    .await
+    .ok()?;
+
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() > deadline {
+            let _ = child.start_kill();
+            break;
+        }
+        let line = match timeout(Duration::from_millis(200), reader.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(_)) => break,
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Capture the asynchronously-pushed available_commands_update notification.
+        if value.get("method").and_then(|v| v.as_str()) == Some("session/update") {
+            if let Some(update) = value
+                .get("params")
+                .and_then(|p| p.get("update"))
+                .and_then(|v| v.as_object())
+            {
+                let session_update = update
+                    .get("sessionUpdate")
+                    .or_else(|| update.get("availableCommandsUpdate"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if session_update == "available_commands_update"
+                    || session_update == "availableCommandsUpdate"
+                    || update.contains_key("availableCommands")
+                    || update.contains_key("available_commands")
+                {
+                    let parsed = parse_available_commands(update);
+                    if !parsed.is_empty() {
+                        commands = Some(parsed);
+                        let _ = child.start_kill();
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if rpc_error_message(&value).is_some() {
+            if value.get("id").and_then(|v| v.as_u64()) != Some(expected_id) {
+                continue;
+            }
+            let _ = child.start_kill();
+            return None;
+        }
+        if value.get("id").and_then(|v| v.as_u64()) != Some(expected_id) {
+            continue;
+        }
+        let result = value.get("result")?;
+        if expected_id == 1 {
+            expected_id = next_id;
+            write_rpc(
+                &mut stdin,
+                next_id,
+                "session/new",
+                build_session_new_params(cwd, &[]),
+            )
+            .await
+            .ok()?;
+            next_id += 1;
+            continue;
+        }
+        if expected_id == 2 {
+            // session/new acknowledged; some agents include commands inline in the result.
+            if let Some(update) = result.as_object() {
+                let parsed = parse_available_commands(update);
+                if !parsed.is_empty() {
+                    commands = Some(parsed);
+                    let _ = child.start_kill();
+                    break;
+                }
+            }
+            // Otherwise keep reading notifications until the agent pushes them or we time out.
+            expected_id = 0; // no further responses expected
+            continue;
+        }
+    }
+
+    commands.map(|mut cmds| {
+        cmds.sort_by(|a, b| a.name.cmp(&b.name));
+        cmds.dedup_by(|a, b| a.name == b.name);
+        cmds
+    })
 }
 
 fn choose_permission_outcome(options: Option<&Value>) -> Option<String> {
@@ -728,6 +899,77 @@ mod tests {
         });
         let models = normalize_models(&result);
         assert!(models.iter().any(|m| m.id == "grok-4.3"));
+    }
+
+    fn event_variant(event: &UnifiedAgentEvent) -> &'static str {
+        match event {
+            UnifiedAgentEvent::Status { .. } => "Status",
+            UnifiedAgentEvent::TextDelta { .. } => "TextDelta",
+            UnifiedAgentEvent::ThinkingDelta { .. } => "ThinkingDelta",
+            UnifiedAgentEvent::ToolUse { .. } => "ToolUse",
+            UnifiedAgentEvent::ToolResult { .. } => "ToolResult",
+            UnifiedAgentEvent::Usage { .. } => "Usage",
+            UnifiedAgentEvent::TurnEnd { .. } => "TurnEnd",
+            UnifiedAgentEvent::Error { .. } => "Error",
+            UnifiedAgentEvent::Raw { .. } => "Raw",
+            UnifiedAgentEvent::SlashCommands { .. } => "SlashCommands",
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live cursor-agent login + network"]
+    async fn cursor_acp_smoke() {
+        let cwd = std::env::temp_dir();
+        let mut child = Command::new("cursor-agent")
+            .arg("acp")
+            .current_dir(&cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn cursor-agent acp");
+
+        let events = std::cell::RefCell::new(Vec::<UnifiedAgentEvent>::new());
+        let result = timeout(
+            Duration::from_secs(90),
+            run_acp_session(
+                &mut child,
+                "Reply with exactly the token SMOKE_OK and nothing else.",
+                &cwd,
+                None,
+                &[],
+                |event| events.borrow_mut().push(event),
+                || false,
+            ),
+        )
+        .await;
+
+        let _ = child.start_kill();
+        let captured = events.into_inner();
+        eprintln!("=== cursor ACP smoke: {} events ===", captured.len());
+        for (i, ev) in captured.iter().enumerate() {
+            eprintln!("[{i}] {ev:?}");
+        }
+        let seq: Vec<&str> = captured.iter().map(event_variant).collect();
+        eprintln!("cursor sequence: {seq:?}");
+        match &result {
+            Ok(Ok(())) => eprintln!("cursor run_acp_session: Ok"),
+            Ok(Err(e)) => eprintln!("cursor run_acp_session: Err({e})"),
+            Err(_) => panic!("cursor ACP session HUNG past 90s wall-clock guard"),
+        }
+
+        let got_text = captured
+            .iter()
+            .any(|e| matches!(e, UnifiedAgentEvent::TextDelta { .. }));
+        let got_error = captured
+            .iter()
+            .any(|e| matches!(e, UnifiedAgentEvent::Error { .. }))
+            || matches!(&result, Ok(Err(_)));
+        assert!(
+            got_text || got_error,
+            "expected at least one TextDelta or an Error/Err round-trip, got: {seq:?}"
+        );
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use super::super::types::{
     PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions, RuntimeContext, StreamFormat,
-    JsonEventParser,
 };
 
 const FALLBACK_MODELS: &[(&str, &str)] = &[
@@ -37,55 +36,19 @@ fn codex_needs_danger_full_access() -> bool {
         .is_some_and(|v| !v.trim().is_empty())
 }
 
+#[allow(dead_code)]
+fn _codex_sandbox_hint() -> bool {
+    codex_needs_danger_full_access()
+}
+
 pub fn build_codex_args(
-    ctx: &RuntimeContext,
-    options: &RuntimeBuildOptions,
+    _ctx: &RuntimeContext,
+    _options: &RuntimeBuildOptions,
     _prompt: Option<&str>,
 ) -> Vec<String> {
-    let mut args = if codex_needs_danger_full_access() {
-        vec![
-            "exec".to_string(),
-            "--json".to_string(),
-            "--skip-git-repo-check".to_string(),
-            "--sandbox".to_string(),
-            "danger-full-access".to_string(),
-        ]
-    } else {
-        vec![
-            "exec".to_string(),
-            "--json".to_string(),
-            "--skip-git-repo-check".to_string(),
-            "--sandbox".to_string(),
-            "workspace-write".to_string(),
-            "-c".to_string(),
-            "sandbox_workspace_write.network_access=true".to_string(),
-        ]
-    };
-    args.push("-c".to_string());
-    args.push("default_permissions=\":workspace\"".to_string());
-    if let Some(cwd) = ctx.cwd.as_ref().filter(|c| !c.is_empty()) {
-        args.push("-C".to_string());
-        args.push(cwd.clone());
-    }
-    for dir in &ctx.extra_allowed_dirs {
-        if !dir.is_empty() {
-            args.push("--add-dir".to_string());
-            args.push(dir.clone());
-        }
-    }
-    if let Some(model) = options.model.as_ref().filter(|m| *m != "default" && !m.is_empty()) {
-        args.push("--model".to_string());
-        args.push(model.clone());
-    }
-    if let Some(reasoning) = options
-        .reasoning
-        .as_ref()
-        .filter(|r| *r != "default" && !r.is_empty())
-    {
-        args.push("-c".to_string());
-        args.push(format!("model_reasoning_effort=\"{reasoning}\""));
-    }
-    args
+    // The app-server protocol negotiates cwd / model / sandbox / approval over JSON-RPC
+    // (`Thread/start` + `Turn/start`), so no model / sandbox CLI flags are needed here.
+    vec!["app-server".to_string()]
 }
 
 pub const CODEX_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
@@ -102,12 +65,13 @@ pub const CODEX_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     models_from_stderr: false,
     model_probe: None,
     model_probe_args: None,
+    slash_strategy: super::super::types::SlashStrategy::None,
     env: &[],
     max_prompt_arg_bytes: None,
-    prompt_via_stdin: true,
+    prompt_via_stdin: false,
     prompt_input_format: PromptInputFormat::Text,
-    stream_format: StreamFormat::JsonEventStream,
-    json_event_parser: Some(JsonEventParser::Codex),
+    stream_format: StreamFormat::CodexAppServer,
+    json_event_parser: None,
     external_mcp_injection: None,
     resumes_session_via_cli: false,
     build_args: build_codex_args,
@@ -118,10 +82,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codex_build_args_workspace_write_on_unix() {
-        if cfg!(target_os = "windows") {
-            return;
-        }
+    fn codex_build_args_uses_app_server() {
         let args = build_codex_args(
             &RuntimeContext {
                 cwd: Some("/tmp/p".to_string()),
@@ -136,7 +97,6 @@ mod tests {
             },
             None,
         );
-        assert!(args.contains(&"workspace-write".to_string()));
-        assert!(args.contains(&"-C".to_string()));
+        assert_eq!(args, vec!["app-server".to_string()]);
     }
 }

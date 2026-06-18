@@ -2,23 +2,37 @@ use tauri::AppHandle;
 
 use crate::chat::storage::{load_conversation, save_conversation};
 use crate::chat::types::AgentRuntimeConfig;
-use crate::external_agents::detection::detect_all_agents;
+use crate::external_agents::detection::{EXTERNAL_AGENT_MODELS_CACHE_TTL, detect_all_agents};
 use crate::external_agents::slash::list_external_cli_slash_commands;
 use crate::state::AppState;
 
 #[tauri::command]
 pub async fn chat_detect_external_agents(
     state: tauri::State<'_, AppState>,
+    force_refresh: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    let force = force_refresh.unwrap_or(false);
+    if !force {
+        if let Some(agents) = state.get_cached_detected_agents(EXTERNAL_AGENT_MODELS_CACHE_TTL) {
+            return Ok(serde_json::json!({
+                "success": true,
+                "agents": agents,
+                "cached": true,
+            }));
+        }
+    }
+
     let agents = detect_all_agents().await;
     for agent in &agents {
         if !agent.models.is_empty() {
             state.set_cached_external_agent_models(agent.id.clone(), agent.models.clone());
         }
     }
+    state.set_cached_detected_agents(agents.clone());
     Ok(serde_json::json!({
         "success": true,
         "agents": agents,
+        "cached": false,
     }))
 }
 

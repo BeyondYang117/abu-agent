@@ -54,14 +54,24 @@ impl JsonEventStreamState {
             }
             "item.completed" => {
                 if let Some(item) = obj.get("item").and_then(|v| v.as_object()) {
-                    if item.get("type").and_then(|v| v.as_str()) == Some("agent_message") {
-                        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                            sink(UnifiedAgentEvent::TextDelta {
-                                delta: text.to_string(),
-                            });
+                    match item.get("type").and_then(|v| v.as_str()) {
+                        Some("agent_message") => {
+                            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                sink(UnifiedAgentEvent::TextDelta {
+                                    delta: text.to_string(),
+                                });
+                            }
                         }
-                    } else {
-                        self.emit_codex_command_execution(item, sink, true);
+                        Some("reasoning") => {
+                            if let Some(text) =
+                                item.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty())
+                            {
+                                sink(UnifiedAgentEvent::ThinkingDelta {
+                                    delta: text.to_string(),
+                                });
+                            }
+                        }
+                        _ => self.emit_codex_command_execution(item, sink, true),
                     }
                 }
             }
@@ -207,6 +217,17 @@ impl JsonEventStreamState {
                     if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
                             sink(UnifiedAgentEvent::TextDelta {
+                                delta: text.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            "reasoning" => {
+                if let Some(part) = part {
+                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                        if !text.is_empty() {
+                            sink(UnifiedAgentEvent::ThinkingDelta {
                                 delta: text.to_string(),
                             });
                         }
@@ -459,6 +480,32 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(UnifiedAgentEvent::TextDelta { delta }) if delta == "hello"
+        ));
+    }
+
+    #[test]
+    fn codex_reasoning_emits_thinking_delta() {
+        let raw = r#"{"type":"item.completed","item":{"type":"reasoning","text":"weighing options"}}"#;
+        let value: Value = serde_json::from_str(raw).unwrap();
+        let mut events = Vec::new();
+        JsonEventStreamState::new(JsonEventParser::Codex)
+            .handle_value(&value, &mut |e| events.push(e));
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ThinkingDelta { delta }) if delta == "weighing options"
+        ));
+    }
+
+    #[test]
+    fn opencode_reasoning_emits_thinking_delta() {
+        let raw = r#"{"type":"reasoning","part":{"text":"let me think"}}"#;
+        let value: Value = serde_json::from_str(raw).unwrap();
+        let mut events = Vec::new();
+        JsonEventStreamState::new(JsonEventParser::OpenCode)
+            .handle_value(&value, &mut |e| events.push(e));
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ThinkingDelta { delta }) if delta == "let me think"
         ));
     }
 

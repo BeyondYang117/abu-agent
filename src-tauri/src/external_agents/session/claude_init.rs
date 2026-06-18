@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -10,8 +11,9 @@ use crate::external_agents::slash::is_claude_init;
 use crate::external_agents::spawn::{parse_json_line, spawn_agent, write_probe_stdin};
 use crate::external_agents::types::{RuntimeBuildOptions, RuntimeContext, RuntimeModelOption};
 
-/// `--model` aliases accepted by Claude Code. We probe each alias via init and keep
-/// only aliases the CLI resolves successfully (no local display fallback).
+/// `--model` aliases accepted by Claude Code, used to build a static model catalog with
+/// labels + context windows (no per-alias process probe). The CLI validates the alias at
+/// run time, so an unsupported alias simply fails that turn rather than the picker load.
 const CLAUDE_MODEL_ALIASES: &[&str] = &[
     "opus",
     "sonnet",
@@ -21,6 +23,23 @@ const CLAUDE_MODEL_ALIASES: &[&str] = &[
     "fable",
     "fable[1m]",
 ];
+
+/// `env.*` keys in `~/.claude/settings.json` (and the matching process env vars) that
+/// point Claude Code at a custom/third-party model. We surface these as extra `--model`
+/// targets so a user's gateway/bedrock setup shows up in the picker. These are the
+/// Claude CLI's own public env interface — not paseo's code.
+const CLAUDE_ENV_MODEL_KEYS: &[&str] = &[
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+];
+
+/// Upper bound on the single best-effort "default" probe. Discovery no longer spawns a
+/// process per alias — the alias catalog is static — so this is the only spawn, kept short
+/// so the model picker stays responsive even when the CLI is slow to emit its init event.
+const DEFAULT_PROBE_TIMEOUT_SECS: u64 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeInitInfo {
@@ -148,41 +167,111 @@ pub async fn probe_claude_init(
 
 pub async fn detect_claude_models(resolved_bin: &Path, cwd: &Path) -> Option<Vec<RuntimeModelOption>> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
 
-    if let Some(info) = probe_claude_init(resolved_bin, cwd, None).await {
-        out.push(model_option_from_probe("default", &info));
-    }
+    // 1. Default option — one best-effort probe (short timeout). The CLI reports the model
+    //    it actually resolves "default" to, which gives an accurate label + context window.
+    //    Failure is non-fatal: we still ship a generic "Default" entry.
+    let default_info = tokio::time::timeout(
+        Duration::from_secs(DEFAULT_PROBE_TIMEOUT_SECS),
+        probe_claude_init(resolved_bin, cwd, None),
+    )
+    .await
+    .ok()
+    .flatten();
+    out.push(RuntimeModelOption {
+        id: "default".to_string(),
+        label: match &default_info {
+            Some(info) => label_for_claude_model("default", &info.resolved_model),
+            None => "Default".to_string(),
+        },
+        context_window_tokens: default_info.as_ref().and_then(|info| info.context_window_tokens),
+    });
+    seen.insert("default".to_string());
 
-    let mut handles = Vec::new();
-    for alias in CLAUDE_MODEL_ALIASES {
-        let bin = resolved_bin.to_path_buf();
-        let cwd = cwd.to_path_buf();
-        let alias = (*alias).to_string();
-        handles.push(tokio::spawn(async move {
-            let info = probe_claude_init(&bin, &cwd, Some(&alias)).await?;
-            Some((alias, info))
-        }));
-    }
-
-    for handle in handles {
-        if let Ok(Some((alias, info))) = handle.await {
-            out.push(model_option_from_probe(&alias, &info));
+    // 2. Built-in alias catalog — entirely static, no process spawn.
+    for &alias in CLAUDE_MODEL_ALIASES {
+        if seen.insert(alias.to_string()) {
+            out.push(catalog_model_option(alias));
         }
     }
 
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
+    // 3. Custom models configured via ~/.claude/settings.json `env.*` + process env.
+    for model in claude_config_models() {
+        if seen.insert(model.clone()) {
+            out.push(RuntimeModelOption {
+                context_window_tokens: context_window_from_claude_resolved_model(&model),
+                label: model.clone(),
+                id: model,
+            });
+        }
+    }
+
+    Some(out)
+}
+
+/// Static catalog entry for a Claude `--model` alias — label + context window with no probe.
+fn catalog_model_option(alias: &str) -> RuntimeModelOption {
+    let is_1m = alias.to_ascii_lowercase().ends_with("[1m]");
+    let base = alias
+        .get(..alias.len().saturating_sub(if is_1m { 4 } else { 0 }))
+        .unwrap_or(alias);
+    let family = title_case_token(base);
+    RuntimeModelOption {
+        id: alias.to_string(),
+        label: if is_1m {
+            format!("{family} (1M context)")
+        } else {
+            family
+        },
+        context_window_tokens: context_window_from_claude_model_alias(alias),
     }
 }
 
-fn model_option_from_probe(alias: &str, info: &ClaudeInitInfo) -> RuntimeModelOption {
-    RuntimeModelOption {
-        id: alias.to_string(),
-        label: label_for_claude_model(alias, &info.resolved_model),
-        context_window_tokens: info.context_window_tokens,
+/// Config dir Claude Code reads: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
+fn claude_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
     }
+    directories::BaseDirs::new().map(|base| base.home_dir().join(".claude"))
+}
+
+/// Extra model ids the user configured for Claude Code via settings.json `env.*` and process
+/// env vars (e.g. a gateway/bedrock model). Returns deduped, non-empty ids in discovery order.
+fn claude_config_models() -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let push = |raw: &str, out: &mut Vec<String>, seen: &mut HashSet<String>| {
+        let model = raw.trim();
+        if !model.is_empty() && seen.insert(model.to_string()) {
+            out.push(model.to_string());
+        }
+    };
+
+    if let Some(text) = claude_config_dir()
+        .and_then(|dir| std::fs::read_to_string(dir.join("settings.json")).ok())
+    {
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            if let Some(env) = value.get("env").and_then(|v| v.as_object()) {
+                for key in CLAUDE_ENV_MODEL_KEYS {
+                    if let Some(model) = env.get(*key).and_then(|v| v.as_str()) {
+                        push(model, &mut out, &mut seen);
+                    }
+                }
+            }
+        }
+    }
+
+    for key in CLAUDE_ENV_MODEL_KEYS {
+        if let Ok(model) = std::env::var(key) {
+            push(&model, &mut out, &mut seen);
+        }
+    }
+
+    out
 }
 
 pub fn parse_claude_init_info(value: &Value) -> Option<ClaudeInitInfo> {
@@ -248,6 +337,30 @@ mod tests {
         assert_eq!(context_window_from_claude_model_alias("sonnet[1m]"), Some(1_000_000));
         assert_eq!(context_window_from_claude_model_alias("sonnet"), Some(200_000));
         assert_eq!(context_window_from_claude_model_alias("default"), None);
+    }
+
+    #[test]
+    fn catalog_options_have_labels_and_windows() {
+        let opus = catalog_model_option("opus");
+        assert_eq!(opus.id, "opus");
+        assert_eq!(opus.label, "Opus");
+        assert_eq!(opus.context_window_tokens, Some(200_000));
+
+        let sonnet_1m = catalog_model_option("sonnet[1m]");
+        assert_eq!(sonnet_1m.id, "sonnet[1m]");
+        assert_eq!(sonnet_1m.label, "Sonnet (1M context)");
+        assert_eq!(sonnet_1m.context_window_tokens, Some(1_000_000));
+    }
+
+    #[test]
+    fn full_catalog_covers_every_alias_without_spawn() {
+        // Every alias must yield a catalog entry — discovery no longer probes per alias.
+        for &alias in CLAUDE_MODEL_ALIASES {
+            let option = catalog_model_option(alias);
+            assert_eq!(option.id, alias);
+            assert!(!option.label.is_empty());
+            assert!(option.context_window_tokens.is_some());
+        }
     }
 
     #[test]
