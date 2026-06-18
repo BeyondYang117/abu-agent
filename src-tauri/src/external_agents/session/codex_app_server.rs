@@ -3,10 +3,12 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Child;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
+use crate::external_agents::session::live::SessionCommand;
 use crate::external_agents::stream::usage_from_numbers;
 use crate::external_agents::types::UnifiedAgentEvent;
 
@@ -390,6 +392,294 @@ pub async fn run_codex_app_server_session(
     Ok(())
 }
 
+// ===========================================================================================
+// Persistent session (Phase 2): keep the app-server process alive across turns.
+// ===========================================================================================
+
+/// A live Codex app-server connection: one `thread/start` (or `thread/resume`), then many
+/// `turn/start` calls over the same process. Owned exclusively by its actor task.
+pub struct CodexAppServerSession {
+    child: Child,
+    stdin: ChildStdin,
+    reader: Lines<BufReader<ChildStdout>>,
+    thread_id: String,
+    cwd: String,
+    next_id: u64,
+    emitted_tools: HashSet<String>,
+}
+
+impl CodexAppServerSession {
+    /// Spawn `codex app-server`, `initialize`, then create or resume a thread. The process and
+    /// thread persist for subsequent `run_turn` calls.
+    pub async fn connect(
+        resolved_bin: &Path,
+        args: &[String],
+        cwd: &Path,
+        model: Option<&str>,
+        resume_thread: Option<&str>,
+    ) -> Result<Self, String> {
+        let mut child = tokio::process::Command::new(resolved_bin)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("spawn codex app-server: {e}"))?;
+        let mut stdin = child.stdin.take().ok_or_else(|| "stdin unavailable".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "stdout unavailable".to_string())?;
+        let mut reader = BufReader::new(stdout).lines();
+
+        let cwd_str = cwd.to_string_lossy().to_string();
+        let chosen_model = model.filter(|m| !m.is_empty() && *m != "default");
+
+        write_rpc(
+            &mut stdin,
+            1,
+            "initialize",
+            json!({ "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" } }),
+        )
+        .await?;
+        read_until_response(&mut reader, &mut stdin, 1, Duration::from_secs(15)).await?;
+
+        let (method, mut params) = match resume_thread.filter(|t| !t.is_empty()) {
+            Some(tid) => ("thread/resume", json!({ "threadId": tid })),
+            None => (
+                "thread/start",
+                json!({ "cwd": cwd_str, "sandbox": "workspace-write", "approvalPolicy": "never" }),
+            ),
+        };
+        if let Some(m) = chosen_model {
+            params["model"] = json!(m);
+        }
+        write_rpc(&mut stdin, 2, method, params).await?;
+        let result = read_until_response(&mut reader, &mut stdin, 2, Duration::from_secs(20)).await?;
+        let thread_id = result
+            .get("thread")
+            .and_then(|t| t.get("id"))
+            .and_then(|v| v.as_str())
+            .or_else(|| result.get("threadId").and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .ok_or_else(|| format!("invalid {method} response"))?;
+
+        Ok(Self {
+            child,
+            stdin,
+            reader,
+            thread_id,
+            cwd: cwd_str,
+            next_id: 3,
+            emitted_tools: HashSet::new(),
+        })
+    }
+
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    /// Run one turn over the live thread. Emits events into `events`; polls `control` so an
+    /// incoming `Cancel` sends `turn/interrupt` (without killing the process). Does NOT close stdin.
+    pub async fn run_turn(
+        &mut self,
+        prompt: &str,
+        model: Option<&str>,
+        reasoning: Option<&str>,
+        events: &mpsc::Sender<UnifiedAgentEvent>,
+        control: &mut mpsc::Receiver<SessionCommand>,
+    ) -> Result<(), String> {
+        let chosen_model = model.filter(|m| !m.is_empty() && *m != "default");
+        let chosen_effort = reasoning.filter(|r| !r.is_empty() && *r != "default");
+        let turn_id = self.next_id;
+        self.next_id += 1;
+
+        let mut turn_params = json!({
+            "threadId": self.thread_id,
+            "input": [{ "type": "text", "text": prompt }],
+            "cwd": self.cwd,
+            "approvalPolicy": "never",
+        });
+        if let Some(effort) = chosen_effort {
+            turn_params["effort"] = json!(effort);
+        }
+        if let Some(m) = chosen_model {
+            turn_params["model"] = json!(m);
+        }
+        write_rpc(&mut self.stdin, turn_id, "turn/start", turn_params).await?;
+        let _ = events
+            .send(UnifiedAgentEvent::Status {
+                label: "running".to_string(),
+                model: chosen_model.map(str::to_string),
+            })
+            .await;
+
+        loop {
+            match control.try_recv() {
+                Ok(SessionCommand::Cancel) => {
+                    let iid = self.next_id;
+                    self.next_id += 1;
+                    let _ = write_rpc(
+                        &mut self.stdin,
+                        iid,
+                        "turn/interrupt",
+                        json!({ "threadId": self.thread_id }),
+                    )
+                    .await;
+                    return Err("cancelled".to_string());
+                }
+                Ok(SessionCommand::Close) => return Err("closed".to_string()),
+                Ok(SessionCommand::RunTurn { done, .. }) => {
+                    let _ = done.send(Err("session busy".to_string()));
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    return Err("control channel closed".to_string())
+                }
+            }
+
+            let line = match timeout(Duration::from_millis(200), self.reader.next_line()).await {
+                Ok(Ok(Some(l))) => l,
+                Ok(Ok(None)) => return Err("codex app-server exited mid-turn".to_string()),
+                Ok(Err(e)) => return Err(e.to_string()),
+                Err(_) => continue,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if let (Some(method), Some(id)) =
+                (value.get("method").and_then(|v| v.as_str()), value.get("id"))
+            {
+                if let Some(result) = approval_response(method) {
+                    write_rpc_result(&mut self.stdin, id, result).await?;
+                }
+                continue;
+            }
+            if let Some(method) = value.get("method").and_then(|v| v.as_str()) {
+                let params = value.get("params").cloned().unwrap_or(Value::Null);
+                let mut buf: Vec<UnifiedAgentEvent> = Vec::new();
+                let ended =
+                    map_codex_notification(method, &params, &mut self.emitted_tools, &mut |e| {
+                        buf.push(e)
+                    });
+                for e in buf {
+                    let _ = events.send(e).await;
+                }
+                if ended {
+                    return Ok(());
+                }
+                continue;
+            }
+            if let Some(err) = value.get("error") {
+                let message = err
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| err.to_string());
+                let _ = events
+                    .send(UnifiedAgentEvent::Error {
+                        message: message.clone(),
+                        code: None,
+                    })
+                    .await;
+                return Err(message);
+            }
+            // Response to turn/start (or a stale id): the turn is now running — keep reading.
+        }
+    }
+
+    /// Close stdin and kill the process.
+    pub async fn close(mut self) {
+        let _ = self.stdin.shutdown().await;
+        let _ = self.child.start_kill();
+        let _ = self.child.wait().await;
+    }
+}
+
+/// Read JSON-RPC lines until the response with `target_id` arrives, auto-answering any
+/// server→client approval requests and skipping notifications.
+async fn read_until_response(
+    reader: &mut Lines<BufReader<ChildStdout>>,
+    stdin: &mut ChildStdin,
+    target_id: u64,
+    overall: Duration,
+) -> Result<Value, String> {
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > overall {
+            return Err("codex app-server handshake timeout".to_string());
+        }
+        let line = match timeout(Duration::from_millis(200), reader.next_line()).await {
+            Ok(Ok(Some(l))) => l,
+            Ok(Ok(None)) => return Err("codex app-server exited during handshake".to_string()),
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let (Some(method), Some(id)) =
+            (value.get("method").and_then(|v| v.as_str()), value.get("id"))
+        {
+            if let Some(result) = approval_response(method) {
+                write_rpc_result(stdin, id, result).await?;
+            }
+            continue;
+        }
+        if value.get("method").is_some() {
+            continue; // notification
+        }
+        if let Some(err) = value.get("error") {
+            return Err(err
+                .get("message")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| err.to_string()));
+        }
+        if value.get("id").and_then(|v| v.as_u64()) == Some(target_id) {
+            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+}
+
+/// Spawn the actor task that owns a connected session and serves `SessionCommand`s.
+pub fn spawn_codex_session_actor(mut session: CodexAppServerSession) -> mpsc::Sender<SessionCommand> {
+    let (tx, mut rx) = mpsc::channel::<SessionCommand>(8);
+    tokio::spawn(async move {
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                SessionCommand::RunTurn {
+                    prompt,
+                    model,
+                    reasoning,
+                    events,
+                    done,
+                } => {
+                    let result = session
+                        .run_turn(&prompt, model.as_deref(), reasoning.as_deref(), &events, &mut rx)
+                        .await;
+                    let _ = done.send(result);
+                }
+                SessionCommand::Cancel => {} // no active turn between turns
+                SessionCommand::Close => {
+                    session.close().await;
+                    return;
+                }
+            }
+        }
+        session.close().await;
+    });
+    tx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,6 +690,74 @@ mod tests {
         let mut tools = HashSet::new();
         let ended = map_codex_notification(method, &params, &mut tools, &mut |e| events.push(e));
         (events, ended)
+    }
+
+    /// Live cross-turn continuity: connect once, run two turns on the SAME process, and confirm
+    /// turn 2 recalls a fact stated only in turn 1 — proving the codex thread persists between
+    /// turns (Phase 2). Requires a logged-in `codex` CLI + network.
+    #[tokio::test]
+    #[ignore = "requires live codex login + network"]
+    async fn persistent_session_remembers_across_turns() {
+        use crate::external_agents::session::live::SessionCommand;
+        use tokio::sync::{mpsc, oneshot};
+
+        let bin = which_codex().expect("codex on PATH");
+        let cwd = std::env::temp_dir();
+        let session = CodexAppServerSession::connect(&bin, &["app-server".to_string()], &cwd, None, None)
+            .await
+            .expect("connect codex app-server");
+        let thread_id = session.thread_id().to_string();
+        assert!(!thread_id.is_empty());
+        let control = spawn_codex_session_actor(session);
+
+        async fn one_turn(control: &mpsc::Sender<SessionCommand>, prompt: &str) -> String {
+            let (etx, mut erx) = mpsc::channel::<UnifiedAgentEvent>(64);
+            let (dtx, drx) = oneshot::channel();
+            control
+                .send(SessionCommand::RunTurn {
+                    prompt: prompt.to_string(),
+                    model: None,
+                    reasoning: None,
+                    events: etx,
+                    done: dtx,
+                })
+                .await
+                .unwrap();
+            let mut text = String::new();
+            // Drain events until the turn's `done` fires.
+            let mut drx = drx;
+            loop {
+                tokio::select! {
+                    biased;
+                    r = &mut drx => { while let Ok(e) = erx.try_recv() { if let UnifiedAgentEvent::TextDelta { delta } = e { text.push_str(&delta); } } r.unwrap().unwrap(); break; }
+                    ev = erx.recv() => { if let Some(UnifiedAgentEvent::TextDelta { delta }) = ev { text.push_str(&delta); } }
+                }
+            }
+            text
+        }
+
+        let _t1 = one_turn(&control, "Remember this secret number: 42. Just reply OK.").await;
+        let t2 = one_turn(
+            &control,
+            "What was the secret number I just gave you? Reply with only the digits.",
+        )
+        .await;
+        eprintln!("turn2 reply: {t2:?}");
+        assert!(t2.contains("42"), "turn 2 should recall 42 from turn 1, got: {t2:?}");
+        let _ = control.send(SessionCommand::Close).await;
+    }
+
+    fn which_codex() -> Option<std::path::PathBuf> {
+        let out = std::process::Command::new("which").arg("codex").output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if p.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(p))
+        }
     }
 
     #[test]

@@ -213,7 +213,14 @@ pub async fn run_external_cli_reply(
     let run_id = format!("ext-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
 
-    let mut spawned = spawn_agent(def, &resolved_bin, &args, &cwd, &extra_env).await?;
+    // Phase 2: codex app-server keeps the process alive across turns via the live-session
+    // registry. Other protocols still spawn one child per turn.
+    let persistent = matches!(def.stream_format, StreamFormat::CodexAppServer);
+    let mut spawned_opt = if persistent {
+        None
+    } else {
+        Some(spawn_agent(def, &resolved_bin, &args, &cwd, &extra_env).await?)
+    };
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
@@ -250,7 +257,25 @@ pub async fn run_external_cli_reply(
 
     let cancel_check = || !state.is_chat_generation_active(&conversation_id, run_generation);
 
-    let read_result = match def.stream_format {
+    let read_result = if persistent {
+        run_persistent_turn(
+            state,
+            &conversation_id,
+            &agent_id,
+            &resolved_bin,
+            &args,
+            &cwd,
+            conversation.agent_runtime.external_model.clone(),
+            conversation.agent_runtime.external_reasoning.clone(),
+            &composed.full_prompt,
+            latest_user_message,
+            &mut emit_event,
+            &cancel_check,
+        )
+        .await
+    } else {
+        let spawned = spawned_opt.as_mut().expect("non-persistent path spawns a child");
+        match def.stream_format {
         StreamFormat::PiRpc => {
             let model = conversation.agent_runtime.external_model.as_deref();
             run_pi_rpc_session(
@@ -309,12 +334,21 @@ pub async fn run_external_cli_reply(
             )
             .await
         }
+        }
     };
 
-    let status = spawned.child.wait().await.map_err(|e| e.to_string())?;
+    // Non-persistent path waits on (and drops/kills) the per-turn child. Persistent sessions
+    // keep their process alive in the registry, so there is nothing to wait on here.
+    let exit_code: Option<i32> = match spawned_opt {
+        Some(mut spawned) => {
+            let status = spawned.child.wait().await.map_err(|e| e.to_string())?;
+            status.code()
+        }
+        None => None,
+    };
     if read_result.is_err() {
         stream_outcome = "cancelled".to_string();
-    } else if !status.success() {
+    } else if exit_code.map(|code| code != 0).unwrap_or(false) {
         if content.trim().is_empty() {
             stream_outcome = "error".to_string();
         }
@@ -328,7 +362,7 @@ pub async fn run_external_cli_reply(
             content = format!(
                 "{} 未产生输出（exit={:?}，耗时 {}ms）",
                 def.name,
-                status.code(),
+                exit_code,
                 started_at.elapsed().as_millis()
             );
         }
@@ -475,6 +509,114 @@ impl StreamSegmentTracker {
         self.active_reasoning_idx = Some(segments.len());
         segments.push(segment.clone());
         segment
+    }
+}
+
+/// Phase 2: run one turn against a persistent live session, reusing the conversation's existing
+/// session or connecting a new one. The CLI process is kept alive in the registry between turns,
+/// so a reused session sends only the latest user message (the server holds prior context),
+/// while a fresh session gets the full composed prompt (instructions + first message).
+#[allow(clippy::too_many_arguments)]
+async fn run_persistent_turn<E, C>(
+    state: &State<'_, AppState>,
+    conversation_id: &str,
+    agent_id: &str,
+    resolved_bin: &std::path::Path,
+    args: &[String],
+    cwd: &std::path::Path,
+    model: Option<String>,
+    reasoning: Option<String>,
+    first_prompt: &str,
+    reuse_prompt: &str,
+    emit: &mut E,
+    cancel: &C,
+) -> Result<(), String>
+where
+    E: FnMut(UnifiedAgentEvent),
+    C: Fn() -> bool,
+{
+    use crate::external_agents::session::codex_app_server::{
+        spawn_codex_session_actor, CodexAppServerSession,
+    };
+    use crate::external_agents::session::live::{LiveSession, SessionCommand};
+    use tokio::sync::{mpsc, oneshot};
+
+    let cwd_str = cwd.to_string_lossy().to_string();
+
+    // Reuse an existing live session, or connect a new one.
+    let (control, prompt) =
+        match state.external_live_session_control(conversation_id, agent_id, &cwd_str) {
+            Some(control) => (control, reuse_prompt.to_string()),
+            None => {
+                let session = CodexAppServerSession::connect(
+                    resolved_bin,
+                    args,
+                    cwd,
+                    model.as_deref(),
+                    None,
+                )
+                .await?;
+                let native_id = Some(session.thread_id().to_string());
+                let control = spawn_codex_session_actor(session);
+                state.register_external_live_session(
+                    conversation_id.to_string(),
+                    LiveSession {
+                        control: control.clone(),
+                        protocol: StreamFormat::CodexAppServer,
+                        agent_id: agent_id.to_string(),
+                        cwd: cwd_str.clone(),
+                        native_id,
+                    },
+                );
+                (control, first_prompt.to_string())
+            }
+        };
+
+    let (events_tx, mut events_rx) = mpsc::channel::<UnifiedAgentEvent>(64);
+    let (done_tx, done_rx) = oneshot::channel::<Result<(), String>>();
+    if control
+        .send(SessionCommand::RunTurn {
+            prompt,
+            model,
+            reasoning,
+            events: events_tx,
+            done: done_tx,
+        })
+        .await
+        .is_err()
+    {
+        state.remove_external_live_session(conversation_id);
+        return Err("外部 CLI 会话已结束，请重试".to_string());
+    }
+
+    let mut done_rx = done_rx;
+    let mut events_open = true;
+    let mut cancel_sent = false;
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut done_rx => {
+                while let Ok(event) = events_rx.try_recv() {
+                    emit(event);
+                }
+                let outcome = result.unwrap_or_else(|_| Err("session actor dropped".to_string()));
+                if outcome.is_err() {
+                    state.remove_external_live_session(conversation_id);
+                }
+                return outcome;
+            }
+            maybe_event = events_rx.recv(), if events_open => {
+                match maybe_event {
+                    Some(event) => emit(event),
+                    None => events_open = false,
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {}
+        }
+        if !cancel_sent && cancel() {
+            cancel_sent = true;
+            let _ = control.send(SessionCommand::Cancel).await;
+        }
     }
 }
 

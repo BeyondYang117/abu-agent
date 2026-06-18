@@ -96,6 +96,10 @@ pub struct AppState {
     /// 每次打开都串行重探 8 个 CLI（含 auth 探测超时）。force_refresh 时跳过。
     pub external_detected_agents_cache:
         Mutex<Option<(Instant, Vec<crate::external_agents::types::DetectedAgent>)>>,
+    /// Phase 2 持久会话注册表：conversation_id → 活会话（仅持有控制通道，不持有 Child）。
+    /// 仅在 get/insert/remove 时短暂持锁，绝不跨 turn await 持锁。
+    pub external_live_sessions:
+        Mutex<HashMap<String, crate::external_agents::session::live::LiveSession>>,
     /// 外部入口（例如 Lens）交给 Chat 前端发送的待处理消息。
     /// 后端只负责保存请求和打开窗口，实际发送必须走 Chat 前端的手动发送状态机。
     pub pending_chat_external_sends: Mutex<Vec<PendingChatExternalSend>>,
@@ -160,6 +164,7 @@ impl AppState {
             external_slash_commands_cache: Mutex::new(HashMap::new()),
             external_agent_models_cache: Mutex::new(HashMap::new()),
             external_detected_agents_cache: Mutex::new(None),
+            external_live_sessions: Mutex::new(HashMap::new()),
             pending_chat_external_sends: Mutex::new(Vec::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),
@@ -434,6 +439,45 @@ impl AppState {
             .unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), agents));
     }
 
+    /// Phase 2: return the control channel of a reusable live session for this conversation
+    /// (same agent + cwd, actor still alive). Removes a stale/mismatched entry as a side effect.
+    pub fn external_live_session_control(
+        &self,
+        conversation_id: &str,
+        agent_id: &str,
+        cwd: &str,
+    ) -> Option<tokio::sync::mpsc::Sender<crate::external_agents::session::live::SessionCommand>> {
+        let mut map = self
+            .external_live_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(session) = map.get(conversation_id) {
+            if session.is_reusable(agent_id, cwd) {
+                return Some(session.control.clone());
+            }
+        }
+        map.remove(conversation_id);
+        None
+    }
+
+    pub fn register_external_live_session(
+        &self,
+        conversation_id: String,
+        session: crate::external_agents::session::live::LiveSession,
+    ) {
+        self.external_live_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(conversation_id, session);
+    }
+
+    pub fn remove_external_live_session(&self, conversation_id: &str) {
+        self.external_live_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation_id);
+    }
+
     /// 标记某个 key 失败：进入冷却 + 不变更 active_key_idx
     pub fn mark_key_failed(&self, provider_id: &str, idx: usize) {
         let mut cooldowns = self.key_cooldowns.lock().unwrap_or_else(|e| e.into_inner());
@@ -481,6 +525,7 @@ pub(crate) fn test_app_state() -> AppState {
         external_slash_commands_cache: Mutex::new(HashMap::new()),
         external_agent_models_cache: Mutex::new(HashMap::new()),
         external_detected_agents_cache: Mutex::new(None),
+        external_live_sessions: Mutex::new(HashMap::new()),
         pending_chat_external_sends: Mutex::new(Vec::new()),
         pending_selection: Mutex::new(None),
         lens_freeze_frame_image_id: Mutex::new(None),
