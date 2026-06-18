@@ -1,32 +1,29 @@
 use super::super::types::{
-    PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions, RuntimeContext, StreamFormat,
-    JsonEventParser,
+    JsonEventParser, PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions, RuntimeContext,
+    StreamFormat,
 };
+
+const GEMINI_ENV: &[(&str, &str)] = &[("GEMINI_CLI_TRUST_WORKSPACE", "true")];
 
 const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("default", "Default"),
-    ("auto", "auto"),
-    ("sonnet-4", "sonnet-4"),
-    ("gpt-5", "gpt-5"),
+    ("gemini-3-pro-preview", "gemini-3-pro-preview"),
+    ("gemini-3-flash-preview", "gemini-3-flash-preview"),
+    ("gemini-2.5-pro", "gemini-2.5-pro"),
+    ("gemini-2.5-flash", "gemini-2.5-flash"),
+    ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
 ];
 
-pub fn build_cursor_args(
-    ctx: &RuntimeContext,
+pub fn build_gemini_args(
+    _ctx: &RuntimeContext,
     options: &RuntimeBuildOptions,
     _prompt: Option<&str>,
 ) -> Vec<String> {
     let mut args = vec![
-        "--print".to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
-        "--stream-partial-output".to_string(),
-        "--force".to_string(),
-        "--trust".to_string(),
+        "--yolo".to_string(),
     ];
-    if let Some(cwd) = ctx.cwd.as_ref().filter(|c| !c.is_empty()) {
-        args.push("--workspace".to_string());
-        args.push(cwd.clone());
-    }
     if let Some(model) = options.model.as_ref().filter(|m| *m != "default" && !m.is_empty()) {
         args.push("--model".to_string());
         args.push(model.clone());
@@ -34,29 +31,29 @@ pub fn build_cursor_args(
     args
 }
 
-pub const CURSOR_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
-    id: "cursor-agent",
-    name: "Cursor Agent",
-    bin: "cursor-agent",
+pub const GEMINI_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
+    id: "gemini",
+    name: "Gemini CLI",
+    bin: "gemini",
     fallback_bins: &[],
     version_args: &["--version"],
-    auth_probe_args: Some(&["status"]),
+    auth_probe_args: None,
     fallback_models: FALLBACK_MODELS,
     reasoning_options: &[],
-    list_models_args: Some(&["models"]),
+    list_models_args: None,
     list_models_timeout_secs: None,
     models_from_stderr: false,
     model_probe: None,
     model_probe_args: None,
-    env: &[],
+    env: GEMINI_ENV,
     max_prompt_arg_bytes: None,
     prompt_via_stdin: true,
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::JsonEventStream,
-    json_event_parser: Some(JsonEventParser::CursorAgent),
+    json_event_parser: Some(JsonEventParser::Gemini),
     external_mcp_injection: None,
     resumes_session_via_cli: false,
-    build_args: build_cursor_args,
+    build_args: build_gemini_args,
 };
 
 #[cfg(test)]
@@ -64,23 +61,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_build_args_includes_workspace() {
-        let args = build_cursor_args(
+    fn gemini_build_args_yolo_and_model() {
+        let args = build_gemini_args(
             &RuntimeContext {
-                cwd: Some("/proj".to_string()),
+                cwd: None,
                 extra_allowed_dirs: vec![],
                 resume_session_id: None,
                 new_session_id: None,
                 include_partial_messages: false,
             },
             &RuntimeBuildOptions {
-                model: Some("auto".to_string()),
+                model: Some("gemini-2.5-pro".to_string()),
                 reasoning: None,
             },
             None,
         );
-        assert!(args.contains(&"--workspace".to_string()));
-        assert!(args.contains(&"/proj".to_string()));
-        assert!(!args.iter().any(|a| a == "-"));
+        assert!(args.contains(&"--yolo".to_string()));
+        assert!(args.contains(&"gemini-2.5-pro".to_string()));
     }
 }

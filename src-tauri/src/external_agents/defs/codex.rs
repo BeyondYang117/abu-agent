@@ -37,7 +37,11 @@ fn codex_needs_danger_full_access() -> bool {
         .is_some_and(|v| !v.trim().is_empty())
 }
 
-pub fn build_codex_args(ctx: &RuntimeContext, options: &RuntimeBuildOptions) -> Vec<String> {
+pub fn build_codex_args(
+    ctx: &RuntimeContext,
+    options: &RuntimeBuildOptions,
+    _prompt: Option<&str>,
+) -> Vec<String> {
     let mut args = if codex_needs_danger_full_access() {
         vec![
             "exec".to_string(),
@@ -94,6 +98,12 @@ pub const CODEX_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     fallback_models: FALLBACK_MODELS,
     reasoning_options: REASONING,
     list_models_args: Some(&["debug", "models"]),
+    list_models_timeout_secs: None,
+    models_from_stderr: false,
+    model_probe: None,
+    model_probe_args: None,
+    env: &[],
+    max_prompt_arg_bytes: None,
     prompt_via_stdin: true,
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::JsonEventStream,
@@ -124,6 +134,7 @@ mod tests {
                 model: Some("gpt-5".to_string()),
                 reasoning: Some("high".to_string()),
             },
+            None,
         );
         assert!(args.contains(&"workspace-write".to_string()));
         assert!(args.contains(&"-C".to_string()));

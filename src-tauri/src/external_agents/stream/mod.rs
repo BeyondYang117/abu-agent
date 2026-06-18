@@ -11,10 +11,15 @@ pub fn create_stream_handler(
     parser: Option<JsonEventParser>,
 ) -> StreamHandler {
     match format {
-        StreamFormat::ClaudeStreamJson => StreamHandler::Claude(claude::ClaudeStreamState::default()),
+        StreamFormat::ClaudeStreamJson => {
+            StreamHandler::Claude(claude::ClaudeStreamState::default())
+        }
         StreamFormat::JsonEventStream => StreamHandler::Json(json_events::JsonEventStreamState::new(
             parser.unwrap_or(JsonEventParser::Codex),
         )),
+        StreamFormat::PiRpc | StreamFormat::AcpJsonRpc => {
+            StreamHandler::Json(json_events::JsonEventStreamState::new(JsonEventParser::Codex))
+        }
     }
 }
 

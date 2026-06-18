@@ -8,6 +8,8 @@ use crate::chat::model::ModelUsage;
 pub enum StreamFormat {
     ClaudeStreamJson,
     JsonEventStream,
+    PiRpc,
+    AcpJsonRpc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,12 +17,17 @@ pub enum StreamFormat {
 pub enum JsonEventParser {
     Codex,
     CursorAgent,
+    OpenCode,
+    Gemini,
+    Kimi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalMcpInjection {
     ClaudeMcpJson,
+    OpenCodeEnvContent,
+    AcpMerge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +35,11 @@ pub enum ExternalMcpInjection {
 pub enum PromptInputFormat {
     Text,
     StreamJson,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelProbeStrategy {
+    Acp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,13 +89,19 @@ pub struct RuntimeAgentDef {
     pub fallback_models: &'static [(&'static str, &'static str)],
     pub reasoning_options: &'static [(&'static str, &'static str)],
     pub list_models_args: Option<&'static [&'static str]>,
+    pub list_models_timeout_secs: Option<u64>,
+    pub models_from_stderr: bool,
+    pub model_probe: Option<ModelProbeStrategy>,
+    pub model_probe_args: Option<&'static [&'static str]>,
+    pub env: &'static [(&'static str, &'static str)],
+    pub max_prompt_arg_bytes: Option<usize>,
     pub prompt_via_stdin: bool,
     pub prompt_input_format: PromptInputFormat,
     pub stream_format: StreamFormat,
     pub json_event_parser: Option<JsonEventParser>,
     pub external_mcp_injection: Option<ExternalMcpInjection>,
     pub resumes_session_via_cli: bool,
-    pub build_args: fn(&RuntimeContext, &RuntimeBuildOptions) -> Vec<String>,
+    pub build_args: fn(&RuntimeContext, &RuntimeBuildOptions, Option<&str>) -> Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

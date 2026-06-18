@@ -10,7 +10,11 @@ const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("haiku", "Haiku (alias)"),
 ];
 
-pub fn build_claude_args(ctx: &RuntimeContext, options: &RuntimeBuildOptions) -> Vec<String> {
+pub fn build_claude_args(
+    ctx: &RuntimeContext,
+    options: &RuntimeBuildOptions,
+    _prompt: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "-p".to_string(),
         "--input-format".to_string(),
@@ -54,6 +58,12 @@ pub const CLAUDE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     fallback_models: FALLBACK_MODELS,
     reasoning_options: &[],
     list_models_args: None,
+    list_models_timeout_secs: None,
+    models_from_stderr: false,
+    model_probe: None,
+    model_probe_args: None,
+    env: &[],
+    max_prompt_arg_bytes: None,
     prompt_via_stdin: true,
     prompt_input_format: PromptInputFormat::StreamJson,
     stream_format: StreamFormat::ClaudeStreamJson,
@@ -81,6 +91,7 @@ mod tests {
                 model: Some("sonnet".to_string()),
                 reasoning: None,
             },
+            None,
         );
         assert!(args.contains(&"--resume".to_string()));
         assert!(args.contains(&"sess-1".to_string()));

@@ -18,15 +18,17 @@ use crate::chat::types::{
 };
 use crate::chat::Conversation;
 use crate::external_agents::detection::detect_single_agent;
-use crate::external_agents::mcp_inject::apply_mcp_injection;
+use crate::external_agents::mcp_inject::{apply_mcp_injection, build_spawn_extra_env};
 use crate::external_agents::prompt::{compose_external_prompt, cwd_hint};
 use crate::external_agents::registry::get_agent_def;
+use crate::external_agents::session::acp::{build_acp_mcp_servers, run_acp_session};
+use crate::external_agents::session::pi_rpc::run_pi_rpc_session;
 use crate::external_agents::session::{persist_delivered_session, resolve_agent_resume_context};
 use crate::external_agents::skill_stage::{skill_cwd_alias_segment, stage_active_skill};
 use crate::external_agents::spawn::{read_stdout_lines, resolve_binary, spawn_agent, write_prompt_stdin};
 use crate::external_agents::stream::create_stream_handler;
 use crate::external_agents::types::{
-    RuntimeBuildOptions, RuntimeContext, UnifiedAgentEvent,
+    ExternalMcpInjection, RuntimeBuildOptions, RuntimeContext, StreamFormat, UnifiedAgentEvent,
 };
 use crate::external_agents::workspace::{
     can_write_mcp_json, extra_allowed_dirs_for_agent, resolve_effective_cwd,
@@ -151,16 +153,31 @@ pub async fn run_external_cli_reply(
         reasoning: conversation.agent_runtime.external_reasoning.clone(),
     };
 
-    let args = (def.build_args)(&runtime_ctx, &build_options);
+    if let Some(max_bytes) = def.max_prompt_arg_bytes {
+        if composed.full_prompt.len() > max_bytes {
+            return Err(format!(
+                "Prompt 过长（{} 字节），超过 {} 的上限（{} 字节）。请缩短消息或改用 stdin 模式的 Agent。",
+                composed.full_prompt.len(),
+                def.name,
+                max_bytes
+            ));
+        }
+    }
+
+    let prompt_for_args = if def.prompt_via_stdin {
+        None
+    } else {
+        Some(composed.full_prompt.as_str())
+    };
+    let args = (def.build_args)(&runtime_ctx, &build_options, prompt_for_args);
+
+    let extra_env = build_spawn_extra_env(def.external_mcp_injection, &settings.chat_tools.servers);
 
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("ext-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
 
-    let mut spawned = spawn_agent(def, &resolved_bin, &args, &cwd).await?;
-    write_prompt_stdin(&mut spawned.child, def, &composed.full_prompt).await?;
-
-    let mut handler = create_stream_handler(def.stream_format, def.json_event_parser);
+    let mut spawned = spawn_agent(def, &resolved_bin, &args, &cwd, &extra_env).await?;
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
@@ -173,34 +190,72 @@ pub async fn run_external_cli_reply(
     let conversation_id = conversation.id.clone();
     let started_at = Instant::now();
 
-    let read_result = read_stdout_lines(
-        &mut spawned.child,
-        |line| {
-            handler.handle_line(
-                line,
-                &mut |event| {
-                    apply_unified_event(
-                        app,
-                        &conversation_id,
-                        &run_id,
-                        &assistant_message_id,
-                        &mut content,
-                        &mut reasoning,
-                        &mut tool_calls,
-                        &mut tool_map,
-                        &mut usage,
-                        &mut segments,
-                        &mut segment_order,
-                        &mut segment_tracker,
-                        event,
-                    );
+    let mut emit_event = |event: UnifiedAgentEvent| {
+        apply_unified_event(
+            app,
+            &conversation_id,
+            &run_id,
+            &assistant_message_id,
+            &mut content,
+            &mut reasoning,
+            &mut tool_calls,
+            &mut tool_map,
+            &mut usage,
+            &mut segments,
+            &mut segment_order,
+            &mut segment_tracker,
+            event,
+        );
+    };
+
+    let cancel_check = || !state.is_chat_generation_active(&conversation_id, run_generation);
+
+    let read_result = match def.stream_format {
+        StreamFormat::PiRpc => {
+            let model = conversation.agent_runtime.external_model.as_deref();
+            run_pi_rpc_session(
+                &mut spawned.child,
+                &composed.full_prompt,
+                model,
+                |event| emit_event(event),
+                cancel_check,
+            )
+            .await
+        }
+        StreamFormat::AcpJsonRpc => {
+            let model = conversation.agent_runtime.external_model.as_deref();
+            let mcp_servers = if def.external_mcp_injection == Some(ExternalMcpInjection::AcpMerge) {
+                build_acp_mcp_servers(&settings.chat_tools.servers)
+            } else {
+                vec![]
+            };
+            run_acp_session(
+                &mut spawned.child,
+                &composed.full_prompt,
+                &cwd,
+                model,
+                &mcp_servers,
+                |event| emit_event(event),
+                cancel_check,
+            )
+            .await
+        }
+        _ => {
+            if def.prompt_via_stdin {
+                write_prompt_stdin(&mut spawned.child, def, &composed.full_prompt).await?;
+            }
+            let mut handler = create_stream_handler(def.stream_format, def.json_event_parser);
+            read_stdout_lines(
+                &mut spawned.child,
+                |line| {
+                    handler.handle_line(line, &mut |event| emit_event(event));
+                    Ok(())
                 },
-            );
-            Ok(())
-        },
-        || !state.is_chat_generation_active(&conversation_id, run_generation),
-    )
-    .await;
+                cancel_check,
+            )
+            .await
+        }
+    };
 
     let status = spawned.child.wait().await.map_err(|e| e.to_string())?;
     if read_result.is_err() {

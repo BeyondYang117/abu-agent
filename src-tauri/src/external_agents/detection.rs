@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use crate::external_agents::registry::AGENT_DEFS;
+use crate::external_agents::session::acp::detect_acp_models;
+use crate::external_agents::session::pi_rpc::parse_pi_models;
 use crate::external_agents::types::{
-    DetectedAgent, RuntimeAgentDef, RuntimeModelOption, default_model_option,
+    DetectedAgent, ModelProbeStrategy, RuntimeAgentDef, RuntimeModelOption, default_model_option,
     fallback_models_from_pairs, reasoning_options_from_pairs,
 };
 
@@ -88,19 +90,37 @@ async fn probe_models(
     def: &RuntimeAgentDef,
     path: Option<&std::path::Path>,
 ) -> Option<Vec<RuntimeModelOption>> {
-    let args = def.list_models_args?;
     let bin = path?;
+
+    if def.model_probe == Some(ModelProbeStrategy::Acp) {
+        let args: Vec<&str> = def.model_probe_args?.iter().copied().collect();
+        let timeout_secs = def.list_models_timeout_secs.unwrap_or(15);
+        let cwd = std::env::temp_dir();
+        return detect_acp_models(bin, &args, &cwd, timeout_secs).await;
+    }
+
+    let args = def.list_models_args?;
+    let timeout_secs = def.list_models_timeout_secs.unwrap_or(5);
     let output = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(timeout_secs),
         tokio::process::Command::new(bin).args(args).output(),
     )
     .await
     .ok()?
     .ok()?;
-    if !output.status.success() {
+
+    let text = if def.models_from_stderr {
+        String::from_utf8_lossy(&output.stderr)
+    } else if output.status.success() {
+        String::from_utf8_lossy(&output.stdout)
+    } else {
         return None;
+    };
+
+    if def.models_from_stderr {
+        return parse_pi_models(text.as_ref());
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+
     parse_models_list(def.id, text.as_ref())
 }
 
@@ -143,6 +163,16 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
                 }
             }
         }
+        "opencode" => {
+            for line in trimmed.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                if line.contains('/') {
+                    out.push(RuntimeModelOption {
+                        id: line.to_string(),
+                        label: line.to_string(),
+                    });
+                }
+            }
+        }
         _ => {}
     }
     if out.len() > 1 {
@@ -165,5 +195,15 @@ mod tests {
         .unwrap();
         assert!(models.iter().any(|m| m.id == "auto"));
         assert!(models.iter().any(|m| m.id == "sonnet-4"));
+    }
+
+    #[test]
+    fn parse_opencode_line_models() {
+        let models = parse_models_list(
+            "opencode",
+            "anthropic/claude-sonnet-4-5\nopenai/gpt-5",
+        )
+        .unwrap();
+        assert!(models.iter().any(|m| m.id == "anthropic/claude-sonnet-4-5"));
     }
 }

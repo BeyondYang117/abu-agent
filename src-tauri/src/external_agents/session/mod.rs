@@ -10,6 +10,9 @@ use tauri::Manager;
 
 use crate::external_agents::types::ExternalAgentSession;
 
+pub mod acp;
+pub mod pi_rpc;
+
 fn sessions_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let base = app
         .path()

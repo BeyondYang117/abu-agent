@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -48,14 +49,23 @@ pub async fn spawn_agent(
     resolved_bin: &Path,
     args: &[String],
     cwd: &Path,
+    extra_env: &HashMap<String, String>,
 ) -> Result<SpawnedAgent, String> {
-    let child = Command::new(resolved_bin)
+    let mut command = Command::new(resolved_bin);
+    command
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    for (key, value) in def.env {
+        command.env(key, value);
+    }
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let child = command
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", def.id))?;
     Ok(SpawnedAgent {
@@ -96,7 +106,6 @@ pub async fn write_prompt_stdin(
                 .write_all(payload.as_bytes())
                 .await
                 .map_err(|e| e.to_string())?;
-            // Keep stdin open until turn_end for Claude multi-turn stream-json.
         }
     }
     Ok(())
