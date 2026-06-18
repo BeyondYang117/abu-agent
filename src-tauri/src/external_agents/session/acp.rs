@@ -13,7 +13,6 @@ use crate::external_agents::stream::usage_from_numbers;
 use crate::external_agents::types::{
     ExternalCliSlashCommand, RuntimeModelOption, UnifiedAgentEvent, default_model_option,
 };
-use crate::settings::ChatMcpServer;
 
 const ACP_PROTOCOL_VERSION: i64 = 1;
 
@@ -24,32 +23,6 @@ pub struct AcpMcpServer {
     pub command: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-}
-
-pub fn build_acp_mcp_servers(servers: &[ChatMcpServer]) -> Vec<AcpMcpServer> {
-    servers
-        .iter()
-        .filter(|s| s.enabled && s.transport == "stdio" && !s.command.trim().is_empty())
-        .map(|s| {
-            let name = if s.id.trim().is_empty() {
-                s.name.clone()
-            } else {
-                s.id.clone()
-            };
-            let env: Vec<(String, String)> = s
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            AcpMcpServer {
-                server_type: "stdio".to_string(),
-                name,
-                command: s.command.clone(),
-                args: s.args.clone(),
-                env,
-            }
-        })
-        .collect()
 }
 
 fn build_session_new_params(cwd: &Path, mcp_servers: &[AcpMcpServer]) -> Value {
@@ -1419,21 +1392,5 @@ mod tests {
             got_text || got_error,
             "expected at least one TextDelta or an Error/Err round-trip, got: {seq:?}"
         );
-    }
-
-    #[test]
-    fn build_acp_mcp_servers_stdio_only() {
-        let servers = vec![ChatMcpServer {
-            id: "local".to_string(),
-            name: "Local".to_string(),
-            enabled: true,
-            command: "node".to_string(),
-            args: vec!["server.js".to_string()],
-            transport: "stdio".to_string(),
-            ..Default::default()
-        }];
-        let out = build_acp_mcp_servers(&servers);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].command, "node");
     }
 }

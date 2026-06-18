@@ -429,7 +429,6 @@ export type ChatConfig = {
   userDisplayName?: string
   userAvatar?: string
   defaultAgentRuntime?: AgentRuntimeConfig
-  externalAllowMcpInProject?: boolean
 }
 
 export type ChatMemoryConfig = {

@@ -491,9 +491,6 @@ pub struct ChatConfig {
     /// 新建对话默认 Agent 运行时（内置 loop 或外部 CLI）。
     #[serde(default)]
     pub default_agent_runtime: crate::chat::AgentRuntimeConfig,
-    /// 允许在用户项目 root_path 内写入 `.mcp.json`（外部 Claude Code 专用）。
-    #[serde(default)]
-    pub external_allow_mcp_in_project: bool,
 }
 
 impl Default for ChatConfig {
@@ -507,7 +504,6 @@ impl Default for ChatConfig {
             user_display_name: String::new(),
             user_avatar: String::new(),
             default_agent_runtime: crate::chat::AgentRuntimeConfig::default(),
-            external_allow_mcp_in_project: false,
         }
     }
 }

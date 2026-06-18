@@ -9,7 +9,6 @@ use crate::external_agents::types::RuntimeAgentDef;
 #[derive(Debug, Clone)]
 pub struct ResolvedWorkspace {
     pub cwd: PathBuf,
-    pub is_managed_sandbox: bool,
 }
 
 pub fn resolve_effective_cwd(
@@ -22,10 +21,7 @@ pub fn resolve_effective_cwd(
             if let Some(root) = project.root_path.filter(|p| !p.trim().is_empty()) {
                 let path = PathBuf::from(root);
                 if path.is_dir() {
-                    return Ok(ResolvedWorkspace {
-                        cwd: path,
-                        is_managed_sandbox: false,
-                    });
+                    return Ok(ResolvedWorkspace { cwd: path });
                 }
             }
         }
@@ -37,28 +33,7 @@ pub fn resolve_effective_cwd(
         .join("chat-workspaces")
         .join(conversation_id);
     std::fs::create_dir_all(&base).map_err(|e| format!("create workspace: {e}"))?;
-    Ok(ResolvedWorkspace {
-        cwd: base,
-        is_managed_sandbox: true,
-    })
-}
-
-pub fn can_write_mcp_json(workspace: &ResolvedWorkspace, allow_in_project: bool) -> bool {
-    workspace.is_managed_sandbox || allow_in_project
-}
-
-pub fn is_managed_sandbox_path(cwd: &Path, app: &AppHandle) -> bool {
-    conversations_dir(app)
-        .ok()
-        .and_then(|dir| dir.parent().map(|p| p.join("chat-workspaces")))
-        .and_then(|workspaces| {
-            cwd.canonicalize()
-                .ok()
-                .and_then(|canonical| {
-                    workspaces.canonicalize().ok().map(|root| canonical.starts_with(root))
-                })
-        })
-        .unwrap_or(false)
+    Ok(ResolvedWorkspace { cwd: base })
 }
 
 pub fn detection_cache_ttl() -> Duration {

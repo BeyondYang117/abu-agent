@@ -72,7 +72,6 @@ pub const CODEX_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::CodexAppServer,
     json_event_parser: None,
-    external_mcp_injection: None,
     resumes_session_via_cli: false,
     build_args: build_codex_args,
 };

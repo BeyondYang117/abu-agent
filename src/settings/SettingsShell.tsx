@@ -241,7 +241,6 @@ function defaultChatConfig(): NonNullable<SettingsData['chat']> {
       externalModel: null,
       externalReasoning: null,
     },
-    externalAllowMcpInProject: false,
   }
 }
 

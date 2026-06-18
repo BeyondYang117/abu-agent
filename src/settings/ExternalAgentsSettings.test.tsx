@@ -19,7 +19,6 @@ const baseChatConfig = {
     externalModel: null,
     externalReasoning: null,
   },
-  externalAllowMcpInProject: false,
 }
 
 describe('ExternalAgentsSettings', () => {

@@ -49,7 +49,6 @@ pub const KIMI_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::JsonEventStream,
     json_event_parser: Some(JsonEventParser::Kimi),
-    external_mcp_injection: None,
     resumes_session_via_cli: false,
     build_args: build_kimi_args,
 };

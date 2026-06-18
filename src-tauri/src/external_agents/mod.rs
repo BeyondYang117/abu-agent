@@ -3,7 +3,6 @@ pub mod compact;
 pub mod context;
 pub mod defs;
 pub mod detection;
-pub mod mcp_inject;
 pub mod prompt;
 pub mod registry;
 pub mod run;

@@ -398,8 +398,6 @@ export interface DetectedExternalAgent {
   sandbox_options?: Array<{ id: string; label: string }>
   authStatus?: string | null
   auth_status?: string | null
-  externalMcpInjection?: string | null
-  external_mcp_injection?: string | null
 }
 
 export interface Conversation {

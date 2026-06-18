@@ -18,12 +18,11 @@ use crate::chat::types::{
 };
 use crate::chat::Conversation;
 use crate::external_agents::detection::detect_single_agent;
-use crate::external_agents::mcp_inject::{apply_mcp_injection, build_spawn_extra_env};
 use crate::external_agents::prompt::{
     compose_external_prompt, compose_external_prompt_passthrough, cwd_hint, is_cli_slash_input,
 };
 use crate::external_agents::registry::get_agent_def;
-use crate::external_agents::session::acp::{build_acp_mcp_servers, run_acp_session, AcpMcpServer};
+use crate::external_agents::session::acp::{run_acp_session, AcpMcpServer};
 use crate::external_agents::session::codex_app_server::run_codex_app_server_session;
 use crate::external_agents::session::pi_rpc::run_pi_rpc_session;
 use crate::external_agents::session::{persist_delivered_session, resolve_agent_resume_context};
@@ -32,10 +31,10 @@ use crate::external_agents::slash::{self};
 use crate::external_agents::spawn::{read_stdout_lines, resolve_binary, spawn_agent, write_prompt_stdin};
 use crate::external_agents::stream::create_stream_handler;
 use crate::external_agents::types::{
-    ExternalMcpInjection, RuntimeBuildOptions, RuntimeContext, StreamFormat, UnifiedAgentEvent,
+    RuntimeBuildOptions, RuntimeContext, StreamFormat, UnifiedAgentEvent,
 };
 use crate::external_agents::workspace::{
-    can_write_mcp_json, extra_allowed_dirs_for_agent, resolve_effective_cwd,
+    extra_allowed_dirs_for_agent, resolve_effective_cwd,
 };
 use crate::skills::read_skill_detail;
 use crate::state::AppState;
@@ -167,14 +166,6 @@ pub async fn run_external_cli_reply(
         )
     };
 
-    let can_write_mcp = can_write_mcp_json(&workspace, settings.chat.external_allow_mcp_in_project);
-    apply_mcp_injection(
-        def.external_mcp_injection,
-        &cwd,
-        &settings.chat_tools.servers,
-        can_write_mcp,
-    )?;
-
     let extra_dirs = extra_allowed_dirs_for_agent(def, &settings.chat_tools.skill_scan_paths);
     let runtime_ctx = RuntimeContext {
         cwd: Some(cwd.to_string_lossy().into_owned()),
@@ -208,7 +199,7 @@ pub async fn run_external_cli_reply(
     };
     let args = (def.build_args)(&runtime_ctx, &build_options, prompt_for_args);
 
-    let extra_env = build_spawn_extra_env(def.external_mcp_injection, &settings.chat_tools.servers);
+    let extra_env: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("ext-run-{}-{}", run_generation, Uuid::new_v4());
@@ -262,11 +253,7 @@ pub async fn run_external_cli_reply(
     let cancel_check = || !state.is_chat_generation_active(&conversation_id, run_generation);
 
     let read_result = if persistent {
-        let persistent_mcp = if def.external_mcp_injection == Some(ExternalMcpInjection::AcpMerge) {
-            build_acp_mcp_servers(&settings.chat_tools.servers)
-        } else {
-            vec![]
-        };
+        let persistent_mcp: Vec<AcpMcpServer> = vec![];
         run_persistent_turn(
             app,
             state,
@@ -316,11 +303,7 @@ pub async fn run_external_cli_reply(
         }
         StreamFormat::AcpJsonRpc => {
             let model = conversation.agent_runtime.external_model.as_deref();
-            let mcp_servers = if def.external_mcp_injection == Some(ExternalMcpInjection::AcpMerge) {
-                build_acp_mcp_servers(&settings.chat_tools.servers)
-            } else {
-                vec![]
-            };
+            let mcp_servers: Vec<AcpMcpServer> = vec![];
             run_acp_session(
                 &mut spawned.child,
                 &composed.full_prompt,

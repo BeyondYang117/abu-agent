@@ -1,5 +1,5 @@
 use super::super::types::{
-    ExternalMcpInjection, ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
+    ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
     RuntimeBuildOptions, RuntimeContext, StreamFormat,
 };
 
@@ -89,7 +89,6 @@ pub const CLAUDE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     prompt_input_format: PromptInputFormat::StreamJson,
     stream_format: StreamFormat::ClaudeStreamJson,
     json_event_parser: None,
-    external_mcp_injection: Some(ExternalMcpInjection::ClaudeMcpJson),
     resumes_session_via_cli: true,
     build_args: build_claude_args,
 };

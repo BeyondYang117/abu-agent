@@ -59,7 +59,6 @@ pub async fn detect_single_agent(def: &RuntimeAgentDef) -> DetectedAgent {
         reasoning_options: reasoning_options_from_pairs(def.reasoning_options),
         sandbox_options: sandbox_options_for(def.id),
         auth_status,
-        external_mcp_injection: def.external_mcp_injection,
     }
 }
 

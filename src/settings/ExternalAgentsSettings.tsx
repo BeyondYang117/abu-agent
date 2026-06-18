@@ -4,7 +4,7 @@ import type { AgentRuntimeConfig, ChatConfig } from '../api/tauri'
 import { AgentIcon } from '../chat/AgentIcon'
 import { chatApi, type DetectedExternalAgent } from '../chat/api'
 import type { SettingsTab } from './SettingsShell'
-import { Select, SettingRow, SettingsGroup, Toggle } from './components'
+import { Select, SettingRow, SettingsGroup } from './components'
 import { i18n, type Lang } from './i18n'
 
 const BUILTIN_RUNTIME: AgentRuntimeConfig = {
@@ -185,15 +185,6 @@ export function ExternalAgentsSettings({
       </SettingsGroup>
 
       <SettingsGroup title={t.externalAgentsMcpSection}>
-        <SettingRow
-          label={t.externalAgentsMcpProjectToggle}
-          description={t.externalAgentsMcpProjectHint}
-        >
-          <Toggle
-            checked={chatConfig.externalAllowMcpInProject === true}
-            onChange={(externalAllowMcpInProject) => onChatChange({ externalAllowMcpInProject })}
-          />
-        </SettingRow>
         <div className="px-1 pb-2">
           <button
             type="button"

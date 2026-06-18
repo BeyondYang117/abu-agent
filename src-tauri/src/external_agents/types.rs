@@ -25,14 +25,6 @@ pub enum JsonEventParser {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ExternalMcpInjection {
-    ClaudeMcpJson,
-    OpenCodeEnvContent,
-    AcpMerge,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PromptInputFormat {
     Text,
     StreamJson,
@@ -86,7 +78,6 @@ pub struct DetectedAgent {
     #[serde(default)]
     pub sandbox_options: Vec<RuntimeModelOption>,
     pub auth_status: Option<String>,
-    pub external_mcp_injection: Option<ExternalMcpInjection>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +119,6 @@ pub struct RuntimeAgentDef {
     pub prompt_input_format: PromptInputFormat,
     pub stream_format: StreamFormat,
     pub json_event_parser: Option<JsonEventParser>,
-    pub external_mcp_injection: Option<ExternalMcpInjection>,
     pub resumes_session_via_cli: bool,
     pub build_args: fn(&RuntimeContext, &RuntimeBuildOptions, Option<&str>) -> Vec<String>,
 }

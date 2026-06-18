@@ -66,7 +66,6 @@ pub const PI_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::PiRpc,
     json_event_parser: None,
-    external_mcp_injection: None,
     resumes_session_via_cli: false,
     build_args: build_pi_args,
 };

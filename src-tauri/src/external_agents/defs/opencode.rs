@@ -1,5 +1,5 @@
 use super::super::types::{
-    ExternalMcpInjection, ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
+    ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
     RuntimeBuildOptions, RuntimeContext, SlashStrategy, StreamFormat,
 };
 
@@ -43,7 +43,6 @@ pub const OPENCODE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::AcpJsonRpc,
     json_event_parser: None,
-    external_mcp_injection: Some(ExternalMcpInjection::AcpMerge),
     resumes_session_via_cli: false,
     build_args: build_opencode_args,
 };
