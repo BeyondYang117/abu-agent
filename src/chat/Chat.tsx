@@ -2515,7 +2515,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }
 
   const handleExternalModelChange = async (model: string, reasoning?: string | null) => {
-    if (!currentConversation) return
+    // Route through handleRuntimeChange so the draft updates even before a conversation exists
+    // (the draft is applied when the conversation is created on first send).
     const next: AgentRuntimeConfig = {
       ...activeAgentRuntime,
       kind: 'external',
