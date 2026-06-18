@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, Check, ShieldAlert } from 'lucide-react'
-import { chatTitlebarPillButtonClass } from './platform'
+import { Check, ShieldAlert } from 'lucide-react'
 import { APPROVAL_POLICY_OPTIONS } from './approvalPolicies'
 import { chatApi, type DetectedExternalAgent } from './api'
 import type { AgentRuntimeConfig } from './types'
@@ -76,21 +75,19 @@ export function PermissionPicker({
   }
 
   return (
-    <div className="relative max-w-full min-w-0" data-tauri-drag-region="false">
+    <div className="relative" data-tauri-drag-region="false">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
-        title={usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+          open
+            ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
+            : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'
+        }`}
+        title={`${usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}：${currentLabel}`}
+        aria-label={`${usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}：${currentLabel}`}
       >
-        <ShieldAlert size={14} className="shrink-0 text-neutral-500" strokeWidth={1.8} />
-        <span className="max-w-[120px] truncate font-medium text-neutral-800 dark:text-neutral-200">
-          {currentLabel}
-        </span>
-        <ChevronDown
-          size={15}
-          className={`shrink-0 text-neutral-400 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
+        <ShieldAlert size={16} strokeWidth={1.8} />
       </button>
       {open && (
         <>
