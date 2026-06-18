@@ -9,6 +9,7 @@ pub struct JsonEventStreamState {
     parser: JsonEventParser,
     cursor_text: String,
     opencode_tool_uses: HashSet<String>,
+    codex_tool_uses: HashSet<String>,
 }
 
 impl JsonEventStreamState {
@@ -17,6 +18,7 @@ impl JsonEventStreamState {
             parser,
             cursor_text: String::new(),
             opencode_tool_uses: HashSet::new(),
+            codex_tool_uses: HashSet::new(),
         }
     }
 
@@ -30,7 +32,7 @@ impl JsonEventStreamState {
         }
     }
 
-    fn handle_codex(&self, value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
+    fn handle_codex(&mut self, value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
         let obj = match value.as_object() {
             Some(o) => o,
             None => return,
@@ -45,6 +47,11 @@ impl JsonEventStreamState {
                 label: "running".to_string(),
                 model: None,
             }),
+            "item.started" => {
+                if let Some(item) = obj.get("item").and_then(|v| v.as_object()) {
+                    self.emit_codex_command_execution(item, sink, false);
+                }
+            }
             "item.completed" => {
                 if let Some(item) = obj.get("item").and_then(|v| v.as_object()) {
                     if item.get("type").and_then(|v| v.as_str()) == Some("agent_message") {
@@ -53,6 +60,8 @@ impl JsonEventStreamState {
                                 delta: text.to_string(),
                             });
                         }
+                    } else {
+                        self.emit_codex_command_execution(item, sink, true);
                     }
                 }
             }
@@ -77,6 +86,49 @@ impl JsonEventStreamState {
             }),
             _ => {}
         }
+    }
+
+    fn emit_codex_command_execution(
+        &mut self,
+        item: &serde_json::Map<String, Value>,
+        sink: &mut dyn FnMut(UnifiedAgentEvent),
+        include_result: bool,
+    ) {
+        if item.get("type").and_then(|v| v.as_str()) != Some("command_execution") {
+            return;
+        }
+        let id = match item.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            Some(id) => id.to_string(),
+            None => return,
+        };
+        let command = item
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !self.codex_tool_uses.contains(&id) {
+            self.codex_tool_uses.insert(id.clone());
+            sink(UnifiedAgentEvent::ToolUse {
+                id: id.clone(),
+                name: "Bash".to_string(),
+                input: serde_json::json!({ "command": command }),
+            });
+        }
+        if !include_result {
+            return;
+        }
+        let content = item
+            .get("aggregated_output")
+            .map(stringify_json_value)
+            .unwrap_or_default();
+        let exit_code = item.get("exit_code").and_then(|v| v.as_u64());
+        let status_failed = item.get("status").and_then(|v| v.as_str()) == Some("failed");
+        let is_error = exit_code.map(|code| code != 0).unwrap_or(status_failed);
+        sink(UnifiedAgentEvent::ToolResult {
+            tool_use_id: id,
+            content,
+            is_error,
+        });
     }
 
     fn handle_cursor(&mut self, value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
@@ -358,6 +410,31 @@ fn stringify_json_value(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_command_execution_emits_tool_use_and_result() {
+        let started = r#"{"type":"item.started","item":{"type":"command_execution","id":"cmd-1","command":"ls"}}"#;
+        let completed = r#"{"type":"item.completed","item":{"type":"command_execution","id":"cmd-1","command":"ls","aggregated_output":"ok\n","exit_code":0,"status":"completed"}}"#;
+        let mut state = JsonEventStreamState::new(JsonEventParser::Codex);
+        let mut events = Vec::new();
+        state.handle_value(
+            &serde_json::from_str(started).unwrap(),
+            &mut |e| events.push(e),
+        );
+        state.handle_value(
+            &serde_json::from_str(completed).unwrap(),
+            &mut |e| events.push(e),
+        );
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ToolUse { id, name, .. }) if id == "cmd-1" && name == "Bash"
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, is_error }
+                if tool_use_id == "cmd-1" && content.contains("ok") && !*is_error
+        )));
+    }
 
     #[test]
     fn codex_agent_message_emits_text_delta() {

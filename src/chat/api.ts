@@ -1197,6 +1197,29 @@ export const chatApi = {
     return result.agents ?? []
   },
 
+  async listExternalCliSlashCommands(
+    agentId: string,
+    conversationId?: string | null,
+  ): Promise<import('./externalCliSlashCommands').ExternalCliSlashCommandsResult> {
+    if (!isTauriRuntime()) {
+      return { supportsSlashCommands: false, commands: [], message: 'CLI slash commands unavailable in browser preview' }
+    }
+    const result = await invoke<{
+      success: boolean
+      supportsSlashCommands: boolean
+      commands: import('./externalCliSlashCommands').ExternalCliSlashCommandDto[]
+      message?: string | null
+    }>('chat_list_external_cli_slash_commands', {
+      agentId,
+      conversationId: conversationId ?? null,
+    })
+    return {
+      supportsSlashCommands: result.supportsSlashCommands,
+      commands: result.commands ?? [],
+      message: result.message ?? null,
+    }
+  },
+
   async setAgentRuntime(
     conversationId: string,
     agentRuntime: AgentRuntimeConfig,

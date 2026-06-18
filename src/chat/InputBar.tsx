@@ -25,6 +25,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Square,
+  Terminal,
   Wrench,
   X,
   Zap,
@@ -37,9 +38,11 @@ import type { AgentPlanMode, AgentPlanState, ChatProject, PendingAttachment } fr
 import {
   buildSlashCommands,
   commandMatches,
+  shouldOpenSlashPopover,
   type SlashCommandDefinition,
   type SlashSkill,
 } from './slashCommands'
+import { mapExternalCliSlashCommands, externalCliAgentLabel } from './externalCliSlashCommands'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -242,6 +245,9 @@ function slashCommandIcon(command: SlashCommandDefinition) {
   if (command.kind === 'skill') {
     return Sparkles
   }
+  if (command.kind === 'cli') {
+    return Terminal
+  }
   switch (command.id as SlashCommandId) {
     case 'help':
       return CircleHelp
@@ -399,6 +405,10 @@ interface InputBarProps {
   autoFocus?: boolean
   /** footer：贴底（有消息时）；inline：嵌入居中区域（空对话欢迎页） */
   layout?: 'footer' | 'inline'
+  /** 外部 CLI 模式：斜杠命令直通 Agent，不展示 Kivio 弹层 */
+  usesExternalRuntime?: boolean
+  externalAgentName?: string | null
+  conversationId?: string | null
 }
 
 export function InputBar({
@@ -431,6 +441,9 @@ export function InputBar({
   onClearAssistant,
   autoFocus,
   layout = 'footer',
+  usesExternalRuntime = false,
+  externalAgentName = null,
+  conversationId = null,
 }: InputBarProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -448,6 +461,9 @@ export function InputBar({
   const [slashPanelOpen, setSlashPanelOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const [activeSlashToken, setActiveSlashToken] = useState<ActiveSlashToken | null>(null)
+  const [externalCliSlashCommands, setExternalCliSlashCommands] = useState<SlashCommandDefinition[]>([])
+  const [externalCliSlashHint, setExternalCliSlashHint] = useState<string | null>(null)
+  const [externalCliSlashLoading, setExternalCliSlashLoading] = useState(false)
   const [slashPanelLeft, setSlashPanelLeft] = useState(0)
   const innerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -588,7 +604,7 @@ export function InputBar({
   const syncSlashToken = useCallback((value: string, cursor: number) => {
     const token = findActiveSlashToken(value, cursor)
     setActiveSlashToken(token)
-    if (token) {
+    if (token && shouldOpenSlashPopover()) {
       setSlashPanelOpen(true)
       setToolPanelOpen(false)
       closeProjectMenu()
@@ -598,9 +614,45 @@ export function InputBar({
   }, [closeProjectMenu])
 
   const allSlashCommands = useMemo(
-    () => buildSlashCommands(LOCAL_SLASH_COMMANDS, enabledSkills),
-    [enabledSkills],
+    () => (
+      usesExternalRuntime
+        ? externalCliSlashCommands
+        : buildSlashCommands(LOCAL_SLASH_COMMANDS, enabledSkills)
+    ),
+    [enabledSkills, externalCliSlashCommands, usesExternalRuntime],
   )
+
+  useEffect(() => {
+    if (!usesExternalRuntime || !externalAgentName) {
+      setExternalCliSlashCommands([])
+      setExternalCliSlashHint(null)
+      setExternalCliSlashLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setExternalCliSlashLoading(true)
+    void chatApi.listExternalCliSlashCommands(externalAgentName, conversationId)
+      .then((result) => {
+        if (cancelled) return
+        setExternalCliSlashCommands(mapExternalCliSlashCommands(externalAgentName, result.commands))
+        setExternalCliSlashHint(result.message ?? null)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setExternalCliSlashCommands([])
+        setExternalCliSlashHint(
+          typeof err === 'string' ? err : err instanceof Error ? err.message : '无法加载 CLI 命令',
+        )
+      })
+      .finally(() => {
+        if (!cancelled) setExternalCliSlashLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [conversationId, externalAgentName, usesExternalRuntime])
   const filteredSlashCommands = useMemo(
     () => allSlashCommands.filter((command) => (
       commandMatches(command, activeSlashToken?.query ?? '')
@@ -776,9 +828,8 @@ export function InputBar({
   const handleSlashCommandSelect = useCallback(async (command: SlashCommandDefinition) => {
     if (disabled) return
 
-    if (command.kind === 'skill') {
-      // Skill commands are messages: complete the token and let the user type
-      // arguments, then send the whole string with Enter.
+    if (command.kind === 'skill' || command.kind === 'cli') {
+      // Complete the token; user can add args then send with Enter (CLI passthrough).
       completeSkillSlashToken(command)
       return
     }
@@ -1230,6 +1281,7 @@ export function InputBar({
     && !slashPanelOpen
     && !disabled
     && !sendDisabledReason
+  const cliAgentLabel = externalCliAgentLabel(externalAgentName)
 
   const wrapperClass =
     layout === 'inline'
@@ -1397,7 +1449,11 @@ export function InputBar({
                 })
               ) : (
                 <div className="flex h-[26px] items-center px-2 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
-                  No matching command
+                  {usesExternalRuntime
+                    ? (externalCliSlashLoading
+                      ? '正在加载 CLI 命令…'
+                      : externalCliSlashHint ?? 'No matching CLI command')
+                    : 'No matching command'}
                 </div>
               )}
             </div>
@@ -1609,7 +1665,11 @@ export function InputBar({
               onPaste={(e) => void handlePaste(e)}
               onKeyDown={handleKeyDown}
               onSelect={handleSelect}
-              placeholder="Ask me anything..."
+              placeholder={
+                usesExternalRuntime
+                  ? `${cliAgentLabel} 命令，输入 / 补全`
+                  : 'Ask me anything...'
+              }
               rows={1}
               className="mb-0.5 max-h-40 min-h-[28px] flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
             />

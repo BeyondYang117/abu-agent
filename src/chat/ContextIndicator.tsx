@@ -9,6 +9,7 @@ interface ContextIndicatorProps {
   loading?: boolean
   compressing?: boolean
   error?: string
+  usesExternalRuntime?: boolean
   onRefresh?: () => void
   onCompress?: () => void
 }
@@ -34,8 +35,9 @@ function statusColor(status: string, ratio: number | null): string {
   return '#3E8B60'
 }
 
-function formatTokenTotal(tokens: number): string {
-  return `~${formatTokens(tokens).replace('k', 'K')}`
+function formatTokenTotal(tokens: number, exact = false): string {
+  const formatted = formatTokens(tokens).replace('k', 'K')
+  return exact ? formatted : `~${formatted}`
 }
 
 function formatTimestamp(seconds?: number | null): string {
@@ -71,6 +73,7 @@ export function ContextIndicator({
   loading = false,
   compressing = false,
   error = '',
+  usesExternalRuntime = false,
   onRefresh,
   onCompress,
 }: ContextIndicatorProps) {
@@ -87,6 +90,15 @@ export function ContextIndicator({
   )
   const usageRatio = valueFrom(contextState?.usage_ratio, contextState?.usageRatio, null)
   const status = contextState?.status ?? 'unknown'
+  const contextSource = valueFrom(contextState?.context_source, contextState?.contextSource, null)
+  const tokenCountSource = valueFrom(
+    contextState?.token_count_source,
+    contextState?.tokenCountSource,
+    null,
+  )
+  const isExternalContext =
+    usesExternalRuntime || contextSource === 'external_cli'
+  const isCliReported = tokenCountSource === 'cli_reported'
   const lastCompressedAt = valueFrom(
     contextState?.last_compressed_at,
     contextState?.lastCompressedAt,
@@ -105,13 +117,21 @@ export function ContextIndicator({
     () => (contextState?.segments ?? []).filter((segment) => segmentTokens(segment) > 0),
     [contextState?.segments],
   )
-  const fullness = usageRatio == null ? 'Estimated' : `${compactPercent(usageRatio)} Full`
+  const fullness = usageRatio == null
+    ? (isExternalContext ? 'CLI pending' : 'Estimated')
+    : `${compactPercent(usageRatio)} Full`
   const windowLabel = contextWindowTokens
     ? `${formatTokens(contextWindowTokens).replace('k', 'K')} Tokens`
     : '? Tokens'
-  const tokenLine = `${formatTokenTotal(estimatedInputTokens)} / ${windowLabel}`
+  const tokenLine = `${formatTokenTotal(estimatedInputTokens, isCliReported)} / ${windowLabel}`
+  const sourceLabel = isExternalContext
+    ? (isCliReported ? 'CLI reported' : 'CLI estimated')
+    : 'Kivio estimated'
   const ringDegrees = usageRatio == null ? 0 : Math.max(0, Math.min(1, usageRatio)) * 360
   const canCompress = Boolean(onCompress) && !compressing && !loading && messageCount > 2
+  const compressLabel = isExternalContext
+    ? (compressing ? 'Compacting' : 'CLI Compact')
+    : (compressing ? 'Compressing' : 'Compress')
 
   return (
     <div className="relative" data-tauri-drag-region="false">
@@ -146,6 +166,11 @@ export function ContextIndicator({
               >
                 {readableStatus(status)}
               </span>
+              {isExternalContext && (
+                <span className="shrink-0 rounded-full bg-neutral-100 px-1.5 py-[2px] text-[10px] font-medium leading-none text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                  CLI
+                </span>
+              )}
             </div>
             <button
               type="button"
@@ -164,6 +189,9 @@ export function ContextIndicator({
             <div className="shrink-0 text-right">
               <div className="text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
                 {tokenLine}
+              </div>
+              <div className="mt-0.5 text-[10px] text-neutral-400 dark:text-neutral-500">
+                {sourceLabel}
               </div>
               {messageCount > 0 && (
                 <div className="mt-0.5 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
@@ -205,7 +233,7 @@ export function ContextIndicator({
                   {segment.label}
                 </span>
                 <span className="shrink-0 tabular-nums text-neutral-500 dark:text-neutral-400">
-                  {formatTokenTotal(segmentTokens(segment))}
+                  {formatTokenTotal(segmentTokens(segment), isCliReported)}
                 </span>
               </div>
             ))}
@@ -219,7 +247,7 @@ export function ContextIndicator({
                   <span className="shrink-0">{formatTimestamp(lastCompressedAt)}</span>
                 </div>
               )}
-              {summary?.stale && (
+              {summary?.stale && !isExternalContext && (
                 <div className="mt-0.5 text-[#A15C2F] dark:text-[#E0A06E]">
                   Summary will be ignored until recompressed.
                 </div>
@@ -256,7 +284,7 @@ export function ContextIndicator({
               disabled={!canCompress}
             >
               <Archive size={12} />
-              {compressing ? 'Compressing' : 'Compress'}
+              {compressLabel}
             </button>
           </div>
         </div>

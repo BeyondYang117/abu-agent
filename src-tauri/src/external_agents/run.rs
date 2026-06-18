@@ -19,12 +19,15 @@ use crate::chat::types::{
 use crate::chat::Conversation;
 use crate::external_agents::detection::detect_single_agent;
 use crate::external_agents::mcp_inject::{apply_mcp_injection, build_spawn_extra_env};
-use crate::external_agents::prompt::{compose_external_prompt, cwd_hint};
+use crate::external_agents::prompt::{
+    compose_external_prompt, compose_external_prompt_passthrough, cwd_hint, is_cli_slash_input,
+};
 use crate::external_agents::registry::get_agent_def;
 use crate::external_agents::session::acp::{build_acp_mcp_servers, run_acp_session};
 use crate::external_agents::session::pi_rpc::run_pi_rpc_session;
 use crate::external_agents::session::{persist_delivered_session, resolve_agent_resume_context};
 use crate::external_agents::skill_stage::{skill_cwd_alias_segment, stage_active_skill};
+use crate::external_agents::slash::{self};
 use crate::external_agents::spawn::{read_stdout_lines, resolve_binary, spawn_agent, write_prompt_stdin};
 use crate::external_agents::stream::create_stream_handler;
 use crate::external_agents::types::{
@@ -38,6 +41,27 @@ use crate::state::AppState;
 
 pub struct ExternalCliRunOutcome {
     pub stream_outcome: String,
+}
+
+pub async fn run_external_cli_slash_command(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    slash_command: &str,
+) -> Result<(), String> {
+    if !is_cli_slash_input(slash_command) {
+        return Err("外部 CLI slash 命令必须以 / 开头".to_string());
+    }
+    run_external_cli_reply(
+        app,
+        state,
+        conversation,
+        None,
+        slash_command,
+        None,
+        AgentRunEntry::Send,
+    )
+    .await
 }
 
 pub async fn run_external_cli_reply(
@@ -77,28 +101,33 @@ pub async fn run_external_cli_reply(
         conversation.project_id.as_deref(),
     )?;
     let cwd = workspace.cwd.clone();
+    let is_slash = is_cli_slash_input(latest_user_message);
 
-    let skill_detail = if let Some(skill_id) = active_skill_id.filter(|s| !s.is_empty()) {
+    let skill_detail = if is_slash {
+        None
+    } else if let Some(skill_id) = active_skill_id.filter(|s| !s.is_empty()) {
         read_skill_detail(app, &settings.chat_tools.skill_scan_paths, skill_id).ok()
     } else {
         None
     };
 
-    let memory_body = if settings.chat_memory.enabled {
-        l1_prompt_block(app).unwrap_or(None).unwrap_or_default()
-    } else {
+    let memory_body = if is_slash || !settings.chat_memory.enabled {
         String::new()
+    } else {
+        l1_prompt_block(app).unwrap_or(None).unwrap_or_default()
     };
 
     let mut daemon_instructions = String::new();
-    if !settings.chat.system_prompt.trim().is_empty() {
-        daemon_instructions.push_str(settings.chat.system_prompt.trim());
-        daemon_instructions.push_str("\n\n");
-    }
-    if !memory_body.trim().is_empty() {
-        daemon_instructions.push_str("## Memory\n\n");
-        daemon_instructions.push_str(memory_body.trim());
-        daemon_instructions.push('\n');
+    if !is_slash {
+        if !settings.chat.system_prompt.trim().is_empty() {
+            daemon_instructions.push_str(settings.chat.system_prompt.trim());
+            daemon_instructions.push_str("\n\n");
+        }
+        if !memory_body.trim().is_empty() {
+            daemon_instructions.push_str("## Memory\n\n");
+            daemon_instructions.push_str(memory_body.trim());
+            daemon_instructions.push('\n');
+        }
     }
     daemon_instructions.push_str(&cwd_hint(cwd.to_string_lossy().as_ref()));
 
@@ -116,20 +145,26 @@ pub async fn run_external_cli_reply(
     let skill_body = skill_detail.as_ref().map(|d| d.body.clone());
     let skill_folder = skill_dir.as_deref().map(skill_cwd_alias_segment);
 
-    if let (Some(dir), Some(folder)) = (skill_dir.as_deref(), skill_folder.as_deref()) {
-        let _ = stage_active_skill(&cwd, folder, std::path::Path::new(dir));
+    if !is_slash {
+        if let (Some(dir), Some(folder)) = (skill_dir.as_deref(), skill_folder.as_deref()) {
+            let _ = stage_active_skill(&cwd, folder, std::path::Path::new(dir));
+        }
     }
 
-    let composed = compose_external_prompt(
-        conversation,
-        &daemon_instructions,
-        skill_body.as_deref(),
-        skill_dir.as_deref(),
-        skill_folder.as_deref(),
-        resume_ctx.skip_instructions,
-        resume_ctx.is_resuming,
-        latest_user_message,
-    );
+    let composed = if is_slash {
+        compose_external_prompt_passthrough(latest_user_message)
+    } else {
+        compose_external_prompt(
+            conversation,
+            &daemon_instructions,
+            skill_body.as_deref(),
+            skill_dir.as_deref(),
+            skill_folder.as_deref(),
+            resume_ctx.skip_instructions,
+            resume_ctx.is_resuming,
+            latest_user_message,
+        )
+    };
 
     let can_write_mcp = can_write_mcp_json(&workspace, settings.chat.external_allow_mcp_in_project);
     apply_mcp_injection(
@@ -189,8 +224,12 @@ pub async fn run_external_cli_reply(
     let mut segment_tracker = StreamSegmentTracker::default();
     let conversation_id = conversation.id.clone();
     let started_at = Instant::now();
+    let slash_cache_key = slash::cache_key(&agent_id, &cwd.to_string_lossy());
 
     let mut emit_event = |event: UnifiedAgentEvent| {
+        if let Some(commands) = slash::slash_commands_from_event(&event) {
+            state.set_cached_external_slash_commands(slash_cache_key.clone(), commands);
+        }
         apply_unified_event(
             app,
             &conversation_id,
@@ -267,13 +306,17 @@ pub async fn run_external_cli_reply(
     }
 
     if content.trim().is_empty() && stream_outcome == "completed" {
-        stream_outcome = "error".to_string();
-        content = format!(
-            "{} 未产生输出（exit={:?}，耗时 {}ms）",
-            def.name,
-            status.code(),
-            started_at.elapsed().as_millis()
-        );
+        if is_slash {
+            content = format!("{} 命令已执行", def.name);
+        } else {
+            stream_outcome = "error".to_string();
+            content = format!(
+                "{} 未产生输出（exit={:?}，耗时 {}ms）",
+                def.name,
+                status.code(),
+                started_at.elapsed().as_millis()
+            );
+        }
     }
 
     emit_chat_stream_done(
@@ -290,7 +333,11 @@ pub async fn run_external_cli_reply(
         &conversation_id,
         def.id,
         &resume_ctx,
-        &composed.instructions_block,
+        if composed.instructions_block.is_empty() {
+            &daemon_instructions
+        } else {
+            &composed.instructions_block
+        },
     )?;
 
     push_assistant_message(
@@ -424,6 +471,26 @@ fn text_phase_for_tool_count(tool_calls_len: usize) -> ChatMessageSegmentPhase {
     }
 }
 
+fn push_tool_segment(
+    segments: &mut Vec<ChatMessageSegment>,
+    segment_order: &mut u32,
+    tool_call_id: &str,
+) -> ChatMessageSegment {
+    *segment_order += 1;
+    let segment = ChatMessageSegment {
+        id: format!("seg_{}", Uuid::new_v4()),
+        kind: ChatMessageSegmentKind::Tool,
+        phase: ChatMessageSegmentPhase::ToolLoop,
+        order: *segment_order,
+        step_number: None,
+        round: Some(1),
+        text: None,
+        tool_call_id: Some(tool_call_id.to_string()),
+    };
+    segments.push(segment.clone());
+    segment
+}
+
 fn apply_unified_event(
     app: &AppHandle,
     conversation_id: &str,
@@ -480,6 +547,16 @@ fn apply_unified_event(
         UnifiedAgentEvent::ToolUse { id, name, input } => {
             segment_tracker.reset_text();
             segment_tracker.reset_reasoning();
+            let segment = push_tool_segment(segments, segment_order, &id);
+            emit_chat_stream_delta(
+                app,
+                conversation_id,
+                run_id,
+                message_id,
+                "",
+                None,
+                Some(&segment),
+            );
             let record = ToolCallRecord {
                 id: id.clone(),
                 name: name.clone(),
@@ -556,6 +633,21 @@ mod tests {
         assert_eq!(first.id, second.id);
         assert_eq!(segments[0].text.as_deref(), Some("你好"));
         assert_eq!(segments[0].phase, ChatMessageSegmentPhase::Plain);
+    }
+
+    #[test]
+    fn push_tool_segment_increments_order_and_sets_tool_kind() {
+        let mut segments = Vec::new();
+        let mut order = 2u32;
+        let first = push_tool_segment(&mut segments, &mut order, "tool-1");
+        let second = push_tool_segment(&mut segments, &mut order, "tool-2");
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(first.kind, ChatMessageSegmentKind::Tool);
+        assert_eq!(first.order, 3);
+        assert_eq!(first.tool_call_id.as_deref(), Some("tool-1"));
+        assert_eq!(second.order, 4);
+        assert_eq!(second.phase, ChatMessageSegmentPhase::ToolLoop);
     }
 
     #[test]

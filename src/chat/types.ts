@@ -330,6 +330,18 @@ export interface ConversationContextState {
   summary?: ConversationContextSummary | null
   warning?: string | null
   warningMessage?: string | null
+  context_source?: 'kivio_builtin' | 'external_cli' | string
+  contextSource?: 'kivio_builtin' | 'external_cli' | string
+  token_count_source?: 'cli_reported' | 'estimated' | string
+  tokenCountSource?: 'cli_reported' | 'estimated' | string
+  session_input_tokens?: number
+  sessionInputTokens?: number
+  session_output_tokens?: number
+  sessionOutputTokens?: number
+  external_agent_id?: string
+  externalAgentId?: string
+  external_model?: string
+  externalModel?: string
 }
 
 export type AgentTodoStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
@@ -377,7 +389,7 @@ export interface DetectedExternalAgent {
   available: boolean
   path?: string | null
   version?: string | null
-  models: Array<{ id: string; label: string }>
+  models: Array<{ id: string; label: string; contextWindowTokens?: number | null; context_window_tokens?: number | null }>
   reasoningOptions?: Array<{ id: string; label: string }>
   reasoning_options?: Array<{ id: string; label: string }>
   authStatus?: string | null

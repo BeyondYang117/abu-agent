@@ -48,6 +48,10 @@ export function RuntimePicker({ agentRuntime, onRuntimeChange }: RuntimePickerPr
   }, [loadAgents])
 
   const usesExternal = agentRuntime.kind === 'external' && !!agentRuntime.externalAgentId
+  const availableAgents = useMemo(
+    () => agents.filter((agent) => agent.available),
+    [agents],
+  )
   const currentAgent = agents.find((item) => item.id === agentRuntime.externalAgentId)
 
   const label = useMemo(() => {
@@ -69,7 +73,7 @@ export function RuntimePicker({ agentRuntime, onRuntimeChange }: RuntimePickerPr
 
   const selectLocalCliMode = () => {
     if (usesExternal && currentAgent?.available) return
-    const firstAvailable = agents.find((agent) => agent.available)
+    const firstAvailable = availableAgents[0]
     if (firstAvailable) {
       selectExternal(firstAvailable)
     }
@@ -124,6 +128,7 @@ export function RuntimePicker({ agentRuntime, onRuntimeChange }: RuntimePickerPr
                   type="button"
                   role="tab"
                   aria-selected={usesExternal}
+                  disabled={availableAgents.length === 0}
                   className={`kv-runtime-picker__seg-btn${usesExternal ? ' is-active' : ''}`}
                   onClick={selectLocalCliMode}
                 >
@@ -136,9 +141,11 @@ export function RuntimePicker({ agentRuntime, onRuntimeChange }: RuntimePickerPr
               <span className="kv-runtime-picker__label">代理</span>
               {agents.length === 0 ? (
                 <span className="kv-runtime-picker__hint">正在检测本机 CLI…</span>
+              ) : availableAgents.length === 0 ? (
+                <span className="kv-runtime-picker__hint">PATH 中未发现可用 CLI</span>
               ) : (
                 <div className="kv-runtime-picker__agent-grid" role="radiogroup">
-                  {agents.map((agent) => {
+                  {availableAgents.map((agent) => {
                     const active = usesExternal && agentRuntime.externalAgentId === agent.id
                     return (
                       <button
@@ -146,12 +153,7 @@ export function RuntimePicker({ agentRuntime, onRuntimeChange }: RuntimePickerPr
                         type="button"
                         role="radio"
                         aria-checked={active}
-                        disabled={!agent.available}
-                        title={
-                          agent.available
-                            ? agent.version ?? undefined
-                            : `${agent.name} 未安装或未在 PATH 中`
-                        }
+                        title={agent.version ?? undefined}
                         onClick={() => selectExternal(agent)}
                         className={`kv-runtime-picker__agent${active ? ' is-active' : ''}`}
                       >
@@ -175,6 +177,22 @@ interface ExternalModelSelectorProps {
   onModelChange: (model: string, reasoning?: string | null) => void
 }
 
+function formatModelLabel(model: {
+  id: string
+  label: string
+  contextWindowTokens?: number | null
+  context_window_tokens?: number | null
+}): string {
+  const tokens = model.contextWindowTokens ?? model.context_window_tokens
+  if (!tokens) return model.label
+  const window = tokens >= 1_000_000
+    ? '1M'
+    : tokens >= 1_000
+      ? `${Math.round(tokens / 1000)}K`
+      : `${tokens}`
+  return `${model.label} · ${window}`
+}
+
 export function ExternalModelSelector({
   agentRuntime,
   onModelChange,
@@ -189,7 +207,10 @@ export function ExternalModelSelector({
   const agent = agents.find((item) => item.id === agentRuntime.externalAgentId)
   const models = agent?.models ?? [{ id: 'default', label: 'Default' }]
   const reasoningOptions = agent?.reasoningOptions ?? []
-  const displayName = agentRuntime.externalModel || 'default'
+  const displayName = useMemo(() => {
+    const selected = models.find((item) => item.id === (agentRuntime.externalModel || 'default'))
+    return selected ? formatModelLabel(selected) : (agentRuntime.externalModel || 'default')
+  }, [agentRuntime.externalModel, models])
 
   if (agentRuntime.kind !== 'external' || !agentRuntime.externalAgentId) {
     return null
@@ -226,7 +247,7 @@ export function ExternalModelSelector({
                   displayName === model.id ? 'font-semibold' : ''
                 }`}
               >
-                {model.label}
+                {formatModelLabel(model)}
               </button>
             ))}
             {reasoningOptions.length > 0 && (

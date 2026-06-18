@@ -7,6 +7,18 @@ pub struct ComposedExternalPrompt {
     pub skip_transcript: bool,
 }
 
+pub fn is_cli_slash_input(content: &str) -> bool {
+    content.trim_start().starts_with('/')
+}
+
+pub fn compose_external_prompt_passthrough(latest_user_message: &str) -> ComposedExternalPrompt {
+    ComposedExternalPrompt {
+        full_prompt: latest_user_message.trim().to_string(),
+        instructions_block: String::new(),
+        skip_transcript: true,
+    }
+}
+
 pub fn compose_external_prompt(
     conversation: &Conversation,
     daemon_instructions: &str,
@@ -132,5 +144,22 @@ mod tests {
         assert!(composed.full_prompt.contains("# Instructions"));
         assert!(composed.full_prompt.contains("skill body"));
         assert!(composed.full_prompt.contains("hello"));
+    }
+
+    #[test]
+    fn is_cli_slash_input_detects_leading_slash() {
+        assert!(is_cli_slash_input("/compact"));
+        assert!(is_cli_slash_input("  /model gpt-5"));
+        assert!(!is_cli_slash_input("hello /compact"));
+        assert!(!is_cli_slash_input("plain text"));
+    }
+
+    #[test]
+    fn passthrough_prompt_is_raw_slash_without_wrapper() {
+        let composed = compose_external_prompt_passthrough("  /model gpt-5  ");
+        assert_eq!(composed.full_prompt, "/model gpt-5");
+        assert!(composed.instructions_block.is_empty());
+        assert!(composed.skip_transcript);
+        assert!(!composed.full_prompt.contains("# Instructions"));
     }
 }

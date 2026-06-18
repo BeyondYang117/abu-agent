@@ -7,8 +7,10 @@
 // - 'skill'  — user skills surfaced as `/name`; selecting one only completes the
 //   token (`/name `), and the whole string is sent on Enter. The backend parses
 //   the slash trigger and pins the skill (see try_apply_skill_slash_trigger).
+// - 'cli'    — external agent CLI slash commands; completes the token and sends
+//   on Enter (passthrough to the local CLI runtime).
 
-export type SlashCommandKind = 'action' | 'skill'
+export type SlashCommandKind = 'action' | 'skill' | 'cli'
 
 export interface SlashCommandDefinition {
   id: string
@@ -80,4 +82,9 @@ export function commandMatches(command: SlashCommandDefinition, query: string): 
     ...command.keywords,
   ].map((item) => item.toLowerCase())
   return searchable.some((item) => item.includes(normalized))
+}
+
+/** Open slash popover whenever the user is typing a `/` token. */
+export function shouldOpenSlashPopover(): boolean {
+  return true
 }

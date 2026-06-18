@@ -410,6 +410,16 @@ export type SkillFileEntry = {
   sizeBytes: number
 }
 
+export type AgentRuntimeConfig = {
+  kind: 'builtin' | 'external'
+  externalAgentId?: string | null
+  external_agent_id?: string | null
+  externalModel?: string | null
+  external_model?: string | null
+  externalReasoning?: string | null
+  external_reasoning?: string | null
+}
+
 export type ChatConfig = {
   streamEnabled?: boolean
   thinkingEnabled?: boolean
@@ -418,6 +428,8 @@ export type ChatConfig = {
   systemPrompt?: string
   userDisplayName?: string
   userAvatar?: string
+  defaultAgentRuntime?: AgentRuntimeConfig
+  externalAllowMcpInProject?: boolean
 }
 
 export type ChatMemoryConfig = {

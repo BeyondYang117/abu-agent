@@ -85,6 +85,13 @@ pub struct AppState {
     pub chat_create_conversation_lock: Mutex<()>,
     /// Chat MCP/native tool 列表缓存。key 由工具相关 settings 生成，避免每轮对话重复冷启动 server。
     pub chat_tool_list_cache: Mutex<HashMap<String, (Instant, Vec<ChatToolDefinition>)>>,
+    /// 外部 CLI 斜杠命令探测缓存（agent_id:cwd → 命令列表）。
+    pub external_slash_commands_cache:
+        Mutex<HashMap<String, (Instant, Vec<crate::external_agents::types::ExternalCliSlashCommand>)>>,
+    /// 外部 CLI 模型列表探测缓存（agent_id → 模型选项）。
+    pub external_agent_models_cache: Mutex<
+        HashMap<String, (Instant, Vec<crate::external_agents::types::RuntimeModelOption>)>,
+    >,
     /// 外部入口（例如 Lens）交给 Chat 前端发送的待处理消息。
     /// 后端只负责保存请求和打开窗口，实际发送必须走 Chat 前端的手动发送状态机。
     pub pending_chat_external_sends: Mutex<Vec<PendingChatExternalSend>>,
@@ -146,6 +153,8 @@ impl AppState {
             pending_python_runs: Mutex::new(HashMap::new()),
             chat_create_conversation_lock: Mutex::new(()),
             chat_tool_list_cache: Mutex::new(HashMap::new()),
+            external_slash_commands_cache: Mutex::new(HashMap::new()),
+            external_agent_models_cache: Mutex::new(HashMap::new()),
             pending_chat_external_sends: Mutex::new(Vec::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),
@@ -335,6 +344,64 @@ impl AppState {
             .insert(cache_key, (Instant::now(), tools));
     }
 
+    pub fn get_cached_external_slash_commands(
+        &self,
+        cache_key: &str,
+        ttl: Duration,
+    ) -> Option<Vec<crate::external_agents::types::ExternalCliSlashCommand>> {
+        let mut cache = self
+            .external_slash_commands_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((created_at, commands)) = cache.get(cache_key) {
+            if created_at.elapsed() <= ttl {
+                return Some(commands.clone());
+            }
+        }
+        cache.remove(cache_key);
+        None
+    }
+
+    pub fn set_cached_external_slash_commands(
+        &self,
+        cache_key: String,
+        commands: Vec<crate::external_agents::types::ExternalCliSlashCommand>,
+    ) {
+        self.external_slash_commands_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(cache_key, (Instant::now(), commands));
+    }
+
+    pub fn get_cached_external_agent_models(
+        &self,
+        agent_id: &str,
+        ttl: Duration,
+    ) -> Option<Vec<crate::external_agents::types::RuntimeModelOption>> {
+        let mut cache = self
+            .external_agent_models_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some((created_at, models)) = cache.get(agent_id) {
+            if created_at.elapsed() <= ttl {
+                return Some(models.clone());
+            }
+        }
+        cache.remove(agent_id);
+        None
+    }
+
+    pub fn set_cached_external_agent_models(
+        &self,
+        agent_id: String,
+        models: Vec<crate::external_agents::types::RuntimeModelOption>,
+    ) {
+        self.external_agent_models_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(agent_id, (Instant::now(), models));
+    }
+
     /// 标记某个 key 失败：进入冷却 + 不变更 active_key_idx
     pub fn mark_key_failed(&self, provider_id: &str, idx: usize) {
         let mut cooldowns = self.key_cooldowns.lock().unwrap_or_else(|e| e.into_inner());
@@ -379,6 +446,8 @@ pub(crate) fn test_app_state() -> AppState {
         pending_python_runs: Mutex::new(HashMap::new()),
         chat_create_conversation_lock: Mutex::new(()),
         chat_tool_list_cache: Mutex::new(HashMap::new()),
+        external_slash_commands_cache: Mutex::new(HashMap::new()),
+        external_agent_models_cache: Mutex::new(HashMap::new()),
         pending_chat_external_sends: Mutex::new(Vec::new()),
         pending_selection: Mutex::new(None),
         lens_freeze_frame_image_id: Mutex::new(None),

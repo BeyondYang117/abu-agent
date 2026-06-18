@@ -261,6 +261,32 @@ function upsertStreamSegment(
   return next.sort(compareTimelineSegments)
 }
 
+function nextSegmentOrder(segments: ChatMessageSegment[]): number {
+  if (segments.length === 0) return 1
+  return Math.max(...segments.map((segment) => segment.order ?? 0)) + 1
+}
+
+function upsertToolStreamSegment(
+  segments: ChatMessageSegment[],
+  record: ToolCallRecord,
+): ChatMessageSegment[] {
+  const toolCallId = record.id || record.toolCallId || ''
+  if (!toolCallId) return segments
+  const exists = segments.some(
+    (segment) => segment.kind === 'tool' && segmentToolCallId(segment) === toolCallId,
+  )
+  if (exists) return segments
+  return upsertStreamSegment(segments, {
+    id: `seg_tool_${toolCallId}`,
+    kind: 'tool',
+    phase: 'tool_loop',
+    order: nextSegmentOrder(segments),
+    round: record.round ?? 1,
+    tool_call_id: toolCallId,
+    toolCallId,
+  })
+}
+
 function sameSegmentField<T>(left: T | null | undefined, right: T | null | undefined): boolean {
   return (left ?? null) === (right ?? null)
 }
@@ -1479,6 +1505,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         snapshot.toolCalls = index < 0
           ? [...snapshot.toolCalls, record]
           : snapshot.toolCalls.map((item, i) => (i === index ? { ...item, ...record } : item))
+        snapshot.segments = upsertToolStreamSegment(snapshot.segments, record)
         syncGeneratingConversationIds()
         showStreamSnapshotIfCurrent(payload.conversationId, snapshot)
       })
@@ -2775,6 +2802,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     loading={contextLoading}
                     compressing={contextCompressing}
                     error={contextError}
+                    usesExternalRuntime={usesExternalRuntime}
                     onRefresh={handleRefreshContext}
                     onCompress={() => void handleCompressContext()}
                   />
@@ -2841,6 +2869,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onOpenAssistantCenter={openAssistantCenter}
                       onClearAssistant={() => void handleApplyAssistant(null)}
                       autoFocus
+                      usesExternalRuntime={usesExternalRuntime}
+                      externalAgentName={activeAgentRuntime.externalAgentId ?? null}
+                      conversationId={currentConversation?.id ?? null}
                     />
                   </div>
                 </div>
@@ -2894,6 +2925,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     onOpenAssistantCenter={openAssistantCenter}
                     onClearAssistant={() => void handleApplyAssistant(null)}
                     autoFocus
+                    usesExternalRuntime={usesExternalRuntime}
+                    externalAgentName={activeAgentRuntime.externalAgentId ?? null}
+                    conversationId={currentConversation?.id ?? null}
                   />
                     </>
                   )}

@@ -11,6 +11,7 @@ use tauri::Manager;
 use crate::external_agents::types::ExternalAgentSession;
 
 pub mod acp;
+pub mod claude_init;
 pub mod pi_rpc;
 
 fn sessions_dir(app: &AppHandle) -> Result<PathBuf, String> {

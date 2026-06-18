@@ -59,6 +59,20 @@ pub struct ConversationContextState {
     pub summary: Option<ConversationContextSummary>,
     #[serde(default)]
     pub warning: Option<String>,
+    /// `kivio_builtin` or `external_cli`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_source: Option<String>,
+    /// `cli_reported` or `estimated` (external CLI only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_count_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_input_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_output_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

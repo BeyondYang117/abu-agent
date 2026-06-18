@@ -246,6 +246,22 @@ function TimelineSegments({
 }) {
   const ordered = orderedSegments(segments)
   const reasoningSegmentCount = ordered.filter((segment) => segment.kind === 'reasoning').length
+  const referencedToolIds = new Set(
+    ordered
+      .filter((segment) => segment.kind === 'tool')
+      .map((segment) => segmentToolCallId(segment))
+      .filter(Boolean),
+  )
+  const orphanTools = toolCalls
+    .filter((toolCall) => {
+      const id = toolRecordId(toolCall)
+      return id && !referencedToolIds.has(id)
+    })
+    .sort((left, right) => {
+      const leftStarted = left.startedAt ?? left.started_at ?? 0
+      const rightStarted = right.startedAt ?? right.started_at ?? 0
+      return leftStarted - rightStarted
+    })
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
       {ordered.map((segment, index) => {
@@ -277,6 +293,13 @@ function TimelineSegments({
           </div>
         )
       })}
+      {orphanTools.map((toolCall, index) => (
+        <div key={toolRecordId(toolCall) || `orphan-tool-${index}`} className="chat-motion-fade">
+          <ToolCallErrorBoundary>
+            <ToolCallBlock toolCall={toolCall} />
+          </ToolCallErrorBoundary>
+        </div>
+      ))}
     </section>
   )
 }

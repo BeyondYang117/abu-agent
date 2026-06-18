@@ -1,14 +1,9 @@
 use super::super::types::{
-    ExternalMcpInjection, PromptInputFormat, RuntimeAgentDef, RuntimeBuildOptions, RuntimeContext,
-    StreamFormat,
+    ExternalMcpInjection, ModelProbeStrategy, PromptInputFormat, RuntimeAgentDef,
+    RuntimeBuildOptions, RuntimeContext, StreamFormat,
 };
 
-const FALLBACK_MODELS: &[(&str, &str)] = &[
-    ("default", "Default"),
-    ("sonnet", "Sonnet (alias)"),
-    ("opus", "Opus (alias)"),
-    ("haiku", "Haiku (alias)"),
-];
+const FALLBACK_MODELS: &[(&str, &str)] = &[("default", "Default")];
 
 pub fn build_claude_args(
     ctx: &RuntimeContext,
@@ -58,9 +53,9 @@ pub const CLAUDE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     fallback_models: FALLBACK_MODELS,
     reasoning_options: &[],
     list_models_args: None,
-    list_models_timeout_secs: None,
+    list_models_timeout_secs: Some(25),
     models_from_stderr: false,
-    model_probe: None,
+    model_probe: Some(ModelProbeStrategy::ClaudeInit),
     model_probe_args: None,
     env: &[],
     max_prompt_arg_bytes: None,

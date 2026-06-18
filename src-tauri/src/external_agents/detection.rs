@@ -2,11 +2,14 @@ use std::time::Duration;
 
 use crate::external_agents::registry::AGENT_DEFS;
 use crate::external_agents::session::acp::detect_acp_models;
+use crate::external_agents::session::claude_init::detect_claude_models;
 use crate::external_agents::session::pi_rpc::parse_pi_models;
 use crate::external_agents::types::{
     DetectedAgent, ModelProbeStrategy, RuntimeAgentDef, RuntimeModelOption, default_model_option,
     fallback_models_from_pairs, reasoning_options_from_pairs,
 };
+
+pub const EXTERNAL_AGENT_MODELS_CACHE_TTL: Duration = Duration::from_secs(300);
 
 pub async fn detect_all_agents() -> Vec<DetectedAgent> {
     let mut out = Vec::new();
@@ -99,6 +102,18 @@ async fn probe_models(
         return detect_acp_models(bin, &args, &cwd, timeout_secs).await;
     }
 
+    if def.model_probe == Some(ModelProbeStrategy::ClaudeInit) {
+        let timeout_secs = def.list_models_timeout_secs.unwrap_or(25);
+        let cwd = std::env::temp_dir();
+        return tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            detect_claude_models(bin, &cwd),
+        )
+        .await
+        .ok()
+        .flatten();
+    }
+
     let args = def.list_models_args?;
     let timeout_secs = def.list_models_timeout_secs.unwrap_or(5);
     let output = tokio::time::timeout(
@@ -144,6 +159,7 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
                 out.push(RuntimeModelOption {
                     id: id.clone(),
                     label: id,
+                    context_window_tokens: None,
                 });
             }
         }
@@ -158,6 +174,7 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
                         out.push(RuntimeModelOption {
                             id: id.to_string(),
                             label: id.to_string(),
+                            context_window_tokens: None,
                         });
                     }
                 }
@@ -169,6 +186,7 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
                     out.push(RuntimeModelOption {
                         id: line.to_string(),
                         label: line.to_string(),
+                        context_window_tokens: None,
                     });
                 }
             }

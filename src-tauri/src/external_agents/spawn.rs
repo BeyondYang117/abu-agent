@@ -93,12 +93,14 @@ pub async fn write_prompt_stdin(
             stdin.shutdown().await.map_err(|e| e.to_string())?;
         }
         PromptInputFormat::StreamJson => {
+            let content = stream_json_user_content(prompt);
             let line = serde_json::json!({
                 "type": "user",
                 "message": {
                     "role": "user",
-                    "content": [{ "type": "text", "text": prompt }]
-                }
+                    "content": content
+                },
+                "parent_tool_use_id": null
             });
             let mut payload = serde_json::to_string(&line).map_err(|e| e.to_string())?;
             payload.push('\n');
@@ -109,6 +111,38 @@ pub async fn write_prompt_stdin(
         }
     }
     Ok(())
+}
+
+/// Minimal stdin write to elicit Claude `system/init` during slash-command probing.
+pub async fn write_probe_stdin(child: &mut Child) -> Result<(), String> {
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "stdin unavailable".to_string())?;
+    let mut stdin = stdin;
+    let line = serde_json::json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": "."
+        },
+        "parent_tool_use_id": null
+    });
+    let mut payload = serde_json::to_string(&line).map_err(|e| e.to_string())?;
+    payload.push('\n');
+    stdin
+        .write_all(payload.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn stream_json_user_content(prompt: &str) -> serde_json::Value {
+    if prompt.trim_start().starts_with('/') {
+        serde_json::Value::String(prompt.to_string())
+    } else {
+        serde_json::json!([{ "type": "text", "text": prompt }])
+    }
 }
 
 pub async fn read_stdout_lines<F>(
@@ -152,3 +186,20 @@ pub fn emit_from_value(value: &serde_json::Value, sink: &mut dyn FnMut(UnifiedAg
         sink(event);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_json_user_content_uses_string_for_slash_commands() {
+        let slash = stream_json_user_content("/compact");
+        assert_eq!(slash, serde_json::json!("/compact"));
+        let text = stream_json_user_content("hello");
+        assert_eq!(
+            text,
+            serde_json::json!([{ "type": "text", "text": "hello" }])
+        );
+    }
+}
+

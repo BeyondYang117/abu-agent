@@ -5,6 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::time::timeout;
 
+use crate::external_agents::context::parse_context_window_label;
 use crate::external_agents::stream::usage_from_numbers;
 use crate::external_agents::types::{RuntimeModelOption, UnifiedAgentEvent, default_model_option};
 
@@ -40,9 +41,11 @@ pub fn parse_pi_models(stderr: &str) -> Option<Vec<RuntimeModelOption>> {
         }
         let full_id = format!("{}/{}", parts[0], parts[1]);
         if seen.insert(full_id.clone()) {
+            let context_window_tokens = parts.get(2).and_then(|label| parse_context_window_label(label));
             out.push(RuntimeModelOption {
                 id: full_id.clone(),
                 label: full_id,
+                context_window_tokens,
             });
         }
     }
@@ -362,6 +365,11 @@ mod tests {
         let models = parse_pi_models(stderr).unwrap();
         assert!(models.iter().any(|m| m.id == "anthropic/claude-sonnet-4-5"));
         assert!(models.iter().any(|m| m.id == "openai/gpt-5"));
+        let claude = models
+            .iter()
+            .find(|m| m.id == "anthropic/claude-sonnet-4-5")
+            .unwrap();
+        assert_eq!(claude.context_window_tokens, Some(200_000));
     }
 
     #[test]

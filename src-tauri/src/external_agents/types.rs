@@ -40,6 +40,7 @@ pub enum PromptInputFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelProbeStrategy {
     Acp,
+    ClaudeInit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +48,8 @@ pub enum ModelProbeStrategy {
 pub struct RuntimeModelOption {
     pub id: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +108,17 @@ pub struct RuntimeAgentDef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalCliSlashCommand {
+    pub name: String,
+    pub slash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UnifiedAgentEvent {
     Status {
@@ -142,6 +156,9 @@ pub enum UnifiedAgentEvent {
     Raw {
         line: String,
     },
+    SlashCommands {
+        commands: Vec<ExternalCliSlashCommand>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +174,7 @@ pub fn default_model_option() -> RuntimeModelOption {
     RuntimeModelOption {
         id: "default".to_string(),
         label: "Default".to_string(),
+        context_window_tokens: None,
     }
 }
 
@@ -169,6 +187,7 @@ pub fn fallback_models_from_pairs(pairs: &[(&str, &str)]) -> Vec<RuntimeModelOpt
         out.push(RuntimeModelOption {
             id: (*id).to_string(),
             label: (*label).to_string(),
+            context_window_tokens: None,
         });
     }
     out
@@ -180,6 +199,7 @@ pub fn reasoning_options_from_pairs(pairs: &[(&str, &str)]) -> Vec<RuntimeModelO
         .map(|(id, label)| RuntimeModelOption {
             id: (*id).to_string(),
             label: (*label).to_string(),
+            context_window_tokens: None,
         })
         .collect()
 }

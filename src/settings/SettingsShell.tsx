@@ -3,7 +3,7 @@ import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
   Settings as SettingsIcon, Languages, Zap,
   Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
-  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3, Terminal,
+  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3, Terminal, Bot,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -36,6 +36,7 @@ import { ProviderSortableList } from './ProviderSortableList'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
 import { KivioCodeSettings } from './KivioCodeSettings'
+import { ExternalAgentsSettings } from './ExternalAgentsSettings'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
 import { resolveModelInfo } from '../data/modelMatching'
 import { useWindowInteractionFocus } from '../utils/windowFocus'
@@ -47,7 +48,7 @@ import {
   SettingsGroup,
 } from './components'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'externalAgents' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 type MemoryLayerKey = 'l1' | 'l2'
@@ -234,6 +235,13 @@ function defaultChatConfig(): NonNullable<SettingsData['chat']> {
     systemPrompt: '',
     userDisplayName: '',
     userAvatar: '',
+    defaultAgentRuntime: {
+      kind: 'builtin',
+      externalAgentId: null,
+      externalModel: null,
+      externalReasoning: null,
+    },
+    externalAllowMcpInProject: false,
   }
 }
 
@@ -2005,6 +2013,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'memory' as const, label: t.tabMemory, icon: Brain },
     { id: 'mixer' as const, label: t.tabMixer, icon: SlidersHorizontal },
     { id: 'kivioCode' as const, label: 'Kivio Code', icon: Terminal },
+    { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: Bot },
     { id: 'mcp' as const, label: 'MCP', icon: Wrench },
     { id: 'skill' as const, label: 'Skill', icon: Sparkles },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: Globe },
@@ -2051,6 +2060,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? '终端编码代理的默认模型、工具审批策略与上下文读取。'
         : 'Default model, tool approval policy, and context reading for the terminal coding agent.',
+    },
+    externalAgents: {
+      title: t.tabExternalAgents,
+      subtitle: t.externalAgentsPageHint,
     },
     mcp: {
       title: 'MCP',
@@ -2770,6 +2783,15 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     <button
                       type="button"
                       className="kv-btn sm"
+                      onClick={() => setActiveTab('externalAgents')}
+                      data-tauri-drag-region="false"
+                    >
+                      <Bot size={11} />
+                      {t.chatOpenExternalAgents}
+                    </button>
+                    <button
+                      type="button"
+                      className="kv-btn sm"
                       onClick={() => setActiveTab('providers')}
                       data-tauri-drag-region="false"
                     >
@@ -3014,6 +3036,15 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== Kivio Code 标签页 ===== */}
             {activeTab === 'kivioCode' && (
               <KivioCodeSettings lang={lang} providers={settings.providers} />
+            )}
+
+            {activeTab === 'externalAgents' && (
+              <ExternalAgentsSettings
+                lang={lang}
+                chatConfig={chatConfig}
+                onChatChange={updateChat}
+                onNavigateTab={setActiveTab}
+              />
             )}
 
             {/* ===== MCP 标签页 ===== */}

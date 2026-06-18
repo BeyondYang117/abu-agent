@@ -145,6 +145,7 @@ fn normalize_models(result: &Value) -> Vec<RuntimeModelOption> {
                         } else {
                             id.to_string()
                         },
+                        context_window_tokens: None,
                     });
                 }
             }
@@ -172,6 +173,7 @@ fn normalize_models(result: &Value) -> Vec<RuntimeModelOption> {
                     } else {
                         id.to_string()
                     },
+                    context_window_tokens: None,
                 });
             }
         }
@@ -294,6 +296,116 @@ fn format_acp_usage(usage: &Value) -> Option<crate::chat::model::ModelUsage> {
     }
 }
 
+fn acp_update_status(update: &serde_json::Map<String, Value>) -> Option<String> {
+    update.get("status").and_then(|v| v.as_str()).map(|status| {
+        status
+            .trim()
+            .to_lowercase()
+            .replace([' ', '-'], "_")
+    })
+}
+
+fn acp_tool_call_id(update: &serde_json::Map<String, Value>) -> Option<String> {
+    update
+        .get("toolCallId")
+        .or_else(|| update.get("tool_call_id"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn acp_tool_name(update: &serde_json::Map<String, Value>) -> String {
+    update
+        .get("title")
+        .or_else(|| update.get("toolName"))
+        .or_else(|| update.get("name"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("tool")
+        .to_string()
+}
+
+fn acp_is_terminal_success(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "complete" | "succeeded" | "success"
+    )
+}
+
+fn acp_is_terminal_failure(status: &str) -> bool {
+    matches!(
+        status,
+        "failed" | "failure" | "error" | "cancelled" | "canceled"
+    )
+}
+
+fn acp_result_content(update: &serde_json::Map<String, Value>) -> String {
+    update
+        .get("content")
+        .or_else(|| update.get("output"))
+        .or_else(|| update.get("result"))
+        .map(|value| {
+            if let Some(text) = value.as_str() {
+                text.to_string()
+            } else {
+                value.to_string()
+            }
+        })
+        .unwrap_or_else(|| acp_tool_name(update))
+}
+
+fn apply_acp_session_update(
+    update: &serde_json::Map<String, Value>,
+    emitted_tool_ids: &mut HashSet<String>,
+    sink: &mut impl FnMut(UnifiedAgentEvent),
+) -> bool {
+    let session_update = update
+        .get("sessionUpdate")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    match session_update {
+        "tool_call" => {
+            let Some(id) = acp_tool_call_id(update) else {
+                return true;
+            };
+            if emitted_tool_ids.insert(id.clone()) {
+                sink(UnifiedAgentEvent::ToolUse {
+                    id,
+                    name: acp_tool_name(update),
+                    input: Value::Object(update.clone()),
+                });
+            }
+            true
+        }
+        "tool_call_update" => {
+            let Some(id) = acp_tool_call_id(update) else {
+                return true;
+            };
+            if !emitted_tool_ids.contains(&id) {
+                emitted_tool_ids.insert(id.clone());
+                sink(UnifiedAgentEvent::ToolUse {
+                    id: id.clone(),
+                    name: acp_tool_name(update),
+                    input: Value::Object(update.clone()),
+                });
+            }
+            if let Some(status) = acp_update_status(update) {
+                if acp_is_terminal_success(&status) || acp_is_terminal_failure(&status) {
+                    sink(UnifiedAgentEvent::ToolResult {
+                        tool_use_id: id,
+                        content: acp_result_content(update),
+                        is_error: acp_is_terminal_failure(&status),
+                    });
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 pub async fn run_acp_session(
     child: &mut Child,
     prompt: &str,
@@ -319,6 +431,7 @@ pub async fn run_acp_session(
     let mut set_model_request_id: Option<u64> = None;
     let mut model_config_id: Option<String> = None;
     let mut emitted_text = String::new();
+    let mut emitted_acp_tools = HashSet::new();
     let mut finished = false;
 
     write_rpc(
@@ -418,6 +531,9 @@ pub async fn run_acp_session(
                                 }
                             }
                         }
+                        continue;
+                    }
+                    if apply_acp_session_update(update, &mut emitted_acp_tools, &mut sink) {
                         continue;
                     }
                     if session_update != "agent_message_chunk"
@@ -567,6 +683,39 @@ pub async fn run_acp_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_acp_session_update_emits_tool_use_and_result() {
+        let started = serde_json::Map::from_iter([
+            ("sessionUpdate".to_string(), json!("tool_call")),
+            ("toolCallId".to_string(), json!("acp-1")),
+            ("title".to_string(), json!("Write")),
+        ]);
+        let finished = serde_json::Map::from_iter([
+            ("sessionUpdate".to_string(), json!("tool_call_update")),
+            ("toolCallId".to_string(), json!("acp-1")),
+            ("title".to_string(), json!("Write")),
+            ("status".to_string(), json!("completed")),
+            ("content".to_string(), json!("done")),
+        ]);
+        let mut emitted = HashSet::new();
+        let mut events = Vec::new();
+        assert!(apply_acp_session_update(&started, &mut emitted, &mut |event| {
+            events.push(event);
+        }));
+        assert!(apply_acp_session_update(&finished, &mut emitted, &mut |event| {
+            events.push(event);
+        }));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolUse { id, name, .. } if id == "acp-1" && name == "Write"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, is_error }
+                if tool_use_id == "acp-1" && content == "done" && !*is_error
+        )));
+    }
 
     #[test]
     fn normalize_models_from_available() {

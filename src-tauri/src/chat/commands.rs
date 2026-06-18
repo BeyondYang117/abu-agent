@@ -29,6 +29,7 @@ use crate::chat::model_metadata::{
     chat_max_output_tokens_for_model, context_window_for_model, model_can_generate_images_directly,
     model_supports_image_generation, model_supports_vision,
 };
+use crate::external_agents::detection::EXTERNAL_AGENT_MODELS_CACHE_TTL;
 use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
 use crate::settings::{ModelProvider, ProviderApiFormat, Settings};
@@ -646,7 +647,17 @@ pub(crate) async fn chat_get_context_stats(
     conversation_id: String,
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
-    let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
+    let context_state = if conversation.agent_runtime.is_external() {
+        crate::external_agents::context::compute_external_context_state_with_probe(
+            &conversation,
+            true,
+            None,
+            None,
+        )
+        .await
+    } else {
+        compute_context_state(&app, &state, &conversation, None, &[]).await?
+    };
     conversation.context_state = context_state.clone();
     save_conversation(&app, &conversation)?;
     Ok(serde_json::json!({
@@ -663,6 +674,19 @@ pub(crate) async fn chat_compress_context(
     conversation_id: String,
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
+    if conversation.agent_runtime.is_external() {
+        crate::external_agents::compact::request_external_compaction(&app, &state, &mut conversation)
+            .await?;
+        conversation.updated_at = chrono::Local::now().timestamp();
+        save_conversation(&app, &conversation)?;
+        let context_state = conversation.context_state.clone();
+        emit_chat_context_state(&app, &conversation.id, &context_state);
+        return Ok(serde_json::json!({
+            "success": true,
+            "contextState": context_state,
+            "conversation": conversation,
+        }));
+    }
     compress_conversation_context(&app, &state, &mut conversation).await?;
     conversation.context_state.warning = None;
     let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
@@ -758,7 +782,10 @@ pub(crate) async fn chat_send_message(
     // Backend slash-trigger preprocessing (承重路径): plain text `/commit msg`
     // pins the skill and rewrites the body even without the front-end popover
     // (also covers paste / external API / mobile entry points).
-    let (content, active_skill_id) = {
+    // External CLI conversations pass slash commands straight through to the agent.
+    let (content, active_skill_id) = if conversation.agent_runtime.is_external() {
+        (content, active_skill_id)
+    } else {
         let settings = state.settings_read().clone();
         let registry =
             skills::build_registry(&app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
@@ -1908,7 +1935,6 @@ fn normalize_assistant_segments(
                 text: Some(reasoning.to_string()),
                 tool_call_id: None,
             });
-            next_order = next_order.saturating_add(1);
         }
     }
 
@@ -1922,12 +1948,32 @@ fn normalize_assistant_segments(
             }
         })
         .collect::<std::collections::HashSet<_>>();
-    for record in tool_calls {
-        if existing_tool_segment_ids.contains(&record.id) {
-            continue;
+    let mut missing_records: Vec<&ToolCallRecord> = tool_calls
+        .iter()
+        .filter(|record| !existing_tool_segment_ids.contains(&record.id))
+        .collect();
+    missing_records.sort_by_key(|record| record.started_at.unwrap_or(0));
+    if !missing_records.is_empty() {
+        let synthesis_start = segments
+            .iter()
+            .filter(|segment| segment.phase == ChatMessageSegmentPhase::Synthesis)
+            .map(|segment| segment.order)
+            .min();
+        for record in missing_records {
+            let insert_at = segments
+                .iter()
+                .filter(|segment| synthesis_start.is_none_or(|start| segment.order < start))
+                .map(|segment| segment.order)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+            for segment in segments.iter_mut() {
+                if segment.order >= insert_at {
+                    segment.order = segment.order.saturating_add(1);
+                }
+            }
+            segments.push(tool_segment_for_record(record, insert_at, None));
         }
-        segments.push(tool_segment_for_record(record, next_order, None));
-        next_order = next_order.saturating_add(1);
     }
 
     segments.sort_by_key(|segment| segment.order);
@@ -2892,6 +2938,25 @@ async fn compute_context_state(
     last_user_api_content: Option<&str>,
     last_user_image_paths: &[PathBuf],
 ) -> Result<ConversationContextState, String> {
+    if conversation.agent_runtime.is_external() {
+        let cached_models = conversation
+            .agent_runtime
+            .external_agent_id
+            .as_deref()
+            .and_then(|agent_id| {
+                state.get_cached_external_agent_models(agent_id, EXTERNAL_AGENT_MODELS_CACHE_TTL)
+            });
+        return Ok(
+            crate::external_agents::context::compute_external_context_state_with_probe(
+                conversation,
+                false,
+                None,
+                cached_models.as_deref(),
+            )
+            .await,
+        );
+    }
+
     let settings = state.settings_read().clone();
     let provider = settings.get_provider(&conversation.provider_id).cloned();
     let provider_supports_tools = provider
@@ -3056,6 +3121,12 @@ async fn compute_context_state(
         compressed_message_count,
         summary,
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
+        context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
+        token_count_source: None,
+        session_input_tokens: None,
+        session_output_tokens: None,
+        external_agent_id: None,
+        external_model: None,
     })
 }
 
@@ -3093,6 +3164,9 @@ fn should_auto_compress_context(
     context_state: &ConversationContextState,
     conversation: &Conversation,
 ) -> bool {
+    if conversation.agent_runtime.is_external() {
+        return false;
+    }
     let Some(ratio) = context_state.usage_ratio else {
         return false;
     };
@@ -5402,6 +5476,64 @@ mod tests {
         assert_eq!(auxiliary.phase, ChatMessageSegmentPhase::Auxiliary);
         assert_eq!(skipped.kind, ChatMessageSegmentKind::Tool);
         assert_eq!(skipped.phase, ChatMessageSegmentPhase::ToolLoop);
+    }
+
+    #[test]
+    fn normalize_segments_inserts_tool_segments_before_synthesis_text() {
+        let tool_calls = vec![test_tool_record(
+            "call_read",
+            "external_cli",
+            1,
+            ToolCallStatus::Success,
+        )];
+        let segments = normalize_assistant_segments(
+            "final answer",
+            Some("reasoning"),
+            &tool_calls,
+            vec![
+                ChatMessageSegment {
+                    id: "seg_reasoning".to_string(),
+                    kind: ChatMessageSegmentKind::Reasoning,
+                    phase: ChatMessageSegmentPhase::Plain,
+                    order: 1,
+                    step_number: None,
+                    round: None,
+                    text: Some("reasoning".to_string()),
+                    tool_call_id: None,
+                },
+                ChatMessageSegment {
+                    id: "seg_before".to_string(),
+                    kind: ChatMessageSegmentKind::Text,
+                    phase: ChatMessageSegmentPhase::ToolLoop,
+                    order: 2,
+                    step_number: None,
+                    round: Some(1),
+                    text: Some("working".to_string()),
+                    tool_call_id: None,
+                },
+                ChatMessageSegment {
+                    id: "seg_final".to_string(),
+                    kind: ChatMessageSegmentKind::Text,
+                    phase: ChatMessageSegmentPhase::Synthesis,
+                    order: 3,
+                    step_number: None,
+                    round: None,
+                    text: Some("final answer".to_string()),
+                    tool_call_id: None,
+                },
+            ],
+        );
+
+        let tool_segment = segments
+            .iter()
+            .find(|segment| segment.tool_call_id.as_deref() == Some("call_read"))
+            .expect("tool segment should exist");
+        let final_segment = segments
+            .iter()
+            .find(|segment| segment.id == "seg_final")
+            .expect("final segment should exist");
+        assert_eq!(tool_segment.kind, ChatMessageSegmentKind::Tool);
+        assert!(tool_segment.order < final_segment.order);
     }
 
     #[test]
