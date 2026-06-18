@@ -451,11 +451,13 @@ impl AppState {
             .external_live_sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(session) = map.get(conversation_id) {
+        if let Some(session) = map.get_mut(conversation_id) {
             if session.is_reusable(agent_id, cwd) {
+                session.last_activity = Instant::now();
                 return Some(session.control.clone());
             }
         }
+        // Dropping the removed entry closes its control channel → the actor shuts the child down.
         map.remove(conversation_id);
         None
     }
@@ -465,10 +467,27 @@ impl AppState {
         conversation_id: String,
         session: crate::external_agents::session::live::LiveSession,
     ) {
-        self.external_live_sessions
+        const IDLE_TTL: Duration = Duration::from_secs(600);
+        const MAX_LIVE_SESSIONS: usize = 6;
+        let mut map = self
+            .external_live_sessions
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(conversation_id, session);
+            .unwrap_or_else(|e| e.into_inner());
+        // Reclaim idle sessions (dropping each entry closes its actor + child) and any whose
+        // actor already exited.
+        map.retain(|_, s| !s.is_idle(IDLE_TTL));
+        // Bound concurrent live processes: evict least-recently-used until under the cap.
+        while map.len() >= MAX_LIVE_SESSIONS {
+            let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, s)| s.last_activity)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            map.remove(&oldest);
+        }
+        map.insert(conversation_id, session);
     }
 
     pub fn remove_external_live_session(&self, conversation_id: &str) {
@@ -476,6 +495,26 @@ impl AppState {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(conversation_id);
+    }
+
+    /// Reclaim every idle/dead live session (e.g. from a periodic sweeper). Returns how many
+    /// were dropped. Dropping each entry closes its actor + child process.
+    pub fn sweep_idle_external_live_sessions(&self, idle_ttl: Duration) -> usize {
+        let mut map = self
+            .external_live_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = map.len();
+        map.retain(|_, s| !s.is_idle(idle_ttl));
+        before - map.len()
+    }
+
+    /// Drop all live sessions (e.g. on app shutdown). Each actor closes its child process.
+    pub fn close_all_external_live_sessions(&self) {
+        self.external_live_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     /// 标记某个 key 失败：进入冷却 + 不变更 active_key_idx

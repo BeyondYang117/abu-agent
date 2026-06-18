@@ -5,6 +5,8 @@
 //! reachable only through an `mpsc::Sender<SessionCommand>` — the registry never holds the
 //! `Child` or any lock across a turn await, only the cheap clonable control sender.
 
+use std::time::{Duration, Instant};
+
 use tokio::sync::{mpsc, oneshot};
 
 use crate::external_agents::types::{StreamFormat, UnifiedAgentEvent};
@@ -34,6 +36,8 @@ pub struct LiveSession {
     pub cwd: String,
     /// Native session/thread id captured at connect (for resume + diagnostics).
     pub native_id: Option<String>,
+    /// Last time a turn was sent/started; drives idle reclamation + LRU eviction.
+    pub last_activity: Instant,
 }
 
 impl LiveSession {
@@ -41,6 +45,11 @@ impl LiveSession {
     /// agent + working directory as the incoming turn.
     pub fn is_reusable(&self, agent_id: &str, cwd: &str) -> bool {
         !self.control.is_closed() && self.agent_id == agent_id && self.cwd == cwd
+    }
+
+    /// Reclaimable: the actor already exited, or the session has been idle past `ttl`.
+    pub fn is_idle(&self, ttl: Duration) -> bool {
+        self.control.is_closed() || Instant::now().saturating_duration_since(self.last_activity) >= ttl
     }
 }
 
@@ -57,6 +66,7 @@ mod tests {
                 agent_id: agent.to_string(),
                 cwd: cwd.to_string(),
                 native_id: Some("thread-1".to_string()),
+                last_activity: Instant::now(),
             },
             rx,
         )
@@ -75,5 +85,25 @@ mod tests {
         let (session, rx) = make("codex", "/proj");
         drop(rx); // actor gone → control channel closed
         assert!(!session.is_reusable("codex", "/proj"));
+    }
+
+    #[test]
+    fn is_idle_on_age_or_closed_channel() {
+        // Fresh + open → not idle.
+        let (session, _rx) = make("codex", "/proj");
+        assert!(!session.is_idle(Duration::from_secs(600)));
+
+        // Aged past ttl → idle.
+        let (mut aged, _rx2) = make("codex", "/proj");
+        aged.last_activity = Instant::now()
+            .checked_sub(Duration::from_secs(700))
+            .expect("instant in range");
+        assert!(aged.is_idle(Duration::from_secs(600)));
+        assert!(!aged.is_idle(Duration::from_secs(3600)));
+
+        // Closed actor → idle regardless of age.
+        let (closed, rx3) = make("codex", "/proj");
+        drop(rx3);
+        assert!(closed.is_idle(Duration::from_secs(3600)));
     }
 }

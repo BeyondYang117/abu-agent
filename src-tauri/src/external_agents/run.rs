@@ -596,6 +596,7 @@ where
                         agent_id: agent_id.to_string(),
                         cwd: cwd_str.clone(),
                         native_id: Some(native_id),
+                        last_activity: std::time::Instant::now(),
                     },
                 );
                 // A resumed session already holds history → send only the latest message.

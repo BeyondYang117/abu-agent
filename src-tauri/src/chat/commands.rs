@@ -4694,8 +4694,12 @@ pub(crate) async fn chat_delete_message(
 #[tauri::command]
 pub(crate) fn chat_delete_conversation(
     app: AppHandle,
+    state: tauri::State<crate::state::AppState>,
     conversation_id: String,
 ) -> Result<serde_json::Value, String> {
+    // 删对话即终止其持久外部 CLI 会话（actor 关闭子进程）并清掉跨重启 resume 句柄。
+    state.remove_external_live_session(&conversation_id);
+    crate::external_agents::session::clear_live_handle(&app, &conversation_id);
     delete_conv(&app, &conversation_id)?;
     Ok(serde_json::json!({
         "success": true,

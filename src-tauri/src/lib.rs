@@ -149,6 +149,19 @@ pub fn run() {
             cleanup_orphan_temp_files();
             cleanup_stale_sandbox_exports();
 
+            // 周期性回收闲置的持久外部 CLI 会话（10 分钟无活动即丢弃 → actor 关闭其子进程），
+            // 避免长时间挂着空转进程占内存。注册时也会做一次清扫 + LRU 限流，这里覆盖纯闲置场景。
+            {
+                let sweeper = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        let state: State<AppState> = sweeper.state();
+                        state.sweep_idle_external_live_sessions(std::time::Duration::from_secs(600));
+                    }
+                });
+            }
+
             let mut settings = load_settings(&app.handle());
             // 一次性内置专家迁移（v1）：清空旧专家索引（含用户自建——用户明确选择），
             // 装入 4 个内置专家（写作/编程/研究/数据）。靠 settings flag 幂等，成功后立即写盘，
@@ -435,6 +448,8 @@ pub fn run() {
                     // 真正退出：同步排干 MCP 连接池，杀掉所有持久子进程，避免孤儿进程。
                     let state: State<AppState> = app_handle.state();
                     tauri::async_runtime::block_on(state.mcp_disconnect_all());
+                    // 丢弃所有活的外部 CLI 会话；每个 actor 关闭其子进程（kill_on_drop 兜底）。
+                    state.close_all_external_live_sessions();
                 }
             }
             #[cfg(target_os = "macos")]
