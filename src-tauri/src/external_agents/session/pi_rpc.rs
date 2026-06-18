@@ -505,4 +505,17 @@ mod tests {
             PiRpcOutcome::AgentEnd
         );
     }
+
+    #[test]
+    fn parse_pi_models_real_aligned_table() {
+        // Real `pi --list-models` output: header + 6 space-aligned columns.
+        let out = "provider          model          context  max-out  thinking  images\n\
+                   zmfooogreencloud  mimo-v2.5-pro  128K     8.2K     no        no\n\
+                   zmfooogreencloud  minimax-m2.7   128K     8.2K     no        no";
+        let models = parse_pi_models(out).unwrap();
+        assert!(models.iter().any(|m| m.id == "zmfooogreencloud/mimo-v2.5-pro"));
+        assert!(models.iter().any(|m| m.id == "zmfooogreencloud/minimax-m2.7"));
+        // Generic provider models must NOT appear (those were the bogus fallback).
+        assert!(!models.iter().any(|m| m.id.starts_with("anthropic/")));
+    }
 }

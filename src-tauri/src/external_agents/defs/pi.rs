@@ -3,16 +3,9 @@ use super::super::types::{
 };
 
 const FALLBACK_MODELS: &[(&str, &str)] = &[
+    // Pi's real models are user-configured and discovered via `pi --list-models`; if that fails
+    // we only offer Default rather than inventing provider models the user never set up.
     ("default", "Default"),
-    (
-        "anthropic/claude-sonnet-4-5",
-        "Claude Sonnet 4.5 (anthropic)",
-    ),
-    ("anthropic/claude-opus-4-5", "Claude Opus 4.5 (anthropic)"),
-    ("openai/gpt-5", "GPT-5 (openai)"),
-    ("openai/o4-mini", "o4-mini (openai)"),
-    ("google/gemini-2.5-pro", "Gemini 2.5 Pro (google)"),
-    ("google/gemini-2.5-flash", "Gemini 2.5 Flash (google)"),
 ];
 
 const REASONING: &[(&str, &str)] = &[

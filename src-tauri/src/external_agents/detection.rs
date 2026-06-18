@@ -161,18 +161,19 @@ async fn probe_models(
     .ok()?
     .ok()?;
 
-    let text = if def.models_from_stderr {
-        String::from_utf8_lossy(&output.stderr)
-    } else if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
-    } else {
-        return None;
-    };
-
+    // Pi prints its model table to stdout (the `models_from_stderr` name is historical — older
+    // builds used stderr). Prefer whichever stream actually has content, then parse the table.
     if def.models_from_stderr {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let text = if !stdout.trim().is_empty() { stdout } else { stderr };
         return parse_pi_models(text.as_ref());
     }
 
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
     parse_models_list(def.id, text.as_ref())
 }
 
@@ -240,6 +241,24 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires live pi CLI on PATH"]
+    async fn live_pi_models_from_config_not_fallback() {
+        use crate::external_agents::registry::get_agent_def;
+        let def = get_agent_def("pi").expect("pi def");
+        let detected = detect_single_agent(def).await;
+        assert!(detected.available, "pi should be on PATH");
+        for m in &detected.models {
+            eprintln!("  {} -> {}", m.id, m.label);
+        }
+        // Real discovered models, not the bogus generic fallback.
+        assert!(
+            detected.models.iter().any(|m| m.id.contains('/') && !m.id.starts_with("anthropic/") && !m.id.starts_with("openai/")),
+            "expected user-configured pi models, got: {:?}",
+            detected.models.iter().map(|m| &m.id).collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn parse_cursor_models_skips_header() {
