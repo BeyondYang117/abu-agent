@@ -1285,6 +1285,7 @@ mod tests {
             steps: Vec::new(),
             stream_outcome: String::new(),
             usage: None,
+            compacted_history: None,
         })
     }
 

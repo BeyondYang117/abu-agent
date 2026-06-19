@@ -506,6 +506,43 @@ impl TurnRuntime {
         app.set_mode(AppMode::Idle);
     }
 
+    /// `/compact [focus]`：强制压缩当前对话历史（无视预算），走与 agent loop 自动路径相同的
+    /// serialize→summary→replace 核心（[`crate::chat::agent::compaction::force_compact`]）。
+    /// 在交互 UI 线程上 `block_on` 打一次摘要模型调用；成功则用压缩后的历史**替换**
+    /// `runtime_messages` 并把 footer ctx gauge 刷到压缩后的小值，推一条 transcript 通知。
+    /// 无可摘要旧段 / 空摘要 / 失败时不改 runtime_messages，仅推一条说明。
+    fn compact_now(&mut self, focus: Option<&str>, app: &mut App) {
+        let before = crate::chat::agent::compaction::estimate_messages_tokens(&self.runtime_messages);
+        let compacted = self.handle.block_on(crate::chat::agent::compaction::force_compact(
+            &self.state,
+            &self.assembly.provider,
+            &self.assembly.model,
+            &self.runtime_messages,
+            self.assembly.max_output_tokens,
+            self.assembly.retry_attempts,
+            "kivio-code",
+            "kivio-code-compact",
+            focus,
+        ));
+        match compacted {
+            Some(compacted) => {
+                self.runtime_messages = compacted;
+                let after = crate::chat::agent::compaction::estimate_messages_tokens(
+                    &self.runtime_messages,
+                );
+                app.set_context_tokens(Some(after as u64));
+                app.push_notice(format!(
+                    "Compacted conversation: ~{before} → ~{after} tokens."
+                ));
+            }
+            None => {
+                app.push_notice(
+                    "Nothing to compact yet (conversation fits in the recent window), or summarization failed.",
+                );
+            }
+        }
+    }
+
     /// 处理一轮结束：忽略过期 generation；否则把 assistant 消息 + 工具调用持久化、累积进
     /// runtime_messages，刷新 footer usage，回到 Idle。返回 footer usage 摘要（None = 不变）。
     fn finish_turn(&mut self, done: TurnDone, app: &mut App) {
@@ -583,8 +620,13 @@ impl TurnRuntime {
 
     /// 把这一轮产生的 provider-agnostic transcript（含 assistant tool_calls / tool 结果）累积进
     /// runtime_messages，使下一轮带上完整上下文。`api_messages` 是 OpenAI 兼容的隐藏消息序列。
+    ///
+    /// 本轮若发生过 L2 压缩（`compacted_history` 有值），则用压缩后的完整历史**替换**累积副本
+    /// （而非追加），让压缩真正跨轮生效——否则交互模式会一直带着压缩前的全量历史单调膨胀。
     fn accumulate_runtime_messages(&mut self, result: &AgentRunResult) {
-        if !result.api_messages.is_empty() {
+        if let Some(compacted) = &result.compacted_history {
+            self.runtime_messages = compacted.clone();
+        } else if !result.api_messages.is_empty() {
             self.runtime_messages
                 .extend(result.api_messages.iter().cloned());
         } else if !result.content.trim().is_empty() {
@@ -1107,6 +1149,17 @@ fn apply_effect(
             // build_system_prompt reads the saved value.
             app.open_settings_selector();
         }
+        AppEffect::Compact { focus } => {
+            if let Some(turn) = turn {
+                // Force a compaction of the accumulated history regardless of budget.
+                // Blocks the UI thread on one summarization model call (the App already
+                // gated against running mid-turn), then replaces runtime_messages with
+                // the compacted history and refreshes the footer ctx gauge.
+                turn.compact_now(focus.as_deref(), app);
+            } else {
+                app.push_notice("No model configured; cannot compact.");
+            }
+        }
     }
     EffectFlow::Continue
 }
@@ -1614,6 +1667,7 @@ mod tests {
             steps: Vec::new(),
             stream_outcome: "completed".to_string(),
             usage: None,
+            compacted_history: None,
         }
     }
 
@@ -1707,6 +1761,54 @@ mod tests {
         assert_eq!(rt.runtime_messages[2]["content"], "answer one");
         assert_eq!(rt.runtime_messages[3]["content"], "second");
         assert_eq!(rt.runtime_messages[4]["content"], "answer two");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// R3: when a turn returns `compacted_history`, the interactive accumulator
+    /// REPLACES its runtime_messages with the compacted history (rather than
+    /// appending api_messages), so compaction shrinks the cross-turn context
+    /// instead of the history growing monotonically.
+    #[tokio::test]
+    async fn compacted_history_replaces_accumulated_runtime_messages() {
+        let cwd = unique_cwd("compacted");
+        let (mut rt, _done) = turn_runtime(&cwd);
+
+        // Simulate a turn that ballooned then got compacted: pre-fill a large
+        // accumulated history, then feed a result carrying a small compacted one.
+        for i in 0..40 {
+            rt.runtime_messages
+                .push(json!({ "role": "tool", "tool_call_id": format!("c{i}"), "content": "X".repeat(2_000) }));
+        }
+        let bloated_len = rt.runtime_messages.len();
+
+        let compacted = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "[context summary] 摘要" }),
+            json!({ "role": "assistant", "content": "已了解摘要" }),
+            json!({ "role": "assistant", "content": "最终回答" }),
+        ];
+        let mut result = result_with(
+            "最终回答",
+            // api_messages is the full per-turn delta — must be IGNORED when
+            // compacted_history is present (otherwise we'd grow, not shrink).
+            vec![json!({ "role": "assistant", "content": "最终回答" })],
+            Vec::new(),
+        );
+        result.compacted_history = Some(compacted.clone());
+
+        rt.accumulate_runtime_messages(&result);
+
+        // Replaced wholesale with the compacted history (NOT extended).
+        assert_eq!(rt.runtime_messages, compacted);
+        assert!(
+            rt.runtime_messages.len() < bloated_len,
+            "compaction must shrink the cross-turn history (was {bloated_len}, now {})",
+            rt.runtime_messages.len()
+        );
+        assert_eq!(rt.runtime_messages[0]["role"], "system");
+        assert_eq!(rt.runtime_messages.last().unwrap()["content"], "最终回答");
 
         let _ = std::fs::remove_dir_all(&cwd);
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
