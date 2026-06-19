@@ -149,6 +149,10 @@ pub enum AppEffect {
     /// `/settings`：请求打开设置覆盖层（事件循环把当前持久化的 toggle 值取出，调
     /// [`App::open_settings_selector`]）。
     OpenSettings,
+    /// `/compact [focus]`：请求强制压缩当前对话历史（无视预算）。事件循环 block_on 走
+    /// `force_compact`，成功后用压缩后的历史替换 runtime_messages 并刷新 footer ctx。
+    /// `focus` 为聚焦指令（命令后剩余文字，None = 无聚焦）。
+    Compact { focus: Option<String> },
 }
 
 /// 覆盖层（overlay）：当前打开的全屏选择器。打开时拦截输入、渲染在 editor 上方。
@@ -1131,6 +1135,15 @@ impl App {
             SlashOutcome::EnterBuild => {
                 self.set_agent_mode(AgentMode::Build);
                 AppEffect::None
+            }
+            SlashOutcome::Compact { focus } => {
+                // Compaction rewrites the conversation history; reject while a turn is
+                // generating (the runtime is mid-mutation), exactly like a normal submit.
+                if self.mode == AppMode::Generating {
+                    self.push_notice("(busy — wait for the current turn to finish or press Esc)");
+                    return AppEffect::None;
+                }
+                AppEffect::Compact { focus }
             }
             SlashOutcome::Unknown(name) => {
                 self.push_notice(format!("Unknown command: /{name}. Type /help for the list."));

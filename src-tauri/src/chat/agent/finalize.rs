@@ -151,6 +151,7 @@ impl<'a> RunResultBuilder<'a> {
             steps,
             stream_outcome: self.outcome.to_string(),
             usage: None,
+            compacted_history: None,
         }
     }
 }
@@ -312,6 +313,7 @@ pub(crate) fn finalize_planning_final(
         steps: std::mem::take(&mut state.steps),
         stream_outcome: "completed".to_string(),
         usage: None,
+        compacted_history: None,
     })
 }
 
@@ -371,6 +373,7 @@ pub(crate) fn finalize_completed(
         steps: std::mem::take(&mut state.steps),
         stream_outcome: "completed".to_string(),
         usage: None,
+        compacted_history: None,
     }
 }
 
@@ -506,5 +509,6 @@ pub(crate) fn cancelled_tool_round_run_result(
         steps,
         stream_outcome: "cancelled".to_string(),
         usage: None,
+        compacted_history: None,
     }
 }

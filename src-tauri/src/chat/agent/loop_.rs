@@ -65,6 +65,10 @@ pub(crate) struct RunState {
     pub(crate) applied_allowed_tools_len: usize,
     /// 本轮全部模型调用（规划/合成/压缩摘要）的 usage 累计；provider 不报则保持 None。
     pub(crate) usage: Option<crate::chat::model::ModelUsage>,
+    /// 本轮是否真正发生过 L2 压缩（摘要已写回 `runtime_messages`）。finalize 据此
+    /// 把压缩后的完整历史回传到 `AgentRunResult.compacted_history`，让跨轮调用方
+    /// 用压缩后的历史替换其累积副本（压缩真正跨轮生效，而非仅当轮发送视图瘦身）。
+    pub(crate) compacted: bool,
 }
 
 impl RunState {
@@ -130,6 +134,7 @@ pub async fn run_agent_loop(
         skill_cache: skills::SkillRunCache::default(),
         applied_allowed_tools_len: 0,
         usage: None,
+        compacted: false,
     };
     // 把助手的技能白名单冻结进 skill_cache,作为 skill_activate 执行派发的硬 gate。
     // 无助手 = None = 不限(全局行为)。
@@ -229,8 +234,19 @@ pub async fn run_agent_loop(
 }
 
 /// 把本轮累计的 provider usage 挂到运行结果上（finalize 构造器们不感知 usage）。
+/// 同时：本轮若发生过 L2 压缩，把压缩后的完整历史 +最终 assistant 回答回传到
+/// `compacted_history`，供跨轮调用方替换其累积历史（finalize 构造器们也不感知压缩）。
 fn attach_usage(mut result: AgentRunResult, state: &mut RunState) -> AgentRunResult {
     result.usage = state.usage.take();
+    if state.compacted {
+        let mut history = std::mem::take(&mut state.runtime_messages);
+        // 追加本轮最终 assistant 回答——它进了 api_messages 但未必落进 runtime_messages，
+        // 补上后 compacted_history 才是下一轮可直接续用的完整历史。
+        let final_message =
+            super::stop::final_assistant_api_message(&result.content, result.reasoning.as_deref());
+        history.push(final_message);
+        result.compacted_history = Some(history);
+    }
     result
 }
 

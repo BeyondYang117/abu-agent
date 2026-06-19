@@ -29,6 +29,7 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "skill", aliases: &["skills"], description: "List discovered skills" },
     SlashCommandSpec { name: "plan", aliases: &[], description: "Switch to plan mode (read-only research & planning)" },
     SlashCommandSpec { name: "build", aliases: &[], description: "Switch to build mode (full tools)" },
+    SlashCommandSpec { name: "compact", aliases: &["compress"], description: "Summarize the conversation to free up context (optional focus)" },
     SlashCommandSpec { name: "settings", aliases: &["setting", "config"], description: "Toggle kivio-code settings" },
     SlashCommandSpec { name: "quit", aliases: &["exit", "q"], description: "Exit kivio-code" },
 ];
@@ -66,6 +67,10 @@ pub enum SlashOutcome {
     EnterPlan,
     /// `/build`：切回 build 工作模式（全工具集）。
     EnterBuild,
+    /// `/compact [focus]`：强制压缩当前对话历史（无视预算）。`focus`（命令后剩余文字，trim 后非空时
+    /// 携带）透传进摘要 prompt 作为聚焦指令。事件循环 block_on 走 `force_compact`，成功后用压缩后的
+    /// 历史替换 runtime_messages 并刷新 footer ctx。
+    Compact { focus: Option<String> },
     /// 未知命令（携带去掉前导 `/` 的命令名）。
     Unknown(String),
 }
@@ -97,9 +102,24 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
         Some("skill") => SlashOutcome::ShowSkills,
         Some("plan") => SlashOutcome::EnterPlan,
         Some("build") => SlashOutcome::EnterBuild,
+        Some("compact") => SlashOutcome::Compact { focus: compact_focus(without_slash) },
         Some("settings") => SlashOutcome::OpenSettings,
         Some("quit") => SlashOutcome::Quit,
         _ => SlashOutcome::Unknown(name),
+    }
+}
+
+/// 从 `/compact [focus]` 的输入里抽取 focus：去掉命令 token 后的剩余文字，trim 后非空才返回 `Some`。
+/// `without_slash` 是已去掉前导 `/` 的整串（如 `compact focus on tests`）。
+fn compact_focus(without_slash: &str) -> Option<String> {
+    let rest = without_slash
+        .split_once(char::is_whitespace)
+        .map(|(_, rest)| rest.trim())
+        .unwrap_or("");
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
     }
 }
 
@@ -224,5 +244,35 @@ mod tests {
     #[test]
     fn bare_slash_is_unknown() {
         assert_eq!(dispatch_slash("/"), SlashOutcome::Unknown(String::new()));
+    }
+
+    #[test]
+    fn compact_without_focus() {
+        assert_eq!(dispatch_slash("/compact"), SlashOutcome::Compact { focus: None });
+        // alias
+        assert_eq!(dispatch_slash("/compress"), SlashOutcome::Compact { focus: None });
+        // trailing whitespace only → still no focus.
+        assert_eq!(dispatch_slash("/compact   "), SlashOutcome::Compact { focus: None });
+    }
+
+    #[test]
+    fn compact_with_focus() {
+        assert_eq!(
+            dispatch_slash("/compact focus on tests"),
+            SlashOutcome::Compact { focus: Some("focus on tests".to_string()) }
+        );
+        // extra spacing around the focus is trimmed.
+        assert_eq!(
+            dispatch_slash("/compact    keep the diff   "),
+            SlashOutcome::Compact { focus: Some("keep the diff".to_string()) }
+        );
+    }
+
+    #[test]
+    fn help_lists_compact() {
+        let SlashOutcome::Notice(text) = dispatch_slash("/help") else {
+            panic!("expected notice");
+        };
+        assert!(text.contains("/compact"));
     }
 }

@@ -1766,13 +1766,22 @@
         }
     }
 
-    /// In-loop compaction: an oversized tool output from an EARLIER round (outside
-    /// the keep-recent tail) must be snipped in the request sent to the provider,
-    /// while nothing persisted ever carries the snip marker.
+    /// In-loop compaction is L2-only (snip removed): an oversized EARLIER-round
+    /// tool output (outside the keep-recent tail) triggers a summary that replaces
+    /// the old segment in the send view, while THIS round's own tool result is
+    /// persisted raw in api_messages. The compacted full history is returned via
+    /// `compacted_history` so the cross-turn caller can adopt it (R3).
     #[tokio::test]
-    async fn run_loop_compacts_send_view_but_keeps_persisted_messages_raw() {
+    async fn run_loop_l2_compacts_old_history_keeps_current_round_raw() {
         let server = MockModelServer::start(vec![
+            // 1) L2 摘要请求（非流式 JSON）——压缩超预算的旧段。
+            MockResponse::Json(
+                r#"{"choices":[{"message":{"role":"assistant","content":"SUMMARY_MARKER: 早前轮次摘要"}}]}"#
+                    .to_string(),
+            ),
+            // 2) 压缩后的规划请求 → 发起一次 read 工具调用。
             MockResponse::Sse(planning_tool_call_sse_events()),
+            // 3) 合成请求 → 最终回答。
             MockResponse::Sse(vec![
                 r#"{"choices":[{"delta":{"content":"总结完成，工具输出已分析。"}}]}"#.to_string(),
                 "[DONE]".to_string(),
@@ -1780,17 +1789,15 @@
         ]);
         let state = test_app_state();
         let mut config = test_run_config(&state, &server.base_url, true);
-        // 2400 token 窗口（预算 2040）：9000 字符旧工具输出（est ~2353）触发压缩，
-        // L1 snip 后（est ~1798）回到预算内——只走 Layer1，不触发 Layer2 模型摘要。
+        // 600 token 窗口（预算 510）：9000 字符旧工具输出远超 → 直接走 Layer2 摘要（无 L1）。
         config.provider.model_overrides.insert(
             "test-model".to_string(),
             crate::settings::ModelInfo {
-                context_window: Some(2_400),
+                context_window: Some(600),
                 ..Default::default()
             },
         );
         // 预填早前轮次历史：一条超大 tool 输出 + 8 条近期小消息把它推出保护尾巴。
-        // 设计契约：snip 只动 keep-recent(8) 之外的旧 tool 消息，当前轮结果保持原文。
         let huge = "A".repeat(9_000);
         config.runtime_messages.push(serde_json::json!({
             "role": "assistant", "content": "", "tool_calls": [
@@ -1816,32 +1823,40 @@
         assert_eq!(result.stream_outcome, "completed");
         assert_eq!(result.content, "总结完成，工具输出已分析。");
 
-        // 发送视图：两次请求（规划 + 合成）的 body 中旧工具消息都已被 snip。
+        // 三次请求：L2 摘要 + 规划 + 合成。摘要后的请求不再携带旧原文。
         let bodies = server.captured_bodies();
-        assert_eq!(bodies.len(), 2, "planning + synthesis requests");
-        for (idx, body) in bodies.iter().enumerate() {
+        assert_eq!(bodies.len(), 3, "summary + planning + synthesis requests");
+        assert!(bodies[0].contains("tasked with summarizing conversations"));
+        for body in &bodies[1..] {
             assert!(
-                body.contains("chars snipped"),
-                "request #{idx} must carry the snipped old tool output"
-            );
-            assert!(
-                !body.contains(&"A".repeat(8_000)),
-                "request #{idx} must not carry the full 9000-char tool output"
+                !body.contains(&"A".repeat(1_000)),
+                "post-compaction request must not carry the full old tool output"
             );
         }
 
-        // 持久化：本轮产生的 api_messages 不含任何 snip 标记（snip 只作用于发送视图）。
+        // 持久化：本轮 api_messages 不含摘要标记（摘要只作用于发送视图/工作副本）。
         assert!(result
             .api_messages
             .iter()
-            .all(|message| !message.to_string().contains("chars snipped")));
-        // 本轮工具结果原文留存。
+            .all(|message| !message.to_string().contains("SUMMARY_MARKER")));
+        // 本轮工具结果原文留存（压缩只动旧段，不动当前轮）。
         let persisted_tool = result
             .api_messages
             .iter()
             .find(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
             .expect("persisted tool message from this round");
         assert_eq!(persisted_tool["content"], "result:read");
+
+        // R3：压缩发生 → 回传压缩后的完整历史，且末条为本轮最终 assistant 回答。
+        let compacted = result
+            .compacted_history
+            .as_ref()
+            .expect("compacted_history present when L2 ran");
+        assert!(compacted.iter().any(|m| m.to_string().contains("SUMMARY_MARKER")));
+        assert!(!compacted.iter().any(|m| m.to_string().contains(&"A".repeat(1_000))));
+        let last = compacted.last().expect("non-empty compacted history");
+        assert_eq!(last["role"], "assistant");
+        assert_eq!(last["content"], "总结完成，工具输出已分析。");
     }
 
     /// Crash-safety: after a tool round that returns `Continue` (more rounds
@@ -1888,9 +1903,10 @@
         assert!(result.tool_records.iter().any(|r| r.id == "call_read"));
     }
 
-    /// Layer2 escalation: when snip alone cannot fit the window, a summary request
-    /// fires first and the next provider request carries the summary instead of
-    /// the old history; the summary itself stays out of persisted api_messages.
+    /// Layer2 compaction: when the history is over budget, a summary request fires
+    /// first and the next provider request carries the summary instead of the old
+    /// history; the summary itself stays out of persisted api_messages, and the
+    /// compacted full history is returned via `compacted_history` (R3).
     #[tokio::test]
     async fn run_loop_layer2_replaces_old_history_with_summary() {
         let server = MockModelServer::start(vec![
@@ -1936,8 +1952,8 @@
 
         let bodies = server.captured_bodies();
         assert_eq!(bodies.len(), 2, "summary request + planning request");
-        // 摘要请求带着压缩指令与旧段样本。
-        assert!(bodies[0].contains("compress conversation history"));
+        // 摘要请求带着 Claude Code 结构化 prompt 与旧段样本。
+        assert!(bodies[0].contains("tasked with summarizing conversations"));
         // 压缩后的规划请求：携带摘要，不再携带旧原文，保留最近历史。
         assert!(bodies[1].contains("SUMMARY_MARKER"));
         assert!(!bodies[1].contains(&"B".repeat(1_000)));
@@ -1947,6 +1963,13 @@
             .api_messages
             .iter()
             .all(|message| !message.to_string().contains("SUMMARY_MARKER")));
+        // R3：压缩发生 → compacted_history 携带摘要、剔除旧原文。
+        let compacted = result
+            .compacted_history
+            .as_ref()
+            .expect("compacted_history present when L2 ran");
+        assert!(compacted.iter().any(|m| m.to_string().contains("SUMMARY_MARKER")));
+        assert!(!compacted.iter().any(|m| m.to_string().contains(&"B".repeat(1_000))));
     }
 
     /// Under-budget runs must not be touched by compaction: the request body
@@ -2255,6 +2278,7 @@
             skill_cache: skills::SkillRunCache::default(),
             applied_allowed_tools_len: 0,
             usage: None,
+            compacted: false,
         }
     }
 

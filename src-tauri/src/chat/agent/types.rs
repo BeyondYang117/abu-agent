@@ -91,4 +91,9 @@ pub struct AgentRunResult {
     /// 本轮全部模型调用（规划/合成/压缩摘要）累计的 provider 真实 usage；
     /// provider 不报告时为 None（前端回落到 chars 估算）。
     pub usage: Option<crate::chat::model::ModelUsage>,
+    /// 本轮发生了上下文压缩（L2 摘要）时，这里携带压缩后的**完整历史**
+    /// （system + 摘要 + 受保护尾段 + 本轮后续消息 + 最终 assistant 回答）。
+    /// 跨轮调用方（kivio-code 交互模式）据此**替换**自己累积的 runtime_messages，
+    /// 让压缩真正跨轮生效；为 None 时维持"追加 api_messages"的旧行为。
+    pub compacted_history: Option<Vec<Value>>,
 }

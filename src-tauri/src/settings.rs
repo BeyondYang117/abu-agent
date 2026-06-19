@@ -722,6 +722,12 @@ pub const CHAT_TOOL_MAX_TIMEOUT_MS: u64 = 300_000;
 pub const CHAT_TOOL_DEFAULT_ROUNDS: u32 = 20;
 pub const CHAT_TOOL_MIN_ROUNDS: u32 = 1;
 pub const CHAT_TOOL_MAX_ROUNDS: u32 = 100;
+/// 单条工具结果字符上限的合法区间。低于下限会把编译错误/测试输出截到没意义；
+/// 高于上限则失去"防上下文撑爆"的作用。`None`（不截断）由 sanitize 归一到默认值。
+pub const CHAT_TOOL_MIN_OUTPUT_CHARS: usize = 2_000;
+pub const CHAT_TOOL_MAX_OUTPUT_CHARS: usize = 200_000;
+/// 默认单条工具结果字符上限 ≈ 6K token（头 1/2 + 尾 1/4 保留约 3/4）。
+pub const DEFAULT_MAX_TOOL_OUTPUT_CHARS: usize = 24_000;
 /// Orchestrate 模式下的最低工具轮次预算：编排者主动 fan-out 子 agent + 先规划再分派，
 /// 单条用户消息内可能需要更多轮次，因此抬到 max(用户配置, 此值)，但不放开为无限。
 pub const ORCHESTRATE_MIN_TOOL_ROUNDS: u32 = 40;
@@ -741,6 +747,13 @@ fn default_mcp_idle_timeout_ms() -> u64 {
 
 fn default_chat_max_tool_rounds() -> Option<u32> {
     Some(CHAT_TOOL_DEFAULT_ROUNDS)
+}
+
+/// 单条工具结果进入上下文前的字符上限（头 1/2 + 尾 1/4 保留，实际约 3/4）。
+/// 默认 [`DEFAULT_MAX_TOOL_OUTPUT_CHARS`]：从源头掐住 read_file / bash / grep 等大输出，
+/// 避免它们以全量累积进 runtime_messages 撑爆上下文。`None` = 不截断（旧行为，sanitize 会归一到默认）。
+fn default_max_tool_output_chars() -> Option<usize> {
+    Some(DEFAULT_MAX_TOOL_OUTPUT_CHARS)
 }
 
 fn default_chat_approval_policy() -> String {
@@ -772,7 +785,7 @@ pub struct ChatToolsConfig {
     /// MCP 持久连接空闲超时（ms）：会话 last_used 超过此值后被 reaper 回收，下次调用透明重连。
     #[serde(default = "default_mcp_idle_timeout_ms")]
     pub mcp_idle_timeout_ms: u64,
-    #[serde(default)]
+    #[serde(default = "default_max_tool_output_chars")]
     pub max_tool_output_chars: Option<usize>,
     #[serde(default = "default_chat_approval_policy")]
     pub approval_policy: String,
@@ -792,7 +805,7 @@ impl Default for ChatToolsConfig {
             max_tool_rounds: default_chat_max_tool_rounds(),
             tool_timeout_ms: default_chat_tool_timeout_ms(),
             mcp_idle_timeout_ms: default_mcp_idle_timeout_ms(),
-            max_tool_output_chars: None,
+            max_tool_output_chars: default_max_tool_output_chars(),
             approval_policy: default_chat_approval_policy(),
             native_tools: ChatNativeToolsConfig::default(),
         }
@@ -1368,7 +1381,15 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .chat_tools
         .mcp_idle_timeout_ms
         .clamp(MCP_IDLE_TIMEOUT_MIN_MS, MCP_IDLE_TIMEOUT_MAX_MS);
-    settings.chat_tools.max_tool_output_chars = None;
+    // 工具输出截断：None（旧的"不截断"）归一到默认值，Some 值钳到合法区间。
+    // 旧逻辑在此无条件置 None（等于永不截断 → 上下文撑爆主因），现改为始终保底截断。
+    settings.chat_tools.max_tool_output_chars = Some(
+        settings
+            .chat_tools
+            .max_tool_output_chars
+            .unwrap_or(DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+            .clamp(CHAT_TOOL_MIN_OUTPUT_CHARS, CHAT_TOOL_MAX_OUTPUT_CHARS),
+    );
     if !matches!(
         settings.chat_tools.approval_policy.trim(),
         "readonly_auto_sensitive_confirm" | "always_confirm" | "auto"
@@ -2240,12 +2261,16 @@ mod tests {
             ChatToolsConfig::default().max_tool_rounds,
             Some(CHAT_TOOL_DEFAULT_ROUNDS)
         );
-        assert_eq!(ChatToolsConfig::default().max_tool_output_chars, None);
+        assert_eq!(
+            ChatToolsConfig::default().max_tool_output_chars,
+            Some(DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+        );
 
         let cfg: ChatToolsConfig =
             serde_json::from_str("{}").expect("empty chat tools config should load");
         assert_eq!(cfg.max_tool_rounds, Some(CHAT_TOOL_DEFAULT_ROUNDS));
-        assert_eq!(cfg.max_tool_output_chars, None);
+        // 缺省字段经 serde default 补成默认截断值（而非 None/不截断）。
+        assert_eq!(cfg.max_tool_output_chars, Some(DEFAULT_MAX_TOOL_OUTPUT_CHARS));
     }
 
     #[test]
@@ -2260,7 +2285,8 @@ mod tests {
             settings.chat_tools.max_tool_rounds,
             Some(CHAT_TOOL_MAX_ROUNDS)
         );
-        assert_eq!(settings.chat_tools.max_tool_output_chars, None);
+        // 合法区间内的值原样保留（不再被无条件清成 None）。
+        assert_eq!(settings.chat_tools.max_tool_output_chars, Some(12_000));
 
         let mut settings = Settings::default();
         settings.chat_tools.max_tool_rounds = None;
@@ -2268,6 +2294,36 @@ mod tests {
         let settings = sanitize_settings(settings);
 
         assert_eq!(settings.chat_tools.max_tool_rounds, None);
+    }
+
+    #[test]
+    fn sanitize_settings_normalizes_and_clamps_tool_output_chars() {
+        // None（旧的"不截断"）→ 归一到默认截断值，绝不再保留 None（上下文撑爆根因）。
+        let mut settings = Settings::default();
+        settings.chat_tools.max_tool_output_chars = None;
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.max_tool_output_chars,
+            Some(DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+        );
+
+        // 过小钳到下限。
+        let mut settings = Settings::default();
+        settings.chat_tools.max_tool_output_chars = Some(1);
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.max_tool_output_chars,
+            Some(CHAT_TOOL_MIN_OUTPUT_CHARS)
+        );
+
+        // 过大钳到上限。
+        let mut settings = Settings::default();
+        settings.chat_tools.max_tool_output_chars = Some(usize::MAX);
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.max_tool_output_chars,
+            Some(CHAT_TOOL_MAX_OUTPUT_CHARS)
+        );
     }
 
     #[test]
