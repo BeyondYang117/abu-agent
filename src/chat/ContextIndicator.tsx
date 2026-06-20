@@ -137,7 +137,7 @@ export function ContextIndicator({
     <div className="relative" data-tauri-drag-region="false">
       <button
         type="button"
-        className="flex h-8 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[12px] font-medium text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-neutral-50"
+        className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-neutral-600 transition duration-[var(--kv-dur-instant)] hover:bg-black/[0.05] hover:text-neutral-900 active:scale-[0.97] dark:text-neutral-300 dark:hover:bg-white/[0.07] dark:hover:text-neutral-50"
         aria-label="Context"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -154,7 +154,7 @@ export function ContextIndicator({
       </button>
 
       {open && (
-        <div className="chat-motion-popover absolute left-0 top-9 z-40 w-[18rem] max-w-[calc(100vw-2rem)] rounded-xl border border-neutral-200/90 bg-white p-3 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+        <div className="chat-motion-popover absolute right-0 top-9 z-40 w-[18rem] max-w-[calc(100vw-2rem)] rounded-xl border border-neutral-200/90 bg-white p-3 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
               <span className="text-[13px] font-semibold leading-none text-neutral-900 dark:text-neutral-50">

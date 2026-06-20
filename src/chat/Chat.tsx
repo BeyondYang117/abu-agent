@@ -2785,8 +2785,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   }}
                 />
               )}
-              <div className="flex min-w-0 items-center gap-1.5">
-                <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
+              <div className="flex min-w-0 items-center gap-1">
+                <div className="shrink-0" data-tauri-drag-region="false">
                   <RuntimePicker
                     agentRuntime={activeAgentRuntime}
                     onRuntimeChange={(runtime) => void handleRuntimeChange(runtime)}
@@ -2806,7 +2806,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     />
                   )}
                 </div>
-                <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
+                <div className="shrink-0" data-tauri-drag-region="false">
                   <PermissionPicker
                     agentRuntime={activeAgentRuntime}
                     onSandboxChange={(s) => void handleExternalSandboxChange(s)}
@@ -2814,6 +2814,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     onApprovalPolicyChange={handleApprovalPolicyChange}
                   />
                 </div>
+              </div>
+              <div className="min-w-5 flex-1" data-tauri-drag-region />
+              <div className="flex min-w-0 shrink items-center justify-end gap-1">
                 <div className="shrink-0" data-tauri-drag-region="false">
                   <ContextIndicator
                     contextState={contextState}
@@ -2828,7 +2831,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 </div>
                 <AgentTodoIndicator todoState={currentConversation?.agent_todo_state ?? currentConversation?.agentTodoState ?? null} />
               </div>
-              <div className="min-w-5 flex-1" data-tauri-drag-region />
                 </header>
 
                 <div className="flex min-h-0 flex-1 flex-col">

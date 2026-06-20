@@ -77,10 +77,10 @@ export function AgentTodoIndicator({ todoState }: AgentTodoIndicatorProps) {
     <div className="relative min-w-0" data-tauri-drag-region="false">
       <button
         type="button"
-        className={`flex h-8 min-w-0 max-w-[18rem] shrink items-center gap-1.5 rounded-md px-1.5 text-[12px] font-medium transition ${
+        className={`flex h-8 min-w-0 max-w-[18rem] shrink items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium transition duration-[var(--kv-dur-instant)] active:scale-[0.97] ${
           allDone
-            ? 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'
-            : 'text-neutral-700 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-200 dark:hover:bg-neutral-800 dark:hover:text-neutral-50'
+            ? 'text-neutral-500 hover:bg-black/[0.05] hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-white/[0.07] dark:hover:text-neutral-100'
+            : 'text-neutral-700 hover:bg-black/[0.05] hover:text-neutral-950 dark:text-neutral-200 dark:hover:bg-white/[0.07] dark:hover:text-neutral-50'
         }`}
         aria-label="Agent todo"
         aria-expanded={open}
@@ -102,7 +102,7 @@ export function AgentTodoIndicator({ todoState }: AgentTodoIndicatorProps) {
       </button>
 
       {open && (
-        <div className="chat-motion-popover absolute left-0 top-9 z-40 w-[21rem] max-w-[calc(100vw-2rem)] rounded-xl border border-neutral-200/90 bg-white p-3 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+        <div className="chat-motion-popover absolute right-0 top-9 z-40 w-[21rem] max-w-[calc(100vw-2rem)] rounded-xl border border-neutral-200/90 bg-white p-3 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-2">

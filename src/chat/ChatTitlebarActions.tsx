@@ -1,8 +1,5 @@
 import { PanelLeftClose, PanelLeftOpen, SquarePen } from 'lucide-react'
-import {
-  chatTitlebarPillButtonClass,
-  chatTitlebarPillIconClass,
-} from './platform'
+import { chatTitlebarPillIconClass } from './platform'
 
 type ChatTitlebarActionsProps = {
   sidebarExpanded: boolean
@@ -19,7 +16,10 @@ export function ChatTitlebarActions({
   const toggleLabel = sidebarExpanded ? '收起侧栏' : '展开侧栏'
 
   return (
-    <div className={chatTitlebarPillButtonClass} data-tauri-drag-region="false">
+    <div
+      className="inline-flex h-8 shrink-0 items-center gap-0.5"
+      data-tauri-drag-region="false"
+    >
       <button
         type="button"
         onClick={onToggleSidebar}
@@ -35,10 +35,6 @@ export function ChatTitlebarActions({
           }`}
         />
       </button>
-      <span
-        aria-hidden
-        className="h-4 w-px shrink-0 bg-neutral-200/90 dark:bg-neutral-700"
-      />
       <button
         type="button"
         onClick={onNewConversation}
