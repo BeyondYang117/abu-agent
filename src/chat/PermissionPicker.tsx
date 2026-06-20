@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ShieldAlert } from 'lucide-react'
+import { Check, Eye, FilePen, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { APPROVAL_POLICY_OPTIONS } from './approvalPolicies'
 import { chatApi, type DetectedExternalAgent } from './api'
 import type { AgentRuntimeConfig } from './types'
@@ -7,6 +7,18 @@ import type { AgentRuntimeConfig } from './types'
 interface Option {
   value: string
   label: string
+}
+
+/** Distinct icon per permission level so the capsule reflects the active mode at a glance.
+ *  Covers built-in approval policies (by value) and external CLI sandbox levels (by label). */
+function modeIcon(value: string, label: string) {
+  if (value === 'always_confirm') return ShieldAlert
+  if (value === 'readonly_auto_sensitive_confirm') return ShieldQuestion
+  if (value === 'auto') return ShieldCheck
+  if (/计划|只读|read|plan/i.test(label)) return Eye
+  if (/编辑|edit/i.test(label)) return FilePen
+  if (/完全|默认|full|default/i.test(label)) return ShieldCheck
+  return ShieldAlert
 }
 
 interface PermissionPickerProps {
@@ -64,6 +76,7 @@ export function PermissionPicker({
   if (!usesExternal && !onApprovalPolicyChange) return null
 
   const currentLabel = options.find((o) => o.value === current)?.label ?? '权限'
+  const CurrentIcon = modeIcon(current, currentLabel)
 
   const pick = (value: string) => {
     if (usesExternal) {
@@ -87,7 +100,7 @@ export function PermissionPicker({
         title={`${usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}：${currentLabel}`}
         aria-label={`${usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}：${currentLabel}`}
       >
-        <ShieldAlert size={16} strokeWidth={1.8} />
+        <CurrentIcon size={16} strokeWidth={1.8} />
       </button>
       {open && (
         <>
