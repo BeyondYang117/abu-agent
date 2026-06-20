@@ -5,7 +5,7 @@
 <h1 align="center">Kivio</h1>
 
 <p align="center">
-  <strong>A lightweight desktop AI client and screen-level agent for chat, tools, translation, OCR, and visual Q&A.</strong>
+  <strong>A lightweight desktop AI client and screen-level agent: chat, tools, translation, OCR, and visual Q&A in one small app.</strong>
 </p>
 
 <p align="center">
@@ -31,24 +31,14 @@
 
 ## What Kivio Is
 
-Kivio started as a small screen translation tool. It is now a compact desktop AI client with a built-in agent runtime:
+Kivio is a compact desktop AI client with a built-in agent runtime. It stays in the tray or menu bar, opens when you need it, and keeps a much smaller footprint than a browser-based AI workspace.
 
-- **Kivio Agent** for long-form chat, projects, assistants, memory, file attachments, MCP, Skills, and native tools.
-- **Lens** for screenshot-based visual Q&A, OCR, formula extraction, text polishing, and web-aware answers.
-- **Fast translation** for typed text, selected text, windows, and arbitrary screen regions.
-- **Bring your own models** through OpenAI-compatible providers, Anthropic Messages, and provider-specific routing.
-
-It stays quiet in the tray or menu bar, opens when you need it, and keeps the native footprint much smaller than a browser-based AI workspace.
-
-## Highlights
-
-- **Desktop agent workspace** — chat with models, organize projects, switch assistants, attach files and images, and keep useful memory.
-- **Tool calling that feels local** — use built-in file tools, shell execution, web fetch/search, Pyodide `run_python`, MCP servers, and bundled Skills.
-- **Document-ready Python sandbox** — PDF, Word, and Excel workflows can use packaged Pyodide plus common data/document libraries without depending on first-run CDN downloads.
-- **Screen-first workflows** — translate selected text, OCR a screenshot, or ask Lens about a formula, chart, error dialog, code snippet, or UI.
-- **Model routing** — choose separate models for chat, translation, OCR, Lens, vision pre-analysis, title generation, context compression, and image generation.
-- **Provider resilience** — multi-provider, multi-key failover, retry controls, model metadata, and tool-capability defaults.
-- **Private by default** — no telemetry. Your API keys and local conversation data stay on your machine.
+- **Kivio Agent** — chat, projects, assistants, memory, file/image attachments, MCP, Skills, and native tools (file ops, shell, web fetch/search, Pyodide `run_python`).
+- **Lens** — screenshot-based visual Q&A, OCR, formula extraction, text polishing, and optional web-aware answers.
+- **Fast translation** — typed text, selected text, windows, and arbitrary screen regions.
+- **Bring your own models** — OpenAI-compatible providers and Anthropic Messages, with per-feature model routing and multi-key failover.
+- **Document-ready** — PDF / Word / Excel workflows run on a bundled offline Pyodide sandbox, no first-run CDN download required.
+- **Private by default** — no telemetry; API keys and conversation data stay on your machine.
 
 <a name="screenshots"></a>
 
@@ -60,7 +50,7 @@ It stays quiet in the tray or menu bar, opens when you need it, and keeps the na
   <img src="docs/screenshots/chat-agent.png" width="840" alt="Kivio Agent chat workspace">
 </p>
 
-Use Kivio as a normal desktop AI client: start conversations, group work into projects, pick assistants, attach files, call tools, and let the agent reason across local context.
+Start conversations, group work into projects, pick assistants, attach files, and call tools.
 
 ### Lens Visual Q&A
 
@@ -68,7 +58,7 @@ Use Kivio as a normal desktop AI client: start conversations, group work into pr
   <img src="docs/screenshots/lens-formula-extraction.gif" width="760" alt="Lens formula extraction">
 </p>
 
-Capture a formula, chart, table, UI, or wall of text, then ask follow-up questions with streamed answers and per-image history. Lens can optionally search the web and show sources inline.
+Capture a formula, chart, table, UI, or wall of text and ask follow-up questions with streamed answers and per-image history.
 
 <p align="center">
   <img src="docs/screenshots/lens-optimize-text.gif" width="760" alt="Lens text optimization">
@@ -82,7 +72,7 @@ Capture a formula, chart, table, UI, or wall of text, then ask follow-up questio
   <img src="docs/screenshots/screenshot-translation.png" width="760" alt="Screenshot translation">
 </p>
 
-Capture a window or region and get a compact translation card near the selection. If the text is already selectable, use the selected-text hotkey and skip the screenshot step.
+Capture a window or region and get a compact translation card near the selection.
 
 ### Settings
 
@@ -90,7 +80,7 @@ Capture a window or region and get a compact translation card near the selection
   <img src="docs/screenshots/settings.png" width="560" alt="Kivio settings">
 </p>
 
-Configure providers, feature-specific models, prompts, MCP servers, Skills, web search, memory, tool approvals, and the Mixer from one place.
+Configure providers, per-feature models, prompts, MCP servers, Skills, web search, memory, and tool approvals from one place.
 
 ## Hotkeys
 
@@ -101,60 +91,17 @@ Configure providers, feature-specific models, prompts, MCP servers, Skills, web 
 | Selected text translate | `Command+Shift+T` | `Ctrl+Shift+T` |
 | Lens capture & ask | `Command+Shift+G` | `Ctrl+Shift+G` |
 
-All translation and Lens hotkeys are remappable in Settings. Kivio Agent can also be opened from the tray/menu bar.
+All hotkeys are remappable in Settings. Kivio Agent can also be opened from the tray/menu bar.
 
 ## Quick Start
 
-1. **[Download the latest release](https://github.com/abu/kivio/releases/latest)**.
-   - macOS: choose the Apple Silicon DMG.
-   - Windows: choose the MSI or NSIS `.exe` installer.
-2. **Install and launch.**
-   - macOS needs Accessibility and Screen Recording permissions for global hotkeys, paste-back, and screenshot capture.
-   - If macOS says `Kivio.app is damaged and can't be opened`, remove the quarantine attribute and reopen:
-     ```bash
-     sudo xattr -rd com.apple.quarantine /Applications/Kivio.app
-     ```
-3. **Add a provider** in Settings -> Model Providers. Kivio works with OpenAI-compatible endpoints, Anthropic Messages, DeepSeek, SiliconFlow, Ollama Cloud, and other compatible services.
-4. **Pick your workflow.**
-   - Open Kivio Agent for chat, tools, documents, and projects.
-   - Press a hotkey for translation or Lens.
-
-## Kivio Agent
-
-Kivio Agent is the main desktop AI workspace:
-
-- **Conversations and projects** — keep chats grouped by project, use the sidebar for recent work, and switch models per conversation.
-- **Assistant Center** — create reusable assistants with prompts, tool presets, and task-specific behavior.
-- **Memory** — maintain local memory layers that can be injected into chat context when enabled.
-- **Attachments** — send images and readable local files; image chat can automatically route through vision-capable models.
-- **Tools** — enable built-in native tools, MCP servers, Skill workflows, web search/fetch, and Pyodide Python.
-- **Tool approvals** — keep sensitive actions such as file writes or shell commands behind confirmation while allowing safe reads and analysis to run smoothly.
-- **Streaming and reasoning** — view progressive responses, reasoning blocks, tool cards, and failures without losing the conversation.
-
-## Lens And Translation
-
-Lens remains the fastest path from screen content to an answer:
-
-- Screenshot a region/window and ask questions about what you see.
-- Translate screenshots with native OCR: Apple Vision on macOS and `Windows.Media.Ocr` on Windows.
-- Translate selected text directly with a separate hotkey.
-- Use optional Tavily or Exa search when the answer needs current facts or external context.
-- Keep screenshot history and follow-up context for visual conversations.
-
-## Model And Tool Settings
-
-Important settings:
-
-- **Model Providers** — provider list, API keys, enabled models, metadata, and connection testing.
-- **Default Models** — separate defaults for chat, translation, screenshot translation, Lens, vision, title summary, compression, and image generation.
-- **Mixer** — route side tasks to smaller or specialized models while keeping the main chat model unchanged.
-- **Tools & Extensions** — native tools, MCP servers, Skills, web search, Python sandbox, tool limits, and approval policy.
-- **Memory** — enable or edit local memory layers used by Kivio Agent.
-- **Prompts** — tune feature prompts and the base Chat system prompt.
-
-## Upgrading From KeyLingo
-
-If you used v2.4.4 or earlier under the old **KeyLingo** name, Kivio migrates your settings, API keys, and Lens history on first launch. The old `KeyLingo.app` in `/Applications` can be deleted manually because macOS treats the renamed bundle as a separate app.
+1. **[Download the latest release](https://github.com/abu/kivio/releases/latest)** — macOS: Apple Silicon DMG; Windows: NSIS `.exe`.
+2. **Install and launch.** macOS needs Accessibility and Screen Recording permissions for global hotkeys, paste-back, and capture. If macOS says `Kivio.app is damaged`, clear quarantine:
+   ```bash
+   sudo xattr -rd com.apple.quarantine /Applications/Kivio.app
+   ```
+3. **Add a provider** in Settings → Model Providers (OpenAI-compatible, Anthropic Messages, DeepSeek, SiliconFlow, Ollama Cloud, …).
+4. **Pick your workflow** — open Kivio Agent for chat/tools/documents, or press a hotkey for translation or Lens.
 
 <a name="changelog"></a>
 
@@ -162,11 +109,11 @@ If you used v2.4.4 or earlier under the old **KeyLingo** name, Kivio migrates yo
 
 - **v2.7.1** — Adds **Kivio Code**, a new terminal coding agent (Rust CLI/TUI, build/plan modes, context compaction, Pi-style tools, MCP/Skills); integrates external CLI agents (Claude Code, codex, pi, hermes) into Chat; rebuilds the assistants system with a dedicated Skill page; redesigns the chat title bar and polishes chat motion; and adds a Lens "Continue in AI client" handoff that syncs the full conversation. Apple Silicon DMG built locally; Windows NSIS via GitHub Actions.
 - **v2.7.0** — Agentic platform release: a multi-agent / sub-agent runtime with Orchestrate mode, persistent MCP connections, a Skills system, long-term memory with `memory_search`, in-loop context compaction, and richer native tools. The Chat UI adds a mode pill, generated-file cards, and instant stop; macOS floating windows now appear over native fullscreen Spaces; and providers gain threshold-based multi-key failover plus a frontend test suite + CI.
-- **v2.6.9** — Agent file-editing and Chat polish release: simplified native file tools to `write_file` + `edit_file`, removing the segmented draft-write protocol and `patch` while keeping atomic writes, path locks, and BOM/CRLF preservation in the runtime; added `read_file` windowed reads for files over 2 MB and split streaming HTTP timeouts so long tool calls no longer need multi-step writes; improved sidebar/search modal/reasoning-block display, added project folder open plus better `run_command` background/cwd handling, stabilized Windows chat window frame persistence, and fixed Lens flashing the previous screenshot frame when handing off to the AI client.
-- **v2.6.8** — Agent and workspace polish release: added theme color presets, project workspace filesystem support, better Agent planning/todo/clarification flows, Mermaid and reasoning/timeline rendering improvements, usage statistics, Windows frameless-window polish, a slimmer bundled Python sandbox with common document/data packages, and a release flow that builds macOS locally while GitHub Actions publishes only the Windows NSIS `.exe`.
-- **v2.6.7** — General polish release: restored the native-feeling Windows chat window frame with rounded corners and border, simplified Assistant Center so toolbar controls no longer collide with Windows window controls, and refreshed release packaging so macOS Apple Silicon DMG is built locally while GitHub Actions publishes Windows MSI/NSIS installers.
+- **v2.6.9** — Simplified native file tools to `write_file` + `edit_file` with windowed reads for large files; improved sidebar/search/reasoning display and `run_command` handling; stabilized the Windows chat frame; fixed Lens flashing the previous screenshot on handoff.
+- **v2.6.8** — Added theme color presets, project workspace filesystem, better Agent planning/todo flows, Mermaid/timeline rendering, and usage stats; slimmer bundled Python sandbox; macOS built locally while Actions publishes the Windows NSIS `.exe`.
+- **v2.6.7** — Restored the native-feeling Windows chat window frame, simplified Assistant Center so toolbar controls no longer collide with Windows window controls, and refreshed release packaging (local macOS DMG, Actions for Windows).
 
-See [GitHub Releases](https://github.com/abu/kivio/releases) for the full history. Kivio checks for updates on launch and points you to the latest release.
+See [GitHub Releases](https://github.com/abu/kivio/releases) for the full history. Kivio checks for updates on launch.
 
 ## Development
 
@@ -174,25 +121,13 @@ Built with Tauri v2, Rust, React 18, TypeScript, Vite, and TailwindCSS v4.
 
 ```bash
 npm install
-npm run dev
-```
-
-Useful commands:
-
-```bash
+npm run dev      # run the app
 npm run lint
 npm run typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-### Release Packaging Requirements
-
-- If `pdf`, `docx`, and `xlsx` Skills are bundled, their Python/Pyodide runtime must be bundled too.
-- Installers must include Pyodide core files, `python_stdlib.zip`, `pyodide-lock.json`, and local wheels for common packages such as `numpy`, `pandas`, `matplotlib`, `pillow`, `seaborn`, `openpyxl`, `xlrd`, `et_xmlfile`, `pypdf`, and `micropip`.
-- `run_python` must prefer packaged local Pyodide resources. CDN loading is only a fallback.
-- Before publishing, inspect the final DMG / MSI / NSIS artifacts and verify both bundled Skills and the Python/Pyodide runtime resources are present.
-- Current release flow builds the macOS Apple Silicon DMG locally and lets GitHub Actions publish the Windows MSI / NSIS installers.
-- Follow [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md) instead of releasing from memory.
+Releases follow [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md): the macOS Apple Silicon DMG is built locally and GitHub Actions publishes the Windows NSIS installer.
 
 ## License
 
@@ -210,7 +145,7 @@ MIT © ZM
 <h1 align="center">Kivio · 中文</h1>
 
 <p align="center">
-  <strong>轻量桌面 AI 客户端与屏幕级 Agent：聊天、工具、翻译、OCR、视觉问答，一起放进一个小应用。</strong>
+  <strong>轻量桌面 AI 客户端与屏幕级 Agent：聊天、工具、翻译、OCR、视觉问答，放进一个小应用。</strong>
 </p>
 
 <p align="center">
@@ -229,24 +164,14 @@ MIT © ZM
 
 ## Kivio 是什么
 
-Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个小体积桌面 AI 客户端，内置 Agent 运行时：
+Kivio 是一个小体积桌面 AI 客户端，内置 Agent 运行时。常驻托盘或菜单栏，需要时再出现，比浏览器里的 AI 工作台更轻。
 
-- **Kivio Agent**：长对话、项目、助手、记忆、文件附件、MCP、Skill、本地工具。
-- **Lens**：基于截图的视觉问答、OCR、公式提取、文本优化、联网来源回答。
-- **快速翻译**：输入文本、选中文本、窗口截图、屏幕区域都可以翻译。
-- **自带模型选择权**：支持 OpenAI 兼容接口、Anthropic Messages，以及按功能路由模型。
-
-它常驻托盘或菜单栏，需要时再出现；比浏览器里的 AI 工作台更轻，也更贴近桌面操作。
-
-## 主要能力
-
-- **桌面 Agent 工作区** —— 对话、项目、助手、文件/图片附件、本地记忆。
-- **本地感很强的工具调用** —— 内置文件工具、终端执行、网页抓取/搜索、Pyodide `run_python`、MCP 服务和内置 Skills。
-- **文档分析可直接用** —— PDF、Word、Excel 工作流随包带 Pyodide 和常用数据/文档库，不依赖首次运行时临时从 CDN 下载。
-- **屏幕优先** —— 选中文本翻译、截图 OCR、Lens 问公式/图表/报错/代码/UI。
-- **模型路由** —— Chat、翻译、OCR、Lens、视觉预分析、标题总结、上下文压缩、图片生成都可以分别选模型。
-- **供应商容灾** —— 多服务商、多 Key、失败重试、模型元数据、工具能力默认开启。
-- **默认安静** —— 无遥测。API Key 和本地对话数据留在你的机器上。
+- **Kivio Agent** —— 聊天、项目、助手、记忆、文件/图片附件、MCP、Skills、本地工具（文件操作、终端、网页抓取/搜索、Pyodide `run_python`）。
+- **Lens** —— 基于截图的视觉问答、OCR、公式提取、文本优化，可选联网来源回答。
+- **快速翻译** —— 输入文本、选中文本、窗口、任意屏幕区域。
+- **自带模型选择权** —— 支持 OpenAI 兼容接口与 Anthropic Messages，可按功能分别路由模型，多 Key 故障转移。
+- **文档可直接用** —— PDF / Word / Excel 工作流跑在随包的离线 Pyodide 沙箱，不依赖首次运行从 CDN 下载。
+- **默认安静** —— 无遥测；API Key 与对话数据留在本机。
 
 <a name="截图"></a>
 
@@ -258,7 +183,7 @@ Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个�
   <img src="docs/screenshots/chat-agent.png" width="840" alt="Kivio Agent 聊天工作区">
 </p>
 
-把 Kivio 当成正常桌面 AI 客户端使用：开对话、建项目、选助手、加附件、跑工具，让 Agent 带着本地上下文完成任务。
+开对话、建项目、选助手、加附件、跑工具。
 
 ### Lens 视觉问答
 
@@ -266,7 +191,7 @@ Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个�
   <img src="docs/screenshots/lens-formula-extraction.gif" width="760" alt="Lens 公式提取">
 </p>
 
-截取公式、图表、表格、界面或大段文字后继续追问。Lens 支持流式回答、图片历史，也可以按需联网搜索并在回答里展示来源。
+截取公式、图表、表格、界面或大段文字后继续追问，支持流式回答与图片历史。
 
 <p align="center">
   <img src="docs/screenshots/lens-optimize-text.gif" width="760" alt="Lens 文本优化">
@@ -280,7 +205,7 @@ Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个�
   <img src="docs/screenshots/screenshot-translation.png" width="760" alt="截图翻译">
 </p>
 
-截窗口或选区，译文卡片会出现在选区附近。如果文字本身可选，直接用选中文本热键即可，不必截图。
+截窗口或选区，译文卡片出现在选区附近。
 
 ### 设置
 
@@ -288,7 +213,7 @@ Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个�
   <img src="docs/screenshots/settings.png" width="560" alt="Kivio 设置">
 </p>
 
-服务商、功能模型、提示词、MCP、Skill、联网搜索、记忆、工具审批、Mixer 都在设置里集中管理。
+服务商、功能模型、提示词、MCP、Skill、联网搜索、记忆、工具审批，集中管理。
 
 ## 热键
 
@@ -299,60 +224,17 @@ Kivio 最早是一个轻量屏幕翻译工具。现在它已经演进成一个�
 | 选中文本翻译 | `Command+Shift+T` | `Ctrl+Shift+T` |
 | Lens 截图问答 | `Command+Shift+G` | `Ctrl+Shift+G` |
 
-翻译和 Lens 热键都可在设置里重绑。Kivio Agent 也可以从托盘/菜单栏打开。
+热键都可在设置里重绑。Kivio Agent 也可从托盘/菜单栏打开。
 
 ## 快速开始
 
-1. **[下载最新版](https://github.com/abu/kivio/releases/latest)**。
-   - macOS：选择 Apple Silicon DMG。
-   - Windows：选择 MSI 或 NSIS `.exe` 安装包。
-2. **安装并启动**。
-   - macOS 需要授予辅助功能和屏幕录制权限，用于全局热键、粘回原应用和截图捕获。
-   - 如果 macOS 提示 `Kivio.app 已损坏，无法打开`，执行下面命令后重新打开：
-     ```bash
-     sudo xattr -rd com.apple.quarantine /Applications/Kivio.app
-     ```
-3. **在设置 -> 模型供应商里添加服务商**。支持 OpenAI 兼容接口、Anthropic Messages、DeepSeek、SiliconFlow、Ollama Cloud 等。
-4. **选择你的工作流**。
-   - 打开 Kivio Agent 做聊天、工具、文档和项目。
-   - 按热键做翻译或 Lens 截图问答。
-
-## Kivio Agent
-
-Kivio Agent 是主要的桌面 AI 工作区：
-
-- **对话和项目** —— 用项目组织聊天，侧边栏管理最近工作，每个对话可以切换模型。
-- **助手中心** —— 创建可复用助手，配置提示词、工具预设和任务行为。
-- **记忆** —— 本地维护记忆层，开启后注入 Chat 上下文。
-- **附件** —— 发送图片和可读取的本地文件；图片对话可自动走视觉模型。
-- **工具** —— 启用内置工具、MCP 服务、Skill 工作流、联网搜索/抓取、Pyodide Python。
-- **工具审批** —— 写文件、改文件、运行命令等敏感动作保留确认；读取和分析类任务可以更顺畅地执行。
-- **流式和思考** —— 渐进显示回答、思考块、工具卡片和错误信息，不丢上下文。
-
-## Lens 与翻译
-
-Lens 仍然是从屏幕内容到答案的最快路径：
-
-- 截取屏幕区域或窗口后，对看到的内容直接提问。
-- 截图翻译使用系统 OCR：macOS 是 Apple Vision，Windows 是 `Windows.Media.Ocr`。
-- 选中文本可直接翻译，不用截图。
-- 遇到需要实时信息或外部上下文的问题，可选 Tavily / Exa 联网搜索。
-- 保留截图历史和追问上下文，适合视觉对话。
-
-## 模型与工具设置
-
-重点设置项：
-
-- **模型供应商** —— 服务商列表、API Key、启用模型、模型元数据、连接测试。
-- **默认模型** —— Chat、翻译、截图翻译、Lens、视觉、标题总结、上下文压缩、图片生成都可单独设置。
-- **Mixer** —— 把副任务交给更小或更专用的模型，主对话模型保持不变。
-- **工具与扩展** —— 内置工具、MCP、Skill、联网搜索、Python 沙箱、工具轮次和审批策略。
-- **记忆** —— 开启或编辑 Kivio Agent 使用的本地记忆层。
-- **提示词** —— 调整各功能提示词和 Chat 基础系统提示词。
-
-## 从 KeyLingo 升级
-
-如果你之前用的是 v2.4.4 或更早的 **KeyLingo**，Kivio 首次启动会自动迁移设置、API Key 和 Lens 历史。`/Applications` 下旧的 `KeyLingo.app` 可以手动删除，因为 macOS 会把改名后的应用当成另一个 app。
+1. **[下载最新版](https://github.com/abu/kivio/releases/latest)** —— macOS：Apple Silicon DMG；Windows：NSIS `.exe`。
+2. **安装并启动。** macOS 需授予辅助功能和屏幕录制权限（全局热键、粘回、截图）。若提示 `Kivio.app 已损坏`，清除隔离属性：
+   ```bash
+   sudo xattr -rd com.apple.quarantine /Applications/Kivio.app
+   ```
+3. **在设置 → 模型供应商里添加服务商**（OpenAI 兼容、Anthropic Messages、DeepSeek、SiliconFlow、Ollama Cloud 等）。
+4. **选择工作流** —— 打开 Kivio Agent 做聊天/工具/文档，或按热键做翻译与 Lens。
 
 <a name="更新日志"></a>
 
@@ -360,11 +242,11 @@ Lens 仍然是从屏幕内容到答案的最快路径：
 
 - **v2.7.1** —— 新增全新终端编码 agent **Kivio Code**（Rust CLI/TUI、build/plan 模式、上下文压缩、Pi 风格工具、MCP/Skills）；Chat 接入外部 CLI agent（Claude Code、codex、pi、hermes）；重建助手系统并新增独立技能页；重做聊天顶栏并打磨动效；Lens 新增"在 AI 客户端继续"交接、同步完整对话。macOS DMG 本地构建，Windows NSIS 走 GitHub Actions。
 - **v2.7.0** —— Agentic 平台版本：多代理/子代理运行时与 Orchestrate 模式、MCP 持久连接、Skills 系统、带 `memory_search` 的长期记忆、循环内上下文压缩、更强原生工具；Chat UI 新增模式 pill、生成文件卡片、即时停止；macOS 浮窗可浮现在原生全屏 Space 上方；并加入阈值化多 key 故障转移与前端测试 + CI。
-- **v2.6.9** —— Agent 文件编辑与 Chat 体验优化版本：原生文件工具精简为 `write_file` + `edit_file`，移除分段草稿写入协议和 `patch`，原子写入、路径锁、BOM/行尾保留等保护下沉到运行时；`read_file` 支持大于 2 MB 文件的窗口分段读取，拆分流式 HTTP 超时后大文件一次 `write_file` 即可；优化侧边栏、搜索弹窗与推理块展示；项目支持打开文件夹，并改进 `run_command` 后台执行与 cwd 处理；稳定 Windows Chat 窗口边框持久化；修复 Lens 发送到 AI 客户端后下次打开闪一下上次截图框的问题。
-- **v2.6.8** —— Agent 与工作区体验优化版本：新增主题色预设、项目工作区文件系统、Agent 计划/待办/追问流程，改进 Mermaid、推理/时间线渲染和用量统计，优化 Windows 无边框窗口效果；同时精简随包 Python 沙箱并保留常用文档/数据分析库，发布流程改为本机构建 macOS，GitHub Actions 只发布 Windows NSIS `.exe`。
-- **v2.6.7** —— 通用体验优化：恢复 Windows Chat 窗口接近原生应用的圆角、描边和边界效果；精简助手中心顶部工具栏，避免搜索、创建等控件和 Windows 右上角窗口按钮重叠；同步发布流程，macOS Apple Silicon DMG 改为本机构建上传，GitHub Actions 只发布 Windows MSI / NSIS 安装包。
+- **v2.6.9** —— 原生文件工具精简为 `write_file` + `edit_file`，大文件支持窗口分段读取；优化侧边栏/搜索/推理块展示与 `run_command` 处理；稳定 Windows Chat 窗口边框；修复 Lens 交接后闪上次截图。
+- **v2.6.8** —— 新增主题色预设、项目工作区文件系统、更好的 Agent 计划/待办流程、Mermaid/时间线渲染与用量统计；精简随包 Python 沙箱；macOS 本机构建，Actions 只发 Windows NSIS `.exe`。
+- **v2.6.7** —— 恢复 Windows Chat 窗口接近原生的圆角与边框，精简助手中心避免与窗口按钮重叠，并刷新发布流程（macOS 本地 DMG，Windows 走 Actions）。
 
-完整历史见 [GitHub Releases](https://github.com/abu/kivio/releases)。Kivio 启动时会检查更新，并指向最新版本。
+完整历史见 [GitHub Releases](https://github.com/abu/kivio/releases)。Kivio 启动时会检查更新。
 
 ## 开发
 
@@ -372,25 +254,13 @@ Lens 仍然是从屏幕内容到答案的最快路径：
 
 ```bash
 npm install
-npm run dev
-```
-
-常用检查：
-
-```bash
+npm run dev      # 运行应用
 npm run lint
 npm run typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-### 发布打包要求
-
-- 如果内置 `pdf`、`docx`、`xlsx` Skills，必须同时内置它们依赖的 Python / Pyodide 运行时。
-- 安装包必须包含 Pyodide 核心文件、`python_stdlib.zip`、`pyodide-lock.json`，以及 `numpy`、`pandas`、`matplotlib`、`pillow`、`seaborn`、`openpyxl`、`xlrd`、`et_xmlfile`、`pypdf`、`micropip` 等本地 wheels。
-- `run_python` 必须优先使用随包 Pyodide 资源；CDN 只能作为兜底。
-- 发布前必须检查最终 DMG / MSI / NSIS，确认 Skills 和 Python / Pyodide 运行时资源都在安装包里。
-- 当前发布流程是在本机构建并上传 macOS Apple Silicon DMG，GitHub Actions 只发布 Windows MSI / NSIS 安装包。
-- 具体流程见 [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md)，不要凭记忆发版。
+发布流程见 [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md)：macOS Apple Silicon DMG 本机构建，GitHub Actions 发布 Windows NSIS 安装包。
 
 ## 许可证
 
