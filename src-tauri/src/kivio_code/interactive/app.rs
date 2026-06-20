@@ -1294,78 +1294,70 @@ impl App {
 
     /// 渲染整棵 UI（transcript → 间隔 → editor → footer）成行数组（每行 ≤ width 可见列）。
     ///
-    /// 每次调用重建组件树：transcript 体量在 5a 可控，重建简单可靠；5b 大 transcript 可改增量缓存。
+    /// 单区视图（测试 / 兼容用）：把 [`Self::render_frame`] 的 static + dynamic 拼回单个数组。
     pub fn render(&mut self, width: u16) -> Vec<String> {
+        let frame = self.render_frame(width);
+        let mut lines = frame.static_lines;
+        lines.extend(frame.dynamic_lines);
+        lines
+    }
+
+    /// 渲染一帧并切分为 static（已定稿历史，提交一次进 scrollback 不再 diff）/ dynamic（仍在变的尾部
+    /// + spinner + editor/overlay + footer，就地差分，永远在底部）双区。
+    ///
+    /// graduation 规则：static = transcript 中「已定稿」item 组成的**最长前缀**（见
+    /// [`Self::item_finalized`]）；dynamic = 第一个未定稿 item 起到帧尾的全部。welcome 头在出现
+    /// 第一个已定稿 item 后随该前缀一并进 static（只打印一次）；在此之前与一切同属 dynamic。
+    /// spinner 永远在 dynamic 区，物理上不可能漏进 scrollback —— 这正是修「多行冻结 spinner 堆叠」的根因。
+    pub fn render_frame(&mut self, width: u16) -> crate::kivio_code::tui::render::Frame {
+        use crate::kivio_code::tui::render::Frame;
         self.terminal_cols = width;
-        let mut lines: Vec<String> = Vec::new();
 
-        // 品牌欢迎头（首屏页眉）。
-        if self.show_welcome {
-            lines.extend(self.render_welcome(width));
-            lines.push(String::new());
-        }
-
-        // transcript。
+        // 最长已定稿前缀长度。
+        let mut graduated = 0usize;
         for item in &self.transcript {
-            match item {
-                TranscriptItem::UserMessage(text) => {
-                    let mut t = Text::new(format!("> {text}"), 1, 0, None);
-                    lines.extend(t.render(width));
-                    lines.push(String::new());
-                }
-                TranscriptItem::AssistantMessage(msg) => {
-                    // reasoning（thinking）作为次要的 DIM 块呈现在答案之上（BUG 3）：
-                    // 流式中显示最近几行推理（dim+italic，从属于答案）；完成后折叠为一行 dim 摘要。
-                    if !msg.reasoning.trim().is_empty() {
-                        lines.extend(render_reasoning(
-                            &msg.reasoning,
-                            msg.streaming,
-                            msg.thought_secs,
-                            width,
-                        ));
-                    }
-                    // 流式中追加一个光标提示，让用户看到「还在写」。
-                    let body = if msg.streaming {
-                        format!("{}▌", msg.content)
-                    } else {
-                        msg.content.clone()
-                    };
-                    if !body.trim().is_empty() {
-                        let mut md = Markdown::new(body, 1, 0, MarkdownTheme::plain(), None);
-                        lines.extend(md.render(width));
-                    }
-                    lines.push(String::new());
-                }
-                TranscriptItem::Notice(text) => {
-                    let mut t = Text::new(format!("· {text}"), 1, 0, None);
-                    lines.extend(t.render(width));
-                    lines.push(String::new());
-                }
-                TranscriptItem::ToolCard(card) => {
-                    lines.extend(render_tool_card(card, width));
-                    lines.push(String::new());
-                }
+            if self.item_finalized(item) {
+                graduated += 1;
+            } else {
+                break;
             }
         }
 
-        // thinking spinner（generating 态）。在 transcript 与 editor/overlay 之间。
+        let mut static_lines: Vec<String> = Vec::new();
+        // welcome 仅在已有定稿前缀（对话真正开始、welcome 成为冻结页眉）时进 static；否则留 dynamic。
+        if self.show_welcome && graduated > 0 {
+            static_lines.extend(self.render_welcome(width));
+            static_lines.push(String::new());
+        }
+        for item in self.transcript.iter().take(graduated) {
+            static_lines.extend(Self::render_transcript_item(item, width));
+        }
+
+        let mut dynamic_lines: Vec<String> = Vec::new();
+        // welcome 未进 static 时（无定稿前缀），仍作为 dynamic 区顶部页眉显示。
+        if self.show_welcome && graduated == 0 {
+            dynamic_lines.extend(self.render_welcome(width));
+            dynamic_lines.push(String::new());
+        }
+        for item in self.transcript.iter().skip(graduated) {
+            dynamic_lines.extend(Self::render_transcript_item(item, width));
+        }
+
+        // thinking spinner（generating 态）。在 transcript 与 editor/overlay 之间 —— 永远 dynamic。
         if self.mode == AppMode::Generating {
-            // 基础相位标签由 agent 事件维护（thinking…/responding…/reading …/running: …）；
-            // 当 verbose / thinking 开启时把 reasoning 尾巴叠加在它之上。
             if self.show_reasoning {
                 if let Some(reasoning) = self.latest_reasoning_tail() {
-                    self.loader
-                        .set_message(format!("{} {reasoning}", self.phase_label));
+                    self.loader.set_message(format!("{} {reasoning}", self.phase_label));
                 } else {
                     self.loader.set_message(self.phase_label.clone());
                 }
             }
-            lines.extend(self.loader.render(width));
+            dynamic_lines.extend(self.loader.render(width));
         }
 
         // overlay（模型 / 会话选择器）打开时替代 editor；否则渲染 editor。
         if let Some(overlay) = &mut self.overlay {
-            lines.push(String::new());
+            dynamic_lines.push(String::new());
             let (heading, list) = match overlay {
                 Overlay::Model(list) => ("Select a model (Enter to choose · Esc to cancel)", list),
                 Overlay::Session(list) => {
@@ -1376,22 +1368,83 @@ impl App {
                 }
             };
             let mut h = Text::new(heading.to_string(), 1, 0, None);
-            lines.extend(h.render(width));
-            lines.extend(list.render(width));
+            dynamic_lines.extend(h.render(width));
+            dynamic_lines.extend(list.render(width));
         } else {
-            // editor。
-            lines.extend(self.editor.render(width));
-            // slash 命令补全弹窗（编辑器之下；BUG 4）。
+            dynamic_lines.extend(self.editor.render(width));
             if let Some(popup) = &mut self.slash_popup {
-                lines.extend(popup.render(width));
+                dynamic_lines.extend(popup.render(width));
             }
         }
 
-        // footer：一行空隔 + 状态行。
+        // footer：一行空隔 + 状态行 —— 永远 dynamic。
         let mut spacer = Spacer::new(0);
-        lines.extend(spacer.render(width));
-        lines.extend(self.render_footer(width));
+        dynamic_lines.extend(spacer.render(width));
+        dynamic_lines.extend(self.render_footer(width));
 
+        Frame { static_lines, dynamic_lines }
+    }
+
+    /// 一条 transcript item 是否「已定稿」（可提交进 scrollback 不再 diff）：
+    /// - `UserMessage` / `Notice`：加入即定稿。
+    /// - `AssistantMessage`：`streaming == false` 才定稿（流式中 content 在增长且带 `▌`）。
+    /// - `ToolCard`：status 为终态（Success/Error/Skipped/Cancelled）才定稿；`Pending`/`Running` 属 dynamic。
+    fn item_finalized(&self, item: &TranscriptItem) -> bool {
+        match item {
+            TranscriptItem::UserMessage(_) | TranscriptItem::Notice(_) => true,
+            TranscriptItem::AssistantMessage(m) => !m.streaming,
+            TranscriptItem::ToolCard(c) => matches!(
+                c.status,
+                ToolCallStatus::Success
+                    | ToolCallStatus::Error
+                    | ToolCallStatus::Cancelled
+                    | ToolCallStatus::Skipped
+            ),
+        }
+    }
+
+    /// 渲染单条 transcript item 为行数组（含其尾随空行间隔）。static / dynamic 两区共用，保证视觉一致。
+    fn render_transcript_item(item: &TranscriptItem, width: u16) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        match item {
+            TranscriptItem::UserMessage(text) => {
+                let mut t = Text::new(format!("> {text}"), 1, 0, None);
+                lines.extend(t.render(width));
+                lines.push(String::new());
+            }
+            TranscriptItem::AssistantMessage(msg) => {
+                // reasoning（thinking）作为次要的 DIM 块呈现在答案之上（BUG 3）：
+                // 流式中显示最近几行推理（dim+italic，从属于答案）；完成后折叠为一行 dim 摘要。
+                if !msg.reasoning.trim().is_empty() {
+                    lines.extend(render_reasoning(
+                        &msg.reasoning,
+                        msg.streaming,
+                        msg.thought_secs,
+                        width,
+                    ));
+                }
+                // 流式中追加一个光标提示，让用户看到「还在写」。
+                let body = if msg.streaming {
+                    format!("{}▌", msg.content)
+                } else {
+                    msg.content.clone()
+                };
+                if !body.trim().is_empty() {
+                    let mut md = Markdown::new(body, 1, 0, MarkdownTheme::plain(), None);
+                    lines.extend(md.render(width));
+                }
+                lines.push(String::new());
+            }
+            TranscriptItem::Notice(text) => {
+                let mut t = Text::new(format!("· {text}"), 1, 0, None);
+                lines.extend(t.render(width));
+                lines.push(String::new());
+            }
+            TranscriptItem::ToolCard(card) => {
+                lines.extend(render_tool_card(card, width));
+                lines.push(String::new());
+            }
+        }
         lines
     }
 
