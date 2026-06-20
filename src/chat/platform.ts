@@ -15,20 +15,29 @@ export const chatTitlebarRowClass = usesNativeTitlebar
 /** 窗口左缘交通灯留白（仅侧栏顶栏、收起态主顶栏；约 66px 灯区 + 间距） */
 export const chatTitlebarMacInsetClass = usesNativeTitlebar ? 'pl-[92px]' : ''
 
-/** 顶栏胶囊基础样式 */
-export const chatTitlebarPillClass =
-  'inline-flex shrink-0 items-center rounded-full border border-neutral-200/90 bg-white shadow-sm dark:border-neutral-700 dark:bg-neutral-900'
+/**
+ * 顶栏幽灵控件统一规格（去胶囊化方向 A）：
+ * - 默认透明，无边框 / 无阴影；hover 才出浅背景（与图标钮 hover-bg 同语汇）。
+ * - 统一高度 32px（h-8）、统一圆角 rounded-lg，所有触发控件对齐到同一视觉规格。
+ * - 沿用 active:scale 按压反馈 + --kv-* 令牌；reduced-motion 靠 index.css 末尾全局兜底。
+ */
+export const chatTitlebarGhostHoverClass =
+  'hover:bg-black/[0.05] dark:hover:bg-white/[0.07]'
 
-export const chatTitlebarPillHoverClass = 'hover:bg-neutral-50 dark:hover:bg-neutral-800'
-
-/** 顶栏胶囊控件统一尺寸（模型选择、侧栏操作等） */
+/** 文字 / 复合触发控件（模型选择、侧栏操作组容器等）。 */
 export const chatTitlebarPillButtonClass = [
-  chatTitlebarPillClass,
   'chat-titlebar-pill',
-  'h-[34px] gap-1.5 px-3 text-sm transition duration-[var(--kv-dur-instant)] active:scale-[0.97]',
-  chatTitlebarPillHoverClass,
+  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2.5 text-sm transition duration-[var(--kv-dur-instant)] active:scale-[0.97]',
+  chatTitlebarGhostHoverClass,
 ].join(' ')
 
-/** 顶栏胶囊内的图标按钮（无额外外框，避免撑高） */
+/** 纯图标触发控件（Runtime / Permission 等），与 pill 同高、同圆角的方形钮。 */
+export const chatTitlebarIconButtonClass = [
+  'chat-titlebar-pill',
+  'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent bg-transparent text-neutral-600 transition duration-[var(--kv-dur-instant)] active:scale-[0.97] dark:text-neutral-400',
+  chatTitlebarGhostHoverClass,
+].join(' ')
+
+/** 复合控件内的次级图标按钮（如侧栏操作组里的切栏 / 新建）。 */
 export const chatTitlebarPillIconClass =
-  'chat-titlebar-pill-icon flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-neutral-600 transition duration-[var(--kv-dur-instant)] hover:bg-black/[0.05] hover:text-neutral-900 active:scale-90 dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100'
+  'chat-titlebar-pill-icon flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-600 transition duration-[var(--kv-dur-instant)] hover:bg-black/[0.05] hover:text-neutral-900 active:scale-90 dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100'

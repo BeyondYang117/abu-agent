@@ -517,7 +517,9 @@ body {
 }
 
 .chat-sidebar-shell {
-  background: var(--theme-surface-muted);
+  /* 比白色主区明显深一档（~10%），三套浅色主题各自从 --theme-surface-muted 派生，保持色相 */
+  background: color-mix(in srgb, var(--theme-surface-muted) 90%, #000);
+  border-right: 1px solid var(--border);
   /* 折叠动画：负 margin 把固定宽度（240px，与 w-[240px] 同步）的侧栏整体滑出左侧，
      由 .chat-window-shell 的 overflow:hidden 裁剪；width 不变 → 内容不被压缩。 */
   transition:

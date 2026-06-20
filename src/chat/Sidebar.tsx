@@ -218,7 +218,7 @@ function ExtensionsNav({
         />
       </button>
       {expanded && (
-        <div className="relative ml-[34px] mt-0.5 border-l border-neutral-200/90 pl-2 dark:border-neutral-700">
+        <div className="relative ml-[34px] mt-0.5 border-l border-neutral-300 pl-2 dark:border-neutral-600">
           {extensionSubItems.map((item) => {
             const active = activeItem === item.id
             return (

@@ -370,11 +370,8 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
     'grid size-9 shrink-0 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'
 
   return (
-    <div
-      className="flex h-full min-h-0 flex-col text-neutral-900 dark:text-neutral-100"
-      style={{ background: 'var(--theme-surface-muted)' }}
-    >
-      {/* 顶栏：与侧栏同底色、连成一体的外框；可拖拽，右侧避开窗口按钮 */}
+    <div className="assistant-center-root flex h-full min-h-0 flex-col text-neutral-900 dark:text-neutral-100">
+      {/* 顶栏：与聊天主区同底色、无分隔；可拖拽，右侧避开窗口按钮 */}
       <div
         className={`flex h-[52px] shrink-0 items-center gap-2 px-3 ${
           !usesNativeTitlebar ? 'chat-win-titlebar-safe' : ''
@@ -393,12 +390,8 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
         <div className="h-full min-w-5 flex-1" data-tauri-drag-region />
       </div>
 
-      {/* 内容区：白底嵌入灰色外框，左上圆角 */}
-      <div
-        className="min-h-0 flex-1 overflow-hidden rounded-tl-2xl"
-        style={{ background: 'var(--theme-surface)' }}
-      >
-        <main className="custom-scrollbar h-full min-h-0 overflow-y-auto">
+      {/* 内容区：直接坐在白底上，与聊天主区无缝 */}
+      <main className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-[1040px] px-9 pb-10 pt-7">
             {/* 头部：标题 + 副标题 + 图标动作 */}
             <div className="border-b border-neutral-200/80 pb-6 dark:border-neutral-800/80">
@@ -634,7 +627,6 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
           </div>
         </div>
       </main>
-      </div>
 
       {/* 预览弹窗 */}
       {selectedSkillPreview && (

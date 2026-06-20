@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, Eye, FilePen, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { APPROVAL_POLICY_OPTIONS } from './approvalPolicies'
 import { chatApi, type DetectedExternalAgent } from './api'
+import { chatTitlebarIconButtonClass } from './platform'
 import type { AgentRuntimeConfig } from './types'
 
 interface Option {
@@ -92,10 +93,10 @@ export function PermissionPicker({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition duration-[var(--kv-dur-instant)] active:scale-90 ${
+        className={`${chatTitlebarIconButtonClass} ${
           open
-            ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
-            : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'
+            ? 'bg-black/[0.06] text-neutral-800 dark:bg-white/[0.09] dark:text-neutral-100'
+            : 'hover:text-neutral-800 dark:hover:text-neutral-100'
         }`}
         title={`${usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}：${currentLabel}`}
         aria-label={`${usesExternal ? '沙盒 / 权限等级' : '工具审批策略'}：${currentLabel}`}
