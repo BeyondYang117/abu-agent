@@ -49,7 +49,7 @@ use crate::kivio_code::session::{Session, SessionRecord};
 use crate::kivio_code::{build_app_state, load_settings_from_disk, TurnAssembly};
 use crate::state::AppState;
 
-use super::tui::render::{Component, Tui};
+use super::tui::render::Tui;
 use super::tui::stdin_buffer::StdinBuffer;
 use super::tui::terminal::{CrosstermTerminal, RawModeGuard, Terminal};
 use super::tui::text_width::truncate_to_width;
@@ -65,17 +65,6 @@ pub enum InputEvent {
     Resize(u16, u16),
     /// stdin 已 EOF / 关闭，输入线程即将退出。
     Eof,
-}
-
-/// 渲染一帧：清掉旧子组件，挂一个一次性的 [`AppFrame`] 组件，调用差分渲染器。
-struct AppFrame {
-    lines: Vec<String>,
-}
-
-impl Component for AppFrame {
-    fn render(&mut self, _width: u16) -> Vec<String> {
-        std::mem::take(&mut self.lines)
-    }
 }
 
 /// 交互模式的运行选项。由 bin 从 CLI 参数填充。
@@ -1369,10 +1358,8 @@ fn run_loop(
 
 /// 渲染一帧：把 App 渲染出的行交给差分渲染器。
 fn render_frame(tui: &mut Tui<CrosstermTerminal>, app: &mut App, width: u16) {
-    let lines = app.render(width);
-    tui.clear_children();
-    tui.add_child(Box::new(AppFrame { lines }));
-    tui.render();
+    let frame = app.render_frame(width);
+    tui.render_frame(frame);
 }
 
 /// 转义键消歧超时（ms）：一个孤立的 `ESC`（`\x1b`）是 CSI/SS3 等长序列的合法前缀，
