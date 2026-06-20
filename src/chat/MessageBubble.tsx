@@ -358,7 +358,7 @@ function MessageBubbleComponent({
   }
 
   const bubbleActionBtn =
-    'rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-neutral-800 dark:hover:text-neutral-300'
+    'rounded p-1 text-neutral-400 transition duration-[var(--kv-dur-instant)] hover:bg-neutral-100 hover:text-neutral-600 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-neutral-800 dark:hover:text-neutral-300'
 
   if (isUser) {
     const hasText = message.content.trim().length > 0

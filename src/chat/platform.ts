@@ -25,10 +25,10 @@ export const chatTitlebarPillHoverClass = 'hover:bg-neutral-50 dark:hover:bg-neu
 export const chatTitlebarPillButtonClass = [
   chatTitlebarPillClass,
   'chat-titlebar-pill',
-  'h-[34px] gap-1.5 px-3 text-sm transition-colors',
+  'h-[34px] gap-1.5 px-3 text-sm transition duration-[var(--kv-dur-instant)] active:scale-[0.97]',
   chatTitlebarPillHoverClass,
 ].join(' ')
 
 /** 顶栏胶囊内的图标按钮（无额外外框，避免撑高） */
 export const chatTitlebarPillIconClass =
-  'chat-titlebar-pill-icon flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-neutral-600 transition-colors hover:bg-black/[0.05] hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100'
+  'chat-titlebar-pill-icon flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-neutral-600 transition duration-[var(--kv-dur-instant)] hover:bg-black/[0.05] hover:text-neutral-900 active:scale-90 dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100'

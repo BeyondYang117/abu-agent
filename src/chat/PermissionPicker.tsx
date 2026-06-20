@@ -92,7 +92,7 @@ export function PermissionPicker({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition duration-[var(--kv-dur-instant)] active:scale-90 ${
           open
             ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
             : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'

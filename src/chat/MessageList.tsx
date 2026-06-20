@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import type { AgentPlanState, ChatMessage, ChatMessageSegment, ToolCallRecord } from './types'
 import { MessageBubble } from './MessageBubble'
+
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 // agent 模式下"一条消息 = 一整轮"(几十个工具调用 + 多段 reasoning + 大块 markdown),
 // 按条数定窗口会失效。改为按"渲染权重"决定首屏与每次加载更早的步长。
@@ -102,6 +106,8 @@ export function MessageList({
   const [hiddenCount, setHiddenCount] = useState(() =>
     Math.max(0, messages.length - computeInitialVisible(messages)),
   )
+  // 是否贴在底部——驱动「回到底部」按钮的显隐（ref 不触发渲染，故另用 state）
+  const [atBottom, setAtBottom] = useState(true)
   // 切换会话的重置 effect 需要最新 messages,但不应把 messages 列进依赖(否则每次流式更新都重置窗口)。
   const messagesRef = useRef(messages)
   messagesRef.current = messages
@@ -111,12 +117,23 @@ export function MessageList({
     ? messages.slice(hiddenMessageCount)
     : messages
 
-  const scrollToBottom = useCallback(() => {
+  // smooth 仅用于用户主动点「回到底部」；自动跟随保持瞬时（平滑会抖）。
+  const scrollToBottom = useCallback((smooth = false) => {
     const el = scrollRef.current
     if (!el) return
+    if (smooth && !prefersReducedMotion()) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      return // 平滑滚动期间由 onScroll 更新 lastScrollTop / atBottom
+    }
     el.scrollTop = el.scrollHeight
     lastScrollTopRef.current = el.scrollTop
   }, [])
+
+  const handleJumpToBottom = useCallback(() => {
+    stickToBottomRef.current = true
+    setAtBottom(true)
+    scrollToBottom(true)
+  }, [scrollToBottom])
 
   const loadOlderMessages = useCallback(() => {
     const el = scrollRef.current
@@ -134,7 +151,10 @@ export function MessageList({
 
   // 滚轮向上 = 明确的离开底部意图，立即解除跟随（不设缓冲，消除“挣扎感”）
   const handleWheel = (e: React.WheelEvent) => {
-    if (e.deltaY < 0) stickToBottomRef.current = false
+    if (e.deltaY < 0) {
+      stickToBottomRef.current = false
+      setAtBottom(false)
+    }
   }
 
   // 监听滚动：向上移动立即解除跟随；仅当主动滚回几乎贴底（≤32px）时恢复跟随
@@ -145,11 +165,13 @@ export function MessageList({
     if (scrollTop <= 24 && hiddenMessageCount > 0) {
       loadOlderMessages()
     }
+    const bottom = scrollHeight - scrollTop - clientHeight <= 32
     if (scrollTop < lastScrollTopRef.current - 1) {
       stickToBottomRef.current = false
-    } else if (scrollHeight - scrollTop - clientHeight <= 32) {
+    } else if (bottom) {
       stickToBottomRef.current = true
     }
+    setAtBottom(bottom)
     lastScrollTopRef.current = scrollTop
   }
 
@@ -159,6 +181,7 @@ export function MessageList({
     setHiddenCount(Math.max(0, latest.length - computeInitialVisible(latest)))
     pendingPrependScrollHeightRef.current = null
     stickToBottomRef.current = true
+    setAtBottom(true)
     scrollToBottom()
   }, [conversationId, scrollToBottom])
 
@@ -180,6 +203,7 @@ export function MessageList({
     const count = messages.length
     if (count > prevCountRef.current && messages[count - 1]?.role === 'user') {
       stickToBottomRef.current = true
+      setAtBottom(true)
     }
     prevCountRef.current = count
   }, [messages])
@@ -225,8 +249,9 @@ export function MessageList({
   }, [scrollToBottom])
 
   return (
-    <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto">
-      <div ref={innerRef} className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto">
+        <div ref={innerRef} className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
         <AgentPlanPanel planState={agentPlanState} />
 
         {hiddenMessageCount > 0 && (
@@ -293,6 +318,18 @@ export function MessageList({
           </div>
         )}
       </div>
+      </div>
+      {!atBottom && (
+        <button
+          type="button"
+          onClick={handleJumpToBottom}
+          aria-label="回到底部"
+          title="回到底部"
+          className="chat-motion-pop absolute bottom-4 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-neutral-200 bg-white/95 text-neutral-600 shadow-md backdrop-blur transition-transform duration-[var(--kv-dur-instant)] ease-[var(--kv-ease-spring)] hover:text-neutral-900 active:scale-90 dark:border-neutral-700 dark:bg-neutral-900/95 dark:text-neutral-300 dark:hover:text-neutral-100"
+        >
+          <ChevronDown size={18} strokeWidth={2} />
+        </button>
+      )}
     </div>
   )
 }

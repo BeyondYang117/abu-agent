@@ -1711,13 +1711,13 @@ export function InputBar({
                 title={sendDisabledReason || (canSend ? '发送' : '输入消息后发送')}
                 aria-label={sendDisabledReason || '发送'}
                 aria-hidden={cancelVisible && !!onCancel}
-                className={`absolute inset-0 flex items-center justify-center rounded-full transition-all duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-standard)] ${
+                className={`absolute inset-0 flex items-center justify-center rounded-full transition-all duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-spring)] ${
                   cancelVisible && onCancel
                     ? 'pointer-events-none scale-90 opacity-0'
                     : 'opacity-100'
                 } ${
                   canSend
-                    ? `bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585]${
+                    ? `bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585] active:scale-90${
                         cancelVisible && onCancel ? '' : ' chat-motion-soft-pulse'
                       }`
                     : 'bg-neutral-200 text-neutral-400 dark:bg-neutral-700 dark:text-neutral-500'
