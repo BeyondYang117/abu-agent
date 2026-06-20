@@ -29,6 +29,7 @@ pub const SLASH_COMMANDS: &[SlashCommandSpec] = &[
     SlashCommandSpec { name: "skill", aliases: &["skills"], description: "List discovered skills" },
     SlashCommandSpec { name: "plan", aliases: &[], description: "Switch to plan mode (read-only research & planning)" },
     SlashCommandSpec { name: "build", aliases: &[], description: "Switch to build mode (full tools)" },
+    SlashCommandSpec { name: "autoplan", aliases: &[], description: "Toggle auto build→plan switching for complex tasks (on|off)" },
     SlashCommandSpec { name: "compact", aliases: &["compress"], description: "Summarize the conversation to free up context (optional focus)" },
     SlashCommandSpec { name: "settings", aliases: &["setting", "config"], description: "Toggle kivio-code settings" },
     SlashCommandSpec { name: "quit", aliases: &["exit", "q"], description: "Exit kivio-code" },
@@ -67,6 +68,9 @@ pub enum SlashOutcome {
     EnterPlan,
     /// `/build`：切回 build 工作模式（全工具集）。
     EnterBuild,
+    /// `/autoplan [on|off]`：开关 build→plan 自动切换。`Some(true)` = on、`Some(false)` = off、
+    /// `None` = 无参数（事件循环把它当作「显示当前状态」）。
+    SetAutoPlan(Option<bool>),
     /// `/compact [focus]`：强制压缩当前对话历史（无视预算）。`focus`（命令后剩余文字，trim 后非空时
     /// 携带）透传进摘要 prompt 作为聚焦指令。事件循环 block_on 走 `force_compact`，成功后用压缩后的
     /// 历史替换 runtime_messages 并刷新 footer ctx。
@@ -102,10 +106,27 @@ pub fn dispatch_slash(input: &str) -> SlashOutcome {
         Some("skill") => SlashOutcome::ShowSkills,
         Some("plan") => SlashOutcome::EnterPlan,
         Some("build") => SlashOutcome::EnterBuild,
+        Some("autoplan") => SlashOutcome::SetAutoPlan(autoplan_arg(without_slash)),
         Some("compact") => SlashOutcome::Compact { focus: compact_focus(without_slash) },
         Some("settings") => SlashOutcome::OpenSettings,
         Some("quit") => SlashOutcome::Quit,
         _ => SlashOutcome::Unknown(name),
+    }
+}
+
+/// 从 `/autoplan [on|off]` 的输入里抽取布尔参数。`on`/`true`/`1`/`enable`/`enabled` → `Some(true)`；
+/// `off`/`false`/`0`/`disable`/`disabled` → `Some(false)`；无参数或无法识别 → `None`（事件循环把它当作
+/// 「显示当前状态」）。大小写不敏感。`without_slash` 是已去掉前导 `/` 的整串。
+fn autoplan_arg(without_slash: &str) -> Option<bool> {
+    let arg = without_slash
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("")
+        .to_lowercase();
+    match arg.as_str() {
+        "on" | "true" | "1" | "enable" | "enabled" => Some(true),
+        "off" | "false" | "0" | "disable" | "disabled" => Some(false),
+        _ => None,
     }
 }
 
@@ -199,6 +220,17 @@ mod tests {
     fn plan_and_build_set_mode() {
         assert_eq!(dispatch_slash("/plan"), SlashOutcome::EnterPlan);
         assert_eq!(dispatch_slash("/build"), SlashOutcome::EnterBuild);
+    }
+
+    #[test]
+    fn autoplan_parses_on_off_and_bare() {
+        assert_eq!(dispatch_slash("/autoplan on"), SlashOutcome::SetAutoPlan(Some(true)));
+        assert_eq!(dispatch_slash("/autoplan OFF"), SlashOutcome::SetAutoPlan(Some(false)));
+        assert_eq!(dispatch_slash("/autoplan true"), SlashOutcome::SetAutoPlan(Some(true)));
+        assert_eq!(dispatch_slash("/autoplan disable"), SlashOutcome::SetAutoPlan(Some(false)));
+        // No / unrecognized arg → None (show current state).
+        assert_eq!(dispatch_slash("/autoplan"), SlashOutcome::SetAutoPlan(None));
+        assert_eq!(dispatch_slash("/autoplan maybe"), SlashOutcome::SetAutoPlan(None));
     }
 
     #[test]

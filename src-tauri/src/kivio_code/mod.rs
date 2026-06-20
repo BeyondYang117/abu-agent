@@ -28,9 +28,9 @@ use serde_json::{json, Value};
 
 use crate::chat::agent::{run_agent_loop, AgentRunConfig, AgentRunEntry};
 use crate::mcp::types::{
-    native_edit_file_tool, native_glob_files_tool, native_list_dir_tool, native_read_file_tool,
-    native_run_command_tool, native_search_files_tool, native_web_fetch_tool,
-    native_web_search_tool, native_write_file_tool, ChatToolDefinition,
+    native_edit_file_tool, native_enter_plan_mode_tool, native_glob_files_tool,
+    native_list_dir_tool, native_read_file_tool, native_run_command_tool, native_search_files_tool,
+    native_web_fetch_tool, native_web_search_tool, native_write_file_tool, ChatToolDefinition,
 };
 use crate::settings::{ModelProvider, Settings, WebSearchProvider};
 use crate::skills::SkillRegistry;
@@ -88,6 +88,21 @@ Make the plan concise enough to scan quickly, yet detailed enough to execute wit
 
 ## Stay in plan mode
 Only PRODUCE the plan — do not start implementing. Implementation happens after the user switches to build mode."#;
+
+/// Build-mode guidance spliced into the system prompt by [`build_system_prompt`] ONLY when
+/// the kivio-code `auto_plan` toggle is on. It is the prompt half of auto build→plan
+/// switching: it tells the model to call `enter_plan_mode` FIRST for complex / multi-step /
+/// architectural / multi-file work (instead of editing blind), while still doing small,
+/// well-scoped changes directly. The tool half (`enter_plan_mode` in the build tool set) is
+/// gated by the same toggle in [`TurnAssembly::into_config`]; the interactive layer detects
+/// the resulting tool record and runs a read-only planning pass, then pauses for the user.
+/// This is a prompt-layer trigger — adherence depends on the model — so the wording is
+/// deliberately strong.
+pub const AUTO_PLAN_BUILD_NOTE: &str = r#"<planning>
+You can switch into a read-only planning pass before implementing. For a task that is COMPLEX, multi-step, touches architecture, or spans multiple files, your FIRST action MUST be to call the `enter_plan_mode` tool — do NOT start editing or running mutating commands. After you call it, STOP for that turn (do not call other tools): a read-only planning pass will run next and the user reviews and approves the plan before any code is written.
+For a SMALL, single-file, well-scoped change with an obvious fix, skip planning and just do the work directly.
+When unsure whether a task is complex enough, prefer `enter_plan_mode` — a quick plan the user approves is cheaper than an unwanted multi-file edit.
+</planning>"#;
 
 /// Options for a single print-mode run, parsed from CLI args by the bin.
 #[derive(Debug, Clone)]
@@ -244,6 +259,17 @@ pub fn build_system_prompt(cwd: &std::path::Path, skill_registry: &SkillRegistry
     } else {
         format!("\n{project_context}\n")
     };
+    // Auto build→plan guidance: when `auto_plan` is on, instruct the model to call
+    // `enter_plan_mode` FIRST for complex tasks instead of editing blindly. The
+    // `enter_plan_mode` tool itself is only added to the build-mode tool set when
+    // auto_plan is on (see `into_config`'s `offer_enter_plan_mode`), so this prompt
+    // half stays paired with the tool half. Off → no guidance, no tool, behavior
+    // reverts to purely manual Shift+Tab plan switching.
+    let auto_plan_block = if config::load_merged(cwd).auto_plan {
+        format!("\n{AUTO_PLAN_BUILD_NOTE}\n")
+    } else {
+        String::new()
+    };
     // Skill catalog: only when the registry actually holds skills. The registry
     // is already filtered to enabled skills in `build_skill_registry`, so the
     // enabled-filter closure is always-true; `active_skill_id` = None (nothing
@@ -272,11 +298,13 @@ Guidelines:\n\
 - When the task is complete, give a short final answer summarizing what you did.\n\
 {project_block}\
 {skill_block}\
+{auto_plan_block}\
 \n\
 Current date: {date}\n\
 Current working directory: {cwd}",
         project_block = project_block,
         skill_block = skill_block,
+        auto_plan_block = auto_plan_block,
         date = now.format("%Y-%m-%d"),
         cwd = cwd.display()
     )
@@ -448,6 +476,12 @@ impl TurnAssembly {
     /// cannot mutate the workspace. Print mode passes `false` (plan mode is interactive
     /// only); the plan-mode SYSTEM note is injected by the caller into the per-turn
     /// `runtime_messages` clone (see [`PLAN_SYSTEM_NOTE`]).
+    ///
+    /// `offer_enter_plan_mode` adds the `enter_plan_mode` signal tool to the set. It is
+    /// only ever true in BUILD mode with `auto_plan` on (the interactive layer decides);
+    /// it is never true in plan mode (would let a planning turn re-trigger planning) and
+    /// is irrelevant to print mode (which passes `false`). The tool does not mutate state
+    /// — the interactive layer detects its tool record and runs a read-only planning pass.
     #[allow(clippy::too_many_arguments)]
     pub fn into_config<'a>(
         &'a self,
@@ -458,6 +492,7 @@ impl TurnAssembly {
         generation: u64,
         runtime_messages: Vec<Value>,
         plan_mode: bool,
+        offer_enter_plan_mode: bool,
     ) -> AgentRunConfig<'a> {
         // Assemble the per-turn tool set from all sources: core coding tools,
         // MCP server tools, and skill-provided tools. Each source owns its own
@@ -466,6 +501,13 @@ impl TurnAssembly {
         let mut tools = core_tool_definitions();
         tools.extend(self.mcp_tools.clone());
         tools.extend(skill_setup::skill_tool_definitions(&self.skill_registry));
+
+        // enter_plan_mode (build + auto_plan only): a non-mutating signal tool the model
+        // calls FIRST for complex tasks. Added before the plan-mode read-only filter, but
+        // the caller never sets this in plan mode, so it cannot leak into a planning turn.
+        if offer_enter_plan_mode {
+            tools.push(native_enter_plan_mode_tool());
+        }
 
         // web_search is appended only when a Lens web-search provider key is
         // configured (mirrors the GUI gate). Otherwise it is never advertised, so
@@ -589,6 +631,7 @@ pub async fn run_print(options: PrintOptions, state: &Arc<AppState>) -> Result<S
         host.generation(),
         runtime_messages,
         /* plan_mode */ false,
+        /* offer_enter_plan_mode */ false,
     );
 
     // Map the loop error to a concise, actionable message before bubbling it up,
@@ -973,6 +1016,7 @@ mod tests {
                 1,
                 Vec::new(),
                 plan_mode,
+                /* offer_enter_plan_mode */ false,
             );
             cfg.tools.iter().map(|t| t.name.clone()).collect()
         };
@@ -994,6 +1038,42 @@ mod tests {
     }
 
     #[test]
+    fn into_config_offers_enter_plan_mode_only_when_requested() {
+        // enter_plan_mode is added only when the caller (interactive build + auto_plan)
+        // asks for it; it is never present in plan mode or when not requested.
+        let assembly = assembly_with("chat", "Chat", "m1");
+        let state = build_app_state(assembly.settings.clone());
+
+        let names = |plan_mode: bool, offer: bool| -> Vec<String> {
+            assembly
+                .into_config(
+                    &state,
+                    "c".to_string(),
+                    "r".to_string(),
+                    "msg".to_string(),
+                    1,
+                    Vec::new(),
+                    plan_mode,
+                    offer,
+                )
+                .tools
+                .iter()
+                .map(|t| t.name.clone())
+                .collect()
+        };
+
+        let has = |v: &[String]| v.iter().any(|n| n == "enter_plan_mode");
+        // Build + offered → present.
+        assert!(has(&names(false, true)), "build+offer should expose enter_plan_mode");
+        // Build + not offered (auto_plan off) → absent.
+        assert!(!has(&names(false, false)), "build without offer must not expose it");
+        // Plan mode never offers it (caller passes false), and even if forced, the
+        // read-only filter drops it (not a registered read-only tool).
+        assert!(!has(&names(true, false)), "plan mode must not expose enter_plan_mode");
+        assert!(!has(&names(true, true)), "plan-mode filter must drop a forced enter_plan_mode");
+    }
+
+    #[test]
     fn into_config_plan_mode_uses_same_round_budget_as_build() {
         let mut assembly = assembly_with("chat", "Chat", "m1");
         assembly.effective_chat_tools.max_tool_rounds = Some(40);
@@ -1009,6 +1089,7 @@ mod tests {
                     1,
                     Vec::new(),
                     plan_mode,
+                    /* offer_enter_plan_mode */ false,
                 )
                 .effective_chat_tools
                 .max_tool_rounds
@@ -1066,6 +1147,7 @@ mod tests {
                 1,
                 Vec::new(),
                 /* plan_mode */ false,
+                /* offer_enter_plan_mode */ false,
             );
             cfg.tools.iter().map(|t| t.name.clone()).collect()
         };
@@ -1096,6 +1178,7 @@ mod tests {
             1,
             Vec::new(),
             /* plan_mode */ true,
+            /* offer_enter_plan_mode */ false,
         );
         let names: Vec<String> = cfg.tools.iter().map(|t| t.name.clone()).collect();
         assert!(

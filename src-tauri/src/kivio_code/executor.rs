@@ -129,6 +129,26 @@ impl CliToolExecutor {
             )),
             "web_fetch" => Ok(text_tool_result(web_fetch(&self.http, &arguments).await?)),
             "web_search" => self.dispatch_web_search(&arguments).await,
+            "enter_plan_mode" => {
+                // Signal-only tool (build + auto_plan): does NOT mutate anything. The
+                // interactive layer detects this tool record at turn end and runs a
+                // read-only planning pass, then pauses for the user to `proceed`. Returns
+                // a short result that also tells the model to stop now (belt-and-braces
+                // with the prompt guidance: switching is detected from the record, not the
+                // text, but a calm "stop" reduces the model continuing to edit).
+                let reason = arguments
+                    .get("reason")
+                    .and_then(|r| r.as_str())
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty());
+                let mut msg = String::from(
+                    "Entering plan mode for this request. Stop now — do not call more tools or edit. A read-only planning pass will run next, and the user reviews the plan before any implementation.",
+                );
+                if let Some(reason) = reason {
+                    msg.push_str(&format!(" (reason: {reason})"));
+                }
+                Ok(text_tool_result(msg))
+            }
             other => Err(format!(
                 "kivio-code does not support tool '{other}' in print mode (core tools only)."
             )),

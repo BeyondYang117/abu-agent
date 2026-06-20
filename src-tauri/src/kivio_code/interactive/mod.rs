@@ -107,6 +107,22 @@ pub enum ResumeRequest {
     Reference(String),
 }
 
+/// 一轮 turn 结束后，交互层应执行的后续动作（build→plan 自动切换状态机的产出）。
+/// [`run_loop`] 消费它：[`AutoEnterPlan`] 自动切到 plan 并续跑（不重复 push user）；
+/// [`BackToBuildPause`] 切回 build（推 "say proceed" 通知）并回 Idle，**不**自动起新轮。
+///
+/// [`AutoEnterPlan`]: TurnFollowup::AutoEnterPlan
+/// [`BackToBuildPause`]: TurnFollowup::BackToBuildPause
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TurnFollowup {
+    /// 无后续（普通轮结束）。
+    None,
+    /// build turn 调了 `enter_plan_mode`（且 build + auto_plan 开）→ 自动切 plan 跑只读规划。
+    AutoEnterPlan,
+    /// 自动进入的 plan turn 结束 → 切回 build 并暂停等用户 proceed。
+    BackToBuildPause,
+}
+
 /// 后台 agent 任务完成后送回主循环的结果（连同它跑在哪个 generation，便于丢弃过期任务）。
 struct TurnDone {
     generation: u64,
@@ -162,18 +178,20 @@ impl TurnRuntime {
         ) == Some(true)
     }
 
-    /// 起一轮 agent turn：把 user 消息持久化 + 累积进 runtime_messages，新建 generation/cancel，
-    /// 在 tokio runtime 上 spawn 跑 `run_agent_loop`，事件经 `agent_tx` 回到主循环。
+    /// 起一轮 agent turn：把 user 消息持久化 + 累积进 runtime_messages，然后调 [`spawn_turn`] 跑
+    /// `run_agent_loop`。`plan_mode` 与 `offer_enter_plan_mode` 透传给 [`spawn_turn`]。
     ///
-    /// `plan_mode`（来自 App 的当前 [`AgentMode`]）gate 本轮工具集为只读，并把一条**临时** plan-mode
-    /// system note 追加到本轮 `runtime_messages` 的 **克隆**（不污染存储的 `self.runtime_messages`），
-    /// 让模型只研究/搜索 + 出方案。
+    /// 与 [`spawn_turn`] 的区别：本方法 push 一条新 user 消息（一次真实提交）；[`spawn_turn`] 不
+    /// push，供 build→plan 自动续跑复用同一条 user 消息。
+    ///
+    /// [`spawn_turn`]: TurnRuntime::spawn_turn
     fn begin_turn(
         &mut self,
         text: String,
         image_paths: Vec<PathBuf>,
         agent_tx: &Sender<AgentUiEvent>,
         plan_mode: bool,
+        offer_enter_plan_mode: bool,
     ) {
         // 持久化 user 消息（best-effort）。
         self.append_session(SessionRecord::Message {
@@ -186,8 +204,31 @@ impl TurnRuntime {
 
         // 累积进上下文。
         self.runtime_messages
-            .push(json!({ "role": "user", "content": text }));
+            .push(json!({ "role": "user", "content": text.clone() }));
 
+        self.spawn_turn(text, image_paths, agent_tx, plan_mode, offer_enter_plan_mode);
+    }
+
+    /// Spawn 一轮 agent loop，**不** push 新 user 消息——上下文（含最后一条 user）已在
+    /// `runtime_messages` 里。[`begin_turn`] 在 push user 后调它；build→plan 自动续跑也调它
+    /// （复用同一条 user，不重复提交）。
+    ///
+    /// `plan_mode`（来自 App 的当前 [`AgentMode`]）gate 本轮工具集为只读，并把一条**临时** plan-mode
+    /// system note 追加到本轮 `runtime_messages` 的 **克隆**（不污染存储的 `self.runtime_messages`），
+    /// 让模型只研究/搜索 + 出方案。`offer_enter_plan_mode`（仅 build + auto_plan 时为 true）把
+    /// `enter_plan_mode` 信号工具加进本轮工具集。
+    ///
+    /// `text` 仅用于视觉 mixer 的占位符替换上下文；上下文消息本身用 `self.runtime_messages`。
+    ///
+    /// [`begin_turn`]: TurnRuntime::begin_turn
+    fn spawn_turn(
+        &mut self,
+        text: String,
+        image_paths: Vec<PathBuf>,
+        agent_tx: &Sender<AgentUiEvent>,
+        plan_mode: bool,
+        offer_enter_plan_mode: bool,
+    ) {
         let generation = self.generations.next();
         let cancel = RunCancel::new(generation);
         self.current = Some(cancel.clone());
@@ -329,6 +370,7 @@ impl TurnRuntime {
                 generation,
                 messages,
                 plan_mode,
+                offer_enter_plan_mode,
             );
             let result = run_agent_loop(config, &host, &executor).await;
             let _ = done_tx.send(TurnDone {
@@ -550,8 +592,9 @@ impl TurnRuntime {
     }
 
     /// 处理一轮结束：忽略过期 generation；否则把 assistant 消息 + 工具调用持久化、累积进
-    /// runtime_messages，刷新 footer usage，回到 Idle。返回 footer usage 摘要（None = 不变）。
-    fn finish_turn(&mut self, done: TurnDone, app: &mut App) {
+    /// runtime_messages，刷新 footer usage，回到 Idle。返回 [`TurnFollowup`]——build→plan 自动
+    /// 切换状态机的产出，由 [`run_loop`] 消费（自动续 plan / 切回 build 暂停）。
+    fn finish_turn(&mut self, done: TurnDone, app: &mut App) -> TurnFollowup {
         // 过期任务（已被取消并被新一轮取代）直接丢弃。
         let live = self
             .current
@@ -559,10 +602,17 @@ impl TurnRuntime {
             .map(|c| c.generation() == done.generation)
             .unwrap_or(false);
         if !live {
-            return;
+            return TurnFollowup::None;
         }
         self.current = None;
         self.current_message_id = None;
+
+        // 在切 Idle / 推通知前快照本轮的工作模式与开关，供 followup 判定。
+        let was_plan = app.agent_mode() == AgentMode::Plan;
+        let auto_plan_on = app.auto_plan();
+        let auto_plan_pending = app.auto_plan_pending();
+
+        let mut followup = TurnFollowup::None;
 
         match done.result {
             Ok(result) => {
@@ -586,8 +636,29 @@ impl TurnRuntime {
                         &self.runtime_messages,
                     ) as u64,
                 ));
+
+                // build→plan 自动切换判定（仅成功轮）：
+                // - build turn（非 plan）+ auto_plan 开 + 本轮含 enter_plan_mode tool_record
+                //   → 标记 pending，请求自动切 plan 续跑（复用本轮 user 消息）。
+                // - 自动进入的 plan turn 结束 → 清 pending，请求切回 build 暂停。
+                // 以 tool_record 检测为准（不靠模型文字），符合 PRD「检测到 tool_record 即触发」。
+                if !was_plan
+                    && auto_plan_on
+                    && result
+                        .tool_records
+                        .iter()
+                        .any(|record| record.name == "enter_plan_mode")
+                {
+                    app.set_auto_plan_pending(true);
+                    followup = TurnFollowup::AutoEnterPlan;
+                } else if was_plan && auto_plan_pending {
+                    app.set_auto_plan_pending(false);
+                    followup = TurnFollowup::BackToBuildPause;
+                }
             }
             Err(err) => {
+                // 失败 / 取消：清掉 pending，绝不卡在半切换态（PRD 边界）。
+                app.set_auto_plan_pending(false);
                 if err == "cancelled" {
                     app.apply_agent_event(AgentUiEvent::Done {
                         message_id: done.message_id.clone(),
@@ -606,6 +677,7 @@ impl TurnRuntime {
             }
         }
         app.set_mode(AppMode::Idle);
+        followup
     }
 
     /// 把这一轮的 assistant 消息 + 工具调用/结果落盘（best-effort）。
@@ -768,7 +840,7 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
                 handle: runtime.handle().clone(),
                 state,
                 assembly: Arc::new(assembly),
-                cwd,
+                cwd: cwd.clone(),
                 timeout_ms,
                 generations: Generations::default(),
                 current: None,
@@ -788,6 +860,11 @@ pub fn run(options: InteractiveOptions) -> std::io::Result<()> {
 
     let mut tui = Tui::new(terminal);
     tui.set_show_hardware_cursor(true);
+
+    // Seed App's auto_plan from the MERGED config (global + project `.kivio/config.json`),
+    // so a project that sets `autoPlan: false` is respected; `App::new` only saw the global
+    // value. Mirrors how `build_system_prompt` reads `load_merged(cwd).auto_plan`.
+    app.set_auto_plan(crate::kivio_code::config::load_merged(&cwd).auto_plan);
 
     // 把 footer / welcome 的展示串切到人读的 provider name + 上下文窗口（FIX 2 + 3）。
     // `App::new` 初始化时用的是 bin 传入的 id 形式串（也用作选择器定位的解析值），这里在拿到
@@ -1038,6 +1115,40 @@ fn emit_vision_card(
     let _ = tx.send(AgentUiEvent::ToolRecord(Box::new(record)));
 }
 
+/// 消费一轮结束的 [`TurnFollowup`]（build→plan 自动切换状态机）：
+/// - [`TurnFollowup::AutoEnterPlan`]：build turn 调了 `enter_plan_mode` → 切到 plan 模式，
+///   `spawn_turn(plan_mode=true)` 续跑只读规划（**不**重复 push user 消息）。
+/// - [`TurnFollowup::BackToBuildPause`]：自动进入的 plan turn 出完计划 → 切回 build（`set_agent_mode`
+///   会自动推 "Say 'proceed' to execute the plan" 通知）→ 回 Idle，**不**自动起新轮（暂停点）。
+/// - [`TurnFollowup::None`]：什么都不做。
+fn apply_turn_followup(
+    followup: TurnFollowup,
+    app: &mut App,
+    agent_tx: &Sender<AgentUiEvent>,
+    turn: &mut TurnRuntime,
+) {
+    match followup {
+        TurnFollowup::None => {}
+        TurnFollowup::AutoEnterPlan => {
+            // 切到 plan 模式（推 "Plan mode: …" 通知），并续跑一轮只读规划。复用本轮 user 消息，
+            // 故走 spawn_turn（不 push user）。plan turn 不给 enter_plan_mode（防递归）。
+            app.set_agent_mode(AgentMode::Plan);
+            app.set_mode(AppMode::Generating);
+            turn.spawn_turn(
+                String::new(),
+                Vec::new(),
+                agent_tx,
+                /* plan_mode */ true,
+                /* offer_enter_plan_mode */ false,
+            );
+        }
+        TurnFollowup::BackToBuildPause => {
+            // 出完计划 → 切回 build（自动推 "Say 'proceed'…" 通知）。不自动起新轮：暂停等用户确认。
+            app.set_agent_mode(AgentMode::Build);
+        }
+    }
+}
+
 /// `apply_effect` 的控制流结果。
 enum EffectFlow {
     /// 退出事件循环。
@@ -1085,8 +1196,11 @@ fn apply_effect(
                         images
                     };
                     let plan_mode = app.agent_mode() == AgentMode::Plan;
+                    // enter_plan_mode tool 仅在 build 模式 + auto_plan 开时进工具集
+                    // （plan 模式不给，防递归触发再规划）。
+                    let offer_enter_plan_mode = !plan_mode && app.auto_plan();
                     app.set_mode(AppMode::Generating);
-                    turn.begin_turn(text, images, agent_tx, plan_mode);
+                    turn.begin_turn(text, images, agent_tx, plan_mode, offer_enter_plan_mode);
                 }
             } else {
                 app.push_notice("No model configured; cannot run.");
@@ -1096,6 +1210,9 @@ fn apply_effect(
             if let Some(turn) = turn {
                 turn.request_cancel();
             }
+            // 用户中途取消：清掉 auto-plan pending，绝不卡在半切换态（PRD 边界）。
+            // finish_turn 的 cancelled 分支也会清，这里立即清覆盖「取消但 done 尚未回传」的窗口。
+            app.set_auto_plan_pending(false);
         }
         AppEffect::OpenModelSelector => {
             if let Some(turn) = turn {
@@ -1232,10 +1349,13 @@ fn run_loop(
             app.apply_agent_event(event);
             dirty = true;
         }
-        // Drain finished turns.
+        // Drain finished turns, then act on the build→plan followup (auto-enter plan /
+        // back-to-build pause). Consuming it here keeps the state machine in the loop that
+        // owns `agent_tx` (needed to spawn the plan continuation).
         while let Ok(done) = done_rx.try_recv() {
             if let Some(turn) = turn.as_deref_mut() {
-                turn.finish_turn(done, app);
+                let followup = turn.finish_turn(done, app);
+                apply_turn_followup(followup, app, agent_tx, turn);
             }
             dirty = true;
         }
@@ -1900,6 +2020,191 @@ mod tests {
         let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
     }
 
+    /// A build turn that called `enter_plan_mode` (auto_plan on) must request AutoEnterPlan
+    /// and mark `auto_plan_pending`; the subsequent (auto) plan turn must request
+    /// BackToBuildPause and clear the flag — and applying that followup switches the App back
+    /// to build mode WITHOUT auto-starting another turn (the pause point).
+    #[tokio::test]
+    async fn build_enter_plan_mode_then_plan_turn_pauses_back_to_build() {
+        let cwd = unique_cwd("autoplan-seq");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.set_auto_plan(true);
+        // Build turn that called enter_plan_mode.
+        assert_eq!(app.agent_mode(), AgentMode::Build);
+        app.set_mode(AppMode::Generating);
+        rt.current = Some(RunCancel::new(1));
+        let build_done = TurnDone {
+            generation: 1,
+            result: Ok(result_with(
+                "Let me plan first.",
+                vec![json!({ "role": "assistant", "content": "Let me plan first." })],
+                vec![tool_record("call_1", "enter_plan_mode")],
+            )),
+            message_id: "m1".to_string(),
+        };
+        let followup = rt.finish_turn(build_done, &mut app);
+        assert_eq!(followup, TurnFollowup::AutoEnterPlan);
+        assert!(app.auto_plan_pending(), "build→plan should mark pending");
+        assert_eq!(app.mode(), AppMode::Idle);
+
+        // Simulate the loop consuming AutoEnterPlan: it flips to plan + spawns a plan turn.
+        // (We don't spawn a real loop here; we just set the state the followup handler sets.)
+        app.set_agent_mode(AgentMode::Plan);
+        app.set_mode(AppMode::Generating);
+        rt.current = Some(RunCancel::new(2));
+
+        // The (auto) plan turn finishes with a plan and no tools.
+        let plan_done = TurnDone {
+            generation: 2,
+            result: Ok(result_with(
+                "## Plan\n1. do X",
+                vec![json!({ "role": "assistant", "content": "## Plan\n1. do X" })],
+                Vec::new(),
+            )),
+            message_id: "m2".to_string(),
+        };
+        let followup = rt.finish_turn(plan_done, &mut app);
+        assert_eq!(followup, TurnFollowup::BackToBuildPause);
+        assert!(!app.auto_plan_pending(), "plan turn end clears pending");
+
+        // Applying the followup switches back to build and pauses (Idle, no new turn).
+        let (agent_tx, _agent_rx) = mpsc::channel::<AgentUiEvent>();
+        apply_turn_followup(followup, &mut app, &agent_tx, &mut rt);
+        assert_eq!(app.agent_mode(), AgentMode::Build, "paused back in build mode");
+        assert!(!rt.is_generating(), "must NOT auto-start a build turn — pause point");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// With auto_plan OFF, a build turn that somehow emitted an enter_plan_mode record (the
+    /// tool wouldn't even be offered) must NOT trigger the switch — no followup, no pending.
+    #[tokio::test]
+    async fn auto_plan_off_does_not_trigger_switch() {
+        let cwd = unique_cwd("autoplan-off");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.set_auto_plan(false);
+        app.set_mode(AppMode::Generating);
+        rt.current = Some(RunCancel::new(1));
+        let done = TurnDone {
+            generation: 1,
+            result: Ok(result_with(
+                "answer",
+                Vec::new(),
+                vec![tool_record("call_1", "enter_plan_mode")],
+            )),
+            message_id: "m1".to_string(),
+        };
+        let followup = rt.finish_turn(done, &mut app);
+        assert_eq!(followup, TurnFollowup::None, "auto_plan off → no auto switch");
+        assert!(!app.auto_plan_pending());
+        assert_eq!(app.agent_mode(), AgentMode::Build, "mode unchanged");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// A MANUAL plan turn (pending not set — user pressed Shift+Tab / `/plan`) must finish
+    /// without requesting BackToBuildPause: manual plan does not auto-switch back to build.
+    #[tokio::test]
+    async fn manual_plan_turn_does_not_pause_back_to_build() {
+        let cwd = unique_cwd("manual-plan");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.set_auto_plan(true);
+        app.set_agent_mode(AgentMode::Plan); // manual switch; auto_plan_pending stays false
+        assert!(!app.auto_plan_pending());
+        app.set_mode(AppMode::Generating);
+        rt.current = Some(RunCancel::new(1));
+        let done = TurnDone {
+            generation: 1,
+            result: Ok(result_with("## Plan", Vec::new(), Vec::new())),
+            message_id: "m1".to_string(),
+        };
+        let followup = rt.finish_turn(done, &mut app);
+        assert_eq!(followup, TurnFollowup::None, "manual plan must not auto-pause back");
+        assert_eq!(app.agent_mode(), AgentMode::Plan, "stays in plan after manual plan turn");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// Cancelling a build turn that requested plan switching clears the pending flag so the
+    /// session never gets stuck half-switched (PRD boundary).
+    #[tokio::test]
+    async fn cancel_clears_auto_plan_pending() {
+        let cwd = unique_cwd("autoplan-cancel");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        let mut app = App::new("~".to_string(), "chat:m1".to_string());
+        app.set_terminal_rows(24);
+        app.set_auto_plan_pending(true);
+        app.set_mode(AppMode::Generating);
+        rt.current = Some(RunCancel::new(1));
+        let done = TurnDone {
+            generation: 1,
+            result: Err("cancelled".to_string()),
+            message_id: "m1".to_string(),
+        };
+        let followup = rt.finish_turn(done, &mut app);
+        assert_eq!(followup, TurnFollowup::None);
+        assert!(!app.auto_plan_pending(), "cancel must clear pending");
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
+    /// `spawn_turn` (the plan-continuation path) must NOT push a new user message — it
+    /// reuses the context `begin_turn` already accumulated. `begin_turn` DOES push one.
+    #[tokio::test]
+    async fn spawn_turn_does_not_push_user_message() {
+        let cwd = unique_cwd("spawn-no-push");
+        let (mut rt, _done) = turn_runtime(&cwd);
+        let (agent_tx, _agent_rx) = mpsc::channel::<AgentUiEvent>();
+
+        let before = rt.runtime_messages.len();
+        // begin_turn pushes exactly one user message (synchronously, before the spawned task).
+        rt.begin_turn(
+            "do the thing".to_string(),
+            Vec::new(),
+            &agent_tx,
+            /* plan_mode */ false,
+            /* offer_enter_plan_mode */ true,
+        );
+        assert_eq!(
+            rt.runtime_messages.len(),
+            before + 1,
+            "begin_turn pushes one user message"
+        );
+        let last = rt.runtime_messages.last().unwrap();
+        assert_eq!(last["role"], "user");
+        assert_eq!(last["content"], "do the thing");
+        rt.request_cancel(); // stop the spawned task quickly.
+
+        // spawn_turn (plan continuation) reuses the same context: no extra user message.
+        let after_begin = rt.runtime_messages.len();
+        rt.spawn_turn(
+            String::new(),
+            Vec::new(),
+            &agent_tx,
+            /* plan_mode */ true,
+            /* offer_enter_plan_mode */ false,
+        );
+        assert_eq!(
+            rt.runtime_messages.len(),
+            after_begin,
+            "spawn_turn must not push a user message"
+        );
+        rt.request_cancel();
+
+        let _ = std::fs::remove_dir_all(&cwd);
+        let _ = std::fs::remove_dir_all(crate::kivio_code::session::session_dir_for_cwd(&cwd));
+    }
+
     /// Regression guard for the reported footer ctx bug: a turn whose summed usage
     /// `input_tokens` is huge (900k — the loop accumulates planning + every tool round +
     /// synthesis via RunState::merge_usage) must NOT set the ctx gauge to that number.
@@ -1937,8 +2242,10 @@ mod tests {
         rt.finish_turn(done, &mut app);
 
         let ctx = app.context_tokens().expect("ctx set after turn");
-        // Must be the small conversation estimate, NOT the 900k summed usage.
-        assert!(ctx < 1_000, "ctx {ctx} must reflect the small conversation, not summed usage");
+        // Must be the small conversation estimate, NOT the 900k summed usage. (The system
+        // prompt includes the auto-plan guidance note when auto_plan is on, so the floor is
+        // a couple thousand tokens — still orders of magnitude below the summed usage.)
+        assert!(ctx < 5_000, "ctx {ctx} must reflect the small conversation, not summed usage");
         // And it must match the compaction estimator over the accumulated transcript.
         assert_eq!(ctx, ctx_estimate(&rt.runtime_messages));
 
@@ -2440,6 +2747,7 @@ mod tests {
             Vec::new(),
             &agent_tx,
             /* plan_mode */ true,
+            /* offer_enter_plan_mode */ false,
         );
 
         // Only the user message was appended to the stored context — the transient

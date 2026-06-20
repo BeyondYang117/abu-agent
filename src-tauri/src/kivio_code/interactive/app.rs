@@ -212,6 +212,16 @@ pub struct App {
     /// kivio-code 配置 `read_claude_dir` 的内存副本（`/settings` 翻转时同步更新 +
     /// 落盘）。下一轮 `build_system_prompt` 直接读磁盘上的同一值，故无需把它穿透进 TurnRuntime。
     read_claude_dir: bool,
+    /// kivio-code 配置 `auto_plan` 的内存副本：build 模式遇复杂任务时是否给模型
+    /// `enter_plan_mode` 工具 + 在系统提示里引导它先规划。`/autoplan on|off` 翻转并落盘。
+    /// 默认从持久化配置 seed（默认 ON）。关掉后 `enter_plan_mode` 不进工具集、提示不加，
+    /// 回到纯手动 Shift+Tab。
+    auto_plan: bool,
+    /// 「本轮 plan 是自动进入的」标记：build turn 调了 `enter_plan_mode` → 交互层自动切到
+    /// plan 跑只读规划时置 true；该 plan turn 结束后据此切回 build 并暂停（"say proceed"），
+    /// 然后清掉。用户中途 Esc 取消时也清掉，避免卡在半切换态。普通手动 plan（Shift+Tab /
+    /// `/plan`）不置位，故结束后不会自动切回 build。
+    auto_plan_pending: bool,
     /// 最近一次 resize / 初始化时的终端宽度（列）。`/skill`·`/mcp` 等摘要据此把每条截断到一行。
     terminal_cols: u16,
     /// 进入 Generating 态的时刻（`std::time::Instant`，单调时钟）。footer 据此显示
@@ -258,6 +268,8 @@ impl App {
             // Seed from the persisted kivio-code config so `/settings` reflects the
             // saved value; the event loop may override via `set_read_claude_dir`.
             read_claude_dir: crate::kivio_code::config::load().read_claude_dir,
+            auto_plan: crate::kivio_code::config::load().auto_plan,
+            auto_plan_pending: false,
             terminal_cols: 80,
             generating_started: None,
             pending_images: Vec::new(),
@@ -445,6 +457,28 @@ impl App {
     #[cfg(test)]
     pub fn read_claude_dir(&self) -> bool {
         self.read_claude_dir
+    }
+
+    /// 当前 `auto_plan` 内存值（build→plan 自动切换是否开启）。事件循环起 build turn 时据此
+    /// 决定是否把 `enter_plan_mode` 工具加进工具集。
+    pub fn auto_plan(&self) -> bool {
+        self.auto_plan
+    }
+
+    /// 设置 `auto_plan` 内存值（事件循环可在启动时同步实际持久化值）。
+    pub fn set_auto_plan(&mut self, value: bool) {
+        self.auto_plan = value;
+    }
+
+    /// 「本轮 plan 是自动进入的」标记当前值（测试 / 事件循环判定用）。
+    pub fn auto_plan_pending(&self) -> bool {
+        self.auto_plan_pending
+    }
+
+    /// 设置 / 清除 auto-plan pending 标记。build turn 触发自动转 plan 时置 true；该 plan
+    /// turn 结束切回 build、或用户 Esc 取消时清 false。
+    pub fn set_auto_plan_pending(&mut self, value: bool) {
+        self.auto_plan_pending = value;
     }
 
     /// 打开设置开关覆盖层（`/settings`）。当前仅一项：Read .claude / CLAUDE.md context，
@@ -911,6 +945,32 @@ impl App {
         }
     }
 
+    /// 处理 `/autoplan [on|off]`。`Some(on)` 设置并持久化（load-modify-save 保留其他字段），
+    /// `None`（无参数）只显示当前状态。更新内存值，让下一轮 build turn 据 `auto_plan` 决定是否
+    /// 给 `enter_plan_mode` 工具；下一轮 `build_system_prompt` 读磁盘同值决定是否加引导段。
+    fn handle_autoplan_command(&mut self, arg: Option<bool>) {
+        match arg {
+            None => {
+                self.push_notice(format!(
+                    "Auto plan is {} (use /autoplan on|off to change).",
+                    if self.auto_plan { "on" } else { "off" }
+                ));
+            }
+            Some(next) => {
+                self.auto_plan = next;
+                let mut cfg = crate::kivio_code::config::load();
+                cfg.auto_plan = next;
+                match crate::kivio_code::config::save(&cfg) {
+                    Ok(()) => self.push_notice(format!(
+                        "Auto plan: {}",
+                        if next { "on" } else { "off" }
+                    )),
+                    Err(err) => self.push_notice(format!("Could not save settings: {err}")),
+                }
+            }
+        }
+    }
+
     /// 处理一段已解码的输入序列（一个按键 / 转义序列的原始字节串，由事件循环从 StdinBuffer 喂入）。
     ///
     /// 返回 [`AppEffect`]。app 级按键（提交 / Ctrl+C / Ctrl+D）优先于 editor；其余转发给 editor。
@@ -1134,6 +1194,10 @@ impl App {
             }
             SlashOutcome::EnterBuild => {
                 self.set_agent_mode(AgentMode::Build);
+                AppEffect::None
+            }
+            SlashOutcome::SetAutoPlan(arg) => {
+                self.handle_autoplan_command(arg);
                 AppEffect::None
             }
             SlashOutcome::Compact { focus } => {
