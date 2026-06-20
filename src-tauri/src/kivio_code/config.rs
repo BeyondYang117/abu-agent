@@ -36,9 +36,21 @@ pub struct KivioCodeConfig {
     /// `"always_confirm"` regardless.
     #[serde(default)]
     pub approval_policy: Option<String>,
+    /// Auto build→plan switching: when ON and in build mode, the model is offered
+    /// an `enter_plan_mode` tool and prompted to call it first for complex /
+    /// multi-step / multi-file tasks; the interactive layer then runs a read-only
+    /// planning pass and pauses for the user to `proceed`. Default ON; `/autoplan
+    /// off` (or the settings overlay) disables it, restoring purely manual
+    /// Shift+Tab plan switching.
+    #[serde(default = "default_auto_plan")]
+    pub auto_plan: bool,
 }
 
 fn default_read_claude_dir() -> bool {
+    true
+}
+
+fn default_auto_plan() -> bool {
     true
 }
 
@@ -49,6 +61,7 @@ impl Default for KivioCodeConfig {
             default_provider_id: None,
             default_model: None,
             approval_policy: None,
+            auto_plan: default_auto_plan(),
         }
     }
 }
@@ -94,6 +107,7 @@ pub struct KivioCodeConfigPatch {
     pub default_provider_id: Option<String>,
     pub default_model: Option<String>,
     pub approval_policy: Option<String>,
+    pub auto_plan: Option<bool>,
 }
 
 /// Strictness rank for an approval policy (higher = stricter). Unknown / unset → 0
@@ -123,6 +137,9 @@ fn approval_for_rank(rank: u8) -> &'static str {
 pub fn merge_config(mut base: KivioCodeConfig, patch: KivioCodeConfigPatch) -> KivioCodeConfig {
     if let Some(read_claude_dir) = patch.read_claude_dir {
         base.read_claude_dir = read_claude_dir;
+    }
+    if let Some(auto_plan) = patch.auto_plan {
+        base.auto_plan = auto_plan;
     }
     if let Some(provider) = patch
         .default_provider_id
@@ -199,6 +216,7 @@ mod tests {
         assert_eq!(cfg.default_provider_id, None);
         assert_eq!(cfg.default_model, None);
         assert_eq!(cfg.approval_policy, None);
+        assert!(cfg.auto_plan);
     }
 
     #[test]
@@ -209,6 +227,8 @@ mod tests {
         assert!(!cfg.read_claude_dir);
         assert_eq!(cfg.default_model, None);
         assert_eq!(cfg.approval_policy, None);
+        // auto_plan is absent in this legacy config → defaults ON.
+        assert!(cfg.auto_plan);
     }
 
     #[test]
@@ -224,6 +244,7 @@ mod tests {
             default_provider_id: Some("p1".to_string()),
             default_model: Some("gemma4:31b".to_string()),
             approval_policy: Some("always_confirm".to_string()),
+            auto_plan: false,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: KivioCodeConfig = serde_json::from_str(&json).unwrap();
@@ -266,6 +287,20 @@ mod tests {
         let global = KivioCodeConfig::default(); // true
         let merged = merge_config(global, patch(r#"{"readClaudeDir": false}"#));
         assert!(!merged.read_claude_dir);
+    }
+
+    #[test]
+    fn auto_plan_defaults_on_and_is_overridable() {
+        // Absent in config → ON.
+        assert!(KivioCodeConfig::default().auto_plan);
+        // Project patch may turn it off per key; absent inherits global.
+        let global = KivioCodeConfig::default();
+        assert!(!merge_config(global, patch(r#"{"autoPlan": false}"#)).auto_plan);
+        let global = KivioCodeConfig {
+            auto_plan: false,
+            ..KivioCodeConfig::default()
+        };
+        assert!(!merge_config(global, patch("{}")).auto_plan);
     }
 
     #[test]
