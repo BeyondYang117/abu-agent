@@ -14,6 +14,7 @@ pub mod lens_commands;
 pub mod macos_ocr;
 pub mod mcp;
 pub mod native_tools;
+pub mod path_env;
 pub mod proc;
 pub mod prompts;
 pub mod rapidocr;
@@ -77,6 +78,17 @@ fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWin
 /// 应用入口函数
 /// 初始化 Tauri Builder，加载插件，配置窗口事件处理，设置全局状态、热键和托盘
 pub fn run() {
+    // GUI launches don't always inherit the *current* user PATH, so packaged
+    // builds can't find user-installed CLIs. Enrich the process PATH once,
+    // before any window creation or CLI probing. macOS: login-shell PATH is not
+    // inherited from Finder/Dock. Windows: explorer's PATH is a stale login-time
+    // snapshot, so read the current value from the registry. No-op on Linux.
+    // See `path_env` module docs.
+    #[cfg(target_os = "macos")]
+    path_env::enrich_path_macos();
+    #[cfg(target_os = "windows")]
+    path_env::enrich_path_windows();
+
     let autostart_plugin = {
         #[cfg(target_os = "macos")]
         {
