@@ -14,6 +14,8 @@ pub mod lens_commands;
 pub mod macos_ocr;
 pub mod mcp;
 pub mod native_tools;
+#[cfg(target_os = "macos")]
+pub mod path_env;
 pub mod proc;
 pub mod prompts;
 pub mod rapidocr;
@@ -77,6 +79,13 @@ fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWin
 /// 应用入口函数
 /// 初始化 Tauri Builder，加载插件，配置窗口事件处理，设置全局状态、热键和托盘
 pub fn run() {
+    // macOS GUI launches (Finder/Dock/Launchpad) don't inherit the login-shell
+    // PATH, so packaged builds can't find user-installed CLIs. Enrich the
+    // process PATH once, before any window creation or CLI probing. No-op on
+    // other platforms. See `path_env` module docs.
+    #[cfg(target_os = "macos")]
+    path_env::enrich_path_macos();
+
     let autostart_plugin = {
         #[cfg(target_os = "macos")]
         {
