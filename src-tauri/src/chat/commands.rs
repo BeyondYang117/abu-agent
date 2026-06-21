@@ -132,11 +132,34 @@ pub(crate) fn chat_get_conversation(
     app: AppHandle,
     conversation_id: String,
 ) -> Result<serde_json::Value, String> {
-    let conversation = load_conversation(&app, &conversation_id)?;
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    strip_api_messages_for_frontend(&mut conversation);
     Ok(serde_json::json!({
         "success": true,
         "conversation": conversation,
     }))
+}
+
+/// 剥离发给前端的 Conversation 副本里冗余的 `api_messages`（OpenAI 线格式）。
+///
+/// 前端从不读 `api_messages`（回放/编辑只用 `model_messages`），但 legacy 老对话
+/// 磁盘里仍带着这份转录，照样序列化进 IPC 白占渲染器 JS heap。这里**只动发给前端的
+/// 内存副本，不写盘**——磁盘仍保留 legacy 数据，后端回放仍可在 `model_messages` 为空时
+/// 回落 `api_messages`（见 `build_chat_api_messages`，它读的是独立 `load_conversation`
+/// 的盘上副本，不受此处影响）。
+///
+/// ⚠️ 中断草稿（`stream_outcome == Some("interrupted")`）的 `api_messages` 是「继续」
+/// 恢复工具上下文所必需的（见 commit 9d247b0），**绝不剥**。仅剥已完成的 assistant 消息。
+fn strip_api_messages_for_frontend(conversation: &mut Conversation) {
+    for message in conversation.messages.iter_mut() {
+        let is_interrupted_draft = message.stream_outcome.as_deref() == Some("interrupted");
+        if message.role == "assistant"
+            && !is_interrupted_draft
+            && !message.model_messages.is_empty()
+        {
+            message.api_messages = Vec::new();
+        }
+    }
 }
 
 /// 创建新对话
@@ -4819,6 +4842,9 @@ pub(crate) fn chat_delete_conversation(
     // 删对话即终止其持久外部 CLI 会话（actor 关闭子进程）并清掉跨重启 resume 句柄。
     state.remove_external_live_session(&conversation_id);
     crate::external_agents::session::clear_live_handle(&app, &conversation_id);
+    // 顺手清掉该对话在内存里按 conversation_id 累积的运行态小 map（stream 代际计数 /
+    // 会话级工具同意），它们只插不删、严格无界——对话删了便永远不会再被引用。
+    state.forget_chat_conversation_runtime(&conversation_id);
     delete_conv(&app, &conversation_id)?;
     Ok(serde_json::json!({
         "success": true,
@@ -5897,6 +5923,57 @@ mod tests {
             agent_plan_state: AgentPlanState::default(),
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         }
+    }
+
+    #[test]
+    fn strip_api_messages_for_frontend_keeps_interrupted_draft_drops_completed() {
+        let mut completed = test_chat_message("msg_done", "assistant", "final answer", 2);
+        completed.api_messages = vec![serde_json::json!({
+            "role": "assistant",
+            "content": "final answer"
+        })];
+        completed.model_messages =
+            vec![ModelMessage::text(ModelRole::Assistant, "final answer")];
+        completed.stream_outcome = Some("completed".to_string());
+
+        let mut draft = test_chat_message("msg_draft", "assistant", "partial answer", 4);
+        draft.api_messages = vec![serde_json::json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": { "name": "read_file", "arguments": "{}" }
+            }]
+        })];
+        draft.model_messages =
+            vec![ModelMessage::text(ModelRole::Assistant, "partial answer")];
+        draft.stream_outcome = Some("interrupted".to_string());
+
+        // 旧对话：完成但没有 model_messages，回放需回落 api_messages，DTO 不应剥。
+        let mut legacy = test_chat_message("msg_legacy", "assistant", "legacy answer", 6);
+        legacy.api_messages = vec![serde_json::json!({
+            "role": "assistant",
+            "content": "legacy answer"
+        })];
+        legacy.stream_outcome = Some("completed".to_string());
+
+        let mut user = test_chat_message("msg_user", "user", "hi", 1);
+        user.api_messages = vec![serde_json::json!({ "role": "user", "content": "hi" })];
+
+        let mut conversation = test_conversation_with_summary(false);
+        conversation.messages = vec![user, completed, draft, legacy];
+
+        strip_api_messages_for_frontend(&mut conversation);
+
+        // 已完成 + 有 model_messages：剥光。
+        assert!(conversation.messages[1].api_messages.is_empty());
+        // 中断草稿：保住，「继续」要靠它恢复工具上下文。
+        assert!(!conversation.messages[2].api_messages.is_empty());
+        // legacy（无 model_messages）：保住，回放回落需要它。
+        assert!(!conversation.messages[3].api_messages.is_empty());
+        // user 消息不动。
+        assert!(!conversation.messages[0].api_messages.is_empty());
     }
 
     #[test]

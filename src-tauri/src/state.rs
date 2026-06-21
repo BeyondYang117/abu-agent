@@ -319,6 +319,20 @@ impl AppState {
             == generation
     }
 
+    /// 对话被删除时清理其按 conversation_id 累积的运行态痕迹：stream 代际计数与
+    /// 会话级工具同意标记。两者都严格按 conversation_id 取键，对话删除后再不会被
+    /// 引用，是最无歧义的有界清理点（不影响其它活跃对话）。
+    pub fn forget_chat_conversation_runtime(&self, conversation_id: &str) {
+        self.chat_stream_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation_id);
+        self.chat_session_consent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation_id);
+    }
+
     /// 尝试占用某个对话的回复生成槽位；同对话已有进行中的回复时返回 false。
     pub fn try_begin_chat_reply(&self, conversation_id: &str) -> bool {
         let mut active = self
