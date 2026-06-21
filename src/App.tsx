@@ -303,7 +303,10 @@ function App() {
 
     listen('chat-open-request', () => {
       const path = hashPath()
-      if (isChatPath(path) && path !== 'chat' && !isChatSettingsPath(path)) return
+      // 全局 listen 会收到 emit_to("chat") 的事件（Tauri v2 的 Any 目标语义），所以 lens/translate/
+      // settings/translator 窗也会收到这条广播。只有 chat 窗该响应，否则其它窗口会把自己导航成 chat。
+      if (!isChatPath(path)) return
+      if (path !== 'chat' && !isChatSettingsPath(path)) return
       const rememberedRoute = getRememberedChatRoute()
       if (rememberedRoute && rememberedRoute !== window.location.hash) {
         window.location.hash = rememberedRoute
