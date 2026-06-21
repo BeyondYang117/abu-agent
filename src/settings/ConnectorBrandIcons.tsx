@@ -2,10 +2,13 @@
 // 品牌 path 来源：
 //   - Notion：simple-icons 官方 SVG（https://cdn.simpleicons.org/notion，path 内联）。
 //   - GitHub：直接复用 lucide-react 的 Github 图标（仓库已依赖 lucide-react，准确且省事）。
-//   - Composio：simple-icons 无该 slug（抓取返回空），退而用字母标记（圆角方块 + 首字母「C」）。
+//   - Composio：官方图标（单色蒙版，CSS mask + currentColor，跟随文字色与其它连接器图标统一）。
+//   - Linear / Sentry / Atlassian：simple-icons 官方品牌 path（https://cdn.simpleicons.org/<slug>，path 内联）。
 //   - 自定义连接器：通用 link 图标（fallback）。
 
 import { Github, Link2 } from 'lucide-react'
+
+import composioMask from './composio-mask.png'
 
 type BrandIconProps = { size?: number; className?: string }
 
@@ -31,35 +34,83 @@ export function GithubBrandIcon({ size = 22, className }: BrandIconProps) {
   return <Github size={size} className={className} />
 }
 
-// Composio：simple-icons 无对应 slug，退而用首字母标记（圆角方块 + 「C」）。
+// Composio：官方图标（单色蒙版，CSS mask + currentColor，跟随文字色与其它连接器图标统一）。
 export function ComposioBrandIcon({ size = 22, className }: BrandIconProps) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
+    <span
       role="img"
       aria-label="Composio"
       className={className}
-    >
-      <rect x="2" y="2" width="20" height="20" rx="5" fill="currentColor" />
-      <text
-        x="12"
-        y="16.5"
-        textAnchor="middle"
-        fontSize="13"
-        fontWeight="700"
-        fontFamily="ui-sans-serif, system-ui, sans-serif"
-        className="fill-white dark:fill-black"
-      >
-        C
-      </text>
-    </svg>
+      style={{
+        display: 'inline-block',
+        width: size,
+        height: size,
+        backgroundColor: 'currentColor',
+        WebkitMaskImage: `url(${composioMask})`,
+        maskImage: `url(${composioMask})`,
+        WebkitMaskRepeat: 'no-repeat',
+        maskRepeat: 'no-repeat',
+        WebkitMaskPosition: 'center',
+        maskPosition: 'center',
+        WebkitMaskSize: 'contain',
+        maskSize: 'contain',
+      }}
+    />
   )
 }
 
 // 自定义连接器 / 未知：通用 link 图标。
 export function CustomConnectorIcon({ size = 22, className }: BrandIconProps) {
   return <Link2 size={size} className={className} />
+}
+
+// Linear：simple-icons 官方品牌 path（fill currentColor）。
+export function LinearBrandIcon({ size = 22, className }: BrandIconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      role="img"
+      aria-label="Linear"
+      className={className}
+    >
+      <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
+    </svg>
+  )
+}
+
+// Sentry：simple-icons 官方品牌 path（fill currentColor）。
+export function SentryBrandIcon({ size = 22, className }: BrandIconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      role="img"
+      aria-label="Sentry"
+      className={className}
+    >
+      <path d="M13.91 2.505c-.873-1.448-2.972-1.448-3.844 0L6.904 7.92a15.478 15.478 0 0 1 8.53 12.811h-2.221A13.301 13.301 0 0 0 5.784 9.814l-2.926 5.06a7.65 7.65 0 0 1 4.435 5.848H2.194a.365.365 0 0 1-.298-.534l1.413-2.402a5.16 5.16 0 0 0-1.614-.913L.296 19.275a2.182 2.182 0 0 0 .812 2.999 2.24 2.24 0 0 0 1.086.288h6.983a9.322 9.322 0 0 0-3.845-8.318l1.11-1.922a11.47 11.47 0 0 1 4.95 10.24h5.915a17.242 17.242 0 0 0-7.885-15.28l2.244-3.845a.37.37 0 0 1 .504-.13c.255.14 9.75 16.708 9.928 16.9a.365.365 0 0 1-.327.543h-2.287c.029.612.029 1.223 0 1.831h2.297a2.206 2.206 0 0 0 1.922-3.31z" />
+    </svg>
+  )
+}
+
+// Atlassian：simple-icons 官方品牌 path（fill currentColor）。
+export function AtlassianBrandIcon({ size = 22, className }: BrandIconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      role="img"
+      aria-label="Atlassian"
+      className={className}
+    >
+      <path d="M7.12 11.084a.683.683 0 00-1.16.126L.075 22.974a.703.703 0 00.63 1.018h8.19a.678.678 0 00.63-.39c1.767-3.65.696-9.203-2.406-12.52zM11.434.386a15.515 15.515 0 00-.906 15.317l3.95 7.9a.703.703 0 00.628.388h8.19a.703.703 0 00.63-1.017L12.63.38a.664.664 0 00-1.196.006z" />
+    </svg>
+  )
 }

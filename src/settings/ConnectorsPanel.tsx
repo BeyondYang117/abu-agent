@@ -15,6 +15,9 @@ import {
   GithubBrandIcon,
   ComposioBrandIcon,
   CustomConnectorIcon,
+  LinearBrandIcon,
+  SentryBrandIcon,
+  AtlassianBrandIcon,
 } from './ConnectorBrandIcons'
 import { ConnectorDetailModal } from './ConnectorDetailModal'
 
@@ -26,6 +29,9 @@ const CONNECTOR_ICON_BY_KEY: Record<
   notion: NotionBrandIcon,
   github: GithubBrandIcon,
   composio: ComposioBrandIcon,
+  linear: LinearBrandIcon,
+  sentry: SentryBrandIcon,
+  atlassian: AtlassianBrandIcon,
 }
 
 function connectorIconFor(iconKey: string | undefined) {

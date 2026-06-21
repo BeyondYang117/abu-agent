@@ -88,6 +88,84 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
     developer: 'GitHub, Inc.',
   },
   {
+    id: 'linear',
+    name: 'Linear',
+    description: {
+      zh: '在 Linear 中管理项目、Issue 与工作流。',
+      en: 'Manage projects, issues, and workflows in Linear.',
+    },
+    iconKey: 'linear',
+    url: 'https://mcp.linear.app/mcp',
+    authKind: 'oauth',
+    overview: {
+      zh: [
+        '查询与管理 Linear 项目、Issue 与工作流。',
+        '创建、更新 Issue 并跟踪状态变更。',
+        '通过 OAuth 授权，无需手动管理 token。',
+      ],
+      en: [
+        'Query and manage Linear projects, issues, and workflows.',
+        'Create, update issues and track status changes.',
+        'Authorize via OAuth — no manual token management.',
+      ],
+    },
+    website: 'https://linear.app',
+    support: 'https://linear.app/docs/mcp',
+    developer: 'Linear',
+  },
+  {
+    id: 'sentry',
+    name: 'Sentry',
+    description: {
+      zh: '查询项目错误、Issue 与监控数据。',
+      en: 'Query project errors, issues, and monitoring data.',
+    },
+    iconKey: 'sentry',
+    url: 'https://mcp.sentry.dev/mcp',
+    authKind: 'oauth',
+    overview: {
+      zh: [
+        '查询项目错误、Issue 与监控数据。',
+        '检索堆栈信息与错误发生趋势。',
+        '通过 OAuth 授权，无需手动管理 token。',
+      ],
+      en: [
+        'Query project errors, issues, and monitoring data.',
+        'Inspect stack traces and error occurrence trends.',
+        'Authorize via OAuth — no manual token management.',
+      ],
+    },
+    website: 'https://sentry.io',
+    support: 'https://github.com/getsentry/sentry-mcp',
+    developer: 'Sentry',
+  },
+  {
+    id: 'atlassian',
+    name: 'Atlassian',
+    description: {
+      zh: '访问 Jira 工单与 Confluence 页面。',
+      en: 'Access Jira issues and Confluence pages.',
+    },
+    iconKey: 'atlassian',
+    url: 'https://mcp.atlassian.com/v1/mcp',
+    authKind: 'oauth',
+    overview: {
+      zh: [
+        '访问 Jira 工单并跟踪进度。',
+        '检索与读取 Confluence 页面内容。',
+        '通过 OAuth 授权，无需手动管理 token。',
+      ],
+      en: [
+        'Access Jira issues and track their progress.',
+        'Search and read Confluence page content.',
+        'Authorize via OAuth — no manual token management.',
+      ],
+    },
+    website: 'https://www.atlassian.com',
+    support: 'https://www.atlassian.com/blog/announcements/remote-mcp-server',
+    developer: 'Atlassian',
+  },
+  {
     id: 'composio',
     name: 'Composio',
     description: {
