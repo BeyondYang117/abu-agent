@@ -23,6 +23,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-center",
     "core:window:allow-is-visible",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "shell:allow-open"
   ]
 }

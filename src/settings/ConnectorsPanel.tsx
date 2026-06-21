@@ -1,12 +1,12 @@
 // 连接器面板：目录化 + 一键授权的外部数据源 UX。
 // 每个连接器最终物化成一条带 Authorization header 的 ChatMcpServer，写入
 // chatTools.servers（connectorId 非空），由现有 MCP 管线自动收集工具。
-// Phase A 只支持 token 类（GitHub PAT / Composio key / 自定义 token）；
-// OAuth 类（Notion）连接按钮禁用，留待 Phase B。
+// token 类（GitHub PAT / Composio key / 自定义 token）直接前端物化；
+// OAuth 类（Notion / 自定义 OAuth）走后端 connector_oauth_connect（PKCE + DCR + loopback）。
 
 import { useCallback, useState } from 'react'
 import { Check, Loader2, Trash2, X, Plus } from 'lucide-react'
-import { type ChatMcpServer, type ChatToolsConfig } from '../api/tauri'
+import { api, type ChatMcpServer, type ChatToolsConfig } from '../api/tauri'
 import { i18n, type Lang } from './i18n'
 import { SettingsGroup, Input, Select } from './components'
 import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from './connectorCatalog'
@@ -67,8 +67,13 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
   const [showCustomForm, setShowCustomForm] = useState(false)
   const [customName, setCustomName] = useState('')
   const [customUrl, setCustomUrl] = useState('')
-  const [customAuth, setCustomAuth] = useState<'none' | 'token'>('token')
+  const [customAuth, setCustomAuth] = useState<'none' | 'token' | 'oauth'>('token')
   const [customToken, setCustomToken] = useState('')
+
+  // OAuth 授权进行中的目录项 id（卡片显示「授权中…」）。
+  const [oauthBusyFor, setOauthBusyFor] = useState<string | null>(null)
+  // OAuth 错误提示（按目录项 id 暂存）。
+  const [oauthError, setOauthError] = useState<{ id: string; message: string } | null>(null)
 
   const connectedById = new Map(
     servers.filter((s) => s.connectorId).map((s) => [s.connectorId as string, s]),
@@ -127,10 +132,67 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
     [testServer, writeServer],
   )
 
+  // OAuth 类目录项 → 跑后端 connector_oauth_connect（浏览器授权）→ 合并返回的 server。
+  const connectOauthConnector = useCallback(
+    async (entry: ConnectorCatalogEntry) => {
+      setOauthError(null)
+      setOauthBusyFor(entry.id)
+      try {
+        const server = await api.connectorOauthConnect({ catalogId: entry.id })
+        writeServer(server)
+        // 授权后顺手测一下连接，填充工具数。
+        setBusyId(server.id)
+        try {
+          const result = await testServer(server)
+          if (result?.ok) {
+            setToolCounts((prev) => ({ ...prev, [server.id]: result.tools.length }))
+          }
+        } finally {
+          setBusyId(null)
+        }
+      } catch (err) {
+        setOauthError({ id: entry.id, message: String(err) })
+      } finally {
+        setOauthBusyFor(null)
+      }
+    },
+    [testServer, writeServer],
+  )
+
   const addCustomConnector = useCallback(async () => {
     const name = customName.trim()
     const url = customUrl.trim()
     if (!name || !url) return
+
+    // OAuth：跑后端 connector_oauth_connect（浏览器授权），返回物化好的 server。
+    if (customAuth === 'oauth') {
+      setOauthError(null)
+      setOauthBusyFor('custom')
+      try {
+        const server = await api.connectorOauthConnect({ url, name })
+        writeServer(server)
+        setCustomName('')
+        setCustomUrl('')
+        setCustomToken('')
+        setCustomAuth('token')
+        setShowCustomForm(false)
+        setBusyId(server.id)
+        try {
+          const result = await testServer(server)
+          if (result?.ok) {
+            setToolCounts((prev) => ({ ...prev, [server.id]: result.tools.length }))
+          }
+        } finally {
+          setBusyId(null)
+        }
+      } catch (err) {
+        setOauthError({ id: 'custom', message: String(err) })
+      } finally {
+        setOauthBusyFor(null)
+      }
+      return
+    }
+
     const slug = slugify(name)
     const connectorId = `custom-${slug}`
     const id = connectorServerId(connectorId)
@@ -228,6 +290,8 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
   const renderAvailableCard = (entry: ConnectorCatalogEntry) => {
     const isTokenInput = tokenInputFor === entry.id
     const isOauth = entry.authKind === 'oauth'
+    const oauthBusy = oauthBusyFor === entry.id
+    const errorMessage = oauthError?.id === entry.id ? oauthError.message : null
     const Icon = connectorIconFor(entry.iconKey)
     return (
       <div key={entry.id} className="kv-panel">
@@ -239,23 +303,43 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
             {entry.composio && (
               <div className="kv-row-desc text-[12px] opacity-70">{t.connectorsThirdParty}</div>
             )}
-            {isOauth && (
-              <div className="kv-row-desc text-[12px] opacity-70">{t.connectorsOauthSoon}</div>
+            {errorMessage && (
+              <div className="kv-row-desc text-[12px] text-red-500 dark:text-red-400">
+                {t.connectorsOauthFailed}: {errorMessage}
+              </div>
             )}
           </div>
-          {!isTokenInput && (
+          {isOauth ? (
             <button
               type="button"
               className="kv-btn sm primary shrink-0"
-              disabled={isOauth}
-              onClick={() => {
-                setTokenDraft('')
-                setTokenInputFor(entry.id)
-              }}
+              disabled={oauthBusy}
+              onClick={() => void connectOauthConnector(entry)}
               data-tauri-drag-region="false"
             >
-              {t.connectorsConnect}
+              {oauthBusy ? (
+                <>
+                  <Loader2 size={10} className="animate-spin" />
+                  {t.connectorsOauthAuthorizing}
+                </>
+              ) : (
+                t.connectorsOauthAuthorize
+              )}
             </button>
+          ) : (
+            !isTokenInput && (
+              <button
+                type="button"
+                className="kv-btn sm primary shrink-0"
+                onClick={() => {
+                  setTokenDraft('')
+                  setTokenInputFor(entry.id)
+                }}
+                data-tauri-drag-region="false"
+              >
+                {t.connectorsConnect}
+              </button>
+            )
           )}
         </div>
         {isTokenInput && (
@@ -328,9 +412,12 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
             <div className="flex items-center gap-2">
               <Select
                 value={customAuth}
-                onChange={(v) => setCustomAuth(v === 'none' ? 'none' : 'token')}
+                onChange={(v) =>
+                  setCustomAuth(v === 'none' ? 'none' : v === 'oauth' ? 'oauth' : 'token')
+                }
                 options={[
                   { value: 'token', label: t.connectorsAuthToken },
+                  { value: 'oauth', label: t.connectorsAuthOauth },
                   { value: 'none', label: t.connectorsAuthNone },
                 ]}
               />
@@ -344,14 +431,26 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
                 />
               )}
             </div>
+            {oauthError?.id === 'custom' && (
+              <div className="kv-row-desc text-[12px] text-red-500 dark:text-red-400">
+                {t.connectorsOauthFailed}: {oauthError.message}
+              </div>
+            )}
             <button
               type="button"
               className="kv-btn sm primary"
-              disabled={!customName.trim() || !customUrl.trim()}
+              disabled={!customName.trim() || !customUrl.trim() || oauthBusyFor === 'custom'}
               onClick={() => void addCustomConnector()}
               data-tauri-drag-region="false"
             >
-              {t.connectorsCustomAdd}
+              {oauthBusyFor === 'custom' ? (
+                <>
+                  <Loader2 size={10} className="animate-spin" />
+                  {t.connectorsOauthAuthorizing}
+                </>
+              ) : (
+                t.connectorsCustomAdd
+              )}
             </button>
           </div>
         )}

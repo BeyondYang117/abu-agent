@@ -7,6 +7,7 @@ pub mod chat;
 pub mod cli_install;
 pub mod external_agents;
 pub mod commands;
+pub mod connectors;
 pub mod kivio_code;
 pub mod lens;
 pub mod lens_commands;
@@ -450,6 +451,7 @@ pub fn run() {
             mcp::registry::chat_mcp_import_json,
             mcp::registry::chat_mcp_server_status,
             mcp::registry::chat_mcp_reload_server,
+            connectors::connector_oauth_connect,
             skills::chat_skills_list,
             skills::chat_skills_read,
             skills::chat_skills_import,

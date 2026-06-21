@@ -1095,6 +1095,11 @@ export const api = {
   openExternal: (url: string) => invoke<void>('open_external', { url }),
   openHtmlPreview: (html: string) => invoke<void>('open_html_preview', { html }),
 
+  // 连接器 OAuth：跑完整 OAuth（PKCE + DCR + loopback，会打开浏览器授权）→
+  // 返回物化好的 ChatMcpServer（不写 settings，由前端合并进 chatTools.servers 并保存）。
+  connectorOauthConnect: (args: { catalogId?: string; url?: string; name?: string }) =>
+    invoke<ChatMcpServer>('connector_oauth_connect', args),
+
   // 窗口控制
   resizeWindow: async (width: number, height: number) => {
     const win = getCurrentWindow()

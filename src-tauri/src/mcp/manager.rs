@@ -63,6 +63,10 @@ pub trait McpEventSink {
     fn emit_server_state(&self, server: &ChatMcpServer, state: &McpServerState);
     /// 仅靠 server_id 发 Disconnected（reload / reap 用，可能拿不到完整 server）。
     fn emit_disconnected(&self, server_id: &str);
+    /// 供 token 刷新钩子持久化新 token 用的 AppHandle。测试用 `()` 返回 None。
+    fn app_handle(&self) -> Option<&AppHandle> {
+        None
+    }
 }
 
 impl McpEventSink for AppHandle {
@@ -85,6 +89,10 @@ impl McpEventSink for AppHandle {
                 "state": McpServerState::Disconnected,
             }),
         );
+    }
+
+    fn app_handle(&self) -> Option<&AppHandle> {
+        Some(self)
     }
 }
 
@@ -253,6 +261,11 @@ impl AppState {
         sink: &impl McpEventSink,
         server: &ChatMcpServer,
     ) -> Result<Arc<Mutex<McpSession>>, String> {
+        // 连接前钩子：远程 MCP 的 OAuth token 若临近/已过期，先用 refresh_token 刷新，
+        // 更新 server 的 Authorization header 与 auth，并持久化新 token。失败则用旧
+        // token 继续连接（记录错误，不 panic）。StreamableHttpMcpClient 不变（仍只发 header）。
+        let refreshed = self.refresh_oauth_if_needed(sink, server).await;
+        let server = refreshed.as_ref().unwrap_or(server);
         let fingerprint = config_fingerprint(server);
 
         // 单飞门闩：在持外层池锁时完成「命中已有会话」或「插入 Connecting 占位」二选一，
@@ -309,9 +322,92 @@ impl AppState {
         }
     }
 
-    /// 在持有会话锁的前提下完成一次握手（不持外层池锁）。失败时写 Error 状态并返回错误。
-    async fn connect_session(
+    /// OAuth token 刷新钩子：若该 server 是 OAuth 连接器且 token 临近/已过期，用
+    /// refresh_token 换新 token，返回更新后的 server（headers + auth）。无需刷新或刷新
+    /// 失败则返回 None（调用方用原 server 继续）。成功刷新时把新 token 持久化回 settings。
+    async fn refresh_oauth_if_needed(
         &self,
+        sink: &impl McpEventSink,
+        server: &ChatMcpServer,
+    ) -> Option<ChatMcpServer> {
+        let auth = server.auth.as_ref()?;
+        let now = now_unix();
+        if !crate::connectors::oauth::needs_refresh(
+            auth,
+            now,
+            crate::connectors::oauth::REFRESH_LEEWAY_SECS,
+        ) {
+            return None;
+        }
+        let token_endpoint = auth.token_endpoint.clone()?;
+        let refresh_token = auth.refresh_token.clone()?;
+        let client_id = auth.client_id.clone();
+
+        match crate::connectors::oauth::refresh_access_token(
+            &self.http,
+            &token_endpoint,
+            &refresh_token,
+            client_id.as_deref(),
+        )
+        .await
+        {
+            Ok(token) => {
+                let mut updated = server.clone();
+                let mut new_auth = updated.auth.take().unwrap_or_default();
+                new_auth.access_token = token.access_token.clone();
+                // 多数实现 refresh 不回新的 refresh_token；只在确实下发时替换（轮换场景）。
+                if let Some(rt) = token.refresh_token {
+                    new_auth.refresh_token = Some(rt);
+                }
+                new_auth.expires_at =
+                    crate::connectors::oauth::compute_expires_at(now, token.expires_in);
+                updated.auth = Some(new_auth);
+                updated.headers.insert(
+                    "Authorization".to_string(),
+                    format!("Bearer {}", token.access_token),
+                );
+                // 持久化新 token：仅在拿得到 AppHandle 时（生产路径）。
+                if let Some(app) = sink.app_handle() {
+                    self.persist_refreshed_server(app, &updated);
+                }
+                Some(updated)
+            }
+            Err(err) => {
+                eprintln!(
+                    "OAuth token refresh failed for connector {}: {err}; using existing token",
+                    server.name
+                );
+                None
+            }
+        }
+    }
+
+    /// 把刷新后的 server 写回 settings（内存 + 落盘）。在 settings.chat_tools.servers 里
+    /// 按 id 定位并替换。失败仅记录，不影响本次连接。
+    fn persist_refreshed_server(&self, app: &AppHandle, server: &ChatMcpServer) {
+        let updated_settings = {
+            let mut guard = self.settings_write();
+            let found = guard
+                .chat_tools
+                .servers
+                .iter_mut()
+                .find(|existing| existing.id == server.id);
+            match found {
+                Some(slot) => {
+                    slot.headers = server.headers.clone();
+                    slot.auth = server.auth.clone();
+                    guard.clone()
+                }
+                None => return,
+            }
+        };
+        if let Err(err) = crate::settings::persist_settings(app, &updated_settings) {
+            eprintln!("Failed to persist refreshed OAuth token: {err}");
+        }
+    }
+
+    /// 在持有会话锁的前提下完成一次握手（不持外层池锁）。失败时写 Error 状态并返回错误。
+    async fn connect_session(        &self,
         sink: &impl McpEventSink,
         server: &ChatMcpServer,
         guard: &mut McpSession,
@@ -593,6 +689,14 @@ pub struct McpServerStatusSnapshot {
 /// ChatMcpServer 配置指纹：序列化后做稳定哈希，配置变更即重建会话。
 pub fn config_fingerprint(server: &ChatMcpServer) -> String {
     serde_json::to_string(server).unwrap_or_else(|_| format!("{}:{}", server.id, server.command))
+}
+
+/// 当前 unix 时间戳（秒），用于 OAuth token 过期判断。
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn is_session_expired(err: &str) -> bool {
