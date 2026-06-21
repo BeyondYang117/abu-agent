@@ -216,21 +216,87 @@ impl Terminal for CrosstermTerminal {
 
 /// RAII raw-mode 守卫：构造时 `enable_raw_mode` + 开启 bracketed paste，drop 时还原（即使 panic 也还原）。
 ///
-/// 不进 alt-screen；仅做 raw I/O。drop 顺序：关 bracketed paste → 显示光标 → 关 raw mode。
+/// 不进 alt-screen；仅做 raw I/O。drop 顺序：关 bracketed paste → 显示光标 → 关 raw mode → 还原 VT console 模式。
 pub struct RawModeGuard {
     active: bool,
+    // Windows：保存进入前的 console 模式，drop 时还原。其它平台无此字段。
+    #[cfg(windows)]
+    saved_in: Option<u32>,
+    #[cfg(windows)]
+    saved_out: Option<u32>,
 }
 
 impl RawModeGuard {
     /// 进入 raw mode。失败时返回错误且不改变终端状态。
     pub fn enter() -> std::io::Result<Self> {
         crossterm::terminal::enable_raw_mode()?;
+        // Windows：crossterm 的 enable_raw_mode 只清 line/echo/processed，不开 VT。本 TUI 自己
+        // 读 stdin 原始字节并解码 VT 序列（见 stdin_buffer + keys），故必须显式开 VT 输入，否则
+        // 方向键 / Enter / 控制键到达的字节与解析器预期不符（即「输入会错误」）。输出同时开 VT
+        // 处理，让光标移动 / 清行 / bracketed paste 转义被解释。
+        #[cfg(windows)]
+        let (saved_in, saved_out) = enable_vt_console_modes();
         // 开启 bracketed paste，让粘贴整段到达（StdinBuffer 据此聚合）。
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
         let _ = lock.write_all(b"\x1b[?2004h");
         let _ = lock.flush();
-        Ok(Self { active: true })
+        Ok(Self {
+            active: true,
+            #[cfg(windows)]
+            saved_in,
+            #[cfg(windows)]
+            saved_out,
+        })
+    }
+}
+
+/// Windows：把 stdin 的 `ENABLE_VIRTUAL_TERMINAL_INPUT` 与 stdout 的
+/// `ENABLE_VIRTUAL_TERMINAL_PROCESSING` 打开，返回还原用的旧模式（取不到句柄/模式则为 None）。
+#[cfg(windows)]
+fn enable_vt_console_modes() -> (Option<u32>, Option<u32>) {
+    use windows::Win32::System::Console::{
+        GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    unsafe {
+        let mut saved_in = None;
+        if let Ok(h) = GetStdHandle(STD_INPUT_HANDLE) {
+            let mut mode = CONSOLE_MODE(0);
+            if GetConsoleMode(h, &mut mode).is_ok() {
+                saved_in = Some(mode.0);
+                let _ = SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_INPUT);
+            }
+        }
+        let mut saved_out = None;
+        if let Ok(h) = GetStdHandle(STD_OUTPUT_HANDLE) {
+            let mut mode = CONSOLE_MODE(0);
+            if GetConsoleMode(h, &mut mode).is_ok() {
+                saved_out = Some(mode.0);
+                let _ = SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+        (saved_in, saved_out)
+    }
+}
+
+/// Windows：把保存的 console 模式还原回去（best-effort）。
+#[cfg(windows)]
+fn restore_vt_console_modes(saved_in: Option<u32>, saved_out: Option<u32>) {
+    use windows::Win32::System::Console::{
+        GetStdHandle, SetConsoleMode, CONSOLE_MODE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    unsafe {
+        if let Some(m) = saved_in {
+            if let Ok(h) = GetStdHandle(STD_INPUT_HANDLE) {
+                let _ = SetConsoleMode(h, CONSOLE_MODE(m));
+            }
+        }
+        if let Some(m) = saved_out {
+            if let Ok(h) = GetStdHandle(STD_OUTPUT_HANDLE) {
+                let _ = SetConsoleMode(h, CONSOLE_MODE(m));
+            }
+        }
     }
 }
 
@@ -247,6 +313,9 @@ impl Drop for RawModeGuard {
             let _ = lock.flush();
         }
         let _ = crossterm::terminal::disable_raw_mode();
+        // Windows：还原进入前的 console 模式（VT 输入 / 输出处理）。
+        #[cfg(windows)]
+        restore_vt_console_modes(self.saved_in, self.saved_out);
         self.active = false;
     }
 }
