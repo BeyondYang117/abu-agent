@@ -357,6 +357,41 @@ pub fn chat_mcp_import_json(path: String) -> McpImportResult {
     }
 }
 
+/// 单个连接器工具的元信息（名称 + 描述），给连接器详情面板的工具列表用。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// 列出某个 MCP server 的工具（含描述）。连接器详情面板用来渲染「工具」列表
+/// 与逐工具允许/停用开关。不按 enabled_tools 过滤——前端需要拿到全部工具名
+/// 才能正确展开/收拢白名单。
+#[tauri::command]
+pub async fn chat_mcp_list_tool_defs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    server_id: String,
+) -> Result<Vec<ConnectorToolInfo>, String> {
+    let settings = state.settings_read().clone();
+    let server = settings
+        .chat_tools
+        .servers
+        .iter()
+        .find(|server| server.id == server_id)
+        .cloned()
+        .ok_or_else(|| "MCP server is missing".to_string())?;
+    let tools = state.mcp_list_tools(&app, &server).await?;
+    Ok(tools
+        .into_iter()
+        .map(|tool| ConnectorToolInfo {
+            name: tool.name,
+            description: tool.description,
+        })
+        .collect())
+}
+
 /// 读取某个 MCP server 的持久连接状态快照（状态点 / handshake 次数 / stderr 尾巴）。
 #[tauri::command]
 pub async fn chat_mcp_server_status(

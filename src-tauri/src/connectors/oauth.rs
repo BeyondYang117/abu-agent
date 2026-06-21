@@ -36,6 +36,8 @@ pub struct AuthServerMetadata {
     pub token_endpoint: String,
     pub registration_endpoint: Option<String>,
     pub scopes_supported: Vec<String>,
+    /// OIDC userinfo 端点（若 metadata 提供）。token 响应缺账户信息时可用它兜底取 email/name。
+    pub userinfo_endpoint: Option<String>,
 }
 
 /// PKCE 一对：verifier 发往 token 端点，challenge 发往 authorize 端点。
@@ -112,6 +114,10 @@ pub fn parse_auth_server_metadata(value: &serde_json::Value) -> Option<AuthServe
         token_endpoint,
         registration_endpoint,
         scopes_supported,
+        userinfo_endpoint: value
+            .get("userinfo_endpoint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -287,6 +293,8 @@ pub struct TokenResponse {
     pub refresh_token: Option<String>,
     pub expires_in: Option<i64>,
     pub scope: Option<String>,
+    /// 从 token 响应里尽力提取的真实账户标识（邮箱 > 工作区名 > 用户名），拿不到为 None。
+    pub account: Option<String>,
 }
 
 /// 解析 token 端点 JSON 响应。
@@ -316,7 +324,50 @@ pub fn parse_token_response(value: &serde_json::Value) -> Result<TokenResponse, 
         refresh_token,
         expires_in,
         scope,
+        account: extract_account(value),
     })
+}
+
+/// 从 token 响应 JSON 里尽力提取真实账户标识。
+///
+/// 优先级：邮箱 > 工作区名 > 用户名。覆盖 Notion OAuth 形态（顶层 `workspace_name` /
+/// `owner.user.person.email` / `owner.user.name`）与扁平 `email` / `name` / `account`。
+/// 一个都没有返回 None（绝不回退成端点 URL）。
+pub fn extract_account(value: &serde_json::Value) -> Option<String> {
+    // 1) 邮箱优先：顶层 email，或 Notion owner.user.person.email。
+    let email = str_field(value, "email").or_else(|| {
+        value
+            .pointer("/owner/user/person/email")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+    if let Some(email) = non_empty(email) {
+        return Some(email);
+    }
+    // 2) 工作区名（Notion 常带）。
+    if let Some(ws) = non_empty(str_field(value, "workspace_name")) {
+        return Some(ws);
+    }
+    // 3) 用户名：Notion owner.user.name，或顶层 name / account。
+    let name = value
+        .pointer("/owner/user/name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| str_field(value, "name"))
+        .or_else(|| str_field(value, "account"));
+    non_empty(name)
+}
+
+/// 取 JSON 顶层字符串字段。
+fn str_field(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+/// 去除首尾空白后非空才保留。
+fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// 由换 token 结果与连接器元信息物化成 ChatMcpServer。
@@ -349,6 +400,7 @@ pub fn materialize_server(
         token_endpoint: Some(token_endpoint.to_string()),
         client_id: Some(client_id.to_string()),
         scopes,
+        account: token.account.clone(),
     };
     ChatMcpServer {
         id: format!("connector-{connector_id}"),
@@ -426,7 +478,7 @@ pub async fn run_oauth_connect(
     let code = wait_for_callback(listener, &state).await?;
 
     // 6. 换 token。
-    let token = exchange_code(
+    let mut token = exchange_code(
         http,
         &metadata.token_endpoint,
         &code,
@@ -435,6 +487,18 @@ pub async fn run_oauth_connect(
         &pkce.verifier,
     )
     .await?;
+
+    // 6b. token 响应没带账户信息且服务器声明了 OIDC userinfo 端点时，尽力 GET 一次兜底
+    //     （加超时、失败忽略，不影响连接成功）。
+    if token.account.is_none() {
+        if let Some(userinfo_endpoint) = metadata.userinfo_endpoint.as_deref() {
+            if let Some(account) =
+                fetch_userinfo_account(http, userinfo_endpoint, &token.access_token).await
+            {
+                token.account = Some(account);
+            }
+        }
+    }
 
     Ok(materialize_server(
         connector_id,
@@ -663,7 +727,31 @@ async fn exchange_code(
     parse_token_response(&value)
 }
 
-/// 用 refresh_token 刷新 access_token（manager 连接前钩子调用）。
+/// 用 bearer token GET OIDC userinfo，尽力取 email/name 当账户标识。
+/// 带超时；任何失败（网络/非 2xx/无字段）都返回 None，绝不影响连接流程。
+async fn fetch_userinfo_account(
+    http: &reqwest::Client,
+    userinfo_endpoint: &str,
+    access_token: &str,
+) -> Option<String> {
+    let response = timeout(
+        DISCOVERY_TIMEOUT,
+        http.get(userinfo_endpoint)
+            .bearer_auth(access_token)
+            .send(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let value = timeout(DISCOVERY_TIMEOUT, response.json::<serde_json::Value>())
+        .await
+        .ok()?
+        .ok()?;
+    extract_account(&value)
+}
 pub async fn refresh_access_token(
     http: &reqwest::Client,
     token_endpoint: &str,
@@ -823,6 +911,7 @@ mod tests {
             token_endpoint: Some("https://auth.example.com/token".to_string()),
             client_id: Some("client-1".to_string()),
             scopes: Vec::new(),
+            account: None,
         }
     }
 
@@ -882,6 +971,7 @@ mod tests {
             refresh_token: Some("rt-1".to_string()),
             expires_in: Some(3600),
             scope: None,
+            account: Some("acme-workspace".to_string()),
         };
         let server = materialize_server(
             "notion",
@@ -907,5 +997,69 @@ mod tests {
         assert_eq!(auth.token_endpoint.as_deref(), Some("https://auth.example.com/token"));
         // scope 缺省时回退到请求的 scopes。
         assert_eq!(auth.scopes, vec!["read"]);
+        // account 从 token 响应透传。
+        assert_eq!(auth.account.as_deref(), Some("acme-workspace"));
+    }
+
+    #[test]
+    fn extracts_account_from_notion_owner_shape() {
+        // Notion OAuth：owner.user.person.email 优先于工作区名。
+        let value = serde_json::json!({
+            "access_token": "at",
+            "workspace_name": "Acme Workspace",
+            "owner": {
+                "user": {
+                    "name": "Jane Doe",
+                    "person": { "email": "jane@acme.com" }
+                }
+            }
+        });
+        assert_eq!(extract_account(&value).as_deref(), Some("jane@acme.com"));
+
+        // 无 email 时回退到工作区名。
+        let value = serde_json::json!({
+            "workspace_name": "Acme Workspace",
+            "owner": { "user": { "name": "Jane Doe" } }
+        });
+        assert_eq!(extract_account(&value).as_deref(), Some("Acme Workspace"));
+
+        // 无 email、无工作区名时回退到用户名。
+        let value = serde_json::json!({
+            "owner": { "user": { "name": "Jane Doe" } }
+        });
+        assert_eq!(extract_account(&value).as_deref(), Some("Jane Doe"));
+    }
+
+    #[test]
+    fn extracts_account_from_flat_email() {
+        // 扁平 OIDC userinfo 形态：顶层 email。
+        let value = serde_json::json!({ "email": "bob@example.com", "name": "Bob" });
+        assert_eq!(extract_account(&value).as_deref(), Some("bob@example.com"));
+        // 仅 name。
+        let value = serde_json::json!({ "name": "Bob" });
+        assert_eq!(extract_account(&value).as_deref(), Some("Bob"));
+        // 仅 account 字段。
+        let value = serde_json::json!({ "account": "team-x" });
+        assert_eq!(extract_account(&value).as_deref(), Some("team-x"));
+    }
+
+    #[test]
+    fn extracts_account_missing_returns_none() {
+        // 无任何账户线索 → None（绝不回退成端点 URL）。
+        let value = serde_json::json!({ "access_token": "at", "expires_in": 3600 });
+        assert_eq!(extract_account(&value), None);
+        // 空字符串视为缺失。
+        let value = serde_json::json!({ "email": "  ", "workspace_name": "" });
+        assert_eq!(extract_account(&value), None);
+    }
+
+    #[test]
+    fn parse_token_response_includes_account() {
+        let value = serde_json::json!({
+            "access_token": "at-1",
+            "workspace_name": "Acme",
+        });
+        let token = parse_token_response(&value).expect("token");
+        assert_eq!(token.account.as_deref(), Some("Acme"));
     }
 }

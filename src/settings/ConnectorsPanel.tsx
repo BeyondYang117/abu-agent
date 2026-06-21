@@ -16,6 +16,7 @@ import {
   ComposioBrandIcon,
   CustomConnectorIcon,
 } from './ConnectorBrandIcons'
+import { ConnectorDetailModal } from './ConnectorDetailModal'
 
 // catalog 项 iconKey → 品牌图标组件查找表；未命中（含自定义连接器）回退到通用 link 图标。
 const CONNECTOR_ICON_BY_KEY: Record<
@@ -74,6 +75,11 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
   const [oauthBusyFor, setOauthBusyFor] = useState<string | null>(null)
   // OAuth 错误提示（按目录项 id 暂存）。
   const [oauthError, setOauthError] = useState<{ id: string; message: string } | null>(null)
+
+  // 详情弹层：按已连接 server id 或目录项 id 标识。
+  const [detail, setDetail] = useState<
+    { kind: 'server'; serverId: string } | { kind: 'entry'; entryId: string } | null
+  >(null)
 
   const connectedById = new Map(
     servers.filter((s) => s.connectorId).map((s) => [s.connectorId as string, s]),
@@ -245,7 +251,19 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
     const busy = busyId === server.id
     const Icon = connectorIconFor(entry?.iconKey)
     return (
-      <div key={server.id} className="kv-panel">
+      <div
+        key={server.id}
+        className="kv-panel cursor-pointer transition hover:border-[var(--accent)]"
+        role="button"
+        tabIndex={0}
+        onClick={() => setDetail({ kind: 'server', serverId: server.id })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setDetail({ kind: 'server', serverId: server.id })
+          }
+        }}
+      >
         <div className="flex items-start gap-3">
           <Icon size={22} className="mt-0.5 shrink-0 opacity-90" />
           <div className="min-w-0 flex-1">
@@ -275,7 +293,10 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
             <button
               type="button"
               className="kv-btn sm danger"
-              onClick={() => removeServer(server.id)}
+              onClick={(e) => {
+                e.stopPropagation()
+                removeServer(server.id)
+              }}
               data-tauri-drag-region="false"
             >
               <Trash2 size={10} />
@@ -294,7 +315,19 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
     const errorMessage = oauthError?.id === entry.id ? oauthError.message : null
     const Icon = connectorIconFor(entry.iconKey)
     return (
-      <div key={entry.id} className="kv-panel">
+      <div
+        key={entry.id}
+        className="kv-panel cursor-pointer transition hover:border-[var(--accent)]"
+        role="button"
+        tabIndex={0}
+        onClick={() => setDetail({ kind: 'entry', entryId: entry.id })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setDetail({ kind: 'entry', entryId: entry.id })
+          }
+        }}
+      >
         <div className="flex items-start gap-3">
           <Icon size={22} className="mt-0.5 shrink-0 opacity-90" />
           <div className="min-w-0 flex-1">
@@ -314,7 +347,10 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
               type="button"
               className="kv-btn sm primary shrink-0"
               disabled={oauthBusy}
-              onClick={() => void connectOauthConnector(entry)}
+              onClick={(e) => {
+                e.stopPropagation()
+                void connectOauthConnector(entry)
+              }}
               data-tauri-drag-region="false"
             >
               {oauthBusy ? (
@@ -331,7 +367,8 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
               <button
                 type="button"
                 className="kv-btn sm primary shrink-0"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation()
                   setTokenDraft('')
                   setTokenInputFor(entry.id)
                 }}
@@ -343,7 +380,10 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
           )}
         </div>
         {isTokenInput && (
-          <div className="mt-2 flex items-center gap-2">
+          <div
+            className="mt-2 flex items-center gap-2"
+            onClick={(e) => e.stopPropagation()}
+          >
             <Input
               value={tokenDraft}
               onChange={setTokenDraft}
@@ -355,7 +395,10 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
               type="button"
               className="kv-btn sm primary"
               disabled={!tokenDraft.trim()}
-              onClick={() => void connectTokenConnector(entry, tokenDraft)}
+              onClick={(e) => {
+                e.stopPropagation()
+                void connectTokenConnector(entry, tokenDraft)
+              }}
               data-tauri-drag-region="false"
             >
               {t.connectorsTokenSubmit}
@@ -363,7 +406,8 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
             <button
               type="button"
               className="kv-btn sm"
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation()
                 setTokenInputFor(null)
                 setTokenDraft('')
               }}
@@ -455,6 +499,53 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
           </div>
         )}
       </SettingsGroup>
+
+      {detail &&
+        (() => {
+          // 解析当前详情对应的 server / catalog 项。
+          const server =
+            detail.kind === 'server'
+              ? servers.find((s) => s.id === detail.serverId) ?? null
+              : null
+          const entry =
+            detail.kind === 'entry'
+              ? CONNECTOR_CATALOG.find((e) => e.id === detail.entryId)
+              : CONNECTOR_CATALOG.find((e) => e.id === server?.connectorId)
+          // server 不存在（已被断开）时关闭。
+          if (detail.kind === 'server' && !server) {
+            setDetail(null)
+            return null
+          }
+          const connectBusy =
+            (entry && oauthBusyFor === entry.id) || (server ? busyId === server.id : false)
+          return (
+            <ConnectorDetailModal
+              lang={lang}
+              entry={entry}
+              server={server}
+              fallbackName={server?.name ?? entry?.name ?? ''}
+              fallbackUrl={server?.url ?? entry?.url}
+              connectBusy={!!connectBusy}
+              onClose={() => setDetail(null)}
+              onUpdateServer={writeServer}
+              onDisconnect={(serverId) => {
+                removeServer(serverId)
+                setDetail(null)
+              }}
+              onConnect={() => {
+                if (!entry) return
+                if (entry.authKind === 'oauth') {
+                  void connectOauthConnector(entry)
+                } else {
+                  // token 类：关闭弹层、在可用卡片上展开 token 输入框。
+                  setDetail(null)
+                  setTokenDraft('')
+                  setTokenInputFor(entry.id)
+                }
+              }}
+            />
+          )
+        })()}
     </>
   )
 }

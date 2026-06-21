@@ -675,6 +675,10 @@ pub struct ConnectorAuth {
     pub token_endpoint: Option<String>,
     pub client_id: Option<String>,
     pub scopes: Vec<String>,
+    /// 真实账户标识（邮箱 / 工作区名 / 用户名），授权时尽力提取，拿不到则 None。
+    /// 明文存储，向后兼容（旧设置无此字段时反序列化为 None）。
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

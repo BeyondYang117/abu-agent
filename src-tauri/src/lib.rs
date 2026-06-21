@@ -450,6 +450,7 @@ pub fn run() {
             mcp::registry::chat_mcp_test_server,
             mcp::registry::chat_mcp_import_json,
             mcp::registry::chat_mcp_server_status,
+            mcp::registry::chat_mcp_list_tool_defs,
             mcp::registry::chat_mcp_reload_server,
             connectors::connector_oauth_connect,
             skills::chat_skills_list,

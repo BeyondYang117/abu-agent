@@ -343,6 +343,8 @@ export type ChatMcpServer = {
     tokenEndpoint?: string
     clientId?: string
     scopes?: string[]
+    /** 真实账户标识（邮箱 / 工作区名 / 用户名）。授权时尽力提取，拿不到则缺省。 */
+    account?: string
   }
 }
 
@@ -1220,6 +1222,8 @@ export const api = {
     ),
   chatMcpServerStatus: (serverId: string) =>
     invoke<McpServerStatus>('chat_mcp_server_status', { serverId }),
+  chatMcpListToolDefs: (serverId: string) =>
+    invoke<{ name: string; description: string }[]>('chat_mcp_list_tool_defs', { serverId }),
   chatMcpReloadServer: (serverId: string) =>
     invoke<void>('chat_mcp_reload_server', { serverId }),
   chatSkillsList: (skillScanPaths?: string[]) =>
