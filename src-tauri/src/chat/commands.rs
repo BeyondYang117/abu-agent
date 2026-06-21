@@ -1884,6 +1884,23 @@ pub(crate) async fn push_assistant_message(
         None
     };
 
+    // model_messages 是规范回放源（build_chat_api_messages 优先用它）。算好后，若它
+    // 非空就丢弃冗余的 api_messages（OpenAI 线格式）——回放/编辑路径仅在 model_messages
+    // 为空时才回落 api_messages，前端更是从不读它。省 RAM/磁盘/IPC。为空兜底（罕见：
+    // 转换产出空）才保留 api_messages，避免丢工具上下文。中断草稿走另一条路
+    // (persist_partial_assistant_snapshot)，那里仍保留 api_messages 以保「继续」可回放。
+    let model_messages = assistant_model_messages_for_storage(
+        &stored_content,
+        stored_reasoning.as_deref(),
+        &api_messages,
+        &tool_calls,
+    );
+    let api_messages = if model_messages.is_empty() {
+        api_messages
+    } else {
+        Vec::new()
+    };
+
     upsert_assistant_message(
         conversation,
         ChatMessage {
@@ -1893,12 +1910,7 @@ pub(crate) async fn push_assistant_message(
             attachments: vec![],
             reasoning: stored_reasoning.clone(),
             artifacts,
-            model_messages: assistant_model_messages_for_storage(
-                &stored_content,
-                stored_reasoning.as_deref(),
-                &api_messages,
-                &tool_calls,
-            ),
+            model_messages,
             tool_calls,
             segments,
             api_messages,

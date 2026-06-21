@@ -52,6 +52,12 @@ use crate::state::AppState;
 /// chain general→sub→sub→sub is the hard ceiling.
 pub const MAX_SUB_AGENT_DEPTH: u8 = 3;
 const SUB_AGENT_CONCURRENCY: usize = 3;
+/// 保留的任务记录上限（运行中 + 已完成）。任务表通过 `get`/`list` 按需读取——
+/// 包括完成很久之后——所以不能按短 TTL 删；改为封顶保留，超限时优先丢弃「最老的
+/// 已完成」记录（绝不丢运行中的）。并发受 SUB_AGENT_CONCURRENCY 限，故总有已完成
+/// 记录可回收。把「每条记录持有子 agent 完整 result 文本」的进程级泄漏封到约
+/// MAX_SUB_AGENT_TASKS × 数 KB。
+const MAX_SUB_AGENT_TASKS: usize = 128;
 /// Max attempts for a single sub-agent run. Reasoning models (e.g. DeepSeek-V4)
 /// intermittently return an empty assistant message in the planning step, which
 /// `run_agent_loop` surfaces as `Err`. Top-level chat recovers via user resend;
@@ -186,7 +192,40 @@ impl SubAgentManager {
             let mut by_name = self.by_name.lock().unwrap_or_else(|e| e.into_inner());
             by_name.insert(record.name.clone(), record.id.clone());
         }
-        self.lock_tasks().insert(record.id.clone(), record);
+        let evicted = {
+            let mut tasks = self.lock_tasks();
+            tasks.insert(record.id.clone(), record);
+            Self::evict_completed_over_cap(&mut tasks)
+        };
+        // 清掉被驱逐 id 的 name→id 反查，但只删仍指向被驱逐 id 的项——同名任务可能
+        // 已被更新的 id 覆盖，那条映射要留给新任务。
+        if !evicted.is_empty() {
+            let mut by_name = self.by_name.lock().unwrap_or_else(|e| e.into_inner());
+            by_name.retain(|_, id| !evicted.contains(id));
+        }
+    }
+
+    /// 超过 MAX_SUB_AGENT_TASKS 时，按完成时间从老到新丢弃「已完成」记录，绝不丢
+    /// 运行中的。返回被驱逐的 id 供调用方清理 `by_name`。
+    fn evict_completed_over_cap(tasks: &mut HashMap<String, SubAgentTaskRecord>) -> Vec<String> {
+        let mut evicted = Vec::new();
+        if tasks.len() <= MAX_SUB_AGENT_TASKS {
+            return evicted;
+        }
+        let mut completed: Vec<(String, i64)> = tasks
+            .values()
+            .filter(|r| r.completed_at.is_some())
+            .map(|r| (r.id.clone(), r.completed_at.unwrap_or(r.created_at)))
+            .collect();
+        completed.sort_by_key(|(_, ts)| *ts);
+        for (id, _) in &completed {
+            if tasks.len() <= MAX_SUB_AGENT_TASKS {
+                break;
+            }
+            tasks.remove(id);
+            evicted.push(id.clone());
+        }
+        evicted
     }
 
     #[allow(dead_code)]
@@ -1253,6 +1292,50 @@ mod tests {
         assert_eq!(rec.status, SubAgentStatus::Completed);
         assert_eq!(rec.result.as_deref(), Some("done"));
         assert_eq!(manager.list().len(), 1);
+    }
+
+    #[test]
+    fn manager_caps_table_and_evicts_oldest_completed() {
+        let manager = SubAgentManager::default();
+        // One running task that must never be evicted.
+        manager.register(SubAgentTaskRecord {
+            id: "running".to_string(),
+            name: "running".to_string(),
+            agent_type: "t".to_string(),
+            status: SubAgentStatus::Running,
+            result: None,
+            error: None,
+            depth: 1,
+            created_at: 0,
+            completed_at: None,
+            usage: None,
+        });
+        // MAX + 50 completed tasks, ascending completed_at so we know the order.
+        for i in 0..(MAX_SUB_AGENT_TASKS + 50) {
+            manager.register(SubAgentTaskRecord {
+                id: format!("done-{i}"),
+                name: format!("done-{i}"),
+                agent_type: "t".to_string(),
+                status: SubAgentStatus::Completed,
+                result: Some("r".to_string()),
+                error: None,
+                depth: 1,
+                created_at: i as i64 + 1,
+                completed_at: Some(i as i64 + 1),
+                usage: None,
+            });
+        }
+        // Capped.
+        assert!(manager.list().len() <= MAX_SUB_AGENT_TASKS);
+        // Running task survived despite being the oldest by created_at.
+        assert!(manager.get("running").is_some());
+        // Oldest completed evicted; newest completed retained.
+        assert!(manager.get("done-0").is_none());
+        assert!(manager
+            .get(&format!("done-{}", MAX_SUB_AGENT_TASKS + 49))
+            .is_some());
+        // by_name reverse lookup for an evicted id is gone too (no leak there).
+        assert!(manager.get("done-0").is_none());
     }
 
     #[test]
