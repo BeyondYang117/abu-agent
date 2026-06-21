@@ -863,7 +863,11 @@ mod tests {
 
     #[test]
     fn write_gate_exposes_exactly_whole_file_and_path_tools() {
+        // Start from an explicitly write-disabled config so this gate test is
+        // independent of the default-on baseline.
         let mut native = crate::settings::ChatNativeToolsConfig::default();
+        native.write_file = false;
+        native.edit_file = false;
         let defs = list_native_builtin_tool_defs(&native, false, false);
         assert!(defs.is_empty() || !defs.iter().any(|tool| tool.name == "write"));
 
@@ -887,6 +891,26 @@ mod tests {
             "abort_file_write",
         ] {
             assert!(!names.contains(&removed), "{removed} must not be exposed");
+        }
+    }
+
+    #[test]
+    fn default_native_config_exposes_file_and_command_tools() {
+        // Regression for the "sub-agent stuck on skill_activate" bug: with the
+        // agentic default config (all native tools ON), the agent — and its
+        // sub-agents, which inherit the same tool table — must actually receive
+        // read/ls/grep/find/write/edit/bash. Before the green-light default, only
+        // skill tools were exposed, so weak models looped guessing skill names.
+        // web_search is intentionally NOT asserted here: it stays gated behind a
+        // configured provider key (web_search_configured=false below).
+        let native = crate::settings::ChatNativeToolsConfig::default();
+        let defs = list_native_builtin_tool_defs(&native, false, false);
+        let names: Vec<&str> = defs.iter().map(|tool| tool.name.as_str()).collect();
+        for expected in ["read", "ls", "grep", "find", "write", "edit", "bash"] {
+            assert!(
+                names.contains(&expected),
+                "default config must expose `{expected}` (got {names:?})"
+            );
         }
     }
 

@@ -939,7 +939,10 @@ mod tests {
             ..Default::default()
         };
         let executor = ExecuteTestExecutor::default();
-        let settings = Settings::default();
+        let mut settings = Settings::default();
+        // Exercise the per-conversation consent gate (default policy is now "auto",
+        // which bypasses it).
+        settings.chat_tools.approval_policy = "readonly_auto_sensitive_confirm".to_string();
         let tool = sensitive_test_tool(); // native "write" — consent-gated
         let call = test_pending_call(
             "call_write",
@@ -969,7 +972,9 @@ mod tests {
     async fn file_tool_uses_session_consent_not_per_call_approval() {
         let host = ExecuteTestHost::default(); // grants consent
         let executor = ExecuteTestExecutor::default();
-        let settings = Settings::default(); // default policy: consent, no per-call confirm
+        let mut settings = Settings::default();
+        // Per-conversation consent policy (default is now "auto", which bypasses it).
+        settings.chat_tools.approval_policy = "readonly_auto_sensitive_confirm".to_string();
         let tool = sensitive_test_tool();
         let call = test_pending_call(
             "call_write",

@@ -717,15 +717,21 @@ impl ChatNativeToolsConfig {
 
 impl Default for ChatNativeToolsConfig {
     fn default() -> Self {
+        // Agentic-app baseline: native tools are ON by default. Reading files and
+        // running commands are table stakes for the agent (and its sub-agents),
+        // not opt-in extras. Safety lives at execution time in the session-consent
+        // gate (chat/agent/execute.rs), which the UI lets cautious users tighten
+        // back to per-conversation confirmation. web_search still only surfaces
+        // when a provider key is configured.
         Self {
-            web_search: false,
-            web_fetch: false,
+            web_search: true,
+            web_fetch: true,
             skill_runtime: true,
-            read_file: false,
-            write_file: false,
-            edit_file: false,
-            run_command: false,
-            run_python: false,
+            read_file: true,
+            write_file: true,
+            edit_file: true,
+            run_command: true,
+            run_python: true,
             workspace_roots: Vec::new(),
         }
     }
@@ -788,8 +794,16 @@ fn default_max_tool_output_chars() -> Option<usize> {
 }
 
 fn default_chat_approval_policy() -> String {
-    "readonly_auto_sensitive_confirm".to_string()
+    // Green-light by default: file/shell tools run without a per-conversation
+    // prompt. The consent mechanism stays available — the UI can switch this to
+    // "always_confirm" or the per-conversation prompt for cautious users.
+    "auto".to_string()
 }
+
+/// The pre-green-light default. `sanitize_settings`' one-shot migration only
+/// flips an existing install to "auto" when its stored policy still equals this
+/// string, so a user who deliberately chose another policy is never stomped.
+const LEGACY_DEFAULT_APPROVAL_POLICY: &str = "readonly_auto_sensitive_confirm";
 
 /**
  * Chat 工具与 Skill 配置。
@@ -905,6 +919,11 @@ pub struct Settings {
     /// 仅在首次启动跑一次；之后用户新建/删除专家不受影响。
     #[serde(default)]
     pub builtin_assistants_seeded_v1: bool,
+    /// 一次性迁移标记：把 pre-green-light 安装（原生工具默认全关 + 旧 approval_policy）
+    /// 带到新默认——原生文件/命令工具置 true，且仅当 approval_policy 仍是旧默认时改 "auto"。
+    /// 幂等：置 true 后不再翻转，尊重用户此后手动关闭某工具或改 policy 的选择。
+    #[serde(default)]
+    pub chat_tools_greenlit_v1: bool,
     /// 启动时静默检查 GitHub Releases 是否有新版（默认 true）
     /// 仅做"提示 + 跳转 GH 下载页"，不集成 auto-installer，避免签名密钥那套
     #[serde(default = "default_true")]
@@ -1020,6 +1039,7 @@ impl Default for Settings {
             retry_attempts: default_retry_attempts(),
             legacy_keyring_migrated: false,
             builtin_assistants_seeded_v1: false,
+            chat_tools_greenlit_v1: false,
             auto_check_update: true,
             image_archive_enabled: false,
             image_archive_path: String::new(),
@@ -1426,6 +1446,25 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         "readonly_auto_sensitive_confirm" | "always_confirm" | "auto"
     ) {
         settings.chat_tools.approval_policy = default_chat_approval_policy();
+    }
+    // One-shot green-light migration: bring a pre-green-light install (native
+    // tools defaulted OFF + old approval_policy) to the new baseline. Idempotent
+    // via `chat_tools_greenlit_v1` so a user who later turns a tool back off, or
+    // picks a stricter policy, is never re-flipped. The policy is only changed
+    // when it still equals the legacy default, so an explicit choice survives.
+    if !settings.chat_tools_greenlit_v1 {
+        let native = &mut settings.chat_tools.native_tools;
+        native.read_file = true;
+        native.write_file = true;
+        native.edit_file = true;
+        native.run_command = true;
+        native.run_python = true;
+        native.web_fetch = true;
+        native.web_search = true;
+        if settings.chat_tools.approval_policy == LEGACY_DEFAULT_APPROVAL_POLICY {
+            settings.chat_tools.approval_policy = "auto".to_string();
+        }
+        settings.chat_tools_greenlit_v1 = true;
     }
     settings.chat_tools.skill_scan_paths = settings
         .chat_tools
@@ -2334,6 +2373,58 @@ mod tests {
         let settings = sanitize_settings(settings);
 
         assert_eq!(settings.chat_tools.max_tool_rounds, None);
+    }
+
+    #[test]
+    fn greenlight_migration_enables_tools_and_flips_legacy_policy() {
+        // Simulate a pre-green-light install: flag unset, native tools off, old policy.
+        let mut settings = Settings::default();
+        settings.chat_tools_greenlit_v1 = false;
+        settings.chat_tools.native_tools = ChatNativeToolsConfig {
+            skill_runtime: true,
+            ..Default::default()
+        };
+        settings.chat_tools.native_tools.read_file = false;
+        settings.chat_tools.native_tools.write_file = false;
+        settings.chat_tools.native_tools.run_command = false;
+        settings.chat_tools.approval_policy = LEGACY_DEFAULT_APPROVAL_POLICY.to_string();
+
+        let settings = sanitize_settings(settings);
+
+        assert!(settings.chat_tools_greenlit_v1);
+        assert!(settings.chat_tools.native_tools.read_file);
+        assert!(settings.chat_tools.native_tools.write_file);
+        assert!(settings.chat_tools.native_tools.run_command);
+        assert_eq!(settings.chat_tools.approval_policy, "auto");
+    }
+
+    #[test]
+    fn greenlight_migration_is_idempotent_and_keeps_explicit_choices() {
+        // Already migrated: a user-disabled tool and an explicit policy must survive.
+        let mut settings = Settings::default();
+        settings.chat_tools_greenlit_v1 = true;
+        settings.chat_tools.native_tools.run_command = false;
+        settings.chat_tools.approval_policy = "always_confirm".to_string();
+
+        let settings = sanitize_settings(settings);
+
+        assert!(!settings.chat_tools.native_tools.run_command);
+        assert_eq!(settings.chat_tools.approval_policy, "always_confirm");
+    }
+
+    #[test]
+    fn greenlight_migration_does_not_stomp_explicit_policy_on_first_run() {
+        // Pre-green-light flag, but the user had explicitly chosen always_confirm.
+        let mut settings = Settings::default();
+        settings.chat_tools_greenlit_v1 = false;
+        settings.chat_tools.approval_policy = "always_confirm".to_string();
+
+        let settings = sanitize_settings(settings);
+
+        // Tools still get enabled, but the explicit policy is preserved.
+        assert!(settings.chat_tools_greenlit_v1);
+        assert!(settings.chat_tools.native_tools.read_file);
+        assert_eq!(settings.chat_tools.approval_policy, "always_confirm");
     }
 
     #[test]

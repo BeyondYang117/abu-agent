@@ -407,15 +407,18 @@ export type ChatClipboardFilesResult = {
 }
 
 export function defaultNativeTools(): ChatNativeToolsConfig {
+  // Mirror the backend baseline (ChatNativeToolsConfig::default): native tools
+  // are ON by default; safety is the execution-time consent gate. web_search
+  // still only surfaces when a provider key is configured.
   return {
-    webSearch: false,
-    webFetch: false,
+    webSearch: true,
+    webFetch: true,
     skillRuntime: true,
-    readFile: false,
-    writeFile: false,
-    editFile: false,
-    runCommand: false,
-    runPython: false,
+    readFile: true,
+    writeFile: true,
+    editFile: true,
+    runCommand: true,
+    runPython: true,
     workspaceRoots: [],
   }
 }

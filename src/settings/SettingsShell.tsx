@@ -3242,7 +3242,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       <div className="mt-auto">
                         <Select
                           className="w-full"
-                          value={chatTools.approvalPolicy || 'readonly_auto_sensitive_confirm'}
+                          value={chatTools.approvalPolicy || 'auto'}
                           onChange={(approvalPolicy) => updateChatTools({ approvalPolicy })}
                           options={[
                             {
