@@ -3,10 +3,10 @@
 /* 导入 TailwindCSS 排版插件 */
 @plugin "@tailwindcss/typography";
 
-/* 应用内嵌字体：Noto Serif SC（由 main.tsx 引入 @fontsource-variable，构建时打入 dist） */
+/* 使用系统默认字体栈（跨 mac + Win，含 CJK 覆盖），不再内嵌字体以节省每窗口内存 */
 @theme {
-  --font-sans: "Noto Serif SC Variable", "Noto Serif SC", serif;
-  --font-serif: "Noto Serif SC Variable", "Noto Serif SC", serif;
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  --font-serif: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
 }
 
 /* 自定义 dark 变体：通过 .dark 类启用深色模式 */

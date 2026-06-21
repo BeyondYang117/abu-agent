@@ -1,7 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
-import '@fontsource-variable/noto-serif-sc/wght.css'
 import './index.css'
 
 // React 应用入口文件

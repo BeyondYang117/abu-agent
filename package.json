@@ -21,7 +21,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@fontsource-variable/noto-serif-sc": "^5.2.10",
     "@lobehub/icons": "^5.10.0",
     "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/api": "^2.0.0",
