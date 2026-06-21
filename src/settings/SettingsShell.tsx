@@ -2256,12 +2256,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onChange={(v) => updateSettings({ launchAtStartup: v })}
                     />
                   </SettingRow>
-                  <SettingRow label={t.autoPaste} description={lang === 'zh' ? '翻译完成后自动粘贴到当前应用。' : 'Paste translated text into the foreground app after translation completes.'}>
-                    <Toggle
-                      checked={settings.autoPaste ?? true}
-                      onChange={(v) => updateSettings({ autoPaste: v })}
-                    />
-                  </SettingRow>
                   <SettingRow label={t.retryEnabled} description={t.retryAttemptsHint}>
                     <Toggle
                       checked={settings.retryEnabled ?? true}
@@ -2280,43 +2274,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         max={5}
                         className="!w-20 text-center"
                       />
-                    </SettingRow>
-                  )}
-                </SettingsGroup>
-
-                <SettingsGroup title={t.imageArchive}>
-                  <SettingRow label={t.imageArchive} description={t.imageArchiveHint}>
-                    <Toggle
-                      checked={settings.imageArchiveEnabled ?? false}
-                      onChange={(v) => updateSettings({ imageArchiveEnabled: v })}
-                    />
-                  </SettingRow>
-                  {settings.imageArchiveEnabled && (
-                    <SettingRow label={t.imageArchivePath} description={t.imageArchivePathPlaceholder} stack>
-                      <div className="kv-path-row">
-                        <Input
-                          value={settings.imageArchivePath || ''}
-                          onChange={(v) => updateSettings({ imageArchivePath: v })}
-                          placeholder={t.imageArchivePathPlaceholder}
-                        />
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              const selected = await open({ directory: true, multiple: false })
-                              if (typeof selected === 'string') {
-                                updateSettings({ imageArchivePath: selected })
-                              }
-                            } catch (err) {
-                              console.error('Failed to pick directory:', err)
-                            }
-                          }}
-                          className="kv-btn"
-                          data-tauri-drag-region="false"
-                        >
-                          {t.imageArchiveBrowse}
-                        </button>
-                      </div>
                     </SettingRow>
                   )}
                 </SettingsGroup>
@@ -2392,6 +2349,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         { value: 'fr', label: t.langFr },
                         { value: 'de', label: t.langDe },
                       ]}
+                    />
+                  </SettingRow>
+                  <SettingRow label={t.autoPaste} description={lang === 'zh' ? '翻译完成后自动粘贴到当前应用。' : 'Paste translated text into the foreground app after translation completes.'}>
+                    <Toggle
+                      checked={settings.autoPaste ?? true}
+                      onChange={(v) => updateSettings({ autoPaste: v })}
                     />
                   </SettingRow>
                 </SettingsGroup>
@@ -2551,6 +2514,43 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                           }}
                         />
                       </SettingRow>
+                    </SettingsGroup>
+
+                    <SettingsGroup title={t.imageArchive}>
+                      <SettingRow label={t.imageArchive} description={t.imageArchiveHint}>
+                        <Toggle
+                          checked={settings.imageArchiveEnabled ?? false}
+                          onChange={(v) => updateSettings({ imageArchiveEnabled: v })}
+                        />
+                      </SettingRow>
+                      {settings.imageArchiveEnabled && (
+                        <SettingRow label={t.imageArchivePath} description={t.imageArchivePathPlaceholder} stack>
+                          <div className="kv-path-row">
+                            <Input
+                              value={settings.imageArchivePath || ''}
+                              onChange={(v) => updateSettings({ imageArchivePath: v })}
+                              placeholder={t.imageArchivePathPlaceholder}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const selected = await open({ directory: true, multiple: false })
+                                  if (typeof selected === 'string') {
+                                    updateSettings({ imageArchivePath: selected })
+                                  }
+                                } catch (err) {
+                                  console.error('Failed to pick directory:', err)
+                                }
+                              }}
+                              className="kv-btn"
+                              data-tauri-drag-region="false"
+                            >
+                              {t.imageArchiveBrowse}
+                            </button>
+                          </div>
+                        </SettingRow>
+                      )}
                     </SettingsGroup>
 
                     <SettingsGroup title={t.customPrompts}>
@@ -2761,15 +2761,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     >
                       <Sparkles size={11} />
                       {t.chatOpenSkill}
-                    </button>
-                    <button
-                      type="button"
-                      className="kv-btn sm"
-                      onClick={() => setActiveTab('mcp')}
-                      data-tauri-drag-region="false"
-                    >
-                      <Wrench size={11} />
-                      {lang === 'zh' ? '内置工具' : 'Built-in tools'}
                     </button>
                     <button
                       type="button"
