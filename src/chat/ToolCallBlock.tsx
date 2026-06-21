@@ -1,13 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  BookOpen,
+  Bot,
+  Brain,
   CheckCircle2,
   ChevronDown,
   CircleSlash,
+  Copy,
+  Download,
+  Eye,
+  FileCode2,
+  FilePen,
+  FilePlus2,
+  FileSearch,
+  FileText,
+  FolderInput,
+  FolderOpen,
+  FolderPlus,
+  Globe,
+  ImagePlus,
+  ListChecks,
   Loader2,
+  MessageCircleQuestion,
+  Play,
+  Plug,
+  Save,
+  Search,
+  Sparkles,
+  SquareTerminal,
+  Trash2,
   Wrench,
   XCircle,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import type { AgentTodoItem, AgentTodoState, AgentTodoStatus, ToolCallRecord, ToolCallStatus } from './types'
 import { isToolCallErrorStatus, normalizeToolCallStatus } from './toolStatus'
 import { formatToolResultPreview } from './toolResultPreview'
@@ -109,6 +135,84 @@ function parsedArguments(toolCall: ToolCallRecord): Record<string, unknown> | nu
 
 function toolRawName(toolCall: ToolCallRecord): string {
   return toolCall.tool_name || toolCall.toolName || toolCall.name || ''
+}
+
+function toolGlyph(toolCall: ToolCallRecord): LucideIcon {
+  const raw = toolRawName(toolCall)
+  switch (raw) {
+    case 'read':
+    case 'read_file':
+      return FileText
+    case 'write':
+    case 'write_file':
+      return FilePlus2
+    case 'edit':
+    case 'edit_file':
+      return FilePen
+    case 'bash':
+    case 'run_command':
+      return SquareTerminal
+    case 'grep':
+    case 'search_files':
+      return Search
+    case 'find':
+    case 'glob':
+    case 'glob_files':
+      return FileSearch
+    case 'ls':
+    case 'list_dir':
+      return FolderOpen
+    case 'delete':
+      return Trash2
+    case 'move':
+      return FolderInput
+    case 'copy':
+      return Copy
+    case 'create_dir':
+      return FolderPlus
+    case 'stat':
+    case 'stat_path':
+      return FileSearch
+    case 'run_python':
+      return FileCode2
+    case 'web_search':
+      return Globe
+    case 'web_fetch':
+      return Download
+    case 'skill_activate':
+      return Sparkles
+    case 'skill_read_file':
+      return BookOpen
+    case 'skill_run_script':
+      return Play
+    case 'todo_write':
+    case 'todo_update':
+      return ListChecks
+    case 'memory_read':
+    case 'memory_search':
+    case 'memory_modify':
+      return Brain
+    case 'save_assistant':
+      return Save
+    case 'mixer_vision':
+      return Eye
+    case 'mixer_generate_image':
+      return ImagePlus
+    case 'agent':
+      return Bot
+    case 'ask_user':
+      return MessageCircleQuestion
+    default:
+      break
+  }
+  const isMcp =
+    toolCall.source === 'mcp' ||
+    ((toolCall.server_name || toolCall.serverName) &&
+      toolCall.source !== 'native' &&
+      toolCall.source !== 'skill' &&
+      toolCall.source !== 'mixer')
+  if (isMcp) return Plug
+  return Wrench
 }
 
 function isTodoTool(toolCall: ToolCallRecord): boolean {
@@ -891,6 +995,52 @@ function StatusIcon({ status }: { status: ToolCallStatus }) {
   return <Wrench className="shrink-0" size={12} strokeWidth={1.85} />
 }
 
+function ToolTypeIcon({ toolCall, status }: { toolCall: ToolCallRecord; status: ToolCallStatus }) {
+  // 行首按工具类型显示图标；运行/完成/待执行用工具图标本身，出错/跳过/取消保留专用状态图标。
+  const prevStatusRef = useRef(status)
+  const isDone = status === 'completed' || status === 'success'
+  const wasDone = prevStatusRef.current === 'completed' || prevStatusRef.current === 'success'
+  const justCompleted = isDone && !wasDone
+  useEffect(() => {
+    prevStatusRef.current = status
+  }, [status])
+  if (status === 'error') {
+    return <AlertCircle className="shrink-0 text-red-500" size={12} strokeWidth={1.9} />
+  }
+  if (status === 'skipped') {
+    return <CircleSlash className="shrink-0" size={12} strokeWidth={1.9} />
+  }
+  if (status === 'cancelled') {
+    return <XCircle className="shrink-0" size={12} strokeWidth={1.9} />
+  }
+  const Glyph = toolGlyph(toolCall)
+  if (status === 'running') {
+    return (
+      <Glyph
+        className="shrink-0 text-neutral-500 dark:text-neutral-400 chat-motion-tool-shimmer"
+        size={12}
+        strokeWidth={1.9}
+      />
+    )
+  }
+  if (isDone) {
+    return (
+      <Glyph
+        className={`shrink-0 text-[#C56646] dark:text-[#E39A78]${justCompleted ? ' chat-motion-pop' : ''}`}
+        size={12}
+        strokeWidth={1.9}
+      />
+    )
+  }
+  return (
+    <Glyph
+      className="shrink-0 text-neutral-400 dark:text-neutral-500"
+      size={12}
+      strokeWidth={1.9}
+    />
+  )
+}
+
 function DefaultToolCallBlock({
   toolCall,
   defaultOpen = false,
@@ -932,7 +1082,7 @@ function DefaultToolCallBlock({
             : 'cursor-default'
         }`}
       >
-        <StatusIcon status={status} />
+        <ToolTypeIcon toolCall={toolCall} status={status} />
         <span
           className={`shrink-0 font-medium text-neutral-700 dark:text-neutral-200${
             status === 'running' ? ' chat-motion-tool-shimmer' : ''
