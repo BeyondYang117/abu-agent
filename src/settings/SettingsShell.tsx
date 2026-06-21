@@ -1,9 +1,7 @@
 import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
-  Settings as SettingsIcon, Languages, Zap,
-  Cloud, Info, Aperture, ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
-  MessageSquare, Globe, SlidersHorizontal, Brain, BarChart3, Terminal, Bot,
+  ExternalLink, Download, ChevronRight, Wrench, Sparkles, FolderOpen,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -28,6 +26,10 @@ import {
   type SkillDetail,
 } from '../api/tauri'
 import { i18n } from './i18n'
+import {
+  GeneralIcon, TranslateIcon, ScreenshotIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
+  CodeIcon, AgentIcon, McpIcon, SkillIcon, WebSearchIcon, UsageIcon, ProvidersIcon, AboutIcon,
+} from './NavIcons'
 import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, stableStringify } from './utils'
 import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
 import { ModelPairSelect } from './ModelPairSelect'
@@ -2005,20 +2007,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   }
 
   const navItems = [
-    { id: 'general' as const, label: t.tabGeneral, icon: SettingsIcon },
-    { id: 'translate' as const, label: t.tabTranslate, icon: Languages },
-    { id: 'screenshot' as const, label: t.tabScreenshot, icon: Zap },
-    { id: 'lens' as const, label: t.lensTabLabel, icon: Aperture },
-    { id: 'chat' as const, label: t.tabChatClient, icon: MessageSquare },
-    { id: 'memory' as const, label: t.tabMemory, icon: Brain },
-    { id: 'mixer' as const, label: t.tabMixer, icon: SlidersHorizontal },
-    { id: 'kivioCode' as const, label: 'Kivio Code', icon: Terminal },
-    { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: Bot },
-    { id: 'mcp' as const, label: 'MCP', icon: Wrench },
-    { id: 'skill' as const, label: 'Skill', icon: Sparkles },
-    { id: 'webSearch' as const, label: t.tabWebSearch, icon: Globe },
-    { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: BarChart3 },
-    { id: 'providers' as const, label: t.tabModels, icon: Cloud },
+    { id: 'general' as const, label: t.tabGeneral, icon: GeneralIcon },
+    { id: 'translate' as const, label: t.tabTranslate, icon: TranslateIcon },
+    { id: 'screenshot' as const, label: t.tabScreenshot, icon: ScreenshotIcon },
+    { id: 'lens' as const, label: t.lensTabLabel, icon: LensIcon },
+    { id: 'chat' as const, label: t.tabChatClient, icon: ChatIcon },
+    { id: 'memory' as const, label: t.tabMemory, icon: MemoryIcon },
+    { id: 'mixer' as const, label: t.tabMixer, icon: MixerIcon },
+    { id: 'kivioCode' as const, label: 'Kivio Code', icon: CodeIcon },
+    { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: AgentIcon },
+    { id: 'mcp' as const, label: 'MCP', icon: McpIcon },
+    { id: 'skill' as const, label: 'Skill', icon: SkillIcon },
+    { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
+    { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: UsageIcon },
+    { id: 'providers' as const, label: t.tabModels, icon: ProvidersIcon },
   ]
   const pageMeta: Record<typeof activeTab, { title: string; subtitle: string; right?: string }> = {
     general: {
@@ -2135,7 +2137,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             data-tauri-drag-region="false"
           >
             <span className="settings-embedded-nav-icon">
-              <Info size={17} strokeWidth={1.75} />
+              <AboutIcon size={17} strokeWidth={1.75} />
             </span>
             <span>{lang === 'zh' ? '关于' : 'About'}</span>
           </button>
@@ -2170,7 +2172,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             className={`kv-nav-item ${activeTab === 'about' ? 'active' : ''}`}
             data-tauri-drag-region="false"
           >
-            <Info strokeWidth={1.7} />
+            <AboutIcon strokeWidth={1.7} />
             <span>{lang === 'zh' ? '关于' : 'About'}</span>
           </button>
         </nav>
@@ -2750,7 +2752,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onClick={() => setActiveTab('mcp')}
                       data-tauri-drag-region="false"
                     >
-                      <Wrench size={11} />
+                      <McpIcon size={11} />
                       {t.chatOpenMcp}
                     </button>
                     <button
@@ -2759,7 +2761,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onClick={() => setActiveTab('skill')}
                       data-tauri-drag-region="false"
                     >
-                      <Sparkles size={11} />
+                      <SkillIcon size={11} />
                       {t.chatOpenSkill}
                     </button>
                     <button
@@ -2768,7 +2770,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onClick={() => setActiveTab('memory')}
                       data-tauri-drag-region="false"
                     >
-                      <Brain size={11} />
+                      <MemoryIcon size={11} />
                       {t.tabMemory}
                     </button>
                     <button
@@ -2777,7 +2779,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onClick={() => setActiveTab('externalAgents')}
                       data-tauri-drag-region="false"
                     >
-                      <Bot size={11} />
+                      <AgentIcon size={11} />
                       {t.chatOpenExternalAgents}
                     </button>
                     <button
@@ -2786,7 +2788,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       onClick={() => setActiveTab('providers')}
                       data-tauri-drag-region="false"
                     >
-                      <Cloud size={11} />
+                      <ProvidersIcon size={11} />
                       {t.chatOpenProviders}
                     </button>
                   </div>
