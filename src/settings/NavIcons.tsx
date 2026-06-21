@@ -140,6 +140,17 @@ export function McpIcon(props: IconProps) {
   )
 }
 
+// 连接器：两个互锁的链环（区别于 McpIcon 的插头），表达「连接外部数据源」
+export function ConnectorsIcon(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M9.5 7 H7 A4 4 0 0 0 7 15 H9.5" />
+      <path d="M14.5 7 H17 A4 4 0 0 1 17 15 H14.5" />
+      <path d="M8.5 11 H15.5" />
+    </svg>
+  )
+}
+
 // Skill：卷轴
 export function SkillIcon(props: IconProps) {
   return (

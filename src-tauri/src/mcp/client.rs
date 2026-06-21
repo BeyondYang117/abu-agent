@@ -814,6 +814,8 @@ data: {"jsonrpc":"2.0","id":7,"result":{"ok":true}}
             headers: HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         }
     }
 

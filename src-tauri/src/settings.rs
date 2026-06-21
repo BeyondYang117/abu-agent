@@ -630,6 +630,13 @@ pub struct ChatMcpServer {
     pub headers: std::collections::HashMap<String, String>,
     pub cwd: Option<String>,
     pub enabled_tools: Vec<String>,
+    /// 连接器目录 id（如 "github"/"notion"/"composio" 或 "custom-xxx"）。
+    /// 非空表示这条 server 由「连接器」页管理，不在 MCP 页重复展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector_id: Option<String>,
+    /// 连接器认证信息。Phase A 只用 `{ kind: "token" }`；OAuth 字段留待 Phase B。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<ConnectorAuth>,
 }
 
 impl Default for ChatMcpServer {
@@ -646,8 +653,28 @@ impl Default for ChatMcpServer {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         }
     }
+}
+
+/**
+ * 连接器认证信息。与 `providers[].apiKeys` 一样按本地明文设置策略保存。
+ *
+ * Phase A 仅使用 `kind: "token"` + `access_token`；其余字段（refresh/expires/
+ * token_endpoint/client_id/scopes）为 Phase B 的 OAuth 流程预留。
+ */
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ConnectorAuth {
+    pub kind: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
+    pub token_endpoint: Option<String>,
+    pub client_id: Option<String>,
+    pub scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1502,6 +1529,15 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             .map(|tool| tool.trim().to_string())
             .filter(|tool| !tool.is_empty())
             .collect();
+        // 连接器 id 去空白；空串归一为 None，使其退回普通 MCP server。
+        server.connector_id = server.connector_id.take().and_then(|cid| {
+            let trimmed = cid.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
     }
 
     // 清理归档目录路径（去除首尾空白）
@@ -2754,6 +2790,8 @@ mod tests {
             headers,
             cwd: None,
             enabled_tools: vec![" fetch ".to_string(), "".to_string()],
+            connector_id: None,
+            auth: None,
         });
 
         let s = sanitize_settings(s);
@@ -2784,6 +2822,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         });
 
         let s = sanitize_settings(s);

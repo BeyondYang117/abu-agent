@@ -904,6 +904,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         };
         let tool = tool_definition_from_mcp(
             &server,
@@ -934,6 +936,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         };
         let annotations = serde_json::json!({ "readOnlyHint": true });
         let output_schema = serde_json::json!({
@@ -973,6 +977,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         };
 
         for annotations in [
@@ -1008,6 +1014,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         };
 
         let tool = tool_definition_from_mcp(

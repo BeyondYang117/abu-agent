@@ -926,6 +926,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         }
     }
 
@@ -942,6 +944,8 @@ mod tests {
             headers: std::collections::HashMap::new(),
             cwd: None,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         }
     }
 

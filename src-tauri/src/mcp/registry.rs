@@ -345,6 +345,8 @@ pub fn chat_mcp_import_json(path: String) -> McpImportResult {
             headers: server.headers,
             cwd: server.cwd,
             enabled_tools: Vec::new(),
+            connector_id: None,
+            auth: None,
         })
         .collect();
 

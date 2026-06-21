@@ -28,7 +28,7 @@ import {
 import { i18n } from './i18n'
 import {
   GeneralIcon, TranslateIcon, ScreenshotIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
-  CodeIcon, AgentIcon, McpIcon, SkillIcon, WebSearchIcon, UsageIcon, ProvidersIcon, AboutIcon,
+  CodeIcon, AgentIcon, McpIcon, SkillIcon, WebSearchIcon, ConnectorsIcon, UsageIcon, ProvidersIcon, AboutIcon,
 } from './NavIcons'
 import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, stableStringify } from './utils'
 import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
@@ -50,8 +50,9 @@ import {
   SettingRow, PermissionItem, HotkeyInput, DefaultPrompt,
   SettingsGroup,
 } from './components'
+import { ConnectorsPanel } from './ConnectorsPanel'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'externalAgents' | 'mcp' | 'skill' | 'webSearch' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'externalAgents' | 'mcp' | 'skill' | 'webSearch' | 'connectors' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 type MemoryLayerKey = 'l1' | 'l2'
@@ -2017,6 +2018,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'kivioCode' as const, label: 'Kivio Code', icon: CodeIcon },
     { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: AgentIcon },
     { id: 'mcp' as const, label: 'MCP', icon: McpIcon },
+    { id: 'connectors' as const, label: t.tabConnectors, icon: ConnectorsIcon },
     { id: 'skill' as const, label: 'Skill', icon: SkillIcon },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
     { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: UsageIcon },
@@ -2070,6 +2072,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     mcp: {
       title: 'MCP',
       subtitle: lang === 'zh' ? '管理 MCP 服务器与工具审批策略。' : 'Manage MCP servers and tool approval policy.',
+    },
+    connectors: {
+      title: t.tabConnectors,
+      subtitle: lang === 'zh'
+        ? '连接 Notion、GitHub 等外部数据源；token 存在本机，数据默认直连。'
+        : 'Connect external data sources like Notion and GitHub; tokens stay on your machine, data goes direct by default.',
     },
     skill: {
       title: 'Skill',
@@ -3393,7 +3401,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   )}
 
                   <div className="space-y-3 py-2">
-                    {chatTools.servers.map((server) => {
+                    {chatTools.servers.filter((s) => !s.connectorId).map((server) => {
                       const feedback = mcpTestFeedback[server.id]
                       const knownTools = [
                         ...(feedback?.tools ?? []),
@@ -3636,6 +3644,27 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </div>
                 </SettingsGroup>
               </>
+            )}
+
+            {/* ===== 连接器标签页 ===== */}
+            {activeTab === 'connectors' && (
+              <ConnectorsPanel
+                servers={chatTools.servers}
+                updateChatTools={updateChatTools}
+                lang={lang}
+                testServer={async (server) => {
+                  try {
+                    const result = await api.chatMcpTestServer(server, settings?.chatTools?.toolTimeoutMs)
+                    return {
+                      ok: result.success,
+                      message: result.error || '',
+                      tools: result.tools,
+                    }
+                  } catch {
+                    return null
+                  }
+                }}
+              />
             )}
 
             {/* ===== Skill 标签页 ===== */}

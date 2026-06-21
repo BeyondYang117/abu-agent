@@ -1,0 +1,361 @@
+// 连接器面板：目录化 + 一键授权的外部数据源 UX。
+// 每个连接器最终物化成一条带 Authorization header 的 ChatMcpServer，写入
+// chatTools.servers（connectorId 非空），由现有 MCP 管线自动收集工具。
+// Phase A 只支持 token 类（GitHub PAT / Composio key / 自定义 token）；
+// OAuth 类（Notion）连接按钮禁用，留待 Phase B。
+
+import { useCallback, useState } from 'react'
+import { Check, Loader2, Trash2, X, Plus } from 'lucide-react'
+import { type ChatMcpServer, type ChatToolsConfig } from '../api/tauri'
+import { i18n, type Lang } from './i18n'
+import { SettingsGroup, Input, Select } from './components'
+import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from './connectorCatalog'
+import {
+  NotionBrandIcon,
+  GithubBrandIcon,
+  ComposioBrandIcon,
+  CustomConnectorIcon,
+} from './ConnectorBrandIcons'
+
+// catalog 项 iconKey → 品牌图标组件查找表；未命中（含自定义连接器）回退到通用 link 图标。
+const CONNECTOR_ICON_BY_KEY: Record<
+  string,
+  (props: { size?: number; className?: string }) => JSX.Element
+> = {
+  notion: NotionBrandIcon,
+  github: GithubBrandIcon,
+  composio: ComposioBrandIcon,
+}
+
+function connectorIconFor(iconKey: string | undefined) {
+  if (iconKey && CONNECTOR_ICON_BY_KEY[iconKey]) return CONNECTOR_ICON_BY_KEY[iconKey]
+  return CustomConnectorIcon
+}
+
+type Props = {
+  servers: ChatMcpServer[]
+  updateChatTools: (updates: Partial<ChatToolsConfig>) => void
+  lang: Lang
+  testServer: (server: ChatMcpServer) => Promise<{ ok: boolean; message: string; tools: { name: string }[] } | null>
+}
+
+// 目录项 → 已物化 server 的 id 约定。
+function connectorServerId(catalogId: string): string {
+  return `connector-${catalogId}`
+}
+
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'custom'
+}
+
+export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: Props) {
+  const t = i18n[lang]
+
+  // 哪个目录项正展开 token 输入框。
+  const [tokenInputFor, setTokenInputFor] = useState<string | null>(null)
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  // 每条 server 的工具数（连接后或测试后填充）。
+  const [toolCounts, setToolCounts] = useState<Record<string, number>>({})
+
+  // 自定义连接器表单状态。
+  const [showCustomForm, setShowCustomForm] = useState(false)
+  const [customName, setCustomName] = useState('')
+  const [customUrl, setCustomUrl] = useState('')
+  const [customAuth, setCustomAuth] = useState<'none' | 'token'>('token')
+  const [customToken, setCustomToken] = useState('')
+
+  const connectedById = new Map(
+    servers.filter((s) => s.connectorId).map((s) => [s.connectorId as string, s]),
+  )
+
+  const writeServer = useCallback(
+    (server: ChatMcpServer) => {
+      const next = servers.filter((s) => s.id !== server.id)
+      next.push(server)
+      updateChatTools({ servers: next })
+    },
+    [servers, updateChatTools],
+  )
+
+  const removeServer = useCallback(
+    (serverId: string) => {
+      updateChatTools({ servers: servers.filter((s) => s.id !== serverId) })
+    },
+    [servers, updateChatTools],
+  )
+
+  // token 类目录项 → 物化 + 可选测试连接。
+  const connectTokenConnector = useCallback(
+    async (entry: ConnectorCatalogEntry, token: string) => {
+      const trimmed = token.trim()
+      if (!trimmed) return
+      const id = connectorServerId(entry.id)
+      const server: ChatMcpServer = {
+        id,
+        name: entry.name,
+        connectorId: entry.id,
+        enabled: true,
+        transport: 'streamable_http',
+        url: entry.url,
+        command: '',
+        args: [],
+        env: {},
+        headers: { Authorization: `Bearer ${trimmed}` },
+        cwd: null,
+        enabledTools: [],
+        auth: { kind: 'token', accessToken: trimmed },
+      }
+      writeServer(server)
+      setTokenInputFor(null)
+      setTokenDraft('')
+      setBusyId(id)
+      try {
+        const result = await testServer(server)
+        if (result?.ok) {
+          setToolCounts((prev) => ({ ...prev, [id]: result.tools.length }))
+        }
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [testServer, writeServer],
+  )
+
+  const addCustomConnector = useCallback(async () => {
+    const name = customName.trim()
+    const url = customUrl.trim()
+    if (!name || !url) return
+    const slug = slugify(name)
+    const connectorId = `custom-${slug}`
+    const id = connectorServerId(connectorId)
+    const headers: Record<string, string> = {}
+    let auth: ChatMcpServer['auth']
+    if (customAuth === 'token' && customToken.trim()) {
+      headers.Authorization = `Bearer ${customToken.trim()}`
+      auth = { kind: 'token', accessToken: customToken.trim() }
+    }
+    const server: ChatMcpServer = {
+      id,
+      name,
+      connectorId,
+      enabled: true,
+      transport: 'streamable_http',
+      url,
+      command: '',
+      args: [],
+      env: {},
+      headers,
+      cwd: null,
+      enabledTools: [],
+      auth,
+    }
+    writeServer(server)
+    setCustomName('')
+    setCustomUrl('')
+    setCustomToken('')
+    setCustomAuth('token')
+    setShowCustomForm(false)
+    setBusyId(id)
+    try {
+      const result = await testServer(server)
+      if (result?.ok) {
+        setToolCounts((prev) => ({ ...prev, [id]: result.tools.length }))
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }, [customAuth, customName, customToken, customUrl, testServer, writeServer])
+
+  // 已连接卡（包含目录已知 + 自定义）。
+  const connectedServers = servers.filter((s) => s.connectorId)
+  // 目录中尚未连接的项。
+  const availableEntries = CONNECTOR_CATALOG.filter((e) => !connectedById.has(e.id))
+
+  const renderConnectedCard = (server: ChatMcpServer) => {
+    const entry = CONNECTOR_CATALOG.find((e) => e.id === server.connectorId)
+    const count = toolCounts[server.id]
+    const busy = busyId === server.id
+    const Icon = connectorIconFor(entry?.iconKey)
+    return (
+      <div key={server.id} className="kv-panel">
+        <div className="flex items-start gap-3">
+          <Icon size={22} className="mt-0.5 shrink-0 opacity-90" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{server.name}</div>
+            <div className="kv-row-desc line-clamp-2 text-[12px]">
+              {entry?.description[lang] ?? server.url}
+            </div>
+            {entry?.composio && (
+              <div className="kv-row-desc text-[12px] opacity-70">{t.connectorsThirdParty}</div>
+            )}
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="flex items-center gap-1 text-[12px] text-emerald-600 dark:text-emerald-400">
+              {busy ? (
+                <Loader2 size={12} className="animate-spin opacity-70" />
+              ) : (
+                <Check size={12} />
+              )}
+              <span>
+                {busy
+                  ? t.connectorsConnecting
+                  : typeof count === 'number'
+                    ? t.connectorsToolsFound.replace('{n}', String(count))
+                    : t.connectorsConnected}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="kv-btn sm danger"
+              onClick={() => removeServer(server.id)}
+              data-tauri-drag-region="false"
+            >
+              <Trash2 size={10} />
+              {t.connectorsDisconnect}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const renderAvailableCard = (entry: ConnectorCatalogEntry) => {
+    const isTokenInput = tokenInputFor === entry.id
+    const isOauth = entry.authKind === 'oauth'
+    const Icon = connectorIconFor(entry.iconKey)
+    return (
+      <div key={entry.id} className="kv-panel">
+        <div className="flex items-start gap-3">
+          <Icon size={22} className="mt-0.5 shrink-0 opacity-90" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{entry.name}</div>
+            <div className="kv-row-desc line-clamp-2 text-[12px]">{entry.description[lang]}</div>
+            {entry.composio && (
+              <div className="kv-row-desc text-[12px] opacity-70">{t.connectorsThirdParty}</div>
+            )}
+            {isOauth && (
+              <div className="kv-row-desc text-[12px] opacity-70">{t.connectorsOauthSoon}</div>
+            )}
+          </div>
+          {!isTokenInput && (
+            <button
+              type="button"
+              className="kv-btn sm primary shrink-0"
+              disabled={isOauth}
+              onClick={() => {
+                setTokenDraft('')
+                setTokenInputFor(entry.id)
+              }}
+              data-tauri-drag-region="false"
+            >
+              {t.connectorsConnect}
+            </button>
+          )}
+        </div>
+        {isTokenInput && (
+          <div className="mt-2 flex items-center gap-2">
+            <Input
+              value={tokenDraft}
+              onChange={setTokenDraft}
+              type="password"
+              mono
+              placeholder={entry.tokenHint?.[lang] ?? t.connectorsTokenPlaceholder}
+            />
+            <button
+              type="button"
+              className="kv-btn sm primary"
+              disabled={!tokenDraft.trim()}
+              onClick={() => void connectTokenConnector(entry, tokenDraft)}
+              data-tauri-drag-region="false"
+            >
+              {t.connectorsTokenSubmit}
+            </button>
+            <button
+              type="button"
+              className="kv-btn sm"
+              onClick={() => {
+                setTokenInputFor(null)
+                setTokenDraft('')
+              }}
+              data-tauri-drag-region="false"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <SettingsGroup title={t.connectorsSectionConnected}>
+        {connectedServers.length === 0 ? (
+          <div className="kv-row-desc py-2">{t.connectorsEmptyConnected}</div>
+        ) : (
+          <div className="grid grid-cols-1 gap-3 py-2 md:grid-cols-2">
+            {connectedServers.map(renderConnectedCard)}
+          </div>
+        )}
+        <div className="kv-row-desc py-1 opacity-70">{t.connectorsSaveHint}</div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t.connectorsSectionAvailable}>
+        <div className="grid grid-cols-1 gap-3 py-2 md:grid-cols-2">
+          {availableEntries.map(renderAvailableCard)}
+        </div>
+        <div className="pt-1">
+          <button
+            type="button"
+            className="kv-btn sm"
+            onClick={() => setShowCustomForm((v) => !v)}
+            data-tauri-drag-region="false"
+          >
+            {showCustomForm ? <X size={10} /> : <Plus size={10} />}
+            {t.connectorsAddCustomToggle}
+          </button>
+        </div>
+        {showCustomForm && (
+          <div className="kv-panel mt-2 space-y-2">
+            <Input value={customName} onChange={setCustomName} placeholder={t.connectorsCustomName} />
+            <Input value={customUrl} onChange={setCustomUrl} mono placeholder={t.connectorsCustomUrl} />
+            <div className="flex items-center gap-2">
+              <Select
+                value={customAuth}
+                onChange={(v) => setCustomAuth(v === 'none' ? 'none' : 'token')}
+                options={[
+                  { value: 'token', label: t.connectorsAuthToken },
+                  { value: 'none', label: t.connectorsAuthNone },
+                ]}
+              />
+              {customAuth === 'token' && (
+                <Input
+                  value={customToken}
+                  onChange={setCustomToken}
+                  type="password"
+                  mono
+                  placeholder={t.connectorsTokenPlaceholder}
+                />
+              )}
+            </div>
+            <button
+              type="button"
+              className="kv-btn sm primary"
+              disabled={!customName.trim() || !customUrl.trim()}
+              onClick={() => void addCustomConnector()}
+              data-tauri-drag-region="false"
+            >
+              {t.connectorsCustomAdd}
+            </button>
+          </div>
+        )}
+      </SettingsGroup>
+    </>
+  )
+}

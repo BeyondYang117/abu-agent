@@ -332,6 +332,18 @@ export type ChatMcpServer = {
   headers: Record<string, string>
   cwd?: string | null
   enabledTools: string[]
+  /** 连接器目录 id（"github"/"notion"/... 或 "custom-xxx"）。非空表示由连接器页管理。 */
+  connectorId?: string
+  /** 连接器认证信息。Phase A 只用 { kind: 'token', accessToken }。 */
+  auth?: {
+    kind: string
+    accessToken: string
+    refreshToken?: string
+    expiresAt?: number
+    tokenEndpoint?: string
+    clientId?: string
+    scopes?: string[]
+  }
 }
 
 /** MCP 持久连接状态，与后端 McpServerState（serde tag="kind"）一一对应。 */
