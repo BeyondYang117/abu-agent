@@ -220,6 +220,7 @@ pub async fn run_agent_loop(
                 &config.message_id,
                 &state.tool_records,
                 state.segment_builder.segments(),
+                &state.generated_api_messages,
             );
         }
     }

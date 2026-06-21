@@ -40,14 +40,18 @@ pub trait AgentHost: Send + Sync {
     /// is otherwise written only once, after the loop returns; if the process
     /// dies mid-run (crash / forced exit) that whole turn — including tool work
     /// already done — is lost. This checkpoint keeps it recoverable on the next
-    /// load. Default no-op for hosts that don't own persistence (sub-agents,
-    /// tests).
+    /// load. `api_messages` carries the loop's accumulated provider messages
+    /// (assistant tool_calls + tool results) up to this round so the draft is
+    /// replayable on a later "continue" — without them an `interrupted` draft
+    /// loses all tool context and the model restarts from scratch. Default
+    /// no-op for hosts that don't own persistence (sub-agents, tests).
     fn persist_partial_assistant(
         &self,
         _conversation_id: &str,
         _message_id: &str,
         _tool_records: &[ToolCallRecord],
         _segments: &[ChatMessageSegment],
+        _api_messages: &[serde_json::Value],
     ) {
     }
 

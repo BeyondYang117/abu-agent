@@ -1951,13 +1951,18 @@ fn upsert_assistant_message(conversation: &mut Conversation, message: ChatMessag
 /// conversation (to pick up todo/plan/user state already persisted by other
 /// paths), upserts a draft assistant message keyed by `message_id`, and saves.
 /// The draft is marked `interrupted`; the loop's final write replaces it with
-/// the completed message. No-op when nothing has been produced yet.
+/// the completed message. `api_messages` carries the loop's accumulated
+/// provider messages (assistant tool_calls + tool results) so the draft stays
+/// replayable on a later "continue" — `model_messages` are derived from them
+/// exactly as the final write does, keeping the storage shape consistent. No-op
+/// when nothing has been produced yet.
 fn persist_partial_assistant_snapshot(
     app: &AppHandle,
     conversation_id: &str,
     message_id: &str,
     tool_records: &[ToolCallRecord],
     segments: &[ChatMessageSegment],
+    api_messages: &[Value],
 ) -> Result<(), String> {
     if tool_records.is_empty() && segments.is_empty() {
         return Ok(());
@@ -1966,6 +1971,12 @@ fn persist_partial_assistant_snapshot(
     let segments = segments.to_vec();
     let content = content_from_segments(&segments).unwrap_or_default();
     let reasoning = reasoning_from_segments(&segments);
+    let model_messages = assistant_model_messages_for_storage(
+        &content,
+        reasoning.as_deref(),
+        api_messages,
+        tool_records,
+    );
     let draft = ChatMessage {
         id: message_id.to_string(),
         role: "assistant".to_string(),
@@ -1975,8 +1986,8 @@ fn persist_partial_assistant_snapshot(
         artifacts: Vec::new(),
         tool_calls: tool_records.to_vec(),
         segments,
-        api_messages: Vec::new(),
-        model_messages: Vec::new(),
+        api_messages: api_messages.to_vec(),
+        model_messages,
         active_skill_id: None,
         run_entry: None,
         stream_outcome: Some("interrupted".to_string()),
@@ -3940,6 +3951,7 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         message_id: &str,
         tool_records: &[ToolCallRecord],
         segments: &[ChatMessageSegment],
+        api_messages: &[Value],
     ) {
         if let Err(err) = persist_partial_assistant_snapshot(
             &self.app,
@@ -3947,6 +3959,7 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
             message_id,
             tool_records,
             segments,
+            api_messages,
         ) {
             eprintln!("persist partial assistant snapshot failed: {err}");
         }

@@ -31,8 +31,8 @@
         deltas: Mutex<Vec<RecordedDelta>>,
         dones: Mutex<Vec<(String, String)>>,
         /// Per-call snapshot sizes from `persist_partial_assistant`:
-        /// `(message_id, tool_records_len, segments_len)`.
-        persists: Mutex<Vec<(String, usize, usize)>>,
+        /// `(message_id, tool_records_len, segments_len, api_messages_len)`.
+        persists: Mutex<Vec<(String, usize, usize, usize)>>,
         cancel_after: Option<Duration>,
         cancel_flag: Arc<AtomicBool>,
         cancel_on_first_text_delta: bool,
@@ -93,7 +93,7 @@
                 .clone()
         }
 
-        fn recorded_persists(&self) -> Vec<(String, usize, usize)> {
+        fn recorded_persists(&self) -> Vec<(String, usize, usize, usize)> {
             self.persists
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
@@ -157,6 +157,7 @@
             message_id: &str,
             tool_records: &[ToolCallRecord],
             segments: &[ChatMessageSegment],
+            api_messages: &[serde_json::Value],
         ) {
             if self.cancel_on_persist {
                 self.cancel_flag.store(true, Ordering::SeqCst);
@@ -164,7 +165,12 @@
             self.persists
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
-                .push((message_id.to_string(), tool_records.len(), segments.len()));
+                .push((
+                    message_id.to_string(),
+                    tool_records.len(),
+                    segments.len(),
+                    api_messages.len(),
+                ));
         }
 
         fn request_tool_approval<'a>(
@@ -1963,12 +1969,19 @@
         let persists = host.recorded_persists();
         let snapshot = persists
             .iter()
-            .find(|(_, tool_records_len, _)| *tool_records_len >= 1)
+            .find(|(_, tool_records_len, _, _)| *tool_records_len >= 1)
             .expect("a checkpoint snapshot includes the completed round's tool record");
         assert_eq!(snapshot.0, "message", "snapshot keyed by run message id");
         assert!(
             snapshot.1 >= 1,
             "snapshot carries the round's tool record(s)"
+        );
+        // The draft also carries the loop's accumulated provider messages
+        // (assistant tool_call + tool result) so an `interrupted` draft stays
+        // replayable on a later "continue" instead of losing all tool context.
+        assert!(
+            snapshot.3 >= 1,
+            "snapshot carries accumulated api_messages for replay, not an empty Vec"
         );
 
         // The run still completed normally end-to-end.
