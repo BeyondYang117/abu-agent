@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type ComponentType, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
-  BookOpen,
   Bot,
   Brain,
   CheckCircle2,
@@ -18,16 +17,14 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
-  Globe,
   ImagePlus,
   ListChecks,
   Loader2,
   MessageCircleQuestion,
-  Play,
   Plug,
   Save,
+  ScrollText,
   Search,
-  Sparkles,
   SquareTerminal,
   Trash2,
   Wrench,
@@ -39,6 +36,7 @@ import { isToolCallErrorStatus, normalizeToolCallStatus } from './toolStatus'
 import { formatToolResultPreview } from './toolResultPreview'
 import { AskUserBlock } from './AskUserBlock'
 import { ChatMarkdown } from './ChatMarkdown'
+import { WebSearchIcon } from '../settings/NavIcons'
 
 export interface ToolCallBlockLabels {
   pending: string
@@ -137,7 +135,7 @@ function toolRawName(toolCall: ToolCallRecord): string {
   return toolCall.tool_name || toolCall.toolName || toolCall.name || ''
 }
 
-function toolGlyph(toolCall: ToolCallRecord): LucideIcon {
+function toolGlyph(toolCall: ToolCallRecord): LucideIcon | ComponentType<{ size?: number; strokeWidth?: number; className?: string }> {
   const raw = toolRawName(toolCall)
   switch (raw) {
     case 'read':
@@ -176,15 +174,13 @@ function toolGlyph(toolCall: ToolCallRecord): LucideIcon {
     case 'run_python':
       return FileCode2
     case 'web_search':
-      return Globe
+      return WebSearchIcon
     case 'web_fetch':
       return Download
     case 'skill_activate':
-      return Sparkles
     case 'skill_read_file':
-      return BookOpen
     case 'skill_run_script':
-      return Play
+      return ScrollText
     case 'todo_write':
     case 'todo_update':
       return ListChecks
@@ -435,7 +431,7 @@ function SubAgentCard({ toolCall, defaultOpen = false }: ToolCallBlockProps) {
   const hasDetails = Boolean(prompt || steps.length || preview || result || error)
 
   return (
-    <div className="not-prose mb-2 text-[11.5px] leading-5 text-neutral-500 dark:text-neutral-400">
+    <div className="not-prose mb-2 text-[12.5px] leading-5 text-neutral-500 dark:text-neutral-400">
       <button
         type="button"
         onClick={() => {
@@ -485,7 +481,7 @@ function SubAgentCard({ toolCall, defaultOpen = false }: ToolCallBlockProps) {
         )}
         {hasDetails && (
           <ChevronDown
-            size={11}
+            size={12}
             strokeWidth={2}
             className={`shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
           />
@@ -972,27 +968,27 @@ function StatusIcon({ status }: { status: ToolCallStatus }) {
     prevStatusRef.current = status
   }, [status])
   if (status === 'running') {
-    return <Loader2 className="shrink-0 animate-spin" size={12} />
+    return <Loader2 className="shrink-0 animate-spin" size={14} />
   }
   if (isDone) {
     return (
       <CheckCircle2
         className={`shrink-0 text-[#C56646] dark:text-[#E39A78]${justCompleted ? ' chat-motion-pop' : ''}`}
-        size={12}
+        size={14}
         strokeWidth={1.9}
       />
     )
   }
   if (status === 'error') {
-    return <AlertCircle className="shrink-0 text-red-500" size={12} strokeWidth={1.9} />
+    return <AlertCircle className="shrink-0 text-red-500" size={14} strokeWidth={1.9} />
   }
   if (status === 'skipped') {
-    return <CircleSlash className="shrink-0" size={12} strokeWidth={1.9} />
+    return <CircleSlash className="shrink-0" size={14} strokeWidth={1.9} />
   }
   if (status === 'cancelled') {
-    return <XCircle className="shrink-0" size={12} strokeWidth={1.9} />
+    return <XCircle className="shrink-0" size={14} strokeWidth={1.9} />
   }
-  return <Wrench className="shrink-0" size={12} strokeWidth={1.85} />
+  return <Wrench className="shrink-0" size={14} strokeWidth={1.85} />
 }
 
 function ToolTypeIcon({ toolCall, status }: { toolCall: ToolCallRecord; status: ToolCallStatus }) {
@@ -1005,20 +1001,20 @@ function ToolTypeIcon({ toolCall, status }: { toolCall: ToolCallRecord; status: 
     prevStatusRef.current = status
   }, [status])
   if (status === 'error') {
-    return <AlertCircle className="shrink-0 text-red-500" size={12} strokeWidth={1.9} />
+    return <AlertCircle className="shrink-0 text-red-500" size={14} strokeWidth={1.9} />
   }
   if (status === 'skipped') {
-    return <CircleSlash className="shrink-0" size={12} strokeWidth={1.9} />
+    return <CircleSlash className="shrink-0" size={14} strokeWidth={1.9} />
   }
   if (status === 'cancelled') {
-    return <XCircle className="shrink-0" size={12} strokeWidth={1.9} />
+    return <XCircle className="shrink-0" size={14} strokeWidth={1.9} />
   }
   const Glyph = toolGlyph(toolCall)
   if (status === 'running') {
     return (
       <Glyph
-        className="shrink-0 text-neutral-500 dark:text-neutral-400 chat-motion-tool-shimmer"
-        size={12}
+        className="shrink-0 text-[#C56646] dark:text-[#E39A78] animate-pulse"
+        size={14}
         strokeWidth={1.9}
       />
     )
@@ -1027,7 +1023,7 @@ function ToolTypeIcon({ toolCall, status }: { toolCall: ToolCallRecord; status: 
     return (
       <Glyph
         className={`shrink-0 text-[#C56646] dark:text-[#E39A78]${justCompleted ? ' chat-motion-pop' : ''}`}
-        size={12}
+        size={14}
         strokeWidth={1.9}
       />
     )
@@ -1035,7 +1031,7 @@ function ToolTypeIcon({ toolCall, status }: { toolCall: ToolCallRecord; status: 
   return (
     <Glyph
       className="shrink-0 text-neutral-400 dark:text-neutral-500"
-      size={12}
+      size={14}
       strokeWidth={1.9}
     />
   )
@@ -1069,7 +1065,7 @@ function DefaultToolCallBlock({
   const hasDetails = Boolean(argumentPreview || resultPreview || error || hasFileMutationDetails)
 
   return (
-    <div className="not-prose mb-2 text-[11.5px] leading-5 text-neutral-500 dark:text-neutral-400">
+    <div className="not-prose mb-2 text-[12.5px] leading-5 text-neutral-500 dark:text-neutral-400">
       <button
         type="button"
         onClick={() => {
@@ -1116,7 +1112,7 @@ function DefaultToolCallBlock({
         )}
         {hasDetails && (
           <ChevronDown
-            size={11}
+            size={12}
             strokeWidth={2}
             className={`shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
           />

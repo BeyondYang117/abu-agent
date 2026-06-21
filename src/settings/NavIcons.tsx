@@ -140,22 +140,25 @@ export function McpIcon(props: IconProps) {
   )
 }
 
-// Skill：星花
+// Skill：卷轴
 export function SkillIcon(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
-      <path d="M12 3 L13.4 10.6 L21 12 L13.4 13.4 L12 21 L10.6 13.4 L3 12 L10.6 10.6 Z" />
+      <path d="M15 8 H10" />
+      <path d="M15 12 H10" />
+      <path d="M19 17 V5 A2 2 0 0 0 17 3 H4" />
+      <path d="M8 21 H20 A2 2 0 0 0 22 19 V18 A1 1 0 0 0 21 17 H11 A1 1 0 0 0 10 18 V19 A2 2 0 1 1 6 19 V5 A2 2 0 1 0 2 5 V7 A1 1 0 0 0 3 8 H6" />
     </svg>
   )
 }
 
-// 网络搜索：地球
+// 网络搜索：地球仪（经线椭圆 + 赤道），填满 viewBox，小尺寸也清晰
 export function WebSearchIcon(props: IconProps) {
   return (
     <svg {...svgProps(props)}>
       <circle cx="12" cy="12" r="9" />
       <path d="M3 12 H21" />
-      <path d="M12 3 A4 9 0 0 0 12 21 A4 9 0 0 0 12 3 Z" />
+      <path d="M12 3 a 4.5 9 0 0 0 0 18 a 4.5 9 0 0 0 0 -18" />
     </svg>
   )
 }
