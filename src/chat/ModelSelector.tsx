@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
+import { ModelIcon } from './ModelIcon'
 import { chatTitlebarPillButtonClass } from './platform'
 
 interface ModelSelectorProps {
@@ -56,6 +57,7 @@ export function ModelSelector({
         onClick={() => setOpen(!open)}
         className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
       >
+        {currentModel && <ModelIcon model={currentModel} size={16} />}
         <span className="chat-model-selector-label max-w-[200px] truncate font-medium text-neutral-800 dark:text-neutral-200">
           {displayName}
         </span>
@@ -85,13 +87,14 @@ export function ModelSelector({
                       onModelChange(provider.id, model)
                       setOpen(false)
                     }}
-                    className={`w-full rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
+                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
                       currentProviderId === provider.id && currentModel === model
                         ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
                         : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/80'
                     }`}
                   >
-                    {model}
+                    <ModelIcon model={model} size={16} />
+                    <span className="min-w-0 truncate">{model}</span>
                   </button>
                 ))}
               </div>

@@ -32,6 +32,7 @@ import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, stableS
 import { PROVIDER_PRESETS, type ProviderPreset } from './providerPresets'
 import { ModelPairSelect } from './ModelPairSelect'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
+import { ModelIcon } from '../chat/ModelIcon'
 import { ProviderSortableList } from './ProviderSortableList'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
@@ -4113,6 +4114,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                 const caps = modelInfo.capabilities
                                 return (
                                   <li key={model} className="kv-enabled-model-row" onClick={() => setDrawerModel({ providerId: provider.id, model })}>
+                                    <ModelIcon model={model} size={16} />
                                     <span className="kv-enabled-model-name" title={model}>{modelInfo.displayName || model}</span>
                                     <span className="kv-enabled-model-badges">
                                       {caps?.vision && <span className="kv-badge-mini">V</span>}

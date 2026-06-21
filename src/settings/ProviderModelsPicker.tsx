@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, Minus, Plus, RefreshCw, Search, X } from 'lucide-react'
 import type { ModelProvider } from '../api/tauri'
+import { ModelIcon } from '../chat/ModelIcon'
 import { Input } from './components'
 
 type Lang = 'zh' | 'en'
@@ -224,6 +225,7 @@ export function ProviderModelsPicker({
                 const isEnabled = enabledSet.has(modelKey(model))
                 return (
                   <li key={model} className="kv-model-picker-row">
+                    <ModelIcon model={model} size={16} />
                     <span className="kv-model-picker-row-name" title={model}>
                       {model}
                     </span>
