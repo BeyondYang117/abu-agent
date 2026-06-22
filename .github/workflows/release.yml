@@ -22,6 +22,7 @@ on:
         options:
           - all
           - windows
+          - macos
 
 permissions:
   contents: write
@@ -39,6 +40,9 @@ jobs:
           - id: windows
             platform: windows-latest
             args: "--bundles nsis"
+          - id: macos
+            platform: macos-latest
+            args: "--bundles dmg"
 
     runs-on: ${{ matrix.platform }}
 
@@ -79,7 +83,7 @@ jobs:
           releaseBody: |
             Automated build artifacts for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
-            - macOS: DMG is built and uploaded locally
+            - macOS: DMG (Apple Silicon)
             - Windows: NSIS (.exe)
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
