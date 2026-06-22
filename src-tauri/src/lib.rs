@@ -66,7 +66,7 @@ use windows::{ensure_overlay_panel, restore_previous_frontmost_app};
 const AUTOSTART_ARG: &str = "--from-autostart";
 
 #[cfg(target_os = "macos")]
-const USER_WINDOW_LABELS: &[&str] = &["chat", "settings", "main"];
+const USER_WINDOW_LABELS: &[&str] = &["chat", "main"];
 
 #[cfg(target_os = "macos")]
 fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {

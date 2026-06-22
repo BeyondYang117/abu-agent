@@ -20,7 +20,6 @@ import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import { normalizeThemeColorId } from './themeColors'
 import './index.css'
 
-const Settings = lazy(() => import('./Settings'))
 const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
 
@@ -227,8 +226,6 @@ function App() {
   const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system')
   const [translateSource, setTranslateSource] = useState<string>('')
   const [lang, setLang] = useState<Lang>('zh')
-  const settingsOpenPendingRef = useRef(mode === 'settings')
-  const settingsReadyRef = useRef(false)
 
   useEffect(() => {
     const path = hashPath()
@@ -284,9 +281,6 @@ function App() {
     const handler = () => {
       const path = hashPath()
       const nextMode = getMode()
-      if (nextMode === 'settings') {
-        settingsOpenPendingRef.current = true
-      }
       if (isChatPath(path)) {
         rememberCurrentChatRoute()
       }
@@ -419,47 +413,10 @@ function App() {
     }
   }, [mode, persistChatWindowGeometry])
 
-  const revealSettingsWindow = useCallback(async () => {
-    if (!settingsOpenPendingRef.current) return
-    settingsOpenPendingRef.current = false
-    await new Promise(resolve => window.setTimeout(resolve, 0))
-    try {
-      await api.showWindow()
-      await api.focusWindow()
-    } catch (err) {
-      console.error('[App] Error showing settings window:', err)
-    }
-  }, [])
-
-  // 监听后端触发的打开设置事件
-  // settings 独立 webview 响应；lens 即便误收广播也不切换视图，避免多设置界面。
-  useEffect(() => {
-    let cleanup: (() => void) | undefined
-    api.onOpenSettings(() => {
-      const currentHash = window.location.hash.replace('#', '').split('?')[0]
-      // Chat 内嵌设置由 Chat 组件监听同一事件处理
-      if (currentHash.startsWith('chat')) return
-      if (currentHash !== '' && currentHash !== 'translator' && currentHash !== 'settings') return
-      settingsOpenPendingRef.current = true
-      window.location.hash = '#settings'
-      setMode('settings')
-      if (currentHash === 'settings' && settingsReadyRef.current) {
-        void revealSettingsWindow()
-      }
-    }).then((unlisten) => {
-      cleanup = unlisten
-    })
-    return () => {
-      cleanup?.()
-    }
-  }, [revealSettingsWindow])
-
   // 根据当前模式调整窗口大小
   useEffect(() => {
     const resize = async () => {
-      if (mode === 'settings') {
-        await api.resizeWindow(640, 520)
-      } else if (mode === '' || mode === 'translator') {
+      if (mode === '' || mode === 'translator') {
         await api.resizeWindow(392, 152)
       }
     }
@@ -476,17 +433,7 @@ function App() {
     }
   }
 
-  // 关闭设置页，返回翻译器
-  const closeSettings = async () => {
-    settingsReadyRef.current = false
-    try {
-      await api.closeWindow()
-    } catch (err) {
-      console.error('[App] Error closing settings window:', err)
-    }
-  }
-
-  // 根据模式渲染对应视图
+  // 根据当前模式渲染对应视图
   if (mode === 'lens') {
     return (
       <Suspense fallback={null}>
@@ -509,22 +456,6 @@ function App() {
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>
-    )
-  }
-  if (mode === 'settings') {
-    return (
-      <div className="h-screen w-screen overflow-hidden">
-        <Suspense fallback={null}>
-          <Settings
-            onClose={closeSettings}
-            onSettingsChange={applyTheme}
-            onReady={() => {
-              settingsReadyRef.current = true
-              void revealSettingsWindow()
-            }}
-          />
-        </Suspense>
-      </div>
     )
   }
   return <Translator translateSource={translateSource} lang={lang} onOpenSettings={openSettings} />

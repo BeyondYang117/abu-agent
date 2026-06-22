@@ -4,7 +4,6 @@
   "windows": [
     "main",
     "chat",
-    "settings",
     "lens",
     "translate"
   ],

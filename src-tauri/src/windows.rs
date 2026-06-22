@@ -228,10 +228,6 @@ pub fn get_main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("main")
 }
 
-pub fn get_settings_window(app: &AppHandle) -> Option<WebviewWindow> {
-    app.get_webview_window("settings")
-}
-
 pub fn get_chat_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("chat")
 }

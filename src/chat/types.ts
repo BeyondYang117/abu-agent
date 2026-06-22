@@ -1,16 +1,13 @@
 // Chat 前端类型定义
 
-export const TOOL_CALL_STATUSES = [
-  'pending',
-  'running',
-  'success',
-  'completed',
-  'error',
-  'skipped',
-  'cancelled',
-] as const
-
-export type ToolCallStatus = (typeof TOOL_CALL_STATUSES)[number]
+export type ToolCallStatus =
+  | 'pending'
+  | 'running'
+  | 'success'
+  | 'completed'
+  | 'error'
+  | 'skipped'
+  | 'cancelled'
 
 export interface SkillMeta {
   id: string

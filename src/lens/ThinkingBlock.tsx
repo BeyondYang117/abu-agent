@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Brain, ChevronDown } from 'lucide-react'
-import { estimateTokens, formatTokens } from './markdown'
+import { estimateTokens, formatTokens } from '../utils/tokens'
 
 /** 思维链区块（Claude Code 风格）：默认折叠，header 显示耗时 + token 估算。点击展开/收起。 */
 export function ThinkingBlock({

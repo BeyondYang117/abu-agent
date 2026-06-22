@@ -5,87 +5,7 @@ use tauri_plugin_store::StoreBuilder;
 
 // 设置存储文件名
 const SETTINGS_STORE: &str = "settings.json";
-// 系统钥匙串服务名（用于安全存储 API Key）
-const KEYRING_SERVICE: &str = "com.zmair.kivio";
-// 旧版 service 名（v2.4.5 之前为 com.zmair.keylingo），仅用于 legacy 读 + 清理
-const KEYRING_SERVICE_LEGACY: &str = "com.zmair.keylingo";
 const LEGACY_APPLE_INTELLIGENCE_BASE_URL: &str = "applefoundation://local";
-
-/**
- * 生成提供商 API Key 在钥匙串中的条目名称
- */
-fn provider_credential_name(provider_id: &str) -> String {
-    format!("provider:{provider_id}")
-}
-
-/**
- * 一次性读取旧版 keyring 中的 API Key（仅用于升级迁移）
- * v2.3.x 及之前：API Key 存在系统钥匙串，settings.json 中 apiKey 字段留空。
- * 从 v2.4 起：API Key 直接存 settings.json，钥匙串不再写入。
- * v2.4.5 (Kivio 重命名) 起：service 名从 com.zmair.keylingo → com.zmair.kivio，
- *   读取时同时尝试两个 service，确保从 KeyLingo 升级上来的用户 key 不丢。
- * 此函数仅在 settings.json 中没有 key 时用一次，迁移完成后旧条目可被清理。
- */
-fn legacy_load_keyring_api_key(provider_id: &str) -> Option<String> {
-    let cred = provider_credential_name(provider_id);
-    for svc in [KEYRING_SERVICE, KEYRING_SERVICE_LEGACY] {
-        let Ok(entry) = keyring::Entry::new(svc, &cred) else {
-            continue;
-        };
-        let Ok(raw) = entry.get_password() else {
-            continue;
-        };
-        let trimmed = raw.trim().to_string();
-        if !trimmed.is_empty() {
-            return Some(trimmed);
-        }
-    }
-    None
-}
-
-/**
- * 删除旧版 keyring 中的 API Key 条目（迁移完成后清理）
- * 同时清理新旧 service 名下的条目，避免有残留。
- */
-fn legacy_clear_keyring_api_key(provider_id: &str) {
-    let cred = provider_credential_name(provider_id);
-    for svc in [KEYRING_SERVICE, KEYRING_SERVICE_LEGACY] {
-        if let Ok(entry) = keyring::Entry::new(svc, &cred) {
-            let _ = entry.delete_credential();
-        }
-    }
-}
-
-/**
- * 从旧版 keyring 一次性迁移 API Key 到 settings.api_keys
- * 仅在 settings.json 中没有 key 时执行（保护用户不丢 key）
- * 迁移成功后立即清理 keyring 旧条目
- *
- * 幂等：settings.legacy_keyring_migrated == true 时直接跳过，
- * 防止用户在 v2.3.x ↔ v2.4 之间反复切换时每次启动都抹掉 keyring。
- * 标记会随用户下次保存设置写盘；即使没保存就退出，下次再跑也是 no-op（keyring 已被清）。
- */
-fn migrate_legacy_keyring_keys(settings: &mut Settings) {
-    if settings.legacy_keyring_migrated {
-        return;
-    }
-    for provider in &mut settings.providers {
-        if !provider.api_keys.is_empty() {
-            // settings.json 已有 key，无需迁移；顺手清掉钥匙串里的残留
-            legacy_clear_keyring_api_key(&provider.id);
-            continue;
-        }
-        if let Some(legacy_key) = legacy_load_keyring_api_key(&provider.id) {
-            provider.api_keys.push(legacy_key);
-            legacy_clear_keyring_api_key(&provider.id);
-            eprintln!(
-                "Migrated legacy keyring API key for provider {} into settings.json",
-                provider.id
-            );
-        }
-    }
-    settings.legacy_keyring_migrated = true;
-}
 
 // ========== 数据结构定义 ==========
 
@@ -910,10 +830,6 @@ pub struct Settings {
     pub retry_enabled: bool,
     #[serde(default = "default_retry_attempts")]
     pub retry_attempts: u8,
-    /// 一次性迁移标记：v2.3.x 钥匙串里的 key 已搬到 api_keys[0] 并清掉旧条目后置 true
-    /// 防止 v2.3.x ↔ v2.4 反复切换时重复抹掉钥匙串
-    #[serde(default)]
-    pub legacy_keyring_migrated: bool,
     /// 一次性迁移标记：内置专家（写作/编程/研究/数据）已 seed 进 assistants.json 后置 true。
     /// 该迁移会清空整个助手索引（含用户自建——用户明确选择）再装入这 4 个内置专家，
     /// 仅在首次启动跑一次；之后用户新建/删除专家不受影响。
@@ -1037,7 +953,6 @@ impl Default for Settings {
             settings_language: Some("zh".to_string()),
             retry_enabled: default_retry_enabled(),
             retry_attempts: default_retry_attempts(),
-            legacy_keyring_migrated: false,
             builtin_assistants_seeded_v1: false,
             chat_tools_greenlit_v1: false,
             auto_check_update: true,
@@ -1745,9 +1660,7 @@ pub fn load_settings(app: &AppHandle) -> Settings {
             .unwrap_or_default(),
         Err(_) => Settings::default(),
     };
-    let mut sanitized = sanitize_settings(settings);
-    migrate_legacy_keyring_keys(&mut sanitized);
-    sanitized
+    sanitize_settings(settings)
 }
 
 // ========== 默认提示词生成 ==========

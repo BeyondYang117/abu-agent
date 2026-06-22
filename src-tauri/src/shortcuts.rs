@@ -945,10 +945,6 @@ pub(crate) fn open_chat_settings_window(app: &AppHandle) -> Result<(), String> {
         forget_frontmost_app(&st.prev_frontmost_pid_lens);
         forget_frontmost_app(&st.prev_frontmost_pid_main);
     }
-    if let Some(window) = crate::windows::get_settings_window(app) {
-        let _ = window.close();
-    }
-
     let existing_window = app.get_webview_window("chat");
     let window = ensure_chat_window_with_hash(app, "chat/settings")?;
     apply_chat_window_chrome(&window);

@@ -1110,14 +1110,6 @@ export const api = {
     const win = getCurrentWindow()
     await win.setSize(new LogicalSize(width, height))
   },
-  centerWindow: async () => {
-    const win = getCurrentWindow()
-    await win.center()
-  },
-  hideWindow: async () => {
-    const win = getCurrentWindow()
-    await win.hide()
-  },
   closeWindow: async () => {
     const win = getCurrentWindow()
     await win.close()
@@ -1141,10 +1133,6 @@ export const api = {
   startDragging: async () => {
     const win = getCurrentWindow()
     await win.startDragging()
-  },
-  setAlwaysOnTop: async (alwaysOnTop: boolean) => {
-    const win = getCurrentWindow()
-    await win.setAlwaysOnTop(alwaysOnTop)
   },
 
   // 事件监听
@@ -1262,8 +1250,6 @@ export const api = {
     invoke<ChatPastedImageResult>('chat_save_pasted_attachment', { name, dataBase64 }),
   chatReadClipboardFiles: () =>
     invoke<ChatClipboardFilesResult>('chat_read_clipboard_files'),
-  chatCancelStream: (conversationId: string) =>
-    invoke<void>('chat_cancel_stream', { conversationId }),
   chatConfirmToolCall: (toolCallId: string, approved: boolean) =>
     invoke<void>('chat_confirm_tool_call', { toolCallId, approved }),
   chatRespondSessionConsent: (conversationId: string, granted: boolean) =>
@@ -1295,7 +1281,6 @@ export const api = {
     on<LensTranslateStreamPayload>('lens-translate-stream', (payload) => listener(payload)),
   onLensCloseRequest: (listener: () => void) =>
     on('lens-close-request', () => listener()),
-  lensRequest: () => invoke<void>('lens_request'),
   lensListWindows: () => invoke<LensWindowInfo[]>('lens_list_windows'),
   lensCaptureWindow: (windowId: number) =>
     invoke<{ success: boolean; imageId?: string; error?: string }>('lens_capture_window', { windowId }),
@@ -1313,8 +1298,6 @@ export const api = {
     invoke<{ success: boolean; imageId?: string; error?: string }>(
       'lens_register_annotated_image', { base64Png }
     ),
-  lensRequestTranslate: () => invoke<void>('lens_request_translate'),
-  lensRequestTranslateText: () => invoke<void>('lens_request_translate_text'),
   lensTranslate: (imageId: string) =>
     invoke<{ success: boolean; original?: string; translated?: string; error?: string }>(
       'lens_translate', { imageId }

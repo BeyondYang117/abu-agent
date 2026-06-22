@@ -3,9 +3,6 @@ use std::path::PathBuf;
 use serde_json::Value;
 use tokio::process::Command;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
 use super::{resolve_tool_existing_dir, NativeToolWorkspace};
 use crate::settings::{CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS};
 
