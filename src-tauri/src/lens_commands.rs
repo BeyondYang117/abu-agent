@@ -543,6 +543,15 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
             .unwrap_or_else(|| serde_json::json!({})),
     };
     let reset_detail = serde_json::to_string(&reset_detail).unwrap_or_else(|_| "{}".to_string());
+    // 把复位载荷存进 AppState 供前端冷挂载时主动 take 兜底：Windows 关闭即销毁后，下次冷启的
+    // webview 可能晚于这次 eval 才挂上 lens:reset 监听 → 事件被丢、丢冻结帧。拉取式不丢。
+    {
+        let mut pending = state
+            .lens_pending_reset
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *pending = Some(reset_detail.clone());
+    }
     let script = format!(
         "window.location.hash = '#lens?mode={mode}'; window.dispatchEvent(new HashChangeEvent('hashchange')); window.dispatchEvent(new CustomEvent('lens:reset', {{ detail: {detail} }}));",
         mode = safe_mode,
@@ -1897,10 +1906,14 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
     if let Some(window) = active_overlay_window(&app) {
         // Windows：无 NSPanel 限制，且默认开启冻结帧（重建时背景是截屏冻结帧，不会白闪）
         // → 关闭即销毁，回收 renderer 内存。lens/translate 低频调用，偶尔付一次冷创建可接受。
-        // 下次触发由 ensure_lens_window / ensure_translate_window 重建。destroy() 绕过
-        // CloseRequested 的 prevent_close（仅 macOS 走那条），强制销毁。
+        // 下次触发由 ensure_lens_window / ensure_translate_window 重建。
+        // 先 hide 再 destroy：直接 destroy 会触发 Windows 的窗口关闭动画（全屏浮层往中间缩，
+        // 即视觉回归）。先即时 hide 让它瞬间消失，再销毁已不可见的窗口就没有可见动画。
         #[cfg(target_os = "windows")]
-        let _ = window.destroy();
+        {
+            let _ = window.hide();
+            let _ = window.destroy();
+        }
         // macOS：浮窗被 object_setClass 换成了自定义 NSPanel 子类，destroy() 时 tao/wry 按原类
         // 清理会抛 ObjC 异常穿过 FFI → "Rust cannot catch foreign exceptions" abort。所以只能
         // 复用（隐藏 + 复位全屏几何，避免下次 show 还停在上次浮动 bar 位置）。
@@ -1911,6 +1924,18 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 前端 lens select 态挂载时调用：取走（take，取一次清一次）AppState 里暂存的复位载荷
+/// （frame + freezeFrameImageId 的 JSON）。用于兜底冷启时 lens:reset 事件可能早于监听注册被丢
+/// 的情况——丢事件也能从这里拉到冻结帧。无 pending（已被取走 / 未设置）返回 None。
+#[tauri::command]
+pub(crate) fn lens_take_reset_payload(state: State<'_, AppState>) -> Option<String> {
+    state
+        .lens_pending_reset
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
 }
 
 #[cfg(target_os = "windows")]

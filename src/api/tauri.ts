@@ -1327,6 +1327,9 @@ export const api = {
   // 让原生把 lens 浮窗内部 WKWebView 设为 first responder（修复复用窗口第二次打开偶尔不聚焦）。
   lensFocusWebview: () => invoke<void>('lens_focus_webview'),
   lensClose: () => invoke<void>('lens_close'),
+  // 取走 select 态复位载荷（frame + freezeFrameImageId 的 JSON）。冷挂载兜底用：lens:reset
+  // 事件可能早于监听注册被丢，前端挂载时主动拉一次，丢事件也不丢冻结帧。无 pending 返回 null。
+  lensTakeResetPayload: () => invoke<string | null>('lens_take_reset_payload'),
   // 把当前活跃 image 拷贝到 lens-history 持久目录，让重启后历史能继续提问
   lensCommitImageToHistory: (imageId: string) =>
     invoke<void>('lens_commit_image_to_history', { imageId }),

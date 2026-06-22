@@ -119,6 +119,10 @@ pub struct AppState {
     pub pending_selection: Mutex<Option<String>>,
     /// Windows 冻结帧选择模式的临时截图 id。仅在进入 select 态前预抓屏幕时使用。
     pub lens_freeze_frame_image_id: Mutex<Option<String>>,
+    /// Lens 进入 select 态的复位载荷（frame + freezeFrameImageId 的 JSON）。前端冷挂载时
+    /// 主动 take 来兜底：Windows 关闭即销毁后,下次冷启的 webview 可能晚于 Rust 的 lens:reset
+    /// eval 才挂上监听 → 事件被丢。改放 AppState 供拉取,丢事件也不丢冻结帧。take 语义。
+    pub lens_pending_reset: Mutex<Option<String>>,
     /// API Key 多 key failover 状态：(provider_id, key_idx) → 冷却到期时间。
     /// 某个 key 触发 quota/rate-limit/auth 失败时进入冷却，KEY_COOLDOWN 秒内不再选用。
     pub key_cooldowns: Mutex<HashMap<(String, usize), Instant>>,
@@ -179,6 +183,7 @@ impl AppState {
             pending_chat_external_sends: Mutex::new(Vec::new()),
             pending_selection: Mutex::new(None),
             lens_freeze_frame_image_id: Mutex::new(None),
+            lens_pending_reset: Mutex::new(None),
             key_cooldowns: Mutex::new(HashMap::new()),
             active_key_idx: Mutex::new(HashMap::new()),
             mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),
@@ -593,6 +598,7 @@ pub(crate) fn test_app_state() -> AppState {
         pending_chat_external_sends: Mutex::new(Vec::new()),
         pending_selection: Mutex::new(None),
         lens_freeze_frame_image_id: Mutex::new(None),
+        lens_pending_reset: Mutex::new(None),
         key_cooldowns: Mutex::new(HashMap::new()),
         active_key_idx: Mutex::new(HashMap::new()),
         mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),

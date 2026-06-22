@@ -540,7 +540,18 @@ export default function Lens() {
   }, [cancelPendingMotion, focusLensSurface, loadLensSettings])
 
   useEffect(() => {
-    void enterSelect()
+    // 冷挂载兜底：主动 take 一次后端暂存的复位载荷（frame + freezeFrameImageId）。Windows 关闭即
+    // 销毁后下次冷启，lens:reset 事件可能早于下面的监听注册被丢；从 AppState 拉取则不丢冻结帧。
+    void (async () => {
+      let payload: LensResetPayload = {}
+      try {
+        const raw = await api.lensTakeResetPayload()
+        if (raw) payload = readLensResetPayload(JSON.parse(raw))
+      } catch (err) {
+        console.error('[lens] take reset payload failed', err)
+      }
+      void enterSelect(payload)
+    })()
     const handleReset = (event: Event) => {
       void enterSelect(readLensResetPayload((event as CustomEvent).detail))
     }
