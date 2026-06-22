@@ -5,7 +5,9 @@ export const ANCHOR_GAP = 12
 export const DRAG_THRESHOLD = 5
 export const TRANSITION_MS = 380
 export const SELECT_REVEAL_DELAY_MS = 80
-export const FLOATING_PADDING = 0
+// 浮动卡四周留白：给 lens-floating-surface 的投影留出渲染空间。
+// Windows 走 SetWindowRgn 把全屏覆盖裁成 card 矩形再外扩这个值，=0 时投影会被整圈裁掉。
+export const FLOATING_PADDING = 24
 export const FLOATING_GAP = 8
 
 // macOS 上 lens_set_floating 走的是 set_position + set_size,会真的把 OS 窗口搬到 (x, y)。

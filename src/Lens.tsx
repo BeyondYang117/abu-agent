@@ -403,7 +403,7 @@ export default function Lens() {
       setViewport({ w, h })
       const m = computeMetrics(w, h)
       setBarRect(curMode === 'translateText'
-        ? { x: 0, y: 0, width: Math.min(m.READY_W, w) }
+        ? { x: FLOATING_PADDING, y: FLOATING_PADDING, width: Math.min(m.READY_W, w) }
         : computeSelectBar(w, h, m))
       setFlyDelta({ x: 0, y: 0 })
       setCapturedFrame(null)
@@ -611,7 +611,7 @@ export default function Lens() {
       setBarRect(computeSelectBar(viewport.w, viewport.h, metrics))
     } else if (modeRef.current === 'translateText' && stageRef.current === 'translating') {
       const w = Math.min(metrics.READY_W, viewport.w)
-      setBarRect({ x: 0, y: 0, width: w })
+      setBarRect({ x: FLOATING_PADDING, y: FLOATING_PADDING, width: w })
     }
   }, [viewport, metrics])
 
