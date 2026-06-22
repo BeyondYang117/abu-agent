@@ -251,6 +251,32 @@ where
     F: Fn(&str) -> Fut,
     Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
+    send_with_failover_cancelable(
+        state,
+        label,
+        attempts,
+        provider_id,
+        api_keys,
+        || false,
+        send,
+    )
+    .await
+}
+
+async fn send_with_failover_cancelable<F, Fut, C>(
+    state: &AppState,
+    label: &str,
+    attempts: usize,
+    provider_id: &str,
+    api_keys: &[String],
+    is_cancelled: C,
+    send: F,
+) -> Result<reqwest::Response, String>
+where
+    F: Fn(&str) -> Fut,
+    Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+    C: Fn() -> bool + Send + Sync,
+{
     let total = api_keys.len();
     if total == 0 {
         return Err(format!("{} Error: No API key configured", label));
@@ -260,6 +286,9 @@ where
     let mut last_err: Option<String> = None;
 
     while tried.len() < total {
+        if is_cancelled() {
+            return Err(format!("{} cancelled", label));
+        }
         let idx = match state.pick_active_key(provider_id, total, &tried) {
             Some(i) => i,
             None => break,
@@ -275,7 +304,11 @@ where
             None
         };
 
-        match send_with_retry_for_failover(label, attempts, rate_limit_cap, || send(key)).await {
+        match send_with_retry_for_failover(label, attempts, rate_limit_cap, &is_cancelled, || {
+            send(key)
+        })
+        .await
+        {
             Ok(resp) => {
                 state.mark_key_ok(provider_id, idx);
                 return Ok(resp);
@@ -321,6 +354,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
+    let never_cancelled = || false;
     send_with_retry_status_policy(
         label,
         attempts,
@@ -328,6 +362,7 @@ where
         FailoverRetryPolicy {
             rate_limit_cap: None,
         },
+        &never_cancelled,
     )
     .await
 }
@@ -342,6 +377,7 @@ async fn send_with_retry_for_failover<F, Fut>(
     label: &str,
     attempts: usize,
     rate_limit_cap: Option<usize>,
+    is_cancelled: &(dyn Fn() -> bool + Send + Sync),
     mut send: F,
 ) -> Result<reqwest::Response, String>
 where
@@ -353,6 +389,7 @@ where
         attempts,
         &mut send,
         FailoverRetryPolicy { rate_limit_cap },
+        is_cancelled,
     )
     .await
 }
@@ -382,6 +419,7 @@ async fn send_with_retry_status_policy<F, Fut>(
     attempts: usize,
     send: &mut F,
     policy: FailoverRetryPolicy,
+    is_cancelled: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<reqwest::Response, String>
 where
     F: FnMut() -> Fut,
@@ -401,6 +439,9 @@ where
     let mut rate_limit_attempts: usize = 0;
 
     for attempt in 1..=loop_max {
+        if is_cancelled() {
+            return Err(format!("{} cancelled", label));
+        }
         match send().await {
             Ok(response) => {
                 let status = response.status();
@@ -443,7 +484,10 @@ where
                         "{} retrying in {}ms (attempt {}/{})",
                         label, delay, attempt, shown_max
                     );
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    if is_cancelled() {
+                        return Err(format!("{} cancelled", label));
+                    }
+                    sleep_with_cancel(label, delay, is_cancelled).await?;
                     continue;
                 }
 
@@ -458,7 +502,10 @@ where
                         "{} retrying in {}ms (attempt {}/{})",
                         label, delay, attempt, attempts
                     );
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    if is_cancelled() {
+                        return Err(format!("{} cancelled", label));
+                    }
+                    sleep_with_cancel(label, delay, is_cancelled).await?;
                     continue;
                 }
                 return Err(format!("{} (attempt {}/{})", err_msg, attempt, attempts));
@@ -469,6 +516,27 @@ where
     Err(last_error
         .map(|msg| format!("{} (attempt {}/{})", msg, loop_max, loop_max))
         .unwrap_or_else(|| format!("{} Error: exceeded retry attempts ({})", label, loop_max)))
+}
+
+async fn sleep_with_cancel(
+    label: &str,
+    delay_ms: u64,
+    is_cancelled: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<(), String> {
+    const CANCEL_POLL_MS: u64 = 250;
+    let mut remaining = delay_ms;
+    while remaining > 0 {
+        if is_cancelled() {
+            return Err(format!("{} cancelled", label));
+        }
+        let step = remaining.min(CANCEL_POLL_MS);
+        tokio::time::sleep(Duration::from_millis(step)).await;
+        remaining -= step;
+    }
+    if is_cancelled() {
+        return Err(format!("{} cancelled", label));
+    }
+    Ok(())
 }
 
 fn record_api_usage_success(
@@ -1273,13 +1341,18 @@ pub async fn stream_chat_call(
         "{}/chat/completions",
         provider.base_url.trim_end_matches('/')
     );
+    let generation = state
+        .explain_stream_generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
 
-    let response = send_with_failover(
+    let response = send_with_failover_cancelable(
         state,
         "Stream chat",
         retry_attempts,
         &provider.id,
         &provider.api_keys,
+        || state.explain_stream_generation.load(Ordering::SeqCst) != generation,
         |key| {
             state
                 .http
@@ -1322,10 +1395,6 @@ pub async fn stream_chat_call(
         return Err(err);
     }
 
-    let generation = state
-        .explain_stream_generation
-        .fetch_add(1, Ordering::SeqCst)
-        + 1;
     let stream_result = stream_vision_response(
         app,
         response,
@@ -1405,13 +1474,18 @@ pub async fn stream_translate_combined(
         "{}/chat/completions",
         provider.base_url.trim_end_matches('/')
     );
+    let my_gen = state
+        .explain_stream_generation
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
 
-    let mut response = send_with_failover(
+    let mut response = send_with_failover_cancelable(
         state,
         "Stream translate combined",
         retry_attempts,
         &provider.id,
         &provider.api_keys,
+        || state.explain_stream_generation.load(Ordering::SeqCst) != my_gen,
         |key| {
             state
                 .http
@@ -1453,11 +1527,6 @@ pub async fn stream_translate_combined(
         );
         return Err(err);
     }
-
-    let my_gen = state
-        .explain_stream_generation
-        .fetch_add(1, Ordering::SeqCst)
-        + 1;
 
     let sep = COMBINED_TRANSLATE_SEPARATOR;
     let sep_len = sep.len();
@@ -2074,6 +2143,10 @@ data: [DONE]
         reqwest::Response::from(http_resp)
     }
 
+    fn test_never_cancelled() -> bool {
+        false
+    }
+
     #[tokio::test(start_paused = true)]
     async fn server_error_retries_up_to_attempt_limit() {
         let attempts = 5;
@@ -2093,6 +2166,7 @@ data: [DONE]
             FailoverRetryPolicy {
                 rate_limit_cap: None,
             },
+            &test_never_cancelled,
         )
         .await;
 
@@ -2120,6 +2194,7 @@ data: [DONE]
             FailoverRetryPolicy {
                 rate_limit_cap: None,
             },
+            &test_never_cancelled,
         )
         .await;
 
@@ -2147,6 +2222,7 @@ data: [DONE]
                 FailoverRetryPolicy {
                     rate_limit_cap: None,
                 },
+                &test_never_cancelled,
             )
             .await;
 
@@ -2180,6 +2256,7 @@ data: [DONE]
                 FailoverRetryPolicy {
                     rate_limit_cap: Some(RATE_LIMIT_KEY_SWITCH_THRESHOLD),
                 },
+                &test_never_cancelled,
             )
             .await;
 
@@ -2217,6 +2294,7 @@ data: [DONE]
             FailoverRetryPolicy {
                 rate_limit_cap: None,
             },
+            &test_never_cancelled,
         )
         .await;
 
@@ -2243,6 +2321,7 @@ data: [DONE]
             FailoverRetryPolicy {
                 rate_limit_cap: Some(RATE_LIMIT_KEY_SWITCH_THRESHOLD),
             },
+            &test_never_cancelled,
         )
         .await;
 
@@ -2274,12 +2353,50 @@ data: [DONE]
             FailoverRetryPolicy {
                 rate_limit_cap: None,
             },
+            &test_never_cancelled,
         )
         .await;
 
         assert!(result.is_err());
         // 退避重试到限流专用上限（paused 时钟让 retry-after 的 sleep 瞬时跳过）。
         assert_eq!(calls.load(AtomicOrdering::SeqCst), RATE_LIMIT_MAX_ATTEMPTS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retry_backoff_stops_when_cancelled() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_inner = Arc::clone(&calls);
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancelled_check = Arc::clone(&cancelled);
+
+        let mut task = tokio::spawn(async move {
+            send_with_retry_status_policy(
+                "Test",
+                5,
+                &mut || {
+                    let calls = Arc::clone(&calls_inner);
+                    async move {
+                        calls.fetch_add(1, AtomicOrdering::SeqCst);
+                        Ok(make_response(500, None))
+                    }
+                },
+                FailoverRetryPolicy {
+                    rate_limit_cap: None,
+                },
+                &move || cancelled_check.load(AtomicOrdering::SeqCst),
+            )
+            .await
+        });
+
+        tokio::task::yield_now().await;
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+
+        cancelled.store(true, AtomicOrdering::SeqCst);
+        tokio::time::advance(Duration::from_millis(250)).await;
+
+        let result = (&mut task).await.expect("retry task should finish");
+        assert!(matches!(result, Err(err) if err == "Test cancelled"));
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
     }
 
     #[tokio::test(start_paused = true)]

@@ -124,6 +124,7 @@ export default function Lens() {
   const [keepFullscreen, setKeepFullscreen] = useState(() => readModeFromHash() !== 'translateText')
   const [floatingRebased, setFloatingRebased] = useState(false)
   const [mode, setMode] = useState<Mode>(() => readModeFromHash())
+  const [surfaceDormant, setSurfaceDormant] = useState(false)
   // translate 模式专用：OCR 原文 + 翻译结果 + 计时
   const [translateOriginal, setTranslateOriginal] = useState('')
   const [translateText, setTranslateText] = useState('')
@@ -361,6 +362,7 @@ export default function Lens() {
     // barNoTransition 同 frame 一起置 true → bar 从老坐标 snap 到 select 坐标，不回放动画。
     flushSync(() => {
       setBarNoTransition(true)
+      setSurfaceDormant(false)
       setStage(curMode === 'translateText' ? 'translating' : 'select')
       setMode(curMode)
       setKeepFullscreen(curMode === 'chat' || (curMode === 'translate' && screenshotKeepFullscreenRef.current))
@@ -460,7 +462,9 @@ export default function Lens() {
           translateStartRef.current = Date.now()
           setTranslateNow(Date.now())
           try {
+            if (myReq !== selectionReqIdRef.current || motionSeq !== motionSeqRef.current) return
             const result = await api.lensTranslateText(text, requestId)
+            if (myReq !== selectionReqIdRef.current || motionSeq !== motionSeqRef.current) return
             if (!result.success) {
               setTranslateError(result.error || 'Failed')
               if (translateStartRef.current !== null) {
@@ -470,6 +474,7 @@ export default function Lens() {
               setStage('translated')
             }
           } catch (err) {
+            if (myReq !== selectionReqIdRef.current || motionSeq !== motionSeqRef.current) return
             setTranslateError(err instanceof Error ? err.message : String(err))
             if (translateStartRef.current !== null) {
               setTranslateDurationMs(Date.now() - translateStartRef.current)
@@ -766,6 +771,7 @@ export default function Lens() {
     justFinishedStreamRef.current = false
     flushSync(() => {
       setBarNoTransition(true)
+      setSurfaceDormant(true)
       setStage('select')
       setWindows([])
       setFloatingRebased(false)
@@ -812,6 +818,7 @@ export default function Lens() {
     // effect 再次 bump motionSeqRef，所以不能用 motionSeqRef 当守卫（会被自身副作用误判）。
     // 只有 enterSelect（真正的新会话开启/重入）才会改 lensOpenSeqRef——这才是该放弃隐藏的信号。
     const closeOpenSeq = lensOpenSeqRef.current
+    try { await api.lensCancelStream() } catch (err) { console.error(err) }
     resetBeforeHide()
     await waitForFrames(2)
     await waitForVisibleIdle()
@@ -1180,6 +1187,7 @@ export default function Lens() {
    *  流式：lens-translate-stream 事件累积 original/translated；done 事件结束并锁定耗时
    *  非流式：API 返回完整结果一次性灌入（也通过事件，后端在两步完成后 emit 一次完整 delta） */
   const runTranslate = useCallback(async (id: string) => {
+    const translateSeq = motionSeqRef.current
     setTranslateOriginal('')
     setTranslateText('')
     setTranslateError('')
@@ -1188,6 +1196,7 @@ export default function Lens() {
     setTranslateNow(Date.now())
     try {
       const r = await api.lensTranslate(id)
+      if (translateSeq !== motionSeqRef.current || imageIdRef.current !== id) return
       if (!r.success) {
         // 失败兜底：done 事件应该已经带 error 了，但补一刀防止前端漏 done
         setTranslateError(r.error || 'Failed')
@@ -1199,6 +1208,7 @@ export default function Lens() {
       }
       // 成功路径：等 lens-translate-stream 的 done 事件触发 stage / 计时（避免事件还没到 stage 就跳，或反之文字还没到完成态）
     } catch (err) {
+      if (translateSeq !== motionSeqRef.current || imageIdRef.current !== id) return
       setTranslateError(err instanceof Error ? err.message : String(err))
       if (translateStartRef.current !== null) {
         setTranslateDurationMs(Date.now() - translateStartRef.current)
@@ -1247,10 +1257,12 @@ export default function Lens() {
   }, [stage])
 
   const handleCaptureWindow = async (info: LensWindowInfo) => {
+    const captureSeq = motionSeqRef.current
     // capturingRef 全程 true，避免 macOS screencapture 短暂让 lens webview 失焦时触发 blur handler 误关
     capturingRef.current = true
     try {
       const result = await api.lensCaptureWindow(info.id)
+      if (captureSeq !== motionSeqRef.current) return
       if (!result.success || !result.imageId) {
         console.error('lensCaptureWindow failed:', result.error)
         void enterSelect()
@@ -1277,6 +1289,7 @@ export default function Lens() {
         Math.round(info.x), Math.round(info.y), Math.round(info.width), Math.round(info.height),
         info.owner,
       )
+      if (captureSeq !== motionSeqRef.current) return
       if (mode === 'translate') void runTranslate(newId)
     } finally {
       capturingRef.current = false
@@ -1284,6 +1297,7 @@ export default function Lens() {
   }
 
   const handleCaptureRegion = async (rect: { x: number; y: number; width: number; height: number }) => {
+    const captureSeq = motionSeqRef.current
     const gp = clientToGlobal({ x: rect.x, y: rect.y })
     const params = {
       absoluteX: Math.round(gp.x),
@@ -1299,6 +1313,7 @@ export default function Lens() {
     capturingRef.current = true
     try {
       const result = await api.lensCaptureRegion(params)
+      if (captureSeq !== motionSeqRef.current) return
       if (!result.success || !result.imageId) {
         console.error('lensCaptureRegion failed:', result.error)
         void enterSelect()
@@ -1324,6 +1339,7 @@ export default function Lens() {
         } catch (err) { console.error(err) }
       })()
       await flyBarToAnchor(params.absoluteX, params.absoluteY, params.width, params.height, '')
+      if (captureSeq !== motionSeqRef.current) return
       if (mode === 'translate') void runTranslate(newId)
     } finally {
       capturingRef.current = false
@@ -1796,6 +1812,18 @@ export default function Lens() {
       api.lensSetFloating({ x, y, width: w, height: h }).catch(err => console.error('[lens-floating] resize failed:', err))
     }
   }, [stage, answerLayout, barRect, floatingRebased, keepFullscreen, mode, stableAnswerHeight, historyOpen, historyPanelH, isFloatingLayout])
+
+  if (surfaceDormant) {
+    return (
+      <div
+        ref={rootRef}
+        tabIndex={-1}
+        aria-hidden
+        className="fixed left-0 top-0 w-px h-px pointer-events-none select-none opacity-0 outline-none"
+        data-tauri-drag-region="false"
+      />
+    )
+  }
 
   return (
     <div
