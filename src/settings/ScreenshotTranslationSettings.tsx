@@ -1,10 +1,9 @@
-import { ChevronRight, Download, RefreshCw } from 'lucide-react'
+import { Download, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
 import { type DefaultPromptTemplates, type RapidOcrStatus, type Settings } from '../api/tauri'
 import { ModelPairSelect } from './ModelPairSelect'
 import {
-  DefaultPrompt,
   HotkeyInput,
-  Label,
   Select,
   SettingRow,
   SettingsGroup,
@@ -194,36 +193,81 @@ export function ScreenshotTranslationSettings({
           </SettingsGroup>
 
           <SettingsGroup title={t.customPrompts}>
-              <details className="group">
-                <summary className="kv-row cursor-pointer list-none">
-                  <div className="kv-row-text">
-                    <div className="kv-row-label flex items-center gap-1.5">
-                      <ChevronRight size={13} className="text-neutral-400 dark:text-neutral-500 group-open:rotate-90 transition-transform duration-200" strokeWidth={2.25} />
-                      {t.customPrompts}
-                    </div>
-                    <div className="kv-row-desc">{t.screenshotTranslationPromptHint}</div>
-                  </div>
-                </summary>
-                <div className="pb-2 space-y-2">
-                  <Label>{t.screenshotTranslationPrompt}</Label>
-                  <TextArea
-                    value={screenshot?.prompt || ''}
-                    onChange={(prompt) => onUpdate({ prompt })}
-                    placeholder={t.screenshotTranslationPromptHint}
-                    rows={3}
-                  />
-                  {!screenshot?.prompt?.trim() && (defaultPrompts?.screenshotTranslationTemplate || defaultPrompts?.translationTemplate) && (
-                    <DefaultPrompt
-                      label={t.defaultTemplate}
-                      content={defaultPrompts?.screenshotTranslationTemplate || defaultPrompts?.translationTemplate || ''}
-                    />
-                  )}
-                </div>
-              </details>
+              <PromptField
+                label={t.screenshotTranslationPrompt}
+                description={t.screenshotTranslationPromptHint}
+                value={screenshot?.prompt || ''}
+                defaultText={defaultPrompts?.screenshotTranslationTemplate || ''}
+                restoreLabel={t.restoreDefaultPrompt}
+                onChange={(prompt) => onUpdate({ prompt })}
+              />
+              <PromptField
+                label={t.selectedTextTranslationPrompt}
+                description={t.selectedTextTranslationPromptHint}
+                value={screenshot?.textPrompt || ''}
+                defaultText={defaultPrompts?.selectedTextTranslationTemplate || ''}
+                restoreLabel={t.restoreDefaultPrompt}
+                onChange={(textPrompt) => onUpdate({ textPrompt })}
+              />
           </SettingsGroup>
         </>
       )}
     </>
+  )
+}
+
+/**
+ * 自定义提示词字段：空值时把默认模板预填进文本框（可编辑起点），
+ * 用户未编辑前保存仍写空串（运行时用内置默认）；"恢复默认" 清空并复位预填。
+ */
+export function PromptField({
+  label,
+  description,
+  value,
+  defaultText,
+  restoreLabel,
+  onChange,
+}: {
+  label: string
+  description?: string
+  value: string
+  defaultText: string
+  restoreLabel: string
+  onChange: (value: string) => void
+}) {
+  const [interacted, setInteracted] = useState(false)
+  const shown = interacted ? value : value || defaultText
+
+  return (
+    <div className="py-2">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div>
+          <div className="kv-row-label">{label}</div>
+          {description && <p className="kv-row-desc">{description}</p>}
+        </div>
+        <button
+          type="button"
+          className="kv-btn sm shrink-0"
+          onClick={() => {
+            setInteracted(false)
+            onChange('')
+          }}
+          disabled={!defaultText || (!value && !interacted)}
+          data-tauri-drag-region="false"
+        >
+          <RefreshCw size={10} />
+          {restoreLabel}
+        </button>
+      </div>
+      <TextArea
+        value={shown}
+        onChange={(v) => {
+          setInteracted(true)
+          onChange(v)
+        }}
+        rows={4}
+      />
+    </div>
   )
 }
 

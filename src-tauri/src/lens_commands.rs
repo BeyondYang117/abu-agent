@@ -1643,8 +1643,12 @@ pub(crate) async fn lens_translate_text(
     let st_stream = settings.screenshot_translation.stream_enabled;
     let target_lang = resolve_target_lang(&settings.target_lang, &original);
     let lang_name = language_name(&target_lang).to_string();
-    // 选中文本是干净的带结构文本，不复用截图(OCR)提示词，也不沿用其自定义 prompt。
-    let prompt = build_selected_text_translation_prompt(&original, &lang_name, None);
+    // 选中文本是干净的带结构文本，不复用截图(OCR)提示词；用其独立的自定义 prompt。
+    let prompt = build_selected_text_translation_prompt(
+        &original,
+        &lang_name,
+        settings.screenshot_translation.text_prompt.as_deref(),
+    );
 
     let translated = if st_stream {
         let mut body = serde_json::json!({

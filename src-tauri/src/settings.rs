@@ -205,8 +205,13 @@ pub struct ScreenshotTranslationConfig {
     /// OCR 引擎选择（vNext+）。None 表示老版本数据，会在 sanitize_settings 中按 use_system_ocr 迁移。
     #[serde(default)]
     pub ocr_mode: Option<OcrMode>,
+    /// 截图(OCR/视觉)翻译自定义提示词。空 → 用内置截图模板。
     #[serde(default)]
     pub prompt: Option<String>,
+    /// 选中文本翻译自定义提示词。空 → 用内置选中文本模板。独立于 `prompt`：
+    /// 选中文本是干净结构化文本，与 OCR 噪声场景的提示词需求不同。
+    #[serde(default)]
+    pub text_prompt: Option<String>,
     // 旧版字段，用于迁移
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openai: Option<OpenAIConfig>,
@@ -227,6 +232,7 @@ impl Default for ScreenshotTranslationConfig {
             use_system_ocr: false,
             ocr_mode: Some(OcrMode::CloudVision),
             prompt: None,
+            text_prompt: None,
             openai: None,
         }
     }
@@ -1294,6 +1300,8 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     settings.translator_prompt = normalize_optional_prompt(settings.translator_prompt.take());
     settings.screenshot_translation.prompt =
         normalize_optional_prompt(settings.screenshot_translation.prompt.take());
+    settings.screenshot_translation.text_prompt =
+        normalize_optional_prompt(settings.screenshot_translation.text_prompt.take());
 
     // 5. 其他字段验证
     if !matches!(settings.theme.as_str(), "system" | "light" | "dark") {

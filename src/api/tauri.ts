@@ -638,7 +638,10 @@ export type Settings = {
      *    模型文件 + onnxruntime dylib 由用户在设置页面下载,安装包不带。
      *  缺省时由后端 sanitize_settings 按 useSystemOcr 自动迁移。 */
     ocrMode?: 'cloud_vision' | 'system' | 'rapid_ocr'
+    /** 截图(OCR/视觉)翻译自定义提示词。空 → 内置截图模板 */
     prompt?: string
+    /** 选中文本翻译自定义提示词。空 → 内置选中文本模板 */
+    textPrompt?: string
   }
   lens: {
     enabled: boolean
@@ -981,6 +984,7 @@ function normalizeSettings(settings: Settings): Settings {
       useSystemOcr: current.screenshotTranslation?.useSystemOcr ?? false,
       ocrMode: current.screenshotTranslation?.ocrMode ?? 'cloud_vision',
       prompt: current.screenshotTranslation?.prompt ?? '',
+      textPrompt: current.screenshotTranslation?.textPrompt ?? '',
     },
     lens: {
       enabled: current.lens?.enabled ?? true,
@@ -1017,6 +1021,7 @@ function normalizeSettings(settings: Settings): Settings {
 export type DefaultPromptTemplates = {
   translationTemplate: string
   screenshotTranslationTemplate?: string
+  selectedTextTranslationTemplate?: string
   lensPrompts: {
     zh: { system: string; question: string }
     en: { system: string; question: string }

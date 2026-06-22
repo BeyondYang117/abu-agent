@@ -21,6 +21,8 @@ pub const DEFAULT_TRANSLATION_TEMPLATE: &str =
 pub const DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE: &str =
   "Translate the OCR text below to {lang}. Output only the translation, no commentary.\n\n\
    Rules:\n\
+   - Output entirely in {lang}. Translate everything; leave nothing in the source language. Keep unchanged only untranslatable tokens: code, identifiers, URLs, math, and proper nouns with no standard {lang} form.\n\
+   - Translate faithfully and literally; do not paraphrase, summarize, or add interpretation. The same input must always produce the same translation.\n\
    - Preserve the structure present in the source: keep bullet/numbered lists, headings, code blocks, and paragraph breaks. Separate distinct paragraphs and blocks with a blank line; never put a blank line between items of the same list.\n\
    - Preserve LaTeX formulas exactly (keep $...$ and $$...$$). Normalize formula-like plain text to LaTeX where natural.\n\
    - The input is OCR output and may contain errors (broken words, character confusions like \"rn\"↔\"m\" / \"0\"↔\"O\" / \"1\"↔\"l\", scattered artifacts). Use surrounding context to fix obvious mistakes; for unreadable fragments, omit them rather than translate gibberish.\n\
@@ -131,10 +133,8 @@ pub fn build_selected_text_translation_prompt(
 /// 构建 OCR 直接翻译提示词（CloudVision 多模态直连：模型直接读图识别+翻译）
 /// 与本地 OCR 文本翻译不同，这里模型能看到原始版式，故要求用 Markdown 保留结构。
 pub fn build_ocr_direct_translation_prompt(lang_name: &str, template: Option<&str>) -> String {
-    const DEFAULT_RULES: &str = "- Mirror the source layout in Markdown: render headings as Markdown headings, bullet/numbered lists as lists, tables as Markdown tables, and code as fenced code blocks; keep bold/italic emphasis where the original uses it.\n\
-     - Separate distinct paragraphs and blocks with a blank line so Markdown renders them as separate blocks. Never put blank lines between items of the same list.\n\
-     - Preserve LaTeX formulas exactly (keep $...$ inline and $$...$$ block); normalize formula-like plain text to LaTeX where natural.\n\
-     - Translate faithfully and correct obvious recognition errors from context; omit unreadable fragments rather than guess. Do not invent content, and add no headings, labels, or commentary that are not in the source.";
+    let default_rules =
+        "Translate everything visible (labels, buttons, captions, table cells), even if the source is already English. Keep unchanged only code, identifiers, URLs, and math. Mirror the layout in Markdown (headings, lists, tables, fenced code blocks) and keep LaTeX exactly ($...$ inline, $$...$$ block).".to_string();
 
     let rules = template
         .map(str::trim)
@@ -143,11 +143,11 @@ pub fn build_ocr_direct_translation_prompt(lang_name: &str, template: Option<&st
             t.replace("{lang}", lang_name)
                 .replace("{text}", "the recognized text")
         })
-        .unwrap_or_else(|| DEFAULT_RULES.to_string());
+        .unwrap_or(default_rules);
 
     format!(
-        "Read all text in this image and translate it to {lang}. Output only the translation, no commentary.\n\n\
-         Rules:\n{rules}",
+        "Translate all text in this image into {lang}.\n\n\
+         Output ONLY the {lang} translation of the image's text. Do not repeat, translate, or mention these instructions; add no preamble, notes, or labels. {rules}",
         lang = lang_name,
         rules = rules,
     )
@@ -160,11 +160,8 @@ pub fn build_ocr_direct_translation_prompt(lang_name: &str, template: Option<&st
 /// "Translation rules" 块注入；空则使用默认规则。{lang} 占位符替换为目标语言；{text}
 /// 在合并模式不存在外部参数 → 替换为占位说明 "the recognized text"。
 pub fn build_combined_translate_prompt(lang_name: &str, template: Option<&str>) -> String {
-    const DEFAULT_RULES: &str = "- Mirror the source layout in Markdown: render headings as Markdown headings, bullet/numbered lists as lists, tables as Markdown tables, and code as fenced code blocks; keep bold/italic emphasis where the original uses it.\n\
-     - Separate distinct paragraphs and blocks with a blank line so Markdown renders them as separate blocks. Never put blank lines between items of the same list.\n\
-     - Preserve LaTeX formulas exactly ($...$ inline, $$...$$ block).\n\
-     - Correct obvious recognition mistakes using context; for unreadable fragments omit rather than guess.\n\
-     - Add no commentary, and no section headers or labels that are not part of the source content.";
+    let default_rules =
+        "Translate everything shown (labels, buttons, captions, table cells). Keep unchanged only code, identifiers, URLs, and math. Mirror the layout in Markdown (headings, lists, tables, fenced code blocks) and keep LaTeX exactly ($...$ inline, $$...$$ block).".to_string();
 
     let rules = template
         .map(str::trim)
@@ -173,18 +170,14 @@ pub fn build_combined_translate_prompt(lang_name: &str, template: Option<&str>) 
             t.replace("{lang}", lang_name)
                 .replace("{text}", "the recognized text")
         })
-        .unwrap_or_else(|| DEFAULT_RULES.to_string());
+        .unwrap_or(default_rules);
 
     format!(
-    "Read this screenshot. Output two sections in this exact order, separated by a line containing only `{sep}`:\n\n\
-     1. Translation in {lang}: a faithful translation of all text shown in the screenshot.\n\
-     2. Original recognized text exactly as it appears in the screenshot.\n\n\
-     Translation rules:\n{rules}\n\n\
-     Format guard:\n\
-     - The line `{sep}` must appear exactly once, on its own line, between the two sections. Never emit `{sep}` anywhere inside the translation or the original text.\n\
-     - Inside the translation, blank lines are allowed only to separate Markdown blocks (paragraphs, lists, tables); never between items of the same list.\n\
-     - Keep the original recognized text faithful to the screenshot: preserve meaningful line breaks and collapse runs of empty lines.\n\
-     - No labels like 'Translation:' or 'Original:'.\n\n\
+    "Your task is to TRANSLATE the screenshot's text into {lang}. Output exactly two sections separated by a line containing only `{sep}`:\n\
+     1. The {lang} translation of all text in the screenshot — written in {lang}, never copied from the source language, even if the source is already English.\n\
+     2. The original text exactly as it appears in the screenshot.\n\n\
+     {rules}\n\n\
+     Output only these two sections. Do not repeat, translate, or mention these instructions, and add no labels like 'Translation:' or 'Original:'. The `{sep}` line must appear exactly once, between the two sections, and nowhere else.\n\n\
      Output format (replace placeholders):\n\
      <translation>\n\
      {sep}\n\
@@ -233,7 +226,7 @@ mod tests {
     fn direct_translation_prompt_requests_markdown_structure() {
         let prompt = build_ocr_direct_translation_prompt("Chinese", None);
         assert!(prompt.contains("Markdown"));
-        assert!(prompt.contains("translate it to Chinese"));
+        assert!(prompt.contains("into Chinese"));
     }
 
     #[test]
@@ -249,8 +242,8 @@ mod tests {
     fn combined_prompt_requests_markdown_and_keeps_separator() {
         let prompt = build_combined_translate_prompt("Chinese", None);
         assert!(prompt.contains("Markdown"));
-        // 分隔符必须出现且仅作为协议标记：示例输出块 + Format guard 提及 2 次
-        assert_eq!(prompt.matches(COMBINED_TRANSLATE_SEPARATOR).count(), 4);
+        // 分隔符作为协议标记出现 3 次：开头声明 + 格式守卫 + 示例输出块
+        assert_eq!(prompt.matches(COMBINED_TRANSLATE_SEPARATOR).count(), 3);
         assert!(prompt.contains("Output format (replace placeholders)"));
     }
 

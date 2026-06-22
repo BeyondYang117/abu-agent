@@ -36,7 +36,7 @@ import { ModelPairSelect } from './ModelPairSelect'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
 import { ModelIcon } from '../chat/ModelIcon'
 import { ProviderSortableList } from './ProviderSortableList'
-import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
+import { PromptField, ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
 import { KivioCodeSettings } from './KivioCodeSettings'
 import { ExternalAgentsSettings } from './ExternalAgentsSettings'
@@ -46,7 +46,7 @@ import { useWindowInteractionFocus } from '../utils/windowFocus'
 import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/chatTools'
 import { THEME_COLOR_PRESETS, normalizeThemeColorId } from '../themeColors'
 import {
-  Toggle, Select, Input, TextArea, Label,
+  Toggle, Select, Input, TextArea,
   SettingRow, PermissionItem, HotkeyInput, DefaultPrompt,
   SettingsGroup,
 } from './components'
@@ -2564,43 +2564,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     </SettingsGroup>
 
                     <SettingsGroup title={t.customPrompts}>
-                      <details className="group">
-                        <summary className="kv-row cursor-pointer list-none">
-                          <div className="kv-row-text">
-                            <div className="kv-row-label flex items-center gap-1.5">
-                              <ChevronRight size={13} className="text-neutral-400 dark:text-neutral-500 group-open:rotate-90 transition-transform duration-200" strokeWidth={2.25} />
-                              {t.customPrompts}
-                            </div>
-                            <div className="kv-row-desc">{t.customPromptsHint}</div>
-                          </div>
-                        </summary>
-                        <div className="space-y-4 pb-2">
-                          <div>
-                            <Label>{t.lensSystemPrompt}</Label>
-                            <TextArea
-                              value={settings.lens?.systemPrompt || ''}
-                              onChange={(v) => updateLens({ systemPrompt: v })}
-                              placeholder={t.lensPromptHint}
-                              rows={2}
-                            />
-                            {!settings.lens?.systemPrompt?.trim() && lensDefaults?.system && (
-                              <DefaultPrompt label={t.defaultTemplate} content={lensDefaults.system} />
-                            )}
-                          </div>
-                          <div>
-                            <Label>{t.lensQuestionPrompt}</Label>
-                            <TextArea
-                              value={settings.lens?.questionPrompt || ''}
-                              onChange={(v) => updateLens({ questionPrompt: v })}
-                              placeholder={t.lensPromptHint}
-                              rows={3}
-                            />
-                            {!settings.lens?.questionPrompt?.trim() && lensDefaults?.question && (
-                              <DefaultPrompt label={t.defaultTemplate} content={lensDefaults.question} />
-                            )}
-                          </div>
-                        </div>
-                      </details>
+                      <PromptField
+                        label={t.lensSystemPrompt}
+                        value={settings.lens?.systemPrompt || ''}
+                        defaultText={lensDefaults?.system || ''}
+                        restoreLabel={t.restoreDefaultPrompt}
+                        onChange={(v) => updateLens({ systemPrompt: v })}
+                      />
+                      <PromptField
+                        label={t.lensQuestionPrompt}
+                        value={settings.lens?.questionPrompt || ''}
+                        defaultText={lensDefaults?.question || ''}
+                        restoreLabel={t.restoreDefaultPrompt}
+                        onChange={(v) => updateLens({ questionPrompt: v })}
+                      />
                     </SettingsGroup>
                   </>
                 )}

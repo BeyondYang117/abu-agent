@@ -4,9 +4,11 @@ import { Loader2, Copy, Check, Square, Image as ImageIcon, ArrowUp, History as H
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
+import { normalizeMarkdownForRender } from './chat/markdownUtils'
 import { i18n, type Lang } from './settings/i18n'
 import { copyToClipboard } from './utils/clipboard'
 
@@ -19,6 +21,19 @@ import { estimateTokens, formatTokens } from './utils/tokens'
 import { ThinkingBlock } from './lens/ThinkingBlock'
 import { WebSearchBlock } from './lens/WebSearchBlock'
 import { useWindowInteractionFocus } from './utils/windowFocus'
+
+/** 译文/答案卡是浅色卡片：覆盖 Tailwind typography 默认的深色代码块底色（亮色 → 浅灰底），行内/块级代码一致。 */
+const LENS_CODE_PROSE =
+  'prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-800 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-100 prose-pre:bg-neutral-100 prose-pre:text-neutral-800 dark:prose-pre:bg-neutral-800 dark:prose-pre:text-neutral-100'
+
+/** Lens 统一的 Markdown 渲染：GFM（表格/删除线）+ 数学公式，并修复模型把表格各行挤成一行的情况。 */
+function LensMarkdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+      {normalizeMarkdownForRender(children)}
+    </ReactMarkdown>
+  )
+}
 
 /** 解析 webview hash query：'#lens?mode=translate' → 'translate' */
 function readModeFromHash(): Mode {
@@ -2314,7 +2329,7 @@ export default function Lens() {
                           {m.content}
                         </div>
                       ) : (
-                        <div className="prose prose-sm dark:prose-invert max-w-none text-[13.5px] leading-7 text-neutral-800 dark:text-neutral-200">
+                        <div className={`prose prose-sm dark:prose-invert max-w-none text-[13.5px] leading-7 text-neutral-800 dark:text-neutral-200 ${LENS_CODE_PROSE}`}>
                           {m.reasoning && (
                             <ThinkingBlock
                               reasoning={m.reasoning}
@@ -2343,9 +2358,9 @@ export default function Lens() {
                                 {m.content}
                               </pre>
                             ) : (
-                              <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                              <LensMarkdown>
                                 {m.content}
-                              </ReactMarkdown>
+                              </LensMarkdown>
                             )
                           ) : isLast && streaming && !m.reasoning && !searchInProgress ? (
                             <div className="not-prose flex items-center gap-2 text-neutral-500 dark:text-neutral-400">
@@ -2446,10 +2461,10 @@ export default function Lens() {
               <>
                 {/* 译文区（主体）：合并模式下分隔符前的所有 delta 都属于这块，先于原文出现 */}
                 {translateText ? (
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-[13.5px] leading-7 text-neutral-800 dark:text-neutral-200">
-                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  <div className={`prose prose-sm dark:prose-invert max-w-none text-[13.5px] leading-7 text-neutral-800 dark:text-neutral-200 ${LENS_CODE_PROSE}`}>
+                    <LensMarkdown>
                       {translateText}
-                    </ReactMarkdown>
+                    </LensMarkdown>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -2462,10 +2477,10 @@ export default function Lens() {
                 {translateOriginal && mode !== 'translateText' && (
                   <>
                     <div className="border-t border-black/[0.05] dark:border-white/[0.06] -mx-3.5 my-3" />
-                    <div className="prose prose-sm dark:prose-invert max-w-none text-[12.5px] leading-6 text-neutral-500 dark:text-neutral-400">
-                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    <div className={`prose prose-sm dark:prose-invert max-w-none text-[12.5px] leading-6 text-neutral-500 dark:text-neutral-400 ${LENS_CODE_PROSE}`}>
+                      <LensMarkdown>
                         {translateOriginal}
-                      </ReactMarkdown>
+                      </LensMarkdown>
                     </div>
                   </>
                 )}

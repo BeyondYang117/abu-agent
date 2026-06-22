@@ -10,7 +10,8 @@ use crate::api::{
     send_with_retry, with_standard_request_timeout, ProviderConnectionInput,
 };
 use crate::prompts::{
-    build_translation_prompt, DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE, DEFAULT_TRANSLATION_TEMPLATE,
+    build_translation_prompt, DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE,
+    DEFAULT_SELECTED_TEXT_TRANSLATION_TEMPLATE, DEFAULT_TRANSLATION_TEMPLATE,
 };
 use crate::rapidocr;
 use crate::settings::{
@@ -113,6 +114,7 @@ pub(crate) fn get_default_prompt_templates() -> serde_json::Value {
     serde_json::json!({
       "translationTemplate": DEFAULT_TRANSLATION_TEMPLATE,
       "screenshotTranslationTemplate": DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE,
+      "selectedTextTranslationTemplate": DEFAULT_SELECTED_TEXT_TRANSLATION_TEMPLATE,
       "lensPrompts": {
         "zh": {
           "system": default_lens_system_prompt("zh", true),
