@@ -76,6 +76,31 @@ fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWin
     })
 }
 
+/// Windows：让本进程退出 EcoQoS 执行速度节流，使其在无窗口/后台空闲时仍保持正常调度，
+/// 避免全局热键的 WM_HOTKEY 消息泵被饿死。ControlMask=EXECUTION_SPEED + StateMask=0 表示
+/// "由本进程接管该项节流并关闭它"。best-effort：失败静默忽略。
+#[cfg(target_os = "windows")]
+fn disable_process_power_throttling() {
+    use ::windows::Win32::System::Threading::{
+        GetCurrentProcess, SetProcessInformation, ProcessPowerThrottling,
+        PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        PROCESS_POWER_THROTTLING_STATE,
+    };
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &state as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
 /// 应用入口函数
 /// 初始化 Tauri Builder，加载插件，配置窗口事件处理，设置全局状态、热键和托盘
 pub fn run() {
@@ -160,6 +185,13 @@ pub fn run() {
         })
         .setup(|app| {
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
+
+            // Windows：退出后台执行速度节流（EcoQoS）。本应用所有窗口都可关闭（关闭即销毁,
+            // 空闲降到 ~50MB），无窗口时进程会被 Win11 当后台空闲进程节流,饿死全局热键的
+            // WM_HOTKEY 消息泵 → 热键失灵（托盘点击是 shell 唤醒故仍可用）。退出 EXECUTION_SPEED
+            // 节流后,即便无窗口空闲也保持正常调度,热键消息泵持续工作。
+            #[cfg(target_os = "windows")]
+            disable_process_power_throttling();
 
             #[cfg(target_os = "macos")]
             {
