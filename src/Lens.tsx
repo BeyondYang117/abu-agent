@@ -1270,12 +1270,13 @@ export default function Lens() {
   }, [stage])
 
   const handleCaptureWindow = async (info: LensWindowInfo) => {
-    const captureSeq = motionSeqRef.current
+    // 见 handleCaptureRegion：用 lensOpenSeqRef 而非 motionSeqRef，否则 flyBarToAnchor 后守卫必然失败。
+    const captureOpenSeq = lensOpenSeqRef.current
     // capturingRef 全程 true，避免 macOS screencapture 短暂让 lens webview 失焦时触发 blur handler 误关
     capturingRef.current = true
     try {
       const result = await api.lensCaptureWindow(info.id)
-      if (captureSeq !== motionSeqRef.current) return
+      if (captureOpenSeq !== lensOpenSeqRef.current) return
       if (!result.success || !result.imageId) {
         console.error('lensCaptureWindow failed:', result.error)
         void enterSelect()
@@ -1302,7 +1303,7 @@ export default function Lens() {
         Math.round(info.x), Math.round(info.y), Math.round(info.width), Math.round(info.height),
         info.owner,
       )
-      if (captureSeq !== motionSeqRef.current) return
+      if (captureOpenSeq !== lensOpenSeqRef.current) return
       if (mode === 'translate') void runTranslate(newId)
     } finally {
       capturingRef.current = false
@@ -1310,7 +1311,10 @@ export default function Lens() {
   }
 
   const handleCaptureRegion = async (rect: { x: number; y: number; width: number; height: number }) => {
-    const captureSeq = motionSeqRef.current
+    // 用 lensOpenSeqRef 做"截图期间是否开了新会话"的守卫：flyBarToAnchor 内部会 cancelPendingMotion
+    // 把 motionSeqRef++，若用 motionSeq 守卫则 flyBar 后必然不等、runTranslate 永不触发（截图翻译卡住）。
+    // lensOpenSeqRef 只有 enterSelect（真正新会话）才 bump，flyBar 不动它。
+    const captureOpenSeq = lensOpenSeqRef.current
     const gp = clientToGlobal({ x: rect.x, y: rect.y })
     const params = {
       absoluteX: Math.round(gp.x),
@@ -1326,7 +1330,7 @@ export default function Lens() {
     capturingRef.current = true
     try {
       const result = await api.lensCaptureRegion(params)
-      if (captureSeq !== motionSeqRef.current) return
+      if (captureOpenSeq !== lensOpenSeqRef.current) return
       if (!result.success || !result.imageId) {
         console.error('lensCaptureRegion failed:', result.error)
         void enterSelect()
@@ -1352,7 +1356,7 @@ export default function Lens() {
         } catch (err) { console.error(err) }
       })()
       await flyBarToAnchor(params.absoluteX, params.absoluteY, params.width, params.height, '')
-      if (captureSeq !== motionSeqRef.current) return
+      if (captureOpenSeq !== lensOpenSeqRef.current) return
       if (mode === 'translate') void runTranslate(newId)
     } finally {
       capturingRef.current = false
