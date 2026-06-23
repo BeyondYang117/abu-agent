@@ -15,7 +15,6 @@ import {
   Globe,
   ImagePlus,
   ListChecks,
-  Loader2,
   Plug,
   ScrollText,
   Search,
@@ -405,7 +404,9 @@ function TimelineGroupBlock({
         className="mb-1 flex w-full items-center gap-1.5 text-left text-[15px] leading-relaxed font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
       >
         {generating ? (
-          <Loader2 size={16} strokeWidth={2} className="shrink-0 animate-spin" />
+          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+            <span className="image-generation-pending-indicator" />
+          </span>
         ) : (
           <SummaryIcon size={16} className="shrink-0" />
         )}
