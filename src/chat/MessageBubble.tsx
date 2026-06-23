@@ -13,7 +13,7 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
-import { compareTimelineSegments, groupTimelineSegments, isToolGroupRunning, segmentToolCallId, summarizeToolGroup } from './segments'
+import { compareTimelineSegments, groupTimelineSegments, segmentToolCallId, summarizeToolGroup } from './segments'
 import type { TimelineGroupItem } from './segments'
 
 const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
@@ -26,6 +26,8 @@ interface MessageBubbleProps {
   reasoningDurationMsBySegmentId?: Record<string, number>
   /** 思维链正在流式写入 */
   reasoningStreaming?: boolean
+  /** 这条消息整体是否在流式生成中（仅 streaming-assistant bubble 为 true） */
+  messageStreaming?: boolean
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
@@ -274,7 +276,9 @@ function TimelineSegmentNode({
 
 /**
  * 一组「连续的 thinking + tool 段」= 单一可折叠单元。
- * - 生成中（组内任一 tool running，或末组 + reasoning 仍在流）默认展开；完成自动折叠成一行摘要。
+ * - 「生成中」= 这条消息还在流式生成、且这是末组（messageStreaming && isLastGroup）：
+ *   始终保持展开，不受工具间隙/reasoning 是否在流影响，避免抖动。
+ * - 后面出现正文/别的块（非末组）或消息流式结束（含历史消息）→ 折叠成一行摘要。
  * - 用户手动点过开关后以用户操作为准（userToggledRef，参考 ReasoningBlock）。
  * - 展开后原样平铺组内 ReasoningBlock / ToolCallBlock，其内部各自折叠开关继续可用。
  */
@@ -283,6 +287,7 @@ function TimelineGroupBlock({
   toolCalls,
   artifacts,
   isLastGroup,
+  messageStreaming,
   reasoningStreaming,
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
@@ -292,14 +297,13 @@ function TimelineGroupBlock({
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
   isLastGroup: boolean
+  messageStreaming: boolean
   reasoningStreaming: boolean
   reasoningDurationMs?: number | null
   reasoningDurationMsBySegmentId?: Record<string, number>
   reasoningSegmentCount: number
 }) {
-  const hasReasoning = segments.some((segment) => segment.kind === 'reasoning')
-  const generating =
-    isToolGroupRunning(segments, toolCalls) || (isLastGroup && reasoningStreaming && hasReasoning)
+  const generating = messageStreaming && isLastGroup
   const summary = summarizeToolGroup(segments, toolCalls)
   const [open, setOpen] = useState(generating)
   const userToggledRef = useRef(false)
@@ -352,7 +356,7 @@ function TimelineGroupBlock({
                 segmentCount={segments.length}
                 toolCalls={toolCalls}
                 artifacts={artifacts}
-                reasoningStreaming={generating && isLastGroup}
+                reasoningStreaming={reasoningStreaming && isLastGroup}
                 reasoningDurationMs={reasoningDurationMs}
                 reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
                 reasoningSegmentCount={reasoningSegmentCount}
@@ -369,6 +373,7 @@ function TimelineSegments({
   segments,
   toolCalls,
   artifacts,
+  messageStreaming,
   reasoningStreaming,
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
@@ -376,6 +381,7 @@ function TimelineSegments({
   segments: ChatMessageSegment[]
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
+  messageStreaming: boolean
   reasoningStreaming: boolean
   reasoningDurationMs?: number | null
   reasoningDurationMsBySegmentId?: Record<string, number>
@@ -425,6 +431,7 @@ function TimelineSegments({
               toolCalls={toolCalls}
               artifacts={artifacts}
               isLastGroup={index === lastGroupIndex}
+              messageStreaming={messageStreaming}
               reasoningStreaming={reasoningStreaming}
               reasoningDurationMs={reasoningDurationMs}
               reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
@@ -451,6 +458,7 @@ function MessageBubbleComponent({
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
   reasoningStreaming = false,
+  messageStreaming = false,
   onUpdateMessage,
   onRegenerateMessage,
   onDeleteMessage,
@@ -657,6 +665,7 @@ function MessageBubbleComponent({
               segments={timelineSegments}
               toolCalls={toolCalls}
               artifacts={renderArtifacts}
+              messageStreaming={messageStreaming}
               reasoningStreaming={reasoningStreaming}
               reasoningDurationMs={reasoningDurationMs}
               reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}

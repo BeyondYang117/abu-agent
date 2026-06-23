@@ -296,6 +296,7 @@ export function MessageList({
               timestamp: Math.floor(Date.now() / 1000),
             }}
             conversationId={conversationId}
+            messageStreaming={streaming && !streamFrozen}
             reasoningStreaming={reasoningStreaming && !streamFrozen}
             reasoningDurationMs={streamingReasoningDurationMs}
             reasoningDurationMsBySegmentId={streamingReasoningDurationMsBySegmentId}

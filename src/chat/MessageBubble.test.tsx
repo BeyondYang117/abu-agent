@@ -96,7 +96,7 @@ describe('MessageBubble timeline grouping', () => {
     expect(screen.getByText('middle')).toBeInTheDocument()
   })
 
-  it('keeps a generating group expanded with a running summary', () => {
+  it('keeps the last group expanded while the message is streaming', () => {
     const message: ChatMessage = {
       id: 'msg-4',
       role: 'assistant',
@@ -109,15 +109,73 @@ describe('MessageBubble timeline grouping', () => {
           id: 'tool-1',
           name: 'run_command',
           source: 'native',
-          status: 'running',
+          // 工具已完成、但消息整体仍在流式：末组应保持展开，不折叠抖动
+          status: 'completed',
         },
       ],
       timestamp: 1,
     }
 
-    render(<MessageBubble message={message} />)
-    expect(screen.getByText(/执行命令 · 1 步 · 进行中…/)).toBeInTheDocument()
-    // running tool block detail still renders inside the expanded group
+    render(<MessageBubble message={message} messageStreaming />)
+    expect(screen.getByText(/执行命令 · 1 步 · 已完成/)).toBeInTheDocument()
+    // 展开态：组内工具块细节仍渲染
     expect(screen.getByText('run_command')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /执行命令 · 1 步/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  })
+
+  it('collapses non-last groups even while streaming', () => {
+    const message: ChatMessage = {
+      id: 'msg-5',
+      role: 'assistant',
+      content: '',
+      segments: [
+        { id: 'g1', kind: 'tool', phase: 'tool_loop', order: 1, tool_call_id: 'c1' },
+        { id: 'txt', kind: 'text', phase: 'plain', order: 2, text: 'middle' },
+        { id: 'g2', kind: 'tool', phase: 'tool_loop', order: 3, tool_call_id: 'c2' },
+      ],
+      tool_calls: [
+        { id: 'c1', name: 'run_command', source: 'native', status: 'completed' },
+        { id: 'c2', name: 'web_fetch', source: 'native', status: 'running' },
+      ],
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} messageStreaming />)
+    const groups = screen.getAllByLabelText('过程分组')
+    expect(groups).toHaveLength(2)
+    // 前组（被正文打断、非末组）折叠；末组展开
+    expect(screen.getByRole('button', { name: /执行命令 · 1 步/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(screen.getByRole('button', { name: /网页读取 · 1 步/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
+  })
+
+  it('collapses every group once streaming has finished', () => {
+    const message: ChatMessage = {
+      id: 'msg-6',
+      role: 'assistant',
+      content: '',
+      segments: [
+        { id: 'seg-t', kind: 'tool', phase: 'tool_loop', order: 1, tool_call_id: 'tool-1' },
+      ],
+      tool_calls: [
+        { id: 'tool-1', name: 'run_command', source: 'native', status: 'completed' },
+      ],
+      timestamp: 1,
+    }
+
+    // messageStreaming 默认 false（历史消息）→ 末组也折叠
+    render(<MessageBubble message={message} />)
+    expect(screen.getByRole('button', { name: /执行命令 · 1 步/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
   })
 })

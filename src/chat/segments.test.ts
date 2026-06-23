@@ -3,7 +3,6 @@ import type { ChatMessageSegment, ToolCallRecord } from './types'
 import {
   compareTimelineSegments,
   groupTimelineSegments,
-  isToolGroupRunning,
   segmentToolCallId,
   summarizeToolGroup,
 } from './segments'
@@ -155,22 +154,5 @@ describe('summarizeToolGroup', () => {
     const segments = [toolSegment('t1', 1, 'c1')]
     const toolCalls = [tool({ id: 'c1', name: 'search', source: 'mcp', server_name: 'notion-mcp' })]
     expect(summarizeToolGroup(segments, toolCalls).text).toBe('Notion 搜索与读取 · 1 步 · 已完成')
-  })
-})
-
-describe('isToolGroupRunning', () => {
-  it('is true when any tool in the group is running', () => {
-    const segments = [toolSegment('t1', 1, 'c1'), toolSegment('t2', 2, 'c2')]
-    const toolCalls = [
-      tool({ id: 'c1', status: 'completed' }),
-      tool({ id: 'c2', status: 'running' }),
-    ]
-    expect(isToolGroupRunning(segments, toolCalls)).toBe(true)
-  })
-
-  it('is false when all tools are done', () => {
-    const segments = [toolSegment('t1', 1, 'c1')]
-    const toolCalls = [tool({ id: 'c1', status: 'completed' })]
-    expect(isToolGroupRunning(segments, toolCalls)).toBe(false)
   })
 })

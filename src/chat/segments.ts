@@ -250,19 +250,7 @@ export function summarizeToolGroup(
   }
 }
 
-/** 组状态：组内任一 tool 处于 running 视为「生成中」。 */
-export function isToolGroupRunning(
-  segments: ChatMessageSegment[],
-  toolCalls: ToolCallRecord[],
-): boolean {
-  return segments.some((segment) => {
-    if (segment.kind !== 'tool') return false
-    const id = segmentToolCallId(segment)
-    const record = toolCalls.find((tool) => toolRecordId(tool) === id)
-    return record ? normalizeToolCallStatus(record.status) === 'running' : false
-  })
-}
-
+/** tool record 的唯一 id（兼容多种字段命名）。 */
 function toolRecordId(toolCall: ToolCallRecord): string {
   return toolCall.id || toolCall.toolCallId || toolCall.call_id || toolCall.callId || ''
 }
