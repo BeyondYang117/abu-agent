@@ -112,6 +112,32 @@ pub fn with_standard_request_timeout(request: RequestBuilder) -> RequestBuilder 
     request.timeout(STANDARD_HTTP_REQUEST_TIMEOUT)
 }
 
+/// 把 JSON body 挂到请求上：`gzip=false` 走普通 `.json()`；`gzip=true` 则序列化后
+/// gzip 压缩并设置 `Content-Encoding: gzip`。用于绕开个别供应商前置 WAF 对明文请求体的
+/// 误拦（详见 `ModelProvider::compress_request_body`）。压缩任一步失败都安全退回明文。
+pub fn attach_json_body(
+    request: RequestBuilder,
+    body: &serde_json::Value,
+    gzip: bool,
+) -> RequestBuilder {
+    use std::io::Write as _;
+    if gzip {
+        if let Ok(raw) = serde_json::to_vec(body) {
+            let mut enc =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            if enc.write_all(&raw).is_ok() {
+                if let Ok(gz) = enc.finish() {
+                    return request
+                        .header(reqwest::header::CONTENT_TYPE, "application/json")
+                        .header(reqwest::header::CONTENT_ENCODING, "gzip")
+                        .body(gz);
+                }
+            }
+        }
+    }
+    request.json(body)
+}
+
 /// 构建 HTTP 客户端：不设置 total timeout，避免活跃 SSE 流在 60 秒处被砍掉。
 pub fn build_http_client() -> Client {
     Client::builder()
@@ -1912,7 +1938,41 @@ async fn stream_vision_response(
 mod tests {
     use super::*;
 
-    // ===== extract_status_code =====
+    // ===== attach_json_body (gzip) =====
+
+    #[test]
+    fn attach_json_body_plain_when_gzip_off() {
+        let client = Client::new();
+        let body = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]});
+        let req = attach_json_body(client.post("http://x.invalid/v1"), &body, false)
+            .build()
+            .expect("build");
+        assert!(req.headers().get(reqwest::header::CONTENT_ENCODING).is_none());
+        let sent = req.body().and_then(|b| b.as_bytes()).expect("in-memory body");
+        let parsed: serde_json::Value = serde_json::from_slice(sent).expect("plain json");
+        assert_eq!(parsed, body);
+    }
+
+    #[test]
+    fn attach_json_body_gzips_and_round_trips_when_gzip_on() {
+        use std::io::Read as _;
+        let client = Client::new();
+        let body = serde_json::json!({"model": "m", "cmd": "rm -rf /tmp/x && cat /etc/passwd"});
+        let req = attach_json_body(client.post("http://x.invalid/v1"), &body, true)
+            .build()
+            .expect("build");
+        assert_eq!(
+            req.headers().get(reqwest::header::CONTENT_ENCODING).unwrap(),
+            "gzip"
+        );
+        let gz = req.body().and_then(|b| b.as_bytes()).expect("in-memory body");
+        // 压缩体必须能解回原始 JSON。
+        let mut dec = flate2::read::GzDecoder::new(gz);
+        let mut raw = Vec::new();
+        dec.read_to_end(&mut raw).expect("gunzip");
+        let parsed: serde_json::Value = serde_json::from_slice(&raw).expect("round-trip json");
+        assert_eq!(parsed, body);
+    }
 
     #[test]
     fn extract_status_code_parses_typical_send_with_retry_format() {

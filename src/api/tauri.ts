@@ -570,6 +570,9 @@ export type ModelProvider = {
   supportsTools: boolean
   enabled: boolean
   apiFormat: string
+  // 对请求体做 gzip 压缩再发送。默认 false。仅用于个别前置 WAF 会扫明文请求体、
+  // 把 agent 工具/系统提示里的 shell/路径/SQL 文本误判为攻击而返回 403 的供应商。
+  compressRequestBody?: boolean
   modelOverrides?: Record<string, ModelInfo>
 }
 
@@ -832,6 +835,7 @@ function normalizeProvider(provider: ModelProvider): ModelProvider {
     enabledModels: Array.isArray(provider.enabledModels) ? provider.enabledModels : [],
     supportsTools: provider.supportsTools !== false,
     enabled: provider.enabled !== false,
+    compressRequestBody: provider.compressRequestBody === true,
     apiFormat: normalizeProviderApiFormat(provider.apiFormat),
   }
 }

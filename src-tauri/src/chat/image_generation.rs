@@ -670,6 +670,7 @@ mod tests {
             enabled: true,
             api_format: "openai_chat".to_string(),
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         };
 
         assert!(uses_xai_images_api(&provider, "grok-imagine-image-quality"));
@@ -693,6 +694,7 @@ mod tests {
             enabled: true,
             api_format: "openai_chat".to_string(),
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         };
         let openrouter = ModelProvider {
             base_url: "https://openrouter.ai/api/v1".to_string(),

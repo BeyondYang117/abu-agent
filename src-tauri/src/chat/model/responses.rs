@@ -81,12 +81,15 @@ impl OpenAiResponsesProvider<'_> {
             &self.provider.api_keys,
             |key| {
                 with_standard_request_timeout(
-                    self.state
-                        .http
-                        .post(self.responses_url())
-                        .bearer_auth(key)
-                        .header(ACCEPT_ENCODING, "identity")
-                        .json(&body),
+                    crate::api::attach_json_body(
+                        self.state
+                            .http
+                            .post(self.responses_url())
+                            .bearer_auth(key)
+                            .header(ACCEPT_ENCODING, "identity"),
+                        &body,
+                        self.provider.compress_request_body,
+                    ),
                 )
                 .send()
             },
@@ -176,13 +179,16 @@ impl OpenAiResponsesProvider<'_> {
             &self.provider.id,
             &self.provider.api_keys,
             |key| {
-                self.state
-                    .http
-                    .post(self.responses_url())
-                    .bearer_auth(key)
-                    .header(ACCEPT_ENCODING, "identity")
-                    .json(&body)
-                    .send()
+                crate::api::attach_json_body(
+                    self.state
+                        .http
+                        .post(self.responses_url())
+                        .bearer_auth(key)
+                        .header(ACCEPT_ENCODING, "identity"),
+                    &body,
+                    self.provider.compress_request_body,
+                )
+                .send()
             },
         )
         .await

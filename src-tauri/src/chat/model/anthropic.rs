@@ -70,12 +70,15 @@ impl AnthropicMessagesProvider<'_> {
             &self.provider.api_keys,
             |key| {
                 with_standard_request_timeout(
-                    self.state
-                        .http
-                        .post(self.messages_url())
-                        .headers(anthropic_headers(key).unwrap_or_default())
-                        .header(ACCEPT_ENCODING, "identity")
-                        .json(&body),
+                    crate::api::attach_json_body(
+                        self.state
+                            .http
+                            .post(self.messages_url())
+                            .headers(anthropic_headers(key).unwrap_or_default())
+                            .header(ACCEPT_ENCODING, "identity"),
+                        &body,
+                        self.provider.compress_request_body,
+                    ),
                 )
                 .send()
             },
@@ -127,13 +130,16 @@ impl AnthropicMessagesProvider<'_> {
             &self.provider.id,
             &self.provider.api_keys,
             |key| {
-                self.state
-                    .http
-                    .post(self.messages_url())
-                    .headers(anthropic_headers(key).unwrap_or_default())
-                    .header(ACCEPT_ENCODING, "identity")
-                    .json(&body)
-                    .send()
+                crate::api::attach_json_body(
+                    self.state
+                        .http
+                        .post(self.messages_url())
+                        .headers(anthropic_headers(key).unwrap_or_default())
+                        .header(ACCEPT_ENCODING, "identity"),
+                    &body,
+                    self.provider.compress_request_body,
+                )
+                .send()
             },
         )
         .await

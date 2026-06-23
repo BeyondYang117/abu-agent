@@ -68,6 +68,13 @@ pub struct ModelProvider {
     /// 用户自定义的模型参数覆盖（仅持久化用户显式修改的字段）
     #[serde(default)]
     pub model_overrides: std::collections::HashMap<String, ModelInfo>,
+    /// 是否对请求体做 gzip 压缩再发送。默认关。
+    /// 用于个别供应商前置的 Cloudflare WAF 会扫明文请求体、把 agent 工具/系统提示里的
+    /// shell 命令、文件路径、SQL 等文本误判为攻击而返回 403「Blocked」的情况——
+    /// gzip 后 WAF 不解析压缩体即可放行（后端需接受 gzip 请求，多数 OpenAI 兼容网关支持）。
+    /// 不接受 gzip 的供应商（如官方 DeepSeek）请保持关闭，否则会 400。
+    #[serde(default)]
+    pub compress_request_body: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1066,6 +1073,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 enabled: true,
                 api_format: "openai".to_string(),
                 model_overrides: std::collections::HashMap::new(),
+                compress_request_body: false,
             });
             settings.translator_provider_id = "default-translator".to_string();
             settings.translator_model = old_openai.model;
@@ -1090,6 +1098,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 enabled: true,
                 api_format: "openai".to_string(),
                 model_overrides: std::collections::HashMap::new(),
+                compress_request_body: false,
             });
             settings.screenshot_translation.provider_id = "default-ocr".to_string();
             settings.screenshot_translation.model = old_ocr.model;
@@ -2111,6 +2120,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "cloud".to_string(),
@@ -2124,6 +2134,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "apple".to_string();
         s.translator_model = "apple-foundation".to_string();
@@ -2175,6 +2186,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
 
         let s = sanitize_settings(s);
@@ -2202,6 +2214,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -2224,6 +2237,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -2249,6 +2263,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         let s = sanitize_settings(s);
         let p = s.get_provider("p").unwrap();
@@ -2422,6 +2437,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "p".to_string();
         s.screenshot_translation.provider_id = "p".to_string();
@@ -2449,6 +2465,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "lens".to_string(),
@@ -2462,6 +2479,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "translator".to_string();
         s.translator_model = "gpt-4o".to_string();
@@ -2492,6 +2510,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "lens".to_string(),
@@ -2505,6 +2524,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "translator".to_string();
         s.translator_model = "gpt-4o".to_string();
@@ -2543,6 +2563,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.chat_provider_id = "chat".to_string();
         s.chat_model = "m2".to_string();
@@ -2569,6 +2590,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "vision".to_string(),
@@ -2582,6 +2604,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "title".to_string(),
@@ -2595,6 +2618,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "compression".to_string(),
@@ -2608,6 +2632,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "image".to_string(),
@@ -2621,6 +2646,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "chat".to_string();
         s.translator_model = "chat-model".to_string();
@@ -2675,6 +2701,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "chat".to_string();
         s.translator_model = "m1".to_string();
@@ -2720,6 +2747,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "lens".to_string(),
@@ -2733,6 +2761,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "translator".to_string();
         s.translator_model = "gpt-4o".to_string();
@@ -2901,6 +2930,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.lens.provider_id = "nonexistent".to_string();
         s.lens.model = "ghost-model".to_string();
@@ -2925,6 +2955,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: false,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.providers.push(ModelProvider {
             id: "active".to_string(),
@@ -2938,6 +2969,7 @@ mod tests {
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
         });
         s.translator_provider_id = "disabled".to_string();
         s.translator_model = "off-model".to_string();

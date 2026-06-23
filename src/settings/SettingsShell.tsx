@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   X, Check, Plus, Minus, Trash2, RefreshCw,
-  ExternalLink, Download, Upload, ChevronRight, Wrench, Sparkles, FolderOpen, Eye, EyeOff,
+  ExternalLink, Download, Upload, ChevronRight, Wrench, Sparkles, FolderOpen, Eye, EyeOff, Info,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import ReactMarkdown from 'react-markdown'
@@ -1155,6 +1155,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
   // 哪些 API Key 输入框处于明文显示（按 `${providerId}-${idx}` 记），默认全部隐藏。
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set())
+  const [gzipInfoOpen, setGzipInfoOpen] = useState<Set<string>>(new Set())
   const toggleKeyReveal = useCallback((keyId: string) => {
     setRevealedKeys((prev) => {
       const next = new Set(prev)
@@ -4083,6 +4084,41 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                               />
                             </div>
                           </FieldBlock>
+
+                          <SettingRow
+                            label={
+                              <span className="flex flex-col gap-1">
+                                <span className="flex items-center gap-1">
+                                  <span>{lang === 'zh' ? '压缩请求体 (gzip)' : 'Compress request body (gzip)'}</span>
+                                  <button
+                                    type="button"
+                                    aria-label={lang === 'zh' ? '显示说明' : 'Show details'}
+                                    className="kv-icon-btn"
+                                    onClick={() => setGzipInfoOpen((prev) => {
+                                      const next = new Set(prev)
+                                      if (next.has(provider.id)) next.delete(provider.id)
+                                      else next.add(provider.id)
+                                      return next
+                                    })}
+                                  >
+                                    <Info size={12} />
+                                  </button>
+                                </span>
+                                {gzipInfoOpen.has(provider.id) && (
+                                  <span className="kv-row-desc block mt-1">
+                                    {lang === 'zh'
+                                      ? '个别供应商前置的 WAF 会扫描明文请求体，把工具/系统提示里的 shell 命令、文件路径等文本误判为攻击而返回 403。开启后请求体用 gzip 压缩发送（多数网关可正常解压）。若该供应商不接受 gzip 请求（如官方 DeepSeek）会返回 400，请保持关闭。'
+                                      : 'Some providers sit behind a WAF that scans the plaintext request body and returns 403 for shell/path text inside tool or system-prompt content. Enable to gzip the request body (most gateways accept it). Keep off for providers that reject gzip requests (e.g. official DeepSeek), which would return 400.'}
+                                  </span>
+                                )}
+                              </span>
+                            }
+                          >
+                            <Toggle
+                              checked={provider.compressRequestBody === true}
+                              onChange={(v) => updateProvider(provider.id, { compressRequestBody: v })}
+                            />
+                          </SettingRow>
 
                           <FieldBlock label={t.apiKey} description={t.apiKeysHint}>
                             <div className="space-y-1.5">
