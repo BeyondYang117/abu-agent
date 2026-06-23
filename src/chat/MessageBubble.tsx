@@ -410,7 +410,7 @@ function TimelineGroupBlock({
           <SummaryIcon size={16} className="shrink-0" />
         )}
         <span
-          className={`min-w-0 truncate ${summary.status === 'error' ? 'text-red-500' : ''} ${
+          className={`min-w-0 truncate ${
             generating ? 'chat-motion-tool-shimmer' : ''
           }`}
         >
