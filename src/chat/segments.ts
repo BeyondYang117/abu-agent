@@ -74,7 +74,7 @@ export function groupTimelineSegments(orderedSegments: ChatMessageSegment[]): Ti
   return items
 }
 
-type ToolGroupCategory =
+export type ToolGroupCategory =
   | 'read'
   | 'codeSearch'
   | 'globFiles'
@@ -93,6 +93,9 @@ type ToolGroupCategory =
   | 'notion'
   | 'mcp'
   | 'other'
+
+/** 分组头图标用的代表类别：工具类别全集 + 纯思考组的 `'reasoning'`。 */
+export type ToolGroupIcon = ToolGroupCategory | 'reasoning'
 
 const CATEGORY_LABELS: Record<ToolGroupCategory, string> = {
   read: '读取文件',
@@ -186,10 +189,14 @@ function categorizeTool(toolCall: ToolCallRecord): ToolGroupCategory {
   return 'other'
 }
 
+/** 去重并剔除 `'other'` 后的「有意义类别」集合，文案与图标共用同一判定。 */
+function meaningfulCategories(categories: ToolGroupCategory[]): ToolGroupCategory[] {
+  return Array.from(new Set(categories)).filter((category) => category !== 'other')
+}
+
 function describeCategories(categories: ToolGroupCategory[]): string {
-  const unique = Array.from(new Set(categories))
   // 全部归到「other」（无法分类）→ 回退通用文案
-  const meaningful = unique.filter((category) => category !== 'other')
+  const meaningful = meaningfulCategories(categories)
   if (meaningful.length === 0) return CATEGORY_LABELS.other
   if (meaningful.length === 1) return CATEGORY_LABELS[meaningful[0]]
   if (meaningful.length === 2) {
@@ -198,9 +205,17 @@ function describeCategories(categories: ToolGroupCategory[]): string {
   return '多类工具调用'
 }
 
+/** 代表类别：单一有意义类别时取该类别，混合/未知时回退 `'other'`（与文案选择保持一致）。 */
+function representativeCategory(categories: ToolGroupCategory[]): ToolGroupCategory {
+  const meaningful = meaningfulCategories(categories)
+  return meaningful.length === 1 ? meaningful[0] : 'other'
+}
+
 export interface ToolGroupSummary {
   text: string
   status: 'running' | 'error' | 'done'
+  /** 折叠头图标用的代表类别。 */
+  icon: ToolGroupIcon
 }
 
 /**
@@ -222,11 +237,17 @@ export function summarizeToolGroup(
     if (record) matchedTools.push(record)
   }
 
+  const categories = matchedTools.map((tool) => categorizeTool(tool))
   const label = matchedTools.length
-    ? describeCategories(matchedTools.map((tool) => categorizeTool(tool)))
+    ? describeCategories(categories)
     : toolSegments.length
       ? CATEGORY_LABELS.other
       : '思考过程'
+
+  // 图标代表类别：无工具段（纯 reasoning 组）→ 'reasoning'；否则取代表类别。
+  const icon: ToolGroupIcon = toolSegments.length
+    ? representativeCategory(categories)
+    : 'reasoning'
 
   const running = matchedTools.some((tool) => normalizeToolCallStatus(tool.status) === 'running')
   const failed = matchedTools.filter((tool) => normalizeToolCallStatus(tool.status) === 'error').length
@@ -247,6 +268,7 @@ export function summarizeToolGroup(
   return {
     text: `${label} · ${stepCount} 步 · ${suffix}`,
     status,
+    icon,
   }
 }
 

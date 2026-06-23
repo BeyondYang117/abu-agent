@@ -112,7 +112,9 @@ describe('summarizeToolGroup', () => {
       tool({ id: 'c1', name: 'read_file' }),
       tool({ id: 'c2', name: 'read' }),
     ]
-    expect(summarizeToolGroup(segments, toolCalls).text).toBe('读取文件 · 2 步 · 已完成')
+    const summary = summarizeToolGroup(segments, toolCalls)
+    expect(summary.text).toBe('读取文件 · 2 步 · 已完成')
+    expect(summary.icon).toBe('read')
   })
 
   it('joins two categories', () => {
@@ -121,7 +123,10 @@ describe('summarizeToolGroup', () => {
       tool({ id: 'c1', name: 'search_files' }),
       tool({ id: 'c2', name: 'read_file' }),
     ]
-    expect(summarizeToolGroup(segments, toolCalls).text).toBe('代码搜索与读取文件 · 2 步 · 已完成')
+    const summary = summarizeToolGroup(segments, toolCalls)
+    expect(summary.text).toBe('代码搜索与读取文件 · 2 步 · 已完成')
+    // 混合类别 → 通用兜底图标
+    expect(summary.icon).toBe('other')
   })
 
   it('falls back to generic label when category is unknown', () => {
@@ -129,6 +134,7 @@ describe('summarizeToolGroup', () => {
     const toolCalls = [tool({ id: 'c1', name: 'totally_unknown_tool', source: 'native' })]
     const summary = summarizeToolGroup(segments, toolCalls)
     expect(summary.text).toBe('工具调用 · 1 步 · 已完成')
+    expect(summary.icon).toBe('other')
   })
 
   it('appends failure count and error status', () => {
@@ -153,6 +159,18 @@ describe('summarizeToolGroup', () => {
   it('categorizes notion mcp tools as Notion search & read', () => {
     const segments = [toolSegment('t1', 1, 'c1')]
     const toolCalls = [tool({ id: 'c1', name: 'search', source: 'mcp', server_name: 'notion-mcp' })]
-    expect(summarizeToolGroup(segments, toolCalls).text).toBe('Notion 搜索与读取 · 1 步 · 已完成')
+    const summary = summarizeToolGroup(segments, toolCalls)
+    expect(summary.text).toBe('Notion 搜索与读取 · 1 步 · 已完成')
+    expect(summary.icon).toBe('notion')
+  })
+
+  it('uses reasoning icon for a pure thinking group (no tool segments)', () => {
+    const segments = [
+      segment({ id: 'r1', kind: 'reasoning', order: 1, text: 'a' }),
+      segment({ id: 'r2', kind: 'reasoning', order: 2, text: 'b' }),
+    ]
+    const summary = summarizeToolGroup(segments, [])
+    expect(summary.text).toBe('思考过程 · 2 步 · 已完成')
+    expect(summary.icon).toBe('reasoning')
   })
 })

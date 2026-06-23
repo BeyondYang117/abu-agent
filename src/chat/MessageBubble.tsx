@@ -1,5 +1,28 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Check, ChevronDown, Copy, Loader2, Sparkles, Trash2 } from 'lucide-react'
+import {
+  AlertCircle,
+  Bot,
+  Brain,
+  Check,
+  ChevronDown,
+  Copy,
+  FileCode2,
+  FilePen,
+  FileSearch,
+  FileText,
+  FolderInput,
+  FolderOpen,
+  Globe,
+  ImagePlus,
+  ListChecks,
+  Loader2,
+  Plug,
+  ScrollText,
+  Search,
+  SquareTerminal,
+  Trash2,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { copyToClipboard } from '../utils/clipboard'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
@@ -14,7 +37,7 @@ import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
 import { compareTimelineSegments, groupTimelineSegments, segmentToolCallId, summarizeToolGroup } from './segments'
-import type { TimelineGroupItem } from './segments'
+import type { TimelineGroupItem, ToolGroupIcon } from './segments'
 
 const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
 
@@ -274,6 +297,58 @@ function TimelineSegmentNode({
   return <TimelineTextSegment segment={segment} artifacts={artifacts} />
 }
 
+function TimelineStepsIcon({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="3.5" cy="4" r="1.6" />
+      <circle cx="3.5" cy="12" r="1.6" />
+      <path d="M3.5 5.6v4.8" />
+      <path d="M8 4h5" />
+      <path d="M8 12h3.5" />
+    </svg>
+  )
+}
+
+/**
+ * 分组头折叠态图标：按摘要代表类别选 lucide 图标，与 ToolCallBlock 的单工具图标观感一致。
+ * `other`（通用/混合兜底）保留自绘 TimelineStepsIcon。
+ */
+const GROUP_ICON_BY_CATEGORY: Record<
+  ToolGroupIcon,
+  LucideIcon | typeof TimelineStepsIcon
+> = {
+  read: FileText,
+  codeSearch: Search,
+  globFiles: FileSearch,
+  fileWrite: FilePen,
+  runCommand: SquareTerminal,
+  webFetch: Globe,
+  webSearch: Search,
+  runPython: FileCode2,
+  listDir: FolderOpen,
+  fileOps: FolderInput,
+  todo: ListChecks,
+  memory: Brain,
+  subAgent: Bot,
+  skill: ScrollText,
+  image: ImagePlus,
+  notion: Plug,
+  mcp: Plug,
+  reasoning: Brain,
+  other: TimelineStepsIcon,
+}
+
 /**
  * 一组「连续的 thinking + tool 段」= 单一可折叠单元。
  * - 「生成中」= 这条消息还在流式生成、且这是末组（messageStreaming && isLastGroup）：
@@ -305,6 +380,7 @@ function TimelineGroupBlock({
 }) {
   const generating = messageStreaming && isLastGroup
   const summary = summarizeToolGroup(segments, toolCalls)
+  const SummaryIcon = GROUP_ICON_BY_CATEGORY[summary.icon]
   const [open, setOpen] = useState(generating)
   const userToggledRef = useRef(false)
 
@@ -326,12 +402,12 @@ function TimelineGroupBlock({
         onClick={handleToggle}
         aria-expanded={open}
         data-tauri-drag-region="false"
-        className="mb-1 flex w-full items-center gap-1.5 text-left text-[12px] font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+        className="mb-1 flex w-full items-center gap-1.5 text-left text-[15px] leading-relaxed font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
       >
         {generating ? (
-          <Loader2 size={12} strokeWidth={2} className="shrink-0 animate-spin" />
+          <Loader2 size={16} strokeWidth={2} className="shrink-0 animate-spin" />
         ) : (
-          <Sparkles size={12} strokeWidth={2} className="shrink-0" />
+          <SummaryIcon size={16} className="shrink-0" />
         )}
         <span
           className={`min-w-0 truncate ${summary.status === 'error' ? 'text-red-500' : ''} ${
@@ -341,7 +417,7 @@ function TimelineGroupBlock({
           {summary.text}
         </span>
         <ChevronDown
-          size={12}
+          size={16}
           strokeWidth={2}
           className={`ml-auto shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
         />
