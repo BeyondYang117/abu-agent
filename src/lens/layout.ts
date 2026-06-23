@@ -36,8 +36,8 @@ export function cubicBezier(t: number, x1: number, y1: number, x2: number, y2: n
 
 /** 多屏适配：基于当前 viewport 算"比例 + 上下限"，不同分辨率/屏幕大小都能落到舒适区间。 */
 export const computeMetrics = (vw: number, vh: number): Metrics => ({
-  READY_W: Math.round(Math.max(420, Math.min(720, vw * 0.42))),
-  SELECT_W: Math.round(Math.max(480, Math.min(820, vw * 0.5))),
+  READY_W: Math.round(Math.max(420, Math.min(560, vw * 0.34))),
+  SELECT_W: Math.round(Math.max(440, Math.min(640, vw * 0.42))),
   ANSWER_H: Math.round(Math.max(220, Math.min(480, vh * 0.45))),
   SELECT_BOTTOM_OFFSET: Math.round(Math.max(80, Math.min(160, vh * 0.13))),
 })

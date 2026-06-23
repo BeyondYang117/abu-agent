@@ -26,15 +26,15 @@ describe('computeMetrics', () => {
   it('respects minimum bounds on small viewports', () => {
     const metrics = computeMetrics(800, 600)
     expect(metrics.READY_W).toBeGreaterThanOrEqual(420)
-    expect(metrics.SELECT_W).toBeGreaterThanOrEqual(480)
+    expect(metrics.SELECT_W).toBeGreaterThanOrEqual(440)
     expect(metrics.ANSWER_H).toBeGreaterThanOrEqual(220)
     expect(metrics.SELECT_BOTTOM_OFFSET).toBeGreaterThanOrEqual(80)
   })
 
   it('respects maximum bounds on large viewports', () => {
     const metrics = computeMetrics(4000, 3000)
-    expect(metrics.READY_W).toBeLessThanOrEqual(720)
-    expect(metrics.SELECT_W).toBeLessThanOrEqual(820)
+    expect(metrics.READY_W).toBeLessThanOrEqual(560)
+    expect(metrics.SELECT_W).toBeLessThanOrEqual(640)
     expect(metrics.ANSWER_H).toBeLessThanOrEqual(480)
     expect(metrics.SELECT_BOTTOM_OFFSET).toBeLessThanOrEqual(160)
   })

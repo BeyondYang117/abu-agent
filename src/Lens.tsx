@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { flushSync } from 'react-dom'
-import { Loader2, Copy, Check, Square, Image as ImageIcon, ArrowUp, History as HistoryIcon, ChevronDown, MousePointer2, Code, Eye, Globe, MessageSquarePlus } from 'lucide-react'
+import { Loader2, Copy, Check, Square, Image as ImageIcon, ArrowUp, History as HistoryIcon, ChevronDown, MousePointer2, Code, Eye, MessageSquarePlus } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
 import ReactMarkdown from 'react-markdown'
@@ -2121,24 +2121,7 @@ export default function Lens() {
               placeholder={t.lensAskPlaceholder}
               className={`min-w-0 flex-1 bg-transparent text-[16px] text-neutral-900 dark:text-white placeholder-neutral-500 dark:placeholder-neutral-400 focus:outline-none ${streaming ? 'opacity-60' : ''}`}
             />
-            {mode === 'chat' && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!webSearchAvailable || streaming) return
-                  setWebSearchEnabled(v => !v)
-                }}
-                disabled={!webSearchAvailable || streaming}
-                title={webSearchAvailable ? t.lensWebSearchToggle : t.lensWebSearchUnavailable}
-                className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
-                  webSearchEnabled && webSearchAvailable
-                    ? 'bg-blue-500 text-white hover:bg-blue-600'
-                    : 'text-neutral-600 dark:text-neutral-300 hover:bg-black/[0.05] dark:hover:bg-white/[0.06]'
-                } ${(!webSearchAvailable || streaming) ? 'opacity-40 cursor-not-allowed' : ''}`}
-              >
-                <Globe size={15} strokeWidth={1.9} />
-              </button>
-            )}
+            {/* ponytail: 网络搜索按钮已隐藏；webSearchEnabled 仍由 line ~312 在可用时自动开启，功能不变 */}
             {/* History dropdown：按钮 + 弹出面板（容器作为 ref，点击外部关闭） */}
             <div ref={historyPanelRef} className="relative shrink-0">
               <button
