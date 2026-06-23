@@ -340,7 +340,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Project-relative, absolute, home-relative, or ~/ file path depending on workspace mode" },
+                "path": { "type": "string", "description": "File path to read. Relative paths resolve from the project root/current workspace; absolute and ~/ paths are also accepted when allowed by workspace mode." },
                 "offset": { "type": "integer", "description": "1-based start line (optional)" },
                 "limit": { "type": "integer", "description": "Max lines to return (optional)" }
             },
@@ -356,7 +356,7 @@ pub fn native_list_dir_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__list_dir".to_string(),
         name: "ls".to_string(),
-        description: "List files and directories. Omit path (or pass \".\") to list the current working directory; relative paths resolve from it. Do not guess or invent an absolute path, and never translate/\"correct\" directory names — pass an absolute or ~/ path only when the user gave one or an earlier tool returned it.".to_string(),
+        description: "List files and directories in a directory. Omit path (or pass \".\") to list the current working directory; relative paths resolve from it. Do not guess or invent an absolute path, and never translate/\"correct\" directory names — pass an absolute or ~/ path only when the user gave one or an earlier tool returned it.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -378,7 +378,7 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__search_files".to_string(),
         name: "grep".to_string(),
-        description: "Search text files under a directory. By default `query` is a literal substring; set regex=true to treat it as a regular expression. Relative paths resolve from the project root; respects .gitignore and skips common dependency/build folders (node_modules, target, dist, …).".to_string(),
+        description: "Search text in a file or under a directory. By default `query` is a literal substring; set regex=true to treat it as a regular expression. If you already know the exact file, pass that file path directly; for broader searches, pass a directory and use `glob` to narrow the scope. Relative paths resolve from the project root; respects .gitignore and skips common dependency/build folders (node_modules, target, dist, …).".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -387,7 +387,7 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
             "properties": {
                 "query": { "type": "string", "description": "Text to search for (alias: pattern). Literal substring by default; a regular expression when regex=true." },
                 "pattern": { "type": "string", "description": "Alias for query." },
-                "path": { "type": "string", "description": "Directory path, defaults to project root/current workspace" },
+                "path": { "type": "string", "description": "File or directory path, defaults to project root/current workspace" },
                 "regex": { "type": "boolean", "description": "Treat query as a regular expression, default false (literal substring)" },
                 "case_sensitive": { "type": "boolean", "description": "Case-sensitive matching, default false" },
                 "include_hidden": { "type": "boolean", "description": "Include dotfiles and hidden entries" },
@@ -408,7 +408,7 @@ pub fn native_glob_files_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__glob_files".to_string(),
         name: "find".to_string(),
-        description: "Find files/directories by glob pattern such as \"src/**/*.tsx\". Relative paths resolve from the project root; respects .gitignore.".to_string(),
+        description: "Find files/directories under a directory by glob pattern such as \"src/**/*.tsx\". Relative paths resolve from the project root; respects .gitignore.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -831,6 +831,33 @@ mod tests {
         assert!(native_write_file_tool().sensitive);
         assert!(native_edit_file_tool().sensitive);
         assert!(native_run_command_tool().sensitive);
+    }
+
+    #[test]
+    fn file_tool_path_descriptions_are_scope_specific() {
+        let read_schema = native_read_file_tool().input_schema;
+        let ls_schema = native_list_dir_tool().input_schema;
+        let grep = native_search_files_tool();
+        let find = native_glob_files_tool();
+
+        assert!(read_schema["properties"]["path"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("File path"));
+        assert!(ls_schema["properties"]["path"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Directory"));
+        assert!(grep.description.contains("file or under a directory"));
+        assert!(grep.description.contains("pass that file path directly"));
+        assert!(grep.input_schema["properties"]["path"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("File or directory path"));
+        assert!(find.input_schema["properties"]["path"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Directory"));
     }
 
     #[test]

@@ -718,6 +718,12 @@ function fileOperationLabel(operation: string): string {
 function fileToolArgumentPreview(toolCall: ToolCallRecord, args: Record<string, unknown> | null): string {
   const rawName = toolRawName(toolCall)
   const path = typeof args?.path === 'string' ? args.path.trim() : ''
+  const query = typeof args?.query === 'string'
+    ? args.query.trim()
+    : typeof args?.pattern === 'string'
+      ? args.pattern.trim()
+      : ''
+  const glob = typeof args?.glob === 'string' ? args.glob.trim() : ''
   if (rawName === 'write' || rawName === 'write_file') {
     return path ? path : '写入文件'
   }
@@ -730,6 +736,15 @@ function fileToolArgumentPreview(toolCall: ToolCallRecord, args: Record<string, 
     // Legacy single-edit records (old_string/new_string) from persisted conversations.
     const oldString = typeof args?.old_string === 'string' ? compactText(args.old_string, 80) : ''
     return [path, oldString ? `替换 ${oldString}` : ''].filter(Boolean).join(' · ')
+  }
+  if (rawName === 'grep' || rawName === 'search_files') {
+    const scope = glob
+      ? [path || '.', glob].join(' + ')
+      : path
+    if (!query && !scope) return ''
+    const scopeLabel = scope ? compactText(scope, 120) : ''
+    const queryLabel = query ? `搜索 ${compactText(query, 80)}` : ''
+    return [queryLabel, scopeLabel].filter(Boolean).join(' · ')
   }
   return ''
 }

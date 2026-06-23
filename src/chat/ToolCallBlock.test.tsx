@@ -64,4 +64,57 @@ describe('ToolCallBlock', () => {
     expect(screen.getByText('参数')).toBeInTheDocument()
     expect(screen.getByText(/README\.md/)).toBeInTheDocument()
   })
+
+  it('formats grep preview with query and file path', () => {
+    render(
+      <ToolCallBlock
+        toolCall={buildToolCall({
+          toolName: 'grep',
+          result_preview: '',
+          arguments: {
+            query: 'ClaudeAgentClient',
+            path: 'packages/server/src/server/agent/providers/claude/agent.ts',
+          },
+        })}
+      />,
+    )
+    const button = screen.getByRole('button', { name: /grep/i })
+    expect(within(button).getByText(/搜索 ClaudeAgentClient/)).toBeInTheDocument()
+    expect(within(button).getByText(/providers\/claude\/agent\.ts/)).toBeInTheDocument()
+  })
+
+  it('formats grep preview with query and glob scope', () => {
+    render(
+      <ToolCallBlock
+        toolCall={buildToolCall({
+          toolName: 'grep',
+          result_preview: '',
+          arguments: {
+            pattern: 'ClaudeAgentClient',
+            glob: '**/claude/agent.ts',
+          },
+        })}
+      />,
+    )
+    const button = screen.getByRole('button', { name: /grep/i })
+    expect(within(button).getByText(/搜索 ClaudeAgentClient/)).toBeInTheDocument()
+    expect(within(button).getByText(/\.\s\+\s\*\*\/claude\/agent\.ts/)).toBeInTheDocument()
+  })
+
+  it('falls back to stored grep argument preview when parsed arguments are unavailable', () => {
+    render(
+      <ToolCallBlock
+        toolCall={buildToolCall({
+          toolName: 'grep',
+          result_preview: '',
+          arguments: '{"query":',
+          argumentPreview: '正在生成工具参数…',
+          argumentsPreview: '正在生成工具参数…',
+        })}
+      />,
+    )
+    const button = screen.getByRole('button', { name: /grep/i })
+    expect(within(button).getByText(/正在生成工具参数/)).toBeInTheDocument()
+    expect(within(button).queryByText(/搜索文本/)).not.toBeInTheDocument()
+  })
 })

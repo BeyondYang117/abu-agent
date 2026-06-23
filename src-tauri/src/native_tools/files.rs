@@ -1130,15 +1130,19 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "search_files requires query (or its alias pattern)".to_string())?;
-    let root = resolve_tool_read_path(
+    let search_root = resolve_tool_read_path(
         workspace,
         arguments
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("."),
     )?;
-    if !root.is_dir() {
-        return Err("search_files path must be a directory".to_string());
+    if !search_root.exists() {
+        let display = arguments
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+        return Err(format!("search_files path not found: {display}"));
     }
     let case_sensitive = arguments
         .get("case_sensitive")
@@ -1211,8 +1215,20 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
         }
     };
 
-    let paths = walk_paths(&root, true, include_hidden, MAX_SEARCH_FILES)?;
-    let walk_truncated = paths.len() >= MAX_SEARCH_FILES;
+    let (scan_root, paths, walk_truncated) = if search_root.is_dir() {
+        let paths = walk_paths(&search_root, true, include_hidden, MAX_SEARCH_FILES)?;
+        let walk_truncated = paths.len() >= MAX_SEARCH_FILES;
+        (search_root.clone(), paths, walk_truncated)
+    } else if search_root.is_file() {
+        let scan_root = search_root
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        (scan_root, vec![search_root.clone()], false)
+    } else {
+        let display = workspace_display_path(workspace, &search_root);
+        return Err(format!("search_files path is neither a file nor a directory: {display}"));
+    };
     let mut files_scanned = 0usize;
     let mut content_matches = Vec::new();
     let mut files_with_matches = Vec::new();
@@ -1224,7 +1240,7 @@ pub fn search_files(workspace: &NativeToolWorkspace, arguments: &Value) -> Resul
             continue;
         }
         if !glob_patterns.is_empty() {
-            let rel = relative_slash_path(&root, &path);
+            let rel = relative_slash_path(&scan_root, &path);
             let file_name = path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -2188,6 +2204,102 @@ mod tests {
             paths.iter().all(|p| p.ends_with(".rs") || p.ends_with(".txt")),
             "brace glob must only match .rs and .txt files, got: {paths:?}"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_files_accepts_single_file_paths() {
+        let root = std::env::temp_dir().join(format!("kivio_search_file_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("mkdir");
+        let workspace = NativeToolWorkspace::project(
+            "proj".to_string(),
+            "T".to_string(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let file = root.join("one.ts");
+        fs::write(
+            &file,
+            "first\nconst ClaudeAgentClient = 1;\nmatch NEEDLE here\nlast\n",
+        )
+        .expect("write file");
+        let file_path = file.to_string_lossy().into_owned();
+        let parse = |s: String| serde_json::from_str::<Value>(&s).expect("json");
+
+        let literal = parse(
+            search_files(&workspace, &json!({ "query": "ClaudeAgentClient", "path": file_path }))
+                .expect("literal file"),
+        );
+        assert_eq!(literal["files_scanned"], 1);
+        assert_eq!(literal["walk_truncated"], false);
+        assert_eq!(literal["matches"].as_array().unwrap().len(), 1);
+        assert!(literal["matches"][0]["path"].as_str().unwrap().ends_with("one.ts"));
+
+        let regex = parse(
+            search_files(
+                &workspace,
+                &json!({ "query": "^const\\s+ClaudeAgentClient", "regex": true, "path": file_path }),
+            )
+            .expect("regex file"),
+        );
+        assert_eq!(regex["matches"].as_array().unwrap().len(), 1);
+
+        let with_context = parse(
+            search_files(
+                &workspace,
+                &json!({ "query": "NEEDLE", "path": file_path, "context": 1 }),
+            )
+            .expect("context file"),
+        );
+        let m = &with_context["matches"].as_array().unwrap()[0];
+        assert_eq!(m["line"], 3);
+        assert_eq!(m["before"].as_array().unwrap()[0]["text"], "const ClaudeAgentClient = 1;");
+        assert_eq!(m["after"].as_array().unwrap()[0]["text"], "last");
+
+        let count = parse(
+            search_files(
+                &workspace,
+                &json!({ "query": "e", "path": file_path, "output_mode": "count" }),
+            )
+            .expect("count file"),
+        );
+        assert_eq!(count["counts"].as_array().unwrap().len(), 1);
+        assert!(count["total"].as_u64().unwrap() >= 2);
+
+        let files = parse(
+            search_files(
+                &workspace,
+                &json!({ "query": "ClaudeAgentClient", "path": file_path, "output_mode": "files_with_matches" }),
+            )
+            .expect("files_with_matches file"),
+        );
+        assert_eq!(files["files"].as_array().unwrap().len(), 1);
+
+        let glob_hit = parse(
+            search_files(
+                &workspace,
+                &json!({ "query": "ClaudeAgentClient", "path": file_path, "glob": "*.ts" }),
+            )
+            .expect("glob hit"),
+        );
+        assert_eq!(glob_hit["matches"].as_array().unwrap().len(), 1);
+
+        let glob_miss = parse(
+            search_files(
+                &workspace,
+                &json!({ "query": "ClaudeAgentClient", "path": file_path, "glob": "*.rs" }),
+            )
+            .expect("glob miss"),
+        );
+        assert_eq!(glob_miss["matches"].as_array().unwrap().len(), 0);
+        assert_eq!(glob_miss["files_scanned"], 0);
+
+        let missing = search_files(
+            &workspace,
+            &json!({ "query": "ClaudeAgentClient", "path": root.join("missing.ts").to_string_lossy().into_owned() }),
+        )
+        .unwrap_err();
+        assert!(missing.contains("path not found"), "missing path must mention not found: {missing}");
 
         let _ = fs::remove_dir_all(&root);
     }
