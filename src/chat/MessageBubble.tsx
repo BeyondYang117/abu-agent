@@ -1,5 +1,5 @@
-import { memo, useEffect, useState } from 'react'
-import { AlertCircle, Check, ChevronDown, Copy, Trash2 } from 'lucide-react'
+import { memo, useEffect, useRef, useState } from 'react'
+import { AlertCircle, Check, ChevronDown, Copy, Loader2, Sparkles, Trash2 } from 'lucide-react'
 import { copyToClipboard } from '../utils/clipboard'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
@@ -13,7 +13,8 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
-import { compareTimelineSegments, segmentToolCallId } from './segments'
+import { compareTimelineSegments, groupTimelineSegments, isToolGroupRunning, segmentToolCallId, summarizeToolGroup } from './segments'
+import type { TimelineGroupItem } from './segments'
 
 const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
 
@@ -229,6 +230,141 @@ function TimelineTextSegment({
   )
 }
 
+function TimelineSegmentNode({
+  segment,
+  index,
+  segmentCount,
+  toolCalls,
+  artifacts,
+  reasoningStreaming,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  reasoningSegmentCount,
+}: {
+  segment: ChatMessageSegment
+  index: number
+  segmentCount: number
+  toolCalls: ToolCallRecord[]
+  artifacts: ChatToolArtifact[]
+  reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  reasoningSegmentCount: number
+}) {
+  if (segment.kind === 'tool') {
+    return <TimelineToolSegment segment={segment} toolCalls={toolCalls} />
+  }
+  if (segment.kind === 'reasoning') {
+    const reasoning = segmentText(segment)
+    if (!reasoning.trim()) return null
+    return (
+      <ReasoningBlock
+        reasoning={reasoning}
+        streaming={reasoningStreaming && index === segmentCount - 1}
+        durationMs={
+          reasoningDurationMsBySegmentId?.[segment.id]
+            ?? (reasoningSegmentCount === 1 ? reasoningDurationMs : null)
+        }
+      />
+    )
+  }
+  if (!segmentText(segment).trim()) return null
+  return <TimelineTextSegment segment={segment} artifacts={artifacts} />
+}
+
+/**
+ * 一组「连续的 thinking + tool 段」= 单一可折叠单元。
+ * - 生成中（组内任一 tool running，或末组 + reasoning 仍在流）默认展开；完成自动折叠成一行摘要。
+ * - 用户手动点过开关后以用户操作为准（userToggledRef，参考 ReasoningBlock）。
+ * - 展开后原样平铺组内 ReasoningBlock / ToolCallBlock，其内部各自折叠开关继续可用。
+ */
+function TimelineGroupBlock({
+  segments,
+  toolCalls,
+  artifacts,
+  isLastGroup,
+  reasoningStreaming,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  reasoningSegmentCount,
+}: {
+  segments: ChatMessageSegment[]
+  toolCalls: ToolCallRecord[]
+  artifacts: ChatToolArtifact[]
+  isLastGroup: boolean
+  reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  reasoningSegmentCount: number
+}) {
+  const hasReasoning = segments.some((segment) => segment.kind === 'reasoning')
+  const generating =
+    isToolGroupRunning(segments, toolCalls) || (isLastGroup && reasoningStreaming && hasReasoning)
+  const summary = summarizeToolGroup(segments, toolCalls)
+  const [open, setOpen] = useState(generating)
+  const userToggledRef = useRef(false)
+
+  // 生成中默认展开、完成自动折叠；用户手动操作后不再覆盖。
+  useEffect(() => {
+    if (userToggledRef.current) return
+    setOpen(generating)
+  }, [generating])
+
+  const handleToggle = () => {
+    userToggledRef.current = true
+    setOpen((value) => !value)
+  }
+
+  return (
+    <section aria-label="过程分组" className="not-prose">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={open}
+        data-tauri-drag-region="false"
+        className="mb-1 flex w-full items-center gap-1.5 text-left text-[12px] font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+      >
+        {generating ? (
+          <Loader2 size={12} strokeWidth={2} className="shrink-0 animate-spin" />
+        ) : (
+          <Sparkles size={12} strokeWidth={2} className="shrink-0" />
+        )}
+        <span
+          className={`min-w-0 truncate ${summary.status === 'error' ? 'text-red-500' : ''} ${
+            generating ? 'chat-motion-tool-shimmer' : ''
+          }`}
+        >
+          {summary.text}
+        </span>
+        <ChevronDown
+          size={12}
+          strokeWidth={2}
+          className={`ml-auto shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      <div className={`chat-motion-reveal ${open ? 'is-open' : ''}`} aria-hidden={!open}>
+        <div className="space-y-1.5">
+          {segments.map((segment, index) => (
+            <div key={segment.id} className="chat-motion-fade">
+              <TimelineSegmentNode
+                segment={segment}
+                index={index}
+                segmentCount={segments.length}
+                toolCalls={toolCalls}
+                artifacts={artifacts}
+                reasoningStreaming={generating && isLastGroup}
+                reasoningDurationMs={reasoningDurationMs}
+                reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+                reasoningSegmentCount={reasoningSegmentCount}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function TimelineSegments({
   segments,
   toolCalls,
@@ -262,34 +398,38 @@ function TimelineSegments({
       const rightStarted = right.startedAt ?? right.started_at ?? 0
       return leftStarted - rightStarted
     })
+
+  const groupItems = groupTimelineSegments(ordered)
+  const lastGroupIndex = groupItems.reduce(
+    (last, item, index) => (item.type === 'group' ? index : last),
+    -1,
+  )
+
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
-      {ordered.map((segment, index) => {
-        let node: React.ReactNode
-        if (segment.kind === 'tool') {
-          node = <TimelineToolSegment segment={segment} toolCalls={toolCalls} />
-        } else if (segment.kind === 'reasoning') {
-          const reasoning = segmentText(segment)
-          if (!reasoning.trim()) return null
-          node = (
-            <ReasoningBlock
-              reasoning={reasoning}
-              streaming={reasoningStreaming && index === ordered.length - 1}
-              durationMs={
-                reasoningDurationMsBySegmentId?.[segment.id]
-                  ?? (reasoningSegmentCount === 1 ? reasoningDurationMs : null)
-              }
-            />
+      {groupItems.map((item: TimelineGroupItem, index) => {
+        if (item.type === 'text') {
+          if (!segmentText(item.segment).trim()) return null
+          // 每个时间线分段单独淡入：流式中新分段顺次出现而非"啪"地弹出。
+          return (
+            <div key={item.segment.id} className="chat-motion-fade">
+              <TimelineTextSegment segment={item.segment} artifacts={artifacts} />
+            </div>
           )
-        } else {
-          if (!segmentText(segment).trim()) return null
-          node = <TimelineTextSegment segment={segment} artifacts={artifacts} />
         }
-        // 每个时间线分段（推理/工具/正文）单独淡入：流式中新分段顺次出现而非"啪"地弹出。
-        // 用纯透明度（非 fade-up）避免与外层消息 fade-up 的位移叠加；不加 index 错峰避免拖慢流式后续分段。
+        const groupKey = item.segments[0]?.id ?? `group-${index}`
         return (
-          <div key={segment.id} className="chat-motion-fade">
-            {node}
+          <div key={groupKey} className="chat-motion-fade">
+            <TimelineGroupBlock
+              segments={item.segments}
+              toolCalls={toolCalls}
+              artifacts={artifacts}
+              isLastGroup={index === lastGroupIndex}
+              reasoningStreaming={reasoningStreaming}
+              reasoningDurationMs={reasoningDurationMs}
+              reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+              reasoningSegmentCount={reasoningSegmentCount}
+            />
           </div>
         )
       })}
