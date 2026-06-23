@@ -319,6 +319,34 @@ function TimelineStepsIcon({ size = 16, className }: { size?: number; className?
   )
 }
 
+/** macOS 经典放射状短线 spinner：8 根短线绕中心放射、透明度阶梯递增，整体步进旋转。 */
+function TimelineSpinner({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
+      <g className="kv-tick-spinner" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <line
+            key={i}
+            x1="12"
+            y1="3.5"
+            x2="12"
+            y2="7"
+            transform={`rotate(${i * 45} 12 12)`}
+            opacity={(i + 1) / 8}
+          />
+        ))}
+      </g>
+    </svg>
+  )
+}
+
 /**
  * 分组头折叠态图标：按摘要代表类别选 lucide 图标，与 ToolCallBlock 的单工具图标观感一致。
  * `other`（通用/混合兜底）保留自绘 TimelineStepsIcon。
@@ -404,9 +432,7 @@ function TimelineGroupBlock({
         className="mb-1 flex w-full items-center gap-1.5 text-left text-[15px] leading-relaxed font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
       >
         {generating ? (
-          <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
-            <span className="image-generation-pending-indicator" />
-          </span>
+          <TimelineSpinner size={16} className="shrink-0 text-neutral-400 dark:text-neutral-500" />
         ) : (
           <SummaryIcon size={16} className="shrink-0" />
         )}

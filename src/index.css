@@ -880,6 +880,19 @@ body {
   box-shadow: 0 0 0 0 rgba(138, 138, 138, 0.24);
 }
 
+/* timeline 分组头「生成中」放射状短线 spinner：步进旋转配阶梯透明度，经典「线条逐根追逐渐隐」观感。 */
+@keyframes kv-tick-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.kv-tick-spinner {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: kv-tick-spinner-rotate 0.9s steps(8) infinite;
+}
+
 /* 退出动画：元素移除前缩小淡出。NOTE: 故意不在 reduced-motion 里设 animation:none，
    靠全局兜底把时长压到 0.01ms —— 这样 animationend 仍会触发，依赖它清理 DOM 的逻辑（附件移除）不会卡住。 */
 @keyframes chat-motion-exit {
