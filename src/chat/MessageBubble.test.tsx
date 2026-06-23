@@ -67,7 +67,7 @@ describe('MessageBubble timeline grouping', () => {
     }
 
     render(<MessageBubble message={message} />)
-    expect(screen.getByText(/读取文件 · 1 步 · 已完成/)).toBeInTheDocument()
+    expect(screen.getByText(/读取 1 个文件/)).toBeInTheDocument()
     // collapsed group hides the reasoning body region
     expect(screen.getByLabelText('过程分组')).toHaveAttribute('aria-label', '过程分组')
     // final answer text still renders
@@ -117,10 +117,10 @@ describe('MessageBubble timeline grouping', () => {
     }
 
     render(<MessageBubble message={message} messageStreaming />)
-    expect(screen.getByText(/执行命令 · 1 步 · 已完成/)).toBeInTheDocument()
+    expect(screen.getByText(/执行 1 条命令/)).toBeInTheDocument()
     // 展开态：组内工具块细节仍渲染
     expect(screen.getByText('run_command')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /执行命令 · 1 步/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /执行 1 条命令/ })).toHaveAttribute(
       'aria-expanded',
       'true',
     )
@@ -147,11 +147,11 @@ describe('MessageBubble timeline grouping', () => {
     const groups = screen.getAllByLabelText('过程分组')
     expect(groups).toHaveLength(2)
     // 前组（被正文打断、非末组）折叠；末组展开
-    expect(screen.getByRole('button', { name: /执行命令 · 1 步/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /执行 1 条命令/ })).toHaveAttribute(
       'aria-expanded',
       'false',
     )
-    expect(screen.getByRole('button', { name: /网页读取 · 1 步/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /正在读取 1 个网页/ })).toHaveAttribute(
       'aria-expanded',
       'true',
     )
@@ -173,7 +173,7 @@ describe('MessageBubble timeline grouping', () => {
 
     // messageStreaming 默认 false（历史消息）→ 末组也折叠
     render(<MessageBubble message={message} />)
-    expect(screen.getByRole('button', { name: /执行命令 · 1 步/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /执行 1 条命令/ })).toHaveAttribute(
       'aria-expanded',
       'false',
     )

@@ -106,31 +106,64 @@ describe('groupTimelineSegments', () => {
 })
 
 describe('summarizeToolGroup', () => {
-  it('summarizes a single category with step count and completed suffix', () => {
+  it('summarizes a single category with file count (done)', () => {
     const segments = [toolSegment('t1', 1, 'c1'), toolSegment('t2', 2, 'c2')]
     const toolCalls = [
       tool({ id: 'c1', name: 'read_file' }),
       tool({ id: 'c2', name: 'read' }),
     ]
     const summary = summarizeToolGroup(segments, toolCalls)
-    expect(summary.text).toBe('读取文件 · 2 步 · 已完成')
+    expect(summary.text).toBe('读取 2 个文件')
+    expect(summary.status).toBe('done')
     expect(summary.icon).toBe('read')
     // 单类组：去重后仅一个类别
     expect(summary.categories).toEqual(['read'])
   })
 
-  it('joins two categories', () => {
-    const segments = [toolSegment('t1', 1, 'c1'), toolSegment('t2', 2, 'c2')]
+  it('omits a count for count-less categories like code search', () => {
+    const segments = [toolSegment('t1', 1, 'c1')]
+    const toolCalls = [tool({ id: 'c1', name: 'search_files' })]
+    const summary = summarizeToolGroup(segments, toolCalls)
+    expect(summary.text).toBe('搜索代码')
+    expect(summary.icon).toBe('codeSearch')
+    expect(summary.categories).toEqual(['codeSearch'])
+  })
+
+  it('joins two categories with 和 (each keeping its own count)', () => {
+    const segments = [
+      toolSegment('t1', 1, 'c1'),
+      toolSegment('t2', 2, 'c2'),
+      toolSegment('t3', 3, 'c3'),
+      toolSegment('t4', 4, 'c4'),
+    ]
     const toolCalls = [
-      tool({ id: 'c1', name: 'search_files' }),
-      tool({ id: 'c2', name: 'read_file' }),
+      tool({ id: 'c1', name: 'read_file' }),
+      tool({ id: 'c2', name: 'read' }),
+      tool({ id: 'c3', name: 'read_file' }),
+      tool({ id: 'c4', name: 'search_files' }),
     ]
     const summary = summarizeToolGroup(segments, toolCalls)
-    expect(summary.text).toBe('代码搜索与读取文件 · 2 步 · 已完成')
+    expect(summary.text).toBe('读取 3 个文件和搜索代码')
     // 混合类别 → 通用兜底图标
     expect(summary.icon).toBe('other')
     // 两个去重类别，保持首次出现顺序
-    expect(summary.categories).toEqual(['codeSearch', 'read'])
+    expect(summary.categories).toEqual(['read', 'codeSearch'])
+  })
+
+  it('falls back to a step count for three or more categories', () => {
+    const segments = [
+      toolSegment('t1', 1, 'c1'),
+      toolSegment('t2', 2, 'c2'),
+      toolSegment('t3', 3, 'c3'),
+    ]
+    const toolCalls = [
+      tool({ id: 'c1', name: 'read_file' }),
+      tool({ id: 'c2', name: 'search_files' }),
+      tool({ id: 'c3', name: 'run_command' }),
+    ]
+    const summary = summarizeToolGroup(segments, toolCalls)
+    expect(summary.text).toBe('调用 3 次工具')
+    expect(summary.categories).toEqual(['read', 'codeSearch', 'runCommand'])
   })
 
   it('dedupes repeated tools and drops other-category tools from categories', () => {
@@ -145,54 +178,60 @@ describe('summarizeToolGroup', () => {
       tool({ id: 'c3', name: 'read' }),
     ]
     const summary = summarizeToolGroup(segments, toolCalls)
-    // 重复 read 去重，未知工具(other)被剔除
+    // 重复 read 去重，未知工具(other)被剔除；m===1 → 读取片段（count 只数 read）
+    expect(summary.text).toBe('读取 2 个文件')
     expect(summary.categories).toEqual(['read'])
   })
 
-  it('falls back to generic label when category is unknown', () => {
-    const segments = [toolSegment('t1', 1, 'c1')]
-    const toolCalls = [tool({ id: 'c1', name: 'totally_unknown_tool', source: 'native' })]
+  it('falls back to a step count when every category is unknown (m===0)', () => {
+    const segments = [toolSegment('t1', 1, 'c1'), toolSegment('t2', 2, 'c2')]
+    const toolCalls = [
+      tool({ id: 'c1', name: 'totally_unknown_tool', source: 'native' }),
+      tool({ id: 'c2', name: 'another_unknown', source: 'native' }),
+    ]
     const summary = summarizeToolGroup(segments, toolCalls)
-    expect(summary.text).toBe('工具调用 · 1 步 · 已完成')
+    expect(summary.text).toBe('调用 2 次工具')
     expect(summary.icon).toBe('other')
     // 全是 other → categories 为空
     expect(summary.categories).toEqual([])
   })
 
-  it('appends failure count and error status', () => {
+  it('uses the 正在…(…) running form when any tool is running', () => {
+    const segments = [toolSegment('t1', 1, 'c1')]
+    const toolCalls = [tool({ id: 'c1', name: 'read_file', status: 'running' })]
+    const summary = summarizeToolGroup(segments, toolCalls)
+    expect(summary.text).toBe('正在读取 1 个文件…')
+    expect(summary.text.endsWith('…')).toBe(true)
+    expect(summary.status).toBe('running')
+  })
+
+  it('appends a 项失败 suffix on the done path when a tool failed', () => {
     const segments = [toolSegment('t1', 1, 'c1'), toolSegment('t2', 2, 'c2')]
     const toolCalls = [
       tool({ id: 'c1', name: 'run_command', status: 'error' }),
       tool({ id: 'c2', name: 'run_command', status: 'completed' }),
     ]
     const summary = summarizeToolGroup(segments, toolCalls)
-    expect(summary.text).toBe('执行命令 · 2 步 · 1 失败')
+    expect(summary.text).toBe('执行 2 条命令，1 项失败')
+    expect(summary.text.endsWith('，1 项失败')).toBe(true)
     expect(summary.status).toBe('error')
   })
 
-  it('reports running suffix when any tool is running', () => {
-    const segments = [toolSegment('t1', 1, 'c1')]
-    const toolCalls = [tool({ id: 'c1', name: 'web_fetch', status: 'running' })]
-    const summary = summarizeToolGroup(segments, toolCalls)
-    expect(summary.text).toBe('网页读取 · 1 步 · 进行中…')
-    expect(summary.status).toBe('running')
-  })
-
-  it('categorizes notion mcp tools as Notion search & read', () => {
+  it('categorizes notion mcp tools as Notion retrieval', () => {
     const segments = [toolSegment('t1', 1, 'c1')]
     const toolCalls = [tool({ id: 'c1', name: 'search', source: 'mcp', server_name: 'notion-mcp' })]
     const summary = summarizeToolGroup(segments, toolCalls)
-    expect(summary.text).toBe('Notion 搜索与读取 · 1 步 · 已完成')
+    expect(summary.text).toBe('检索 Notion')
     expect(summary.icon).toBe('notion')
   })
 
-  it('uses reasoning icon for a pure thinking group (no tool segments)', () => {
+  it('summarizes a pure thinking group (no tool segments)', () => {
     const segments = [
       segment({ id: 'r1', kind: 'reasoning', order: 1, text: 'a' }),
       segment({ id: 'r2', kind: 'reasoning', order: 2, text: 'b' }),
     ]
     const summary = summarizeToolGroup(segments, [])
-    expect(summary.text).toBe('思考过程 · 2 步 · 已完成')
+    expect(summary.text).toBe('思考')
     expect(summary.icon).toBe('reasoning')
     // 纯思考组不进图标排
     expect(summary.categories).toEqual([])
