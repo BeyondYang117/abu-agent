@@ -38,10 +38,10 @@ use crate::state::AppState;
 
 use super::storage::{
     archive_assistant, assistant_snapshot, conversation_attachments_dir, create_assistant,
-    create_project, delete_conversation as delete_conv, delete_project, duplicate_assistant,
-    find_project_by_id, find_project_by_name, find_reusable_blank_conversation, get_assistants,
-    get_conversations as get_convs, get_projects, load_conversation, save_conversation,
-    update_assistant, update_project,
+    create_project, create_set, delete_conversation as delete_conv, delete_project, delete_set,
+    duplicate_assistant, find_project_by_id, find_project_by_name, find_reusable_blank_conversation,
+    find_set_by_id, get_assistants, get_conversations as get_convs, get_projects, get_sets,
+    load_conversation, save_conversation, update_assistant, update_project, update_set,
 };
 use super::{
     AgentPlanState, AgentTodoState, Attachment, ChatAssistant, ChatMessage, ChatMessageSegment,
@@ -118,8 +118,9 @@ pub(crate) fn chat_get_conversations(
     limit: usize,
     folder: Option<String>,
     project_id: Option<String>,
+    set_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let conversations = get_convs(&app, offset, limit, folder, project_id)?;
+    let conversations = get_convs(&app, offset, limit, folder, project_id, set_id)?;
     Ok(serde_json::json!({
         "success": true,
         "conversations": conversations,
@@ -192,6 +193,7 @@ pub(crate) fn chat_create_conversation(
     model: Option<String>,
     folder: Option<String>,
     project_id: Option<String>,
+    set_id: Option<String>,
     assistant_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let conversation = create_chat_conversation_internal(
@@ -201,6 +203,7 @@ pub(crate) fn chat_create_conversation(
         model,
         folder,
         project_id,
+        set_id,
         assistant_id,
     )?;
 
@@ -217,9 +220,11 @@ pub(crate) fn create_chat_conversation_internal(
     model: Option<String>,
     folder: Option<String>,
     project_id: Option<String>,
+    set_id: Option<String>,
     assistant_id: Option<String>,
 ) -> Result<Conversation, String> {
     let settings = state.settings_read().clone();
+    let set_id = set_id.and_then(non_empty_string);
     let assistant_snapshot = assistant_id
         .as_deref()
         .map(str::trim)
@@ -310,6 +315,7 @@ pub(crate) fn create_chat_conversation_internal(
                 pinned: false,
                 folder,
                 project_id,
+                set_id,
                 context_state: ConversationContextState::default(),
                 agent_todo_state: AgentTodoState::default(),
                 agent_plan_state: AgentPlanState::default(),
@@ -354,6 +360,7 @@ pub(crate) fn chat_import_external_conversation(
         model,
         None,
         project_id,
+        None,
         None,
     )?;
     // create 可能复用了一个空白会话；这里清空以确保从干净状态写入历史。
@@ -636,6 +643,7 @@ pub(crate) fn chat_create_builder_conversation(
         pinned: false,
         folder,
         project_id: resolved_project_id,
+        set_id: None,
         context_state: ConversationContextState::default(),
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
@@ -777,6 +785,76 @@ pub(crate) fn chat_project_open_folder(
         "success": true,
         "path": root_path,
     }))
+}
+
+// ===== Chat 集(Set) 命令：仿 project 命令 =====
+
+#[tauri::command]
+pub(crate) fn chat_get_sets(app: AppHandle) -> Result<serde_json::Value, String> {
+    let sets = get_sets(&app)?;
+    Ok(serde_json::json!({ "success": true, "sets": sets }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_create_set(
+    app: AppHandle,
+    name: String,
+    system_prompt: Option<String>,
+    default_assistant_id: Option<String>,
+    color: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let now = chrono::Local::now().timestamp();
+    let set = create_set(
+        &app,
+        super::ChatSet {
+            id: format!("set_{}", Uuid::new_v4()),
+            name,
+            system_prompt: system_prompt.unwrap_or_default(),
+            default_assistant_id: default_assistant_id.filter(|id| !id.trim().is_empty()),
+            color,
+            created_at: now,
+            updated_at: now,
+        },
+    )?;
+    Ok(serde_json::json!({ "success": true, "set": set }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_update_set(
+    app: AppHandle,
+    set_id: String,
+    name: Option<String>,
+    system_prompt: Option<String>,
+    system_prompt_set: Option<bool>,
+    default_assistant_id: Option<String>,
+    default_assistant_id_set: Option<bool>,
+    color: Option<String>,
+    color_set: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let system_prompt_has_value = system_prompt.is_some();
+    let default_assistant_has_value = default_assistant_id.is_some();
+    let color_has_value = color.is_some();
+    let set = update_set(
+        &app,
+        &set_id,
+        name,
+        system_prompt,
+        system_prompt_set.unwrap_or(system_prompt_has_value),
+        default_assistant_id,
+        default_assistant_id_set.unwrap_or(default_assistant_has_value),
+        color,
+        color_set.unwrap_or(color_has_value),
+    )?;
+    Ok(serde_json::json!({ "success": true, "set": set }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_delete_set(
+    app: AppHandle,
+    set_id: String,
+) -> Result<serde_json::Value, String> {
+    delete_set(&app, &set_id)?;
+    Ok(serde_json::json!({ "success": true }))
 }
 
 #[tauri::command]
@@ -4900,6 +4978,7 @@ pub(crate) fn chat_update_conversation(
     pinned: Option<bool>,
     folder: Option<String>,
     project_id: Option<String>,
+    set_id: Option<String>,
     provider_id: Option<String>,
     model: Option<String>,
     active_skill_id: Option<String>,
@@ -4934,6 +5013,19 @@ pub(crate) fn chat_update_conversation(
             let project = find_project_by_id(&app, trimmed)?;
             conversation.project_id = Some(project.id);
             conversation.folder = Some(project.name);
+            conversation.set_id = None; // 集与项目互斥
+        }
+    }
+    if let Some(set_id) = set_id {
+        let trimmed = set_id.trim();
+        if trimmed.is_empty() {
+            conversation.set_id = None;
+        } else {
+            let set = find_set_by_id(&app, trimmed)?;
+            conversation.set_id = Some(set.id);
+            // 集与项目互斥：归入集即移出项目/文件夹
+            conversation.project_id = None;
+            conversation.folder = None;
         }
     }
     if let Some(provider_id) = provider_id {
@@ -5943,6 +6035,7 @@ mod tests {
             pinned: false,
             folder: None,
             project_id: None,
+            set_id: None,
             context_state: ConversationContextState {
                 summary: Some(ConversationContextSummary {
                     id: "ctxsum_test".to_string(),
@@ -6064,6 +6157,7 @@ mod tests {
             pinned: false,
             folder: None,
             project_id: None,
+            set_id: None,
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
@@ -6190,6 +6284,7 @@ mod tests {
             pinned: false,
             folder: None,
             project_id: None,
+            set_id: None,
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
@@ -6305,6 +6400,7 @@ mod tests {
             pinned: false,
             folder: None,
             project_id: None,
+            set_id: None,
             context_state: ConversationContextState::default(),
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),

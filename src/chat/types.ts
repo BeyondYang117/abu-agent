@@ -226,6 +226,21 @@ export interface ChatProject {
   updatedAt?: number
 }
 
+/** Chat 集(Set)：助手之上的人设分组。不带工作目录，持有系统提示词 + 默认助手。 */
+export interface ChatSet {
+  id: string
+  name: string
+  system_prompt?: string
+  systemPrompt?: string
+  default_assistant_id?: string | null
+  defaultAssistantId?: string | null
+  color?: string | null
+  created_at: number
+  updated_at: number
+  createdAt?: number
+  updatedAt?: number
+}
+
 export interface ChatAssistant {
   id: string
   name: string
@@ -415,6 +430,8 @@ export interface Conversation {
   folder?: string
   project_id?: string | null
   projectId?: string | null
+  set_id?: string | null
+  setId?: string | null
   context_state?: ConversationContextState
   contextState?: ConversationContextState
   agent_todo_state?: AgentTodoState
@@ -438,6 +455,8 @@ export interface ConversationListItem {
   folder?: string
   project_id?: string | null
   projectId?: string | null
+  set_id?: string | null
+  setId?: string | null
   assistant_id?: string | null
   assistantId?: string | null
   assistant_name?: string | null

@@ -7,6 +7,7 @@ import type {
   ChatAssistant,
   ChatAssistantSnapshot,
   ChatProject,
+  ChatSet,
   Conversation,
   ConversationContextState,
   ConversationListItem,
@@ -810,11 +811,12 @@ export const chatApi = {
     limit = 50,
     folder?: string,
     projectId?: string | null,
+    setId?: string | null,
   ): Promise<ConversationListItem[]> {
     if (!isTauriRuntime()) return mockChatApi.getConversations(offset, limit, folder, projectId)
     const result = await invoke<{ success: boolean; conversations: ConversationListItem[] }>(
       'chat_get_conversations',
-      { offset, limit, folder, projectId }
+      { offset, limit, folder, projectId, setId }
     )
     if (!result.success) {
       throw new Error('Failed to get conversations')
@@ -854,11 +856,12 @@ export const chatApi = {
     folder?: string,
     projectId?: string | null,
     assistantId?: string | null,
+    setId?: string | null,
   ): Promise<Conversation> {
     if (!isTauriRuntime()) return mockChatApi.createConversation(providerId, model, folder, projectId, assistantId)
     const result = await invoke<{ success: boolean; conversation: Conversation }>(
       'chat_create_conversation',
-      { providerId, model, folder, projectId, assistantId }
+      { providerId, model, folder, projectId, setId, assistantId }
     )
     if (!result.success) {
       throw new Error('Failed to create conversation')
@@ -914,6 +917,69 @@ export const chatApi = {
       throw new Error('Failed to get projects')
     }
     return result.projects
+  },
+
+  async getSets(): Promise<ChatSet[]> {
+    if (!isTauriRuntime()) return []
+    const result = await invoke<{ success: boolean; sets: ChatSet[] }>('chat_get_sets')
+    if (!result.success) {
+      throw new Error('Failed to get sets')
+    }
+    return result.sets
+  },
+
+  async createSet(
+    name: string,
+    systemPrompt?: string,
+    defaultAssistantId?: string | null,
+    color?: string | null,
+  ): Promise<ChatSet> {
+    if (!isTauriRuntime()) throw new Error('集功能仅在桌面应用内可用')
+    const result = await invoke<{ success: boolean; set: ChatSet }>(
+      'chat_create_set',
+      { name, systemPrompt, defaultAssistantId, color },
+    )
+    if (!result.success) {
+      throw new Error('Failed to create set')
+    }
+    return result.set
+  },
+
+  async updateSet(
+    setId: string,
+    updates: {
+      name?: string
+      systemPrompt?: string
+      defaultAssistantId?: string | null
+      color?: string | null
+    },
+  ): Promise<ChatSet> {
+    if (!isTauriRuntime()) throw new Error('集功能仅在桌面应用内可用')
+    const result = await invoke<{ success: boolean; set: ChatSet }>(
+      'chat_update_set',
+      {
+        setId,
+        name: updates.name,
+        systemPrompt: updates.systemPrompt,
+        systemPromptSet: updates.systemPrompt !== undefined,
+        defaultAssistantId: updates.defaultAssistantId,
+        defaultAssistantIdSet: updates.defaultAssistantId !== undefined,
+        color: updates.color,
+        colorSet: updates.color !== undefined,
+      },
+    )
+    if (!result.success) {
+      throw new Error('Failed to update set')
+    }
+    return result.set
+  },
+
+  async deleteSet(setId: string): Promise<void> {
+    if (!isTauriRuntime()) return
+    const result = await invoke<{ success: boolean }>('chat_delete_set', { setId })
+    if (!result.success) {
+      throw new Error('Failed to delete set')
+    }
   },
 
   async createProject(
@@ -1078,6 +1144,7 @@ export const chatApi = {
       pinned?: boolean
       folder?: string
       projectId?: string | null
+      setId?: string | null
       providerId?: string
       model?: string
       activeSkillId?: string | null
@@ -1087,6 +1154,7 @@ export const chatApi = {
     if (!isTauriRuntime()) return mockChatApi.updateConversation(conversationId, updates)
     const hasFolderUpdate = 'folder' in updates
     const hasProjectUpdate = 'projectId' in updates
+    const hasSetUpdate = 'setId' in updates
     const result = await invoke<{ success: boolean; conversation: Conversation }>(
       'chat_update_conversation',
       {
@@ -1095,6 +1163,7 @@ export const chatApi = {
         pinned: updates.pinned,
         folder: hasFolderUpdate ? updates.folder ?? '' : undefined,
         projectId: hasProjectUpdate ? updates.projectId ?? '' : undefined,
+        setId: hasSetUpdate ? updates.setId ?? '' : undefined,
         providerId: updates.providerId,
         model: updates.model,
         activeSkillId: updates.activeSkillId,

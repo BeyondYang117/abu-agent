@@ -366,6 +366,9 @@ pub struct Conversation {
     pub folder: Option<String>,
     #[serde(default)]
     pub project_id: Option<String>,
+    /// 所属「集」(人设分组) id。与 `project_id` 互斥：至多一个有值。
+    #[serde(default)]
+    pub set_id: Option<String>,
     #[serde(default)]
     pub context_state: ConversationContextState,
     #[serde(default)]
@@ -391,6 +394,9 @@ pub struct ConversationListItem {
     pub folder: Option<String>,
     #[serde(default)]
     pub project_id: Option<String>,
+    /// 所属「集」id（与 project_id 互斥）。
+    #[serde(default)]
+    pub set_id: Option<String>,
     #[serde(default)]
     pub assistant_id: Option<String>,
     #[serde(default)]
@@ -424,6 +430,30 @@ pub struct ChatProject {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChatProjectIndex {
     pub projects: Vec<ChatProject>,
+}
+
+/// Chat 集(Set)：助手之上的人设分组。不带工作目录（区别于项目）；持有自己的系统提示词
+/// 和默认助手。集名下的对话通过 `Conversation.set_id` 关联（与 project_id 互斥）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSet {
+    pub id: String,
+    pub name: String,
+    /// 集级系统提示词，运行时实时注入集内对话（不冻结）。
+    #[serde(default)]
+    pub system_prompt: String,
+    /// 集的默认助手 id；在集下新建对话且未显式指定助手时使用。
+    #[serde(default)]
+    pub default_assistant_id: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 集索引文件结构
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ChatSetIndex {
+    pub sets: Vec<ChatSet>,
 }
 
 /// 可复用 Chat 助手配置。存储字段保持 snake_case，与 Conversation JSON 一致。
@@ -537,6 +567,7 @@ impl From<&Conversation> for ConversationListItem {
             pinned: conv.pinned,
             folder: conv.folder.clone(),
             project_id: conv.project_id.clone(),
+            set_id: conv.set_id.clone(),
             assistant_id: conv.assistant_id.clone(),
             assistant_name: conv
                 .assistant_snapshot

@@ -258,6 +258,7 @@ mod tests {
             pinned: false,
             folder: None,
             project_id: None,
+            set_id: None,
             context_state: ConversationContextState::default(),
             agent_plan_state: AgentPlanState::default(),
             agent_todo_state: AgentTodoState::default(),
