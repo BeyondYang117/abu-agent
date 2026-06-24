@@ -532,6 +532,7 @@ pub fn find_reusable_blank_conversation(
     model: &str,
     folder: Option<&str>,
     project_id: Option<&str>,
+    set_id: Option<&str>,
     assistant_id: Option<&str>,
 ) -> Result<Option<Conversation>, String> {
     let mut index = load_index_or_scan(app)?;
@@ -552,6 +553,9 @@ pub fn find_reusable_blank_conversation(
         if item.project_id.as_deref() != project_id {
             continue;
         }
+        if item.set_id.as_deref() != set_id {
+            continue;
+        }
         if item.assistant_id.as_deref() != assistant_id {
             continue;
         }
@@ -567,6 +571,7 @@ pub fn find_reusable_blank_conversation(
             && conversation.model == model
             && conversation.folder.as_deref() == folder
             && conversation.project_id.as_deref() == project_id
+            && conversation.set_id.as_deref() == set_id
             && conversation.assistant_id.as_deref() == assistant_id
         {
             return Ok(Some(conversation));
@@ -1181,6 +1186,23 @@ fn move_project_conversations(
 #[cfg(test)]
 mod builtin_assistant_tests {
     use super::*;
+
+    #[test]
+    fn set_id_validation_accepts_prefixed_ids_rejects_others() {
+        assert!(validate_set_id("set_abc-123").is_ok());
+        assert!(validate_set_id("set_").is_err()); // 仅前缀无内容
+        assert!(validate_set_id("proj_abc").is_err()); // 错误前缀
+        assert!(validate_set_id("set_a/b").is_err()); // 非法字符
+        assert!(validate_set_id("abc").is_err());
+    }
+
+    #[test]
+    fn set_name_normalization_trims_caps_and_rejects_empty() {
+        assert_eq!(normalize_set_name("  写作集  ").unwrap(), "写作集");
+        assert!(normalize_set_name("   ").is_err());
+        let long: String = "x".repeat(200);
+        assert_eq!(normalize_set_name(&long).unwrap().chars().count(), 80);
+    }
 
     #[test]
     fn builtin_assistants_are_four_valid_built_in_personas() {

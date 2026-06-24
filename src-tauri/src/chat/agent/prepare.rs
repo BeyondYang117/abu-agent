@@ -202,6 +202,7 @@ pub fn build_chat_system_prompt(
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
+    set_system_prompt: Option<&str>,
     custom_system_prompt: &str,
     memory_prompt: Option<&str>,
     agent_plan_prompt: Option<&str>,
@@ -220,6 +221,7 @@ pub fn build_chat_system_prompt(
         active_skill_id,
         active_skill_detail,
         assistant_snapshot,
+        set_system_prompt,
         custom_system_prompt,
         memory_prompt,
         agent_plan_prompt,
@@ -270,6 +272,7 @@ pub fn build_chat_system_prompt_with_segments(
     active_skill_id: Option<&str>,
     active_skill_detail: Option<&skills::SkillDetail>,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
+    set_system_prompt: Option<&str>,
     custom_system_prompt: &str,
     memory_prompt: Option<&str>,
     agent_plan_prompt: Option<&str>,
@@ -300,6 +303,20 @@ pub fn build_chat_system_prompt_with_segments(
                 "assistant",
                 "Assistant",
                 &assistant_prompt,
+            );
+        }
+    }
+    // 集的系统提示词：实时注入（不冻结），随集编辑对集内所有对话立即生效。作为独立段落，
+    // 与助手段并存（助手段提供人设/工具白名单，集段是这一组对话的统一指令）。
+    if let Some(set_prompt) = set_system_prompt {
+        let set_prompt = set_prompt.trim();
+        if !set_prompt.is_empty() {
+            append_context_segment(
+                &mut prompt,
+                &mut segments,
+                "set",
+                "Set instructions",
+                set_prompt,
             );
         }
     }
@@ -573,6 +590,7 @@ pub fn context_segment_color(id: &str) -> Option<&'static str> {
     match id {
         "system_prompt" => Some("#7A7A7A"),
         "assistant" => Some("#8A6FBD"),
+        "set" => Some("#5C9A8B"),
         "runtime_context" => Some("#3E8B60"),
         "memory_l1" => Some("#4F9A9A"),
         "agent_plan" => Some("#8A724C"),
@@ -806,6 +824,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             "",
             None,
             None,
@@ -833,6 +852,7 @@ mod tests {
             &chat_tools,
             true,
             &["run_python".to_string()],
+            None,
             None,
             None,
             None,
@@ -865,6 +885,7 @@ mod tests {
             &chat_tools,
             true,
             &["write".to_string()],
+            None,
             None,
             None,
             None,

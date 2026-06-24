@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
-import type { ChatProject, ConversationListItem } from './types'
+import type { ChatProject, ChatSet, ConversationListItem } from './types'
 import {
   ConversationContextMenu,
   type ConversationMenuAnchor,
@@ -11,6 +11,7 @@ interface ConversationListProps {
   currentConversationId?: string
   generatingConversationIds?: ReadonlySet<string>
   projects: ChatProject[]
+  sets: ChatSet[]
   compact?: boolean
   emptyLabel?: string
   indent?: boolean
@@ -19,6 +20,7 @@ interface ConversationListProps {
   onRenameConversation: (id: string, title: string) => Promise<void>
   onDeleteConversation: (id: string) => Promise<void>
   onMoveConversationToProject: (id: string, projectId: string | undefined) => Promise<void>
+  onMoveConversationToSet: (id: string, setId: string | undefined) => Promise<void>
 }
 
 export const ConversationList = memo(function ConversationList({
@@ -26,6 +28,7 @@ export const ConversationList = memo(function ConversationList({
   currentConversationId,
   generatingConversationIds = new Set(),
   projects,
+  sets,
   compact = false,
   emptyLabel = '暂无对话',
   indent = false,
@@ -34,6 +37,7 @@ export const ConversationList = memo(function ConversationList({
   onRenameConversation,
   onDeleteConversation,
   onMoveConversationToProject,
+  onMoveConversationToSet,
 }: ConversationListProps) {
   const [menuState, setMenuState] = useState<{
     conversationId: string
@@ -186,9 +190,12 @@ export const ConversationList = memo(function ConversationList({
           conversationTitle={menuConversation.title}
           conversationFolder={menuConversation.folder}
           conversationProjectId={menuConversation.project_id ?? menuConversation.projectId ?? null}
+          conversationSetId={menuConversation.set_id ?? menuConversation.setId ?? null}
           projects={projects}
+          sets={sets}
           onRename={() => startRename(menuConversation)}
           onMoveToProject={(projectId) => void onMoveConversationToProject(menuConversation.id, projectId)}
+          onMoveToSet={(setId) => void onMoveConversationToSet(menuConversation.id, setId)}
           onDelete={() => void onDeleteConversation(menuConversation.id)}
           onClose={() => setMenuState(null)}
         />

@@ -25,6 +25,7 @@ import {
 } from './platform'
 import type {
   ChatProject,
+  ChatSet,
   ChatMessage,
   ChatAssistant,
   Conversation,
@@ -450,6 +451,8 @@ function optimisticConversationListItem(
     folder: conversation.folder,
     project_id: conversation.project_id ?? conversation.projectId ?? null,
     projectId: conversation.project_id ?? conversation.projectId ?? null,
+    set_id: conversation.set_id ?? conversation.setId ?? null,
+    setId: conversation.set_id ?? conversation.setId ?? null,
     assistant_id: conversation.assistant_id ?? conversation.assistantId ?? null,
     assistantId: conversation.assistant_id ?? conversation.assistantId ?? null,
     assistant_name:
@@ -482,6 +485,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => getRememberedChatSidebarCollapsed())
   const [searchOpen, setSearchOpen] = useState(false)
   const [selectedProject, setSelectedProject] = useState<ChatProject | null>(null)
+  const [selectedSet, setSelectedSet] = useState<ChatSet | null>(null)
   const [streaming, setStreaming] = useState(false)
   // 取消后冻结展示已生成的部分内容，直到 send invoke 返回持久化消息无缝替换。
   const [streamFrozen, setStreamFrozen] = useState(false)
@@ -1837,6 +1841,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleNewConversation = useCallback(async () => {
     setSelectedProject(null)
+    setSelectedSet(null)
     setAssistantStreamStatsByMessageId({})
     setDraftProviderId(activeProviderId)
     setDraftModel(activeModel)
@@ -1923,6 +1928,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         selectedProject?.name,
         selectedProject?.id ?? null,
         assistant.id,
+        selectedSet?.id ?? null,
       )
       currentConversationIdRef.current = conv.id
       applyConversation(conv)
@@ -1934,7 +1940,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       console.error('Failed to start assistant conversation:', err)
       setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建助手对话失败')
     }
-  }, [activeModel, activeProviderId, applyConversation, refreshSidebar, restoreStreamingPreview, selectedProject?.id, selectedProject?.name, syncConversationRoute])
+  }, [activeModel, activeProviderId, applyConversation, refreshSidebar, restoreStreamingPreview, selectedProject?.id, selectedProject?.name, selectedSet?.id, syncConversationRoute])
 
   const handleStartBuilderChat = useCallback(async () => {
     setAssistantStreamStatsByMessageId({})
@@ -1978,6 +1984,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       activeModel || undefined,
       selectedProject?.name,
       selectedProject?.id ?? null,
+      undefined,
+      selectedSet?.id ?? null,
     )
     if (!agentRuntimesEqual(normalizeAgentRuntime(conversation), draftAgentRuntime)) {
       conversation = await chatApi.setAgentRuntime(conversation.id, draftAgentRuntime)
@@ -1987,7 +1995,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     syncConversationRoute(conversation.id)
     refreshSidebar()
     return conversation
-  }, [activeModel, activeProviderId, applyConversation, currentConversation, draftAgentRuntime, refreshSidebar, selectedProject?.id, selectedProject?.name, syncConversationRoute])
+  }, [activeModel, activeProviderId, applyConversation, currentConversation, draftAgentRuntime, refreshSidebar, selectedProject?.id, selectedProject?.name, selectedSet?.id, syncConversationRoute])
 
   const handleAgentPlanModeChange = useCallback(async (mode: AgentPlanMode) => {
     try {
@@ -2004,6 +2012,20 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleSelectProject = useCallback((project: ChatProject | null) => {
     setSelectedProject(project)
+    setSelectedSet(null)
+    setAssistantStreamStatsByMessageId({})
+    setPendingUserMessage(null)
+    setPendingUserMessageConversationId(null)
+    currentConversationIdRef.current = null
+    applyConversation(null)
+    restoreStreamingPreview(null)
+    syncConversationRoute(null)
+    setStreamError('')
+  }, [applyConversation, restoreStreamingPreview, syncConversationRoute])
+
+  const handleSelectSet = useCallback((set: ChatSet | null) => {
+    setSelectedSet(set)
+    setSelectedProject(null)
     setAssistantStreamStatsByMessageId({})
     setPendingUserMessage(null)
     setPendingUserMessageConversationId(null)
@@ -2091,6 +2113,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           activeModel || undefined,
           selectedProject?.name,
           selectedProject?.id ?? null,
+          undefined,
+          selectedSet?.id ?? null,
         )
         currentConversationIdRef.current = conversation.id
         applyConversation(conversation)
@@ -2242,6 +2266,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     resetLocalCancellation,
     selectedProject?.id,
     selectedProject?.name,
+    selectedSet?.id,
     sendDisabledReason,
     setStreamErrorForConversation,
     syncConversationRoute,
@@ -2701,6 +2726,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     runAfterLeavingSettings(() => handleSelectProject(project))
   }, [handleSelectProject, runAfterLeavingSettings])
 
+  const handleSidebarSelectSet = useCallback((set: ChatSet | null) => {
+    runAfterLeavingSettings(() => handleSelectSet(set))
+  }, [handleSelectSet, runAfterLeavingSettings])
+
   const handleSidebarSelectConversation = useCallback((id: string) => {
     runAfterLeavingSettings(() => void handleSelectConversation(id))
   }, [handleSelectConversation, runAfterLeavingSettings])
@@ -2756,6 +2785,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           optimisticConversations={optimisticSidebarConversations}
           selectedProject={selectedProject}
           onSelectProject={handleSidebarSelectProject}
+          selectedSet={selectedSet}
+          onSelectSet={handleSidebarSelectSet}
           onSelectConversation={handleSidebarSelectConversation}
           onNewConversation={handleSidebarNewConversation}
           onConversationDeleted={handleSidebarConversationDeleted}

@@ -4,17 +4,21 @@ import {
   ChevronRight,
   Folder,
   FolderPlus,
+  Layers,
   LayoutGrid,
   MoreHorizontal,
+  Plus,
   Search,
   Settings as SettingsIcon,
   SquarePen,
 } from 'lucide-react'
-import type { ChatProject, ConversationListItem } from './types'
+import type { ChatAssistant, ChatProject, ChatSet, ConversationListItem } from './types'
 import { ConversationList } from './ConversationList'
 import { ChatSectionMenu } from './ChatSectionMenu'
 import { ProjectContextMenu } from './ProjectContextMenu'
 import { ProjectDialog } from './ProjectDialog'
+import { SetContextMenu } from './SetContextMenu'
+import { SetDialog } from './SetDialog'
 import { api } from '../api/tauri'
 import { chatApi } from './api'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
@@ -85,6 +89,8 @@ interface SidebarProps {
   optimisticConversations?: ConversationListItem[]
   selectedProject?: ChatProject | null
   onSelectProject: (project: ChatProject | null) => void
+  selectedSet?: ChatSet | null
+  onSelectSet: (set: ChatSet | null) => void
   onSelectConversation: (id: string) => void
   onNewConversation: () => void
   onConversationDeleted?: (id: string) => void
@@ -247,6 +253,7 @@ function SearchDialog({
   results,
   currentConversationId,
   projects,
+  sets,
   onQueryChange,
   onSelectConversation,
   onClose,
@@ -255,6 +262,7 @@ function SearchDialog({
   results: ConversationListItem[]
   currentConversationId?: string
   projects: ChatProject[]
+  sets: ChatSet[]
   onQueryChange: (query: string) => void
   onSelectConversation: (conversation: ConversationListItem) => void
   onClose: () => void
@@ -319,6 +327,8 @@ function SearchDialog({
             results.map((conversation) => {
               const active = conversation.id === currentConversationId
               const projectLabel = conversationProjectLabel(conversation, projects)
+              const setId = conversation.set_id ?? conversation.setId ?? null
+              const setLabel = setId ? sets.find((s) => s.id === setId)?.name ?? '' : ''
               return (
                 <button
                   key={conversation.id}
@@ -340,7 +350,12 @@ function SearchDialog({
                   >
                     {conversation.title}
                   </span>
-                  {projectLabel && (
+                  {setLabel && (
+                    <span className="max-w-[100px] shrink-0 truncate text-[12px] text-neutral-400 dark:text-neutral-500">
+                      集 · {setLabel}
+                    </span>
+                  )}
+                  {!setLabel && projectLabel && (
                     <span className="max-w-[100px] shrink-0 truncate text-[12px] text-neutral-400 dark:text-neutral-500">
                       {projectLabel}
                     </span>
@@ -366,6 +381,8 @@ export const Sidebar = memo(function Sidebar({
   optimisticConversations = [],
   selectedProject = null,
   onSelectProject,
+  selectedSet = null,
+  onSelectSet,
   onSelectConversation,
   onNewConversation,
   onConversationDeleted,
@@ -390,17 +407,23 @@ export const Sidebar = memo(function Sidebar({
   }, [collapsed])
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [projects, setProjects] = useState<ChatProject[]>([])
+  const [sets, setSets] = useState<ChatSet[]>([])
+  const [assistants, setAssistants] = useState<ChatAssistant[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   // 后端全量索引搜索结果（覆盖所有对话，不止已加载的前 80）；空查询/非 Tauri 时为空，回退客户端过滤。
   const [fullSearchResults, setFullSearchResults] = useState<ConversationListItem[]>([])
-  const [projectSectionCollapsed, setProjectSectionCollapsed] = useState(false)
+  // 侧栏三块改为横排标签页：同一时刻只显示一块（对话/集/项目）。
+  const [activeTab, setActiveTab] = useState<'conversations' | 'sets' | 'projects'>('conversations')
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   )
   const [expandedProjectConversationIds, setExpandedProjectConversationIds] = useState<Set<string>>(
     () => new Set(),
   )
-  const [conversationSectionCollapsed, setConversationSectionCollapsed] = useState(false)
+  const [collapsedSetIds, setCollapsedSetIds] = useState<Set<string>>(() => new Set())
+  const [expandedSetConversationIds, setExpandedSetConversationIds] = useState<Set<string>>(
+    () => new Set(),
+  )
   const [loading, setLoading] = useState(false)
   const [sectionMenuAnchor, setSectionMenuAnchor] = useState<ConversationMenuAnchor | null>(null)
   const [projectMenuState, setProjectMenuState] = useState<{
@@ -410,6 +433,13 @@ export const Sidebar = memo(function Sidebar({
   const [dialogProject, setDialogProject] = useState<ChatProject | null | undefined>(undefined)
   const [projectSaving, setProjectSaving] = useState(false)
   const [projectError, setProjectError] = useState('')
+  const [setMenuState, setSetMenuState] = useState<{
+    setId: string
+    anchor: ConversationMenuAnchor
+  } | null>(null)
+  const [dialogSet, setDialogSet] = useState<ChatSet | null | undefined>(undefined)
+  const [setDialogSaving, setSetDialogSaving] = useState(false)
+  const [setDialogError, setSetDialogError] = useState('')
   const sectionMenuButtonRef = useRef<HTMLButtonElement>(null)
   const sidebarLoadedRef = useRef(false)
   const [userProfile, setUserProfile] = useState(() => resolveChatUserProfile())
@@ -426,26 +456,34 @@ export const Sidebar = memo(function Sidebar({
     }
   }, [profileRefreshKey])
 
-  const loadSidebarData = useCallback(async (options?: { silent?: boolean; projectOverride?: ChatProject | null }) => {
+  const loadSidebarData = useCallback(async (options?: { silent?: boolean; projectOverride?: ChatProject | null; setOverride?: ChatSet | null }) => {
     const projectForLoad = options?.projectOverride === undefined ? selectedProject : options.projectOverride
+    const setForLoad = options?.setOverride === undefined ? selectedSet : options.setOverride
     const silent = options?.silent ?? false
     if (!silent) setLoading(true)
     try {
-      const [projectData, conversationData] = await Promise.all([
+      const [projectData, setData, assistantData, conversationData] = await Promise.all([
         chatApi.getProjects(),
+        chatApi.getSets(),
+        chatApi.getAssistants(),
         chatApi.getConversations(0, 80),
       ])
       setProjects(projectData)
+      setSets(setData)
+      setAssistants(assistantData)
       setConversations(conversationData)
       if (projectForLoad && !projectData.some((project) => project.id === projectForLoad.id)) {
         onSelectProject(null)
+      }
+      if (setForLoad && !setData.some((set) => set.id === setForLoad.id)) {
+        onSelectSet(null)
       }
     } catch (err) {
       console.error('Failed to load chat sidebar data:', err)
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [onSelectProject, selectedProject])
+  }, [onSelectProject, onSelectSet, selectedProject, selectedSet])
 
   useEffect(() => {
     // 侧栏数据与 selectedProject 无关（loadSidebarData 始终拉全部项目+对话，仅用 selectedProject
@@ -522,6 +560,67 @@ export const Sidebar = memo(function Sidebar({
       await loadSidebarData({ silent: true })
     } catch (err) {
       console.error('Failed to move conversation:', err)
+    }
+  }
+
+  const handleMoveConversationToSet = async (id: string, setId: string | undefined) => {
+    try {
+      const conversation = await chatApi.updateConversation(id, { setId: setId ?? null })
+      const conversationSetId = conversation.set_id ?? conversation.setId ?? null
+      // 当前打开的对话被移出当前选中集，则从主视图移除（与项目逻辑一致）。
+      if (currentConversationId === id && selectedSet && conversationSetId !== selectedSet.id) {
+        onConversationDeleted?.(id)
+      }
+      await loadSidebarData({ silent: true })
+    } catch (err) {
+      console.error('Failed to move conversation to set:', err)
+    }
+  }
+
+  const openCreateSetDialog = () => {
+    setDialogSet(null)
+    setSetDialogError('')
+  }
+
+  const openSetMenu = (setId: string, button: HTMLButtonElement) => {
+    const rect = button.getBoundingClientRect()
+    setSetMenuState({ setId, anchor: { left: rect.right - 180, top: rect.bottom + 4 } })
+  }
+
+  const handleSaveSet = async (
+    name: string,
+    systemPrompt: string,
+    defaultAssistantId: string | null,
+  ) => {
+    setSetDialogSaving(true)
+    setSetDialogError('')
+    try {
+      const set = dialogSet
+        ? await chatApi.updateSet(dialogSet.id, { name, systemPrompt, defaultAssistantId })
+        : await chatApi.createSet(name, systemPrompt, defaultAssistantId)
+      onSelectSet(set)
+      await loadSidebarData({ silent: true, setOverride: set })
+      setDialogSet(undefined)
+    } catch (err) {
+      setSetDialogError(typeof err === 'string' ? err : (err as Error).message || '集保存失败')
+    } finally {
+      setSetDialogSaving(false)
+    }
+  }
+
+  const handleDeleteSet = async (set: ChatSet) => {
+    if (!window.confirm(`确定删除集「${set.name}」？集内的对话会移出集，不会被删除。`)) {
+      return
+    }
+    try {
+      await chatApi.deleteSet(set.id)
+      if (selectedSet?.id === set.id) {
+        onSelectSet(null)
+        if (currentConversationId) onConversationDeleted?.(currentConversationId)
+      }
+      await loadSidebarData({ silent: true })
+    } catch (err) {
+      console.error('Failed to delete set:', err)
     }
   }
 
@@ -633,15 +732,28 @@ export const Sidebar = memo(function Sidebar({
 
   const visibleProjects = projects
 
-  const looseConversations = useMemo(
+  const setConversationMap = useMemo(() => {
+    const map = new Map<string, ConversationListItem[]>()
+    sets.forEach((set) => {
+      map.set(
+        set.id,
+        visibleConversations.filter(
+          (conversation) => (conversation.set_id ?? conversation.setId) === set.id,
+        ),
+      )
+    })
+    return map
+  }, [sets, visibleConversations])
+
+  // 「最近」标签：跨集/项目的全部对话，置顶在前、再按更新时间倒序。
+  const recentConversations = useMemo(
     () =>
-      visibleConversations.filter((conversation) => {
-        const belongsToKnownProject = projects.some((project) =>
-          conversationBelongsToProject(conversation, project),
-        )
-        return !belongsToKnownProject
+      [...visibleConversations].sort((a, b) => {
+        const pin = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned))
+        if (pin !== 0) return pin
+        return (b.updated_at ?? 0) - (a.updated_at ?? 0)
       }),
-    [projects, visibleConversations],
+    [visibleConversations],
   )
 
   // 查询变化时去后端全量索引搜（debounce 180ms）。覆盖掉出"最近 80"的老对话。
@@ -693,6 +805,11 @@ export const Sidebar = memo(function Sidebar({
 
   const allVisibleProjectsCollapsed = visibleProjects.length > 0 &&
     visibleProjects.every((project) => collapsedProjectIds.has(project.id))
+
+  const allVisibleSetsCollapsed =
+    sets.length > 0 && sets.every((set) => collapsedSetIds.has(set.id))
+
+  const menuSet = setMenuState ? sets.find((set) => set.id === setMenuState.setId) : undefined
 
   const closeSearch = useCallback(() => {
     onSearchOpenChange(false)
@@ -766,56 +883,136 @@ export const Sidebar = memo(function Sidebar({
           </div>
         ) : (
           <>
-            <section className="group/projects px-3 pb-2 pt-3">
-              <div className="flex items-center justify-between px-1">
-                <button
-                  type="button"
-                  onClick={() => setProjectSectionCollapsed((collapsed) => !collapsed)}
-                  className="flex min-w-0 items-center gap-1 rounded-md py-0.5 pr-2 text-left text-[13px] font-semibold text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
-                  aria-expanded={!projectSectionCollapsed}
-                >
-                  <span>项目</span>
-                  <ChevronRight
-                    size={13}
-                    strokeWidth={2}
-                    className={`shrink-0 transition-transform ${
-                      projectSectionCollapsed ? '' : 'rotate-90'
-                    }`}
-                  />
-                </button>
-                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover/projects:opacity-100 group-focus-within/projects:opacity-100">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCollapsedProjectIds((previous) => {
-                        const next = new Set(previous)
-                        if (allVisibleProjectsCollapsed) {
-                          visibleProjects.forEach((project) => next.delete(project.id))
-                        } else {
-                          visibleProjects.forEach((project) => next.add(project.id))
-                        }
-                        return next
-                      })
-                    }}
-                    className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                    title={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
-                    aria-label={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
-                  >
-                    <MoreHorizontal size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={openCreateProjectDialog}
-                    className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                    title={`新建项目 (${modLabel}P)`}
-                    aria-label="新建项目"
-                  >
-                    <FolderPlus size={15} strokeWidth={1.75} />
-                  </button>
-                </div>
+            <div className="flex items-center justify-between px-4 pb-1 pt-3">
+              <div className="flex items-center gap-1.5 text-[13px] font-semibold">
+                {([
+                  ['conversations', '最近'],
+                  ['sets', '集'],
+                  ['projects', '项目'],
+                ] as const).flatMap(([tab, label], i) => {
+                  const button = (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
+                      className={`rounded-md px-1 py-0.5 transition-colors ${
+                        activeTab === tab
+                          ? 'text-neutral-900 dark:text-neutral-100'
+                          : 'text-neutral-400 hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300'
+                      }`}
+                      aria-current={activeTab === tab}
+                    >
+                      {label}
+                    </button>
+                  )
+                  return i === 0
+                    ? [button]
+                    : [
+                        <span key={`sep-${tab}`} className="text-neutral-300 dark:text-neutral-700">
+                          /
+                        </span>,
+                        button,
+                      ]
+                })}
               </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {activeTab === 'conversations' && (
+                  <>
+                    <button
+                      ref={sectionMenuButtonRef}
+                      type="button"
+                      onClick={openSectionMenu}
+                      className={`rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                        sectionMenuAnchor
+                          ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200'
+                          : ''
+                      }`}
+                      aria-label="对话列表操作"
+                      aria-haspopup="menu"
+                      aria-expanded={sectionMenuAnchor !== null}
+                    >
+                      <MoreHorizontal size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onNewConversation}
+                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                      aria-label="新建聊天"
+                      title="新建聊天"
+                    >
+                      <SquarePen size={15} strokeWidth={1.75} />
+                    </button>
+                  </>
+                )}
+                {activeTab === 'sets' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCollapsedSetIds((previous) => {
+                          const next = new Set(previous)
+                          if (allVisibleSetsCollapsed) {
+                            sets.forEach((set) => next.delete(set.id))
+                          } else {
+                            sets.forEach((set) => next.add(set.id))
+                          }
+                          return next
+                        })
+                      }}
+                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                      title={allVisibleSetsCollapsed ? '展开全部集' : '折叠全部集'}
+                      aria-label={allVisibleSetsCollapsed ? '展开全部集' : '折叠全部集'}
+                    >
+                      <MoreHorizontal size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openCreateSetDialog}
+                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                      title="新建集"
+                      aria-label="新建集"
+                    >
+                      <Plus size={15} strokeWidth={2} />
+                    </button>
+                  </>
+                )}
+                {activeTab === 'projects' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCollapsedProjectIds((previous) => {
+                          const next = new Set(previous)
+                          if (allVisibleProjectsCollapsed) {
+                            visibleProjects.forEach((project) => next.delete(project.id))
+                          } else {
+                            visibleProjects.forEach((project) => next.add(project.id))
+                          }
+                          return next
+                        })
+                      }}
+                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                      title={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
+                      aria-label={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
+                    >
+                      <MoreHorizontal size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openCreateProjectDialog}
+                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                      title={`新建项目 (${modLabel}P)`}
+                      aria-label="新建项目"
+                    >
+                      <FolderPlus size={15} strokeWidth={1.75} />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
 
-              {!projectSectionCollapsed && (
+            {activeTab === 'projects' && (
+            <section className="group/projects px-3 pb-2 pt-1">
                 <div className="mt-1.5 space-y-1">
                   {visibleProjects.map((project, index) => {
                     const active = selectedProject?.id === project.id
@@ -909,6 +1106,7 @@ export const Sidebar = memo(function Sidebar({
                           currentConversationId={currentConversationId}
                           generatingConversationIds={generatingConversationIds}
                           projects={projects}
+                          sets={sets}
                           compact
                           indent
                           showAssistantName={false}
@@ -919,6 +1117,7 @@ export const Sidebar = memo(function Sidebar({
                           onRenameConversation={handleRenameConversation}
                           onDeleteConversation={handleDeleteConversation}
                           onMoveConversationToProject={handleMoveConversationToProject}
+                          onMoveConversationToSet={handleMoveConversationToSet}
                         />
                       )}
 
@@ -942,60 +1141,151 @@ export const Sidebar = memo(function Sidebar({
                     )
                   })}
                 </div>
-              )}
             </section>
+            )}
 
-            <section className="group/conversations px-3 pb-5 pt-2">
-              <div className="flex min-w-0 items-center justify-between px-1">
-                <button
-                  type="button"
-                  onClick={() => setConversationSectionCollapsed((collapsed) => !collapsed)}
-                  className="flex min-w-0 items-center gap-1 rounded-md py-0.5 pr-2 text-left text-[13px] font-semibold text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
-                  aria-expanded={!conversationSectionCollapsed}
-                >
-                  <span>对话</span>
-                  <ChevronRight
-                    size={13}
-                    strokeWidth={2}
-                    className={`shrink-0 transition-transform ${
-                      conversationSectionCollapsed ? '' : 'rotate-90'
-                    }`}
-                  />
-                </button>
-                <div
-                  className={`flex shrink-0 items-center gap-1 transition-opacity ${
-                    sectionMenuAnchor
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover/conversations:opacity-100 group-focus-within/conversations:opacity-100'
-                  }`}
-                >
-                  <button
-                    ref={sectionMenuButtonRef}
-                    type="button"
-                    onClick={openSectionMenu}
-                    className={`rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
-                      sectionMenuAnchor
-                        ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200'
-                        : ''
-                    }`}
-                    aria-label="对话列表操作"
-                    aria-haspopup="menu"
-                    aria-expanded={sectionMenuAnchor !== null}
-                  >
-                    <MoreHorizontal size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onNewConversation}
-                    className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                    aria-label="新建聊天"
-                    title="新建聊天"
-                  >
-                    <SquarePen size={15} strokeWidth={1.75} />
-                  </button>
+            {activeTab === 'sets' && (
+            <section className="group/sets px-3 pb-2 pt-1">
+                <div className="mt-1.5 space-y-1">
+                  {sets.length === 0 ? (
+                    <button
+                      type="button"
+                      onClick={openCreateSetDialog}
+                      className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[13px] text-neutral-400 transition-colors hover:bg-black/[0.035] hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-white/[0.06] dark:hover:text-neutral-300"
+                    >
+                      <Plus size={14} strokeWidth={2} className="shrink-0" />
+                      新建一个集（系统提示词 + 默认助手）
+                    </button>
+                  ) : (
+                    sets.map((set, index) => {
+                      const active = selectedSet?.id === set.id
+                      const setConversations = setConversationMap.get(set.id) ?? []
+                      const collapsedSet = collapsedSetIds.has(set.id)
+                      const expanded = expandedSetConversationIds.has(set.id)
+                      const previewConversations = expanded
+                        ? setConversations
+                        : setConversations.slice(0, PROJECT_PREVIEW_LIMIT)
+                      return (
+                        <div key={set.id}>
+                          <div
+                            className={`chat-motion-row group flex min-w-0 items-center rounded-lg ${
+                              active
+                                ? 'bg-black/[0.04] dark:bg-white/[0.08]'
+                                : 'hover:bg-black/[0.035] dark:hover:bg-white/[0.06]'
+                            }`}
+                            style={{ ['--chat-motion-delay' as string]: `${Math.min(index, 12) * 18}ms` }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCollapsedSetIds((previous) => {
+                                  const next = new Set(previous)
+                                  if (next.has(set.id)) next.delete(set.id)
+                                  else next.add(set.id)
+                                  return next
+                                })
+                              }}
+                              className={`flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-[13px] ${
+                                active
+                                  ? 'font-semibold text-neutral-900 dark:text-neutral-100'
+                                  : 'font-medium text-neutral-600 dark:text-neutral-300'
+                              }`}
+                              title={collapsedSet ? `展开 ${set.name}` : `折叠 ${set.name}`}
+                              aria-expanded={!collapsedSet}
+                            >
+                              <ChevronRight
+                                size={13}
+                                strokeWidth={2}
+                                className={`shrink-0 text-neutral-400 transition-transform dark:text-neutral-500 ${
+                                  collapsedSet ? '' : 'rotate-90'
+                                }`}
+                              />
+                              <Layers
+                                size={15}
+                                strokeWidth={1.75}
+                                className="shrink-0 text-neutral-500 dark:text-neutral-400"
+                              />
+                              <span className="min-w-0 truncate">{set.name}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openSetMenu(set.id, e.currentTarget)
+                              }}
+                              className={`shrink-0 rounded-md p-0.5 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                                setMenuState?.setId === set.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                              }`}
+                              aria-label="集操作"
+                            >
+                              <MoreHorizontal size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setCollapsedSetIds((previous) => {
+                                  const next = new Set(previous)
+                                  next.delete(set.id)
+                                  return next
+                                })
+                                onSelectSet(set)
+                              }}
+                              className="mr-1 shrink-0 rounded-md p-0.5 text-neutral-400 opacity-0 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                              aria-label="在此集新建聊天"
+                              title="在此集新建聊天"
+                            >
+                              <SquarePen size={15} strokeWidth={1.75} />
+                            </button>
+                          </div>
+
+                          {!collapsedSet && previewConversations.length > 0 && (
+                            <ConversationList
+                              conversations={previewConversations}
+                              currentConversationId={currentConversationId}
+                              generatingConversationIds={generatingConversationIds}
+                              projects={projects}
+                              sets={sets}
+                              compact
+                              indent
+                              showAssistantName={false}
+                              onSelectConversation={(id) => {
+                                if (selectedSet?.id !== set.id) onSelectSet(set)
+                                onSelectConversation(id)
+                              }}
+                              onRenameConversation={handleRenameConversation}
+                              onDeleteConversation={handleDeleteConversation}
+                              onMoveConversationToProject={handleMoveConversationToProject}
+                              onMoveConversationToSet={handleMoveConversationToSet}
+                            />
+                          )}
+
+                          {!collapsedSet && setConversations.length > PROJECT_PREVIEW_LIMIT && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedSetConversationIds((previous) => {
+                                  const next = new Set(previous)
+                                  if (next.has(set.id)) next.delete(set.id)
+                                  else next.add(set.id)
+                                  return next
+                                })
+                              }}
+                              className="ml-8 rounded-md px-2.5 py-0.5 text-left text-[13px] font-medium text-neutral-400 transition-colors hover:bg-black/[0.035] hover:text-neutral-600 dark:text-neutral-500 dark:hover:bg-white/[0.06] dark:hover:text-neutral-300"
+                            >
+                              {expanded ? '收起' : '展开显示'}
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })
+                  )}
                 </div>
-              </div>
+            </section>
+            )}
 
+            {activeTab === 'conversations' && (
+            <section className="group/conversations px-3 pb-5 pt-1">
               {sectionMenuAnchor && (
                 <ChatSectionMenu
                   anchor={sectionMenuAnchor}
@@ -1007,28 +1297,30 @@ export const Sidebar = memo(function Sidebar({
                 />
               )}
 
-              {!conversationSectionCollapsed ? (
+              {recentConversations.length > 0 ? (
                 <div className="mt-1.5">
-                  {looseConversations.length > 0 ? (
                     <ConversationList
-                      conversations={looseConversations}
+                      conversations={recentConversations}
                       currentConversationId={currentConversationId}
                       generatingConversationIds={generatingConversationIds}
                       projects={projects}
+                      sets={sets}
                       compact
                       showAssistantName={false}
                       onSelectConversation={(id) => {
                         if (selectedProject) onSelectProject(null)
+                        if (selectedSet) onSelectSet(null)
                         onSelectConversation(id)
                       }}
                       onRenameConversation={handleRenameConversation}
                       onDeleteConversation={handleDeleteConversation}
                       onMoveConversationToProject={handleMoveConversationToProject}
+                      onMoveConversationToSet={handleMoveConversationToSet}
                     />
-                  ) : null}
                 </div>
               ) : null}
             </section>
+            )}
           </>
         )}
       </div>
@@ -1062,6 +1354,31 @@ export const Sidebar = memo(function Sidebar({
           onClose={() => setDialogProject(undefined)}
         />
       )}
+
+      {setMenuState && menuSet && (
+        <SetContextMenu
+          anchor={setMenuState.anchor}
+          onRename={() => {
+            setDialogSet(menuSet)
+            setSetDialogError('')
+          }}
+          onDelete={() => void handleDeleteSet(menuSet)}
+          onClose={() => setSetMenuState(null)}
+        />
+      )}
+
+      {dialogSet !== undefined && (
+        <SetDialog
+          set={dialogSet}
+          assistants={assistants}
+          saving={setDialogSaving}
+          error={setDialogError}
+          onSave={(name, systemPrompt, defaultAssistantId) =>
+            void handleSaveSet(name, systemPrompt, defaultAssistantId)
+          }
+          onClose={() => setDialogSet(undefined)}
+        />
+      )}
     </aside>
 
     {searchOpen && (
@@ -1070,6 +1387,7 @@ export const Sidebar = memo(function Sidebar({
         results={searchResults}
         currentConversationId={currentConversationId}
         projects={projects}
+        sets={sets}
         onQueryChange={setSearchQuery}
         onSelectConversation={handleSelectSearchConversation}
         onClose={closeSearch}

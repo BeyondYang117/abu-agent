@@ -225,12 +225,29 @@ pub(crate) fn create_chat_conversation_internal(
 ) -> Result<Conversation, String> {
     let settings = state.settings_read().clone();
     let set_id = set_id.and_then(non_empty_string);
-    let assistant_snapshot = assistant_id
+    // 归属互斥：集与项目至多一个。在创建边界强制（防直连 API 同时传两者）——集优先，清掉项目/文件夹。
+    let project_id = if set_id.is_some() { None } else { project_id };
+    let folder = if set_id.is_some() { None } else { folder };
+    let mut assistant_snapshot = assistant_id
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(|id| assistant_snapshot(&app, id))
         .transpose()?;
+    // 在集下新建且未显式指定助手时，用集的默认助手（创建时冻结进快照，与现有助手行为一致）。
+    // 默认助手不可用（归档/停用/不存在）则静默回退为无助手，不阻断建对话。
+    if assistant_snapshot.is_none() {
+        if let Some(set_id) = set_id.as_deref() {
+            if let Some(default_assistant_id) = find_set_by_id(&app, set_id)
+                .ok()
+                .and_then(|set| set.default_assistant_id)
+                .filter(|id| !id.trim().is_empty())
+            {
+                assistant_snapshot =
+                    super::storage::assistant_snapshot(&app, default_assistant_id.trim()).ok();
+            }
+        }
+    }
 
     // 使用提供的 provider/model，或者回退到默认模型配置。
     let (default_provider_id, default_model) = settings.effective_chat_model();
@@ -293,6 +310,7 @@ pub(crate) fn create_chat_conversation_internal(
             &model,
             folder.as_deref(),
             project_id.as_deref(),
+            set_id.as_deref(),
             assistant_id_for_reuse.as_deref(),
         )? {
             conversation
@@ -1691,6 +1709,13 @@ async fn complete_assistant_reply(
     let agent_plan_prompt =
         crate::chat::plan::format_prompt(&conversation.agent_plan_state, &language);
     let project_prompt_context = project_prompt_context_for(app, conversation);
+    // 集的系统提示词：按对话 set_id 实时取（不冻结），随集编辑立即对集内对话生效。
+    let set_system_prompt = conversation
+        .set_id
+        .as_deref()
+        .and_then(|id| find_set_by_id(app, id).ok())
+        .map(|set| set.system_prompt)
+        .filter(|prompt| !prompt.trim().is_empty());
     let system_prompt = agent_prepare::build_chat_system_prompt(
         &language,
         !main_image_paths.is_empty(),
@@ -1702,6 +1727,7 @@ async fn complete_assistant_reply(
         skill_id.as_deref(),
         active_skill_detail.as_ref(),
         conversation.assistant_snapshot.as_ref(),
+        set_system_prompt.as_deref(),
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
         Some(&agent_plan_prompt),
@@ -1732,6 +1758,7 @@ async fn complete_assistant_reply(
         skill_id.as_deref(),
         active_skill_detail.as_ref(),
         conversation.assistant_snapshot.as_ref(),
+        set_system_prompt.as_deref(),
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
         Some(&agent_plan_prompt),
@@ -3293,6 +3320,12 @@ async fn compute_context_state(
         estimate_image_attachment_tokens(provider.as_ref(), &conversation.model, main_image_paths)
     };
 
+    let set_system_prompt = conversation
+        .set_id
+        .as_deref()
+        .and_then(|id| find_set_by_id(app, id).ok())
+        .map(|set| set.system_prompt)
+        .filter(|prompt| !prompt.trim().is_empty());
     let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
         &language,
         !main_image_paths.is_empty(),
@@ -3304,6 +3337,7 @@ async fn compute_context_state(
         active_skill_id.as_deref(),
         active_skill_detail.as_ref(),
         conversation.assistant_snapshot.as_ref(),
+        set_system_prompt.as_deref(),
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
         Some(&crate::chat::plan::format_prompt(

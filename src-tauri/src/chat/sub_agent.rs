@@ -995,6 +995,7 @@ pub fn handle_agent_spawn<'a>(
             None,
             None,
             None,
+            None,
             &compose_persona(&def.system_prompt),
             None,
             None,

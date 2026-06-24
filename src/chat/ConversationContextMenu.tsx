@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, Folder, Pencil, Trash2 } from 'lucide-react'
-import type { ChatProject } from './types'
+import { ChevronRight, Folder, Layers, Pencil, Trash2 } from 'lucide-react'
+import type { ChatProject, ChatSet } from './types'
 
 export interface ConversationMenuAnchor {
   left: number
@@ -13,9 +13,12 @@ interface ConversationContextMenuProps {
   conversationTitle: string
   conversationFolder?: string
   conversationProjectId?: string | null
+  conversationSetId?: string | null
   projects: ChatProject[]
+  sets: ChatSet[]
   onRename: () => void
   onMoveToProject: (projectId: string | undefined) => void
+  onMoveToSet: (setId: string | undefined) => void
   onDelete: () => void
   onClose: () => void
 }
@@ -24,9 +27,12 @@ export function ConversationContextMenu({
   anchor,
   conversationFolder,
   conversationProjectId,
+  conversationSetId,
   projects,
+  sets,
   onRename,
   onMoveToProject,
+  onMoveToSet,
   onDelete,
   onClose,
 }: ConversationContextMenuProps) {
@@ -120,6 +126,62 @@ export function ConversationContextMenu({
                   }}
                 >
                   移出项目
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="group/subset relative">
+        <button
+          type="button"
+          role="menuitem"
+          className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-neutral-800 transition-colors hover:bg-black/[0.04] dark:text-neutral-100 dark:hover:bg-white/[0.06]"
+        >
+          <Layers size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
+          <span className="min-w-0 flex-1">移动到集</span>
+          <ChevronRight size={16} className="shrink-0 text-neutral-400" />
+        </button>
+
+        <div className="pointer-events-none absolute left-full top-0 z-[201] min-w-[168px] pl-1 opacity-0 transition-opacity group-hover/subset:pointer-events-auto group-hover/subset:opacity-100">
+          <div className="rounded-xl border border-neutral-200/90 bg-white py-1.5 shadow-lg dark:border-neutral-700 dark:bg-[#2a2a2c]">
+            {sets.length === 0 ? (
+              <div className="px-3.5 py-2 text-[13px] text-neutral-400">暂无集</div>
+            ) : (
+              sets.map((set) => {
+                const active = conversationSetId === set.id
+                return (
+                  <button
+                    key={set.id}
+                    type="button"
+                    className={`flex w-full px-3.5 py-2 text-left text-[13px] transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06] ${
+                      active
+                        ? 'font-medium text-neutral-900 dark:text-neutral-50'
+                        : 'text-neutral-800 dark:text-neutral-100'
+                    }`}
+                    onClick={() => {
+                      onMoveToSet(set.id)
+                      onClose()
+                    }}
+                  >
+                    {set.name}
+                  </button>
+                )
+              })
+            )}
+            {conversationSetId && (
+              <>
+                <div className="my-1 border-t border-neutral-200/80 dark:border-neutral-700" />
+                <button
+                  type="button"
+                  className="flex w-full px-3.5 py-2 text-left text-[13px] text-neutral-600 transition-colors hover:bg-black/[0.04] dark:text-neutral-300 dark:hover:bg-white/[0.06]"
+                  onClick={() => {
+                    onMoveToSet(undefined)
+                    onClose()
+                  }}
+                >
+                  移出集
                 </button>
               </>
             )}
