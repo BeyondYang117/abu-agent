@@ -4,6 +4,7 @@ import { type DefaultPromptTemplates, type RapidOcrStatus, type Settings } from 
 import { ModelPairSelect } from './ModelPairSelect'
 import {
   HotkeyInput,
+  Input,
   Select,
   SettingRow,
   SettingsGroup,
@@ -55,6 +56,15 @@ export function ScreenshotTranslationSettings({
 }: ScreenshotTranslationSettingsProps) {
   const screenshot = settings.screenshotTranslation
   const ocrMode = screenshot?.ocrMode ?? 'cloud_vision'
+  const cardWidth = screenshot?.cardWidth ?? 480
+  const [widthDraft, setWidthDraft] = useState(String(cardWidth))
+  // 边打字不 clamp（避免输 "5" 立刻跳 360）；失焦/回车时 clamp 到 360–720 再提交。
+  const commitCardWidth = () => {
+    const n = parseInt(widthDraft, 10)
+    const next = Number.isFinite(n) ? Math.max(360, Math.min(720, n)) : cardWidth
+    setWidthDraft(String(next))
+    if (next !== cardWidth) onUpdate({ cardWidth: next })
+  }
 
   return (
     <>
@@ -137,6 +147,19 @@ export function ScreenshotTranslationSettings({
                 <Toggle
                   checked={screenshot?.keepFullscreenAfterCapture !== false}
                   onChange={(keepFullscreenAfterCapture) => onUpdate({ keepFullscreenAfterCapture })}
+                />
+              </SettingRow>
+              <SettingRow label={t.translateCardWidth} description={t.translateCardWidthHint}>
+                <Input
+                  type="number"
+                  min={360}
+                  max={720}
+                  step={10}
+                  className="w-24"
+                  value={widthDraft}
+                  onChange={setWidthDraft}
+                  onBlur={commitCardWidth}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitCardWidth() }}
                 />
               </SettingRow>
           </SettingsGroup>

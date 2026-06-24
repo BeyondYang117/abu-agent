@@ -199,6 +199,10 @@ pub struct ScreenshotTranslationConfig {
     /// 截图后是否保留 lens 全屏覆盖。默认 true：选区高亮 + 译文卡同屏；false → lens 缩成浮动小窗，不挡下层 app。
     #[serde(default = "default_true")]
     pub keep_fullscreen_after_capture: bool,
+
+    /// 快速翻译结果卡左右宽度（px）。截图翻译与选中文本翻译两种卡共用，保证宽度一致且可调。
+    #[serde(default = "default_translate_card_width")]
+    pub card_width: u32,
     /// 用平台本地 OCR 做文字识别，把识别出的文字喂给翻译模型（macOS Apple Vision / Windows OCR）。
     /// true → 系统 OCR + provider 文字翻译（provider 可是任意 OpenAI 兼容 endpoint）
     /// false → provider 必须是多模态模型，一次完成 OCR+翻译
@@ -236,6 +240,7 @@ impl Default for ScreenshotTranslationConfig {
             thinking_enabled: false,
             stream_enabled: true,
             keep_fullscreen_after_capture: true,
+            card_width: default_translate_card_width(),
             use_system_ocr: false,
             ocr_mode: Some(OcrMode::CloudVision),
             prompt: None,
@@ -1829,6 +1834,11 @@ fn default_screenshot_translation_hotkey() -> String {
 
 fn default_screenshot_translation_text_hotkey() -> String {
     "CommandOrControl+Shift+T".to_string()
+}
+
+/// 快速翻译结果卡默认宽度（px）。介于旧截图卡(~514)与选中文本卡(420)之间。
+fn default_translate_card_width() -> u32 {
+    480
 }
 
 fn default_lens_hotkey() -> String {

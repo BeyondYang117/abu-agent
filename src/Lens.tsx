@@ -244,6 +244,8 @@ export default function Lens() {
   const captureHintEnabledRef = useRef(true)
   const sendToChatRef = useRef(true)
   const screenshotKeepFullscreenRef = useRef(true)
+  // 快速翻译结果卡宽度（截图翻译 + 选中文本翻译共用，来自设置，默认 480）
+  const cardWidthRef = useRef(480)
   const prevStreamingRef = useRef(false)
   const preparingSendRef = useRef(false)
   const answerFinishedRef = useRef(false)
@@ -311,6 +313,7 @@ export default function Lens() {
       setWebSearchAvailable(canUseWebSearch)
       setWebSearchEnabled(canUseWebSearch && curMode === 'chat')
       screenshotKeepFullscreenRef.current = settings.screenshotTranslation?.keepFullscreenAfterCapture !== false
+      cardWidthRef.current = settings.screenshotTranslation?.cardWidth ?? 480
       setKeepFullscreen(curMode === 'chat' || (curMode === 'translate' && screenshotKeepFullscreenRef.current))
       captureHintEnabledRef.current = settings.lens?.showCaptureHint !== false
       sendToChatRef.current = settings.lens?.sendToChat !== false
@@ -403,7 +406,7 @@ export default function Lens() {
       setViewport({ w, h })
       const m = computeMetrics(w, h)
       setBarRect(curMode === 'translateText'
-        ? { x: FLOATING_PADDING, y: FLOATING_PADDING, width: Math.min(m.READY_W, w) }
+        ? { x: FLOATING_PADDING, y: FLOATING_PADDING, width: Math.min(cardWidthRef.current, w) }
         : computeSelectBar(w, h, m))
       setFlyDelta({ x: 0, y: 0 })
       setCapturedFrame(null)
@@ -435,6 +438,7 @@ export default function Lens() {
         const settings = await api.getSettings()
         if (motionSeq !== motionSeqRef.current) return
         screenshotKeepFullscreenRef.current = settings.screenshotTranslation?.keepFullscreenAfterCapture !== false
+      cardWidthRef.current = settings.screenshotTranslation?.cardWidth ?? 480
         setKeepFullscreen(curMode === 'chat' || (curMode === 'translate' && screenshotKeepFullscreenRef.current))
         captureHintEnabledRef.current = settings.lens?.showCaptureHint !== false
         if (stageRef.current === 'select' && selectRevealedRef.current) {
@@ -610,7 +614,7 @@ export default function Lens() {
     if (stageRef.current === 'select') {
       setBarRect(computeSelectBar(viewport.w, viewport.h, metrics))
     } else if (modeRef.current === 'translateText' && stageRef.current === 'translating') {
-      const w = Math.min(metrics.READY_W, viewport.w)
+      const w = Math.min(cardWidthRef.current, viewport.w)
       setBarRect({ x: FLOATING_PADDING, y: FLOATING_PADDING, width: w })
     }
   }, [viewport, metrics])
@@ -1054,7 +1058,7 @@ export default function Lens() {
     const ay = anchorAbsY - winOrigin.y
     const vw = window.innerWidth
     const vh = window.innerHeight
-    const barW = mode === 'chat' ? computeChatBarWidth(metrics) : metrics.READY_W
+    const barW = mode === 'chat' ? computeChatBarWidth(metrics) : Math.min(cardWidthRef.current, vw - FLOATING_PADDING * 2)
     const ANSWER_H = metrics.ANSWER_H
 
     const rightStart = ax + anchorW + ANCHOR_GAP

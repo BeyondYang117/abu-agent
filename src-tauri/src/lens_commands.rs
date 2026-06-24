@@ -376,11 +376,13 @@ fn lens_set_interactive_region(
 }
 
 fn lens_position_text_floating(app: &AppHandle, window: &WebviewWindow) {
-    const WIDTH: f64 = 640.0;
+    // 浮动窗 = 卡片宽 + 左右 padding（前端 FLOATING_PADDING=24/边）。卡宽来自设置，与截图翻译统一。
+    let card_w = app.state::<AppState>().settings_read().screenshot_translation.card_width as f64;
+    let width = card_w + 48.0;
     const HEIGHT: f64 = 320.0;
     const GAP: f64 = 12.0;
 
-    let _ = window.set_size(tauri::LogicalSize::new(WIDTH, HEIGHT));
+    let _ = window.set_size(tauri::LogicalSize::new(width, HEIGHT));
 
     let Some(cursor) = get_mouse_position(app) else {
         let _ = window.center();
@@ -402,7 +404,7 @@ fn lens_position_text_floating(app: &AppHandle, window: &WebviewWindow) {
             let mp = monitor.position();
             let ms = monitor.size();
             let scale = monitor.scale_factor();
-            let width = WIDTH * scale;
+            let width = width * scale;
             let height = HEIGHT * scale;
             let min_x = mp.x as f64 + GAP;
             let min_y = mp.y as f64 + GAP;

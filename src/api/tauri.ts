@@ -630,6 +630,8 @@ export type Settings = {
     streamEnabled?: boolean
     /** 截图后是否保持全屏覆盖（默认 true）。false 时截图后窗口缩小为浮动 */
     keepFullscreenAfterCapture?: boolean
+    /** 快速翻译结果卡左右宽度(px)。截图翻译与选中文本翻译共用，统一且可调（默认 480） */
+    cardWidth?: number
     /** 使用系统 OCR(macOS Apple Vision / Windows OCR) 做文字识别,然后让 provider 翻译纯文本(默认 false)。
      *  true 时 provider 可以是任意文字模型;false 时 provider 必须是多模态视觉模型。
      *  从 vNext 起作 ocrMode 的降级镜像保留:System→true，其它→false。新代码应读 ocrMode。 */
@@ -985,6 +987,7 @@ function normalizeSettings(settings: Settings): Settings {
       thinkingEnabled: current.screenshotTranslation?.thinkingEnabled ?? false,
       streamEnabled: current.screenshotTranslation?.streamEnabled ?? true,
       keepFullscreenAfterCapture: current.screenshotTranslation?.keepFullscreenAfterCapture ?? true,
+      cardWidth: current.screenshotTranslation?.cardWidth ?? 480,
       useSystemOcr: current.screenshotTranslation?.useSystemOcr ?? false,
       ocrMode: current.screenshotTranslation?.ocrMode ?? 'cloud_vision',
       prompt: current.screenshotTranslation?.prompt ?? '',
