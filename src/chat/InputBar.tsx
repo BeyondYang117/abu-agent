@@ -1524,7 +1524,7 @@ export function InputBar({
         )}
         <div
           data-chat-composer="true"
-          className={`chat-composer-shell relative z-10 rounded-[28px] border px-3 py-2.5 transition-[box-shadow,border-color] duration-200 ${
+          className={`chat-composer-shell relative select-none ${modeMenuOpen ? 'z-30' : 'z-10'} rounded-[28px] border px-3 py-2.5 transition-[box-shadow,border-color] duration-200 ${
             dragActive
               ? 'border-[#e8a090] shadow-[0_2px_12px_rgba(0,0,0,0.06)] ring-2 ring-[#e8a090]/25 dark:border-[#e8a090] dark:shadow-none'
               : agentPlanActive
@@ -1606,7 +1606,7 @@ export function InputBar({
                   : 'Ask me anything...'
               }
               rows={1}
-              className="mb-0.5 max-h-40 min-h-[28px] flex-1 resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
+              className="mb-0.5 max-h-40 min-h-[28px] flex-1 select-text resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
             />
 
             {onExecuteAgentPlan && agentPlanText && (
@@ -1629,6 +1629,7 @@ export function InputBar({
                 <button
                   type="button"
                   onClick={toggleModeMenu}
+                  onMouseDown={(event) => event.preventDefault()}
                   disabled={disabled}
                   className={`inline-flex h-[26px] max-w-full items-center gap-0.5 rounded-full px-1.5 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 dark:focus-visible:ring-neutral-600 ${
                     modeMenuOpen
@@ -1657,7 +1658,7 @@ export function InputBar({
                   <>
                     <div className="fixed inset-0 z-30" onClick={closeModeMenu} aria-hidden />
                     <div
-                      className={`chat-motion-popover absolute right-0 z-40 w-[min(248px,calc(100vw-32px))] overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+                      className={`chat-motion-popover absolute right-0 z-40 w-[min(236px,calc(100vw-32px))] overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
                       style={{ ['--chat-popover-origin' as string]: modePanelOrigin }}
                       data-tauri-drag-region="false"
                       role="menu"
@@ -1672,18 +1673,18 @@ export function InputBar({
                             role="menuitemradio"
                             aria-checked={active}
                             onClick={() => void setAgentPlanMode(option.mode)}
-                            className={`flex min-h-[38px] w-full min-w-0 items-center gap-2 rounded-md px-2 text-left transition-colors ${
+                            className={`flex min-h-[30px] w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors ${
                               active
                                 ? 'bg-neutral-100 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50'
                                 : 'text-neutral-800 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800'
                             }`}
                           >
                             <Icon
-                              size={15}
+                              size={14}
                               strokeWidth={1.8}
                               className={`shrink-0 ${AGENT_MODE_PILL_CLASS[option.mode].iconColor}`}
                             />
-                            <span className="min-w-0 flex-1">
+                            <span className="min-w-0 flex-1 leading-tight">
                               <span className="block truncate text-[12px] font-semibold">{option.label}</span>
                               <span className="block truncate text-[10px] font-medium text-neutral-400 dark:text-neutral-500">
                                 {option.description}
