@@ -1932,8 +1932,10 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
         // 复用（隐藏 + 复位全屏几何，避免下次 show 还停在上次浮动 bar 位置）。
         #[cfg(not(target_os = "windows"))]
         {
+            // macOS：换回原窗口类后 destroy，终结 WebContent 进程回收内存（about:blank 实测
+            // 不回收，只有销毁进程才行）。下次触发由 ensure_lens/translate_window 冷重建。
             let _ = window.hide();
-            lens_position_fullscreen(&app, &window);
+            windows::destroy_overlay_window(&window);
         }
     }
     Ok(())

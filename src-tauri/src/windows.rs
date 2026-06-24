@@ -591,6 +591,30 @@ extern "C" {
     ) -> *const objc::runtime::Class;
 }
 
+/// 浮窗被 `object_setClass` 换成 NSPanel 子类前的原类（tao `TaoWindow`）。全 app 的 tao 窗口
+/// 共用同一个类，故一个 static 足够。destroy 前换回它，避免 tao 按错类析构触发 ObjC abort。
+/// 存 usize（裸类指针进程常驻、只读）以满足 Send/Sync。
+#[cfg(target_os = "macos")]
+static ORIGINAL_OVERLAY_CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// macOS：销毁重分类过的浮窗。先在主线程同步把类换回原类（`TaoWindow`），再 `destroy()`。
+/// 顺序保证：`run_overlay_on_main` 会等主线程执行完才返回，之后 destroy 的 dealloc 看到的已是
+/// 原类 → tao 析构不再因类不匹配抛 ObjC 异常 abort。未记到原类（理论不会）则回退 hide。
+#[cfg(target_os = "macos")]
+pub fn destroy_overlay_window(window: &WebviewWindow) {
+    let Some(orig) = ORIGINAL_OVERLAY_CLASS.get().copied() else {
+        // 理论不会发生（destroy 前必经 configure_overlay_panel 设过原类）；真走到这里说明
+        // 假设被打破，退回旧的 hide 复用（不回收内存但不崩），留日志便于诊断。
+        eprintln!("[overlay] destroy_overlay_window: 原类未记录，退回 hide");
+        let _ = window.hide();
+        return;
+    };
+    run_overlay_on_main(window, move |ptr| unsafe {
+        object_setClass(ptr, orig as *const objc::runtime::Class);
+    });
+    let _ = window.destroy();
+}
+
 /// 运行时注册一个 NSPanel 子类：borderless 窗口默认 `canBecomeKeyWindow=NO`，强制 YES 才能
 /// 接收键盘；`canBecomeMainWindow=NO` 保持其辅助身份。进程内只注册一次。
 #[cfg(target_os = "macos")]
@@ -655,7 +679,10 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
     let panel_class = kivio_overlay_panel_class();
     let already: bool = msg_send![window, isKindOfClass: panel_class];
     if !already {
-        object_setClass(window, panel_class);
+        // object_setClass 返回原类（tao 的 `TaoWindow`，全 app 共用一个）。存下来，
+        // destroy 前换回它，让 tao 按认识的类析构，避免类不匹配的 ObjC abort。
+        let prev = object_setClass(window, panel_class);
+        let _ = ORIGINAL_OVERLAY_CLASS.set(prev as usize);
     }
 
     // 2) 非激活面板样式：点击/聚焦不激活宿主 app（Spotlight 式）。保留既有 borderless/resizable 位。

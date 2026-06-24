@@ -153,11 +153,11 @@ pub fn run() {
                     {
                         let _ = lens_commands::lens_close(window.app_handle().clone());
                     }
-                    // macOS：浮窗是自定义 NSPanel 子类，destroy() 会抛 ObjC 异常穿过 FFI → abort，
-                    // 只能拦截转 hide 复用。
+                    // macOS：换回原类后可安全 destroy（见 windows::destroy_overlay_window），
+                    // 原生关闭也走完整清理 + destroy 回收内存，不留隐藏僵尸 overlay。
                     #[cfg(not(target_os = "windows"))]
                     {
-                        let _ = window.hide();
+                        let _ = lens_commands::lens_close(window.app_handle().clone());
                     }
                     return;
                 }
