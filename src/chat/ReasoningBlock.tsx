@@ -136,7 +136,7 @@ export function ReasoningBlock({ reasoning, streaming = false, durationMs = null
           <ChevronDown
             size={12}
             strokeWidth={2}
-            className={`ml-auto shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+            className={`shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
           />
         </button>
       ) : (
