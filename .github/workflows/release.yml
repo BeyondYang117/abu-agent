@@ -17,10 +17,10 @@ on:
       platform:
         description: 'Platform to build'
         required: true
-        default: 'macos'
+        default: 'windows'
         type: choice
         options:
-          - macos
+          - windows
 
 permissions:
   contents: write
@@ -35,9 +35,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: macos
-            platform: macos-latest
-            args: "--bundles dmg"
+          - id: windows
+            platform: windows-latest
+            args: "--bundles nsis"
 
     runs-on: ${{ matrix.platform }}
 
@@ -78,8 +78,8 @@ jobs:
           releaseBody: |
             Automated build artifacts for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
-            - macOS: DMG (Apple Silicon)
-            (Windows NSIS is built locally and uploaded separately.)
+            - Windows: NSIS (.exe)
+            (macOS DMG for Apple Silicon is built locally and uploaded separately.)
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
