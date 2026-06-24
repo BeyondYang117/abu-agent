@@ -616,6 +616,7 @@
             round: 1,
             depth: 0,
             tool_conversation_id: "conversation",
+            finish_reason: None,
         }
     }
 

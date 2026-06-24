@@ -373,7 +373,7 @@ fn default_message_order() -> String {
 }
 
 pub fn default_chat_max_output_tokens() -> u32 {
-    8192
+    32768
 }
 
 fn clamp_chat_max_output_tokens(value: u32) -> u32 {

@@ -502,6 +502,38 @@
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
     "pricing": { "input": 0.40, "output": 1.60 }
   },
+  "mimo-v2.5-pro": {
+    "displayName": "MiMo V2.5 Pro",
+    "contextWindow": 1048576,
+    "maxOutput": 131072,
+    "capabilities": { "vision": false, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
+    "pricing": { "input": 0.435, "output": 0.87 }
+  },
+  "mimo-v2.5": {
+    "displayName": "MiMo V2.5",
+    "contextWindow": 1048576,
+    "maxOutput": 131072,
+    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false }
+  },
+  "mimo-v2-pro": {
+    "displayName": "MiMo V2 Pro",
+    "contextWindow": 1048576,
+    "maxOutput": 131072,
+    "capabilities": { "vision": false, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false }
+  },
+  "mimo-v2-omni": {
+    "displayName": "MiMo V2 Omni",
+    "contextWindow": 262144,
+    "maxOutput": 32768,
+    "capabilities": { "vision": true, "functionCalling": true, "reasoning": false, "streaming": true, "webSearch": false }
+  },
+  "mimo-v2-flash": {
+    "displayName": "MiMo V2 Flash",
+    "contextWindow": 262144,
+    "maxOutput": 32768,
+    "capabilities": { "vision": false, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
+    "pricing": { "input": 0.10, "output": 0.30 }
+  },
   "qwen3.7-max": {
     "displayName": "Qwen3.7 Max",
     "contextWindow": 1000000,

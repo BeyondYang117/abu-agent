@@ -58,6 +58,10 @@ pub(crate) async fn run_tool_round(
             round,
             depth: config.depth,
             tool_conversation_id: &config.tool_conversation_id,
+            finish_reason: planned
+                .message
+                .get("finish_reason")
+                .and_then(|v| v.as_str()),
         },
         &state.tools,
         &state.blocked_tool_calls,
@@ -123,6 +127,10 @@ pub(crate) struct ToolRoundContext<'a> {
     pub(crate) round: u32,
     pub(crate) depth: u8,
     pub(crate) tool_conversation_id: &'a str,
+    /// finish_reason of the generation that produced these tool calls. When
+    /// `"length"`, the model hit max_output_tokens and any tool-call JSON is
+    /// truncated — so we explain *that* instead of "invalid JSON, retry".
+    pub(crate) finish_reason: Option<&'a str>,
 }
 
 pub(crate) struct ToolRoundResult {
@@ -661,14 +669,37 @@ fn invalid_tool_arguments_result(
     tool: &ChatToolDefinition,
     error: String,
 ) -> ToolExecutionResult {
-    let mut record = invalid_tool_arguments_record(tool_call, tool, ctx.round, error);
+    // finish_reason == "length" means the model hit max_output_tokens and the
+    // tool-call JSON was cut off mid-stream — not malformed JSON. Telling the
+    // model to "retry compact" is misleading; name the real cause so it (and
+    // the user) can react: split a large write, or raise max output tokens.
+    let truncated = ctx.finish_reason == Some("length");
+    let (record_error, model_hint) = if truncated {
+        (
+            format!(
+                "Output truncated: hit the max output token limit (finish_reason=length), \
+                 so the tool-call arguments are incomplete. Original error: {error}"
+            ),
+            "Your previous response was cut off at the max output token limit \
+             (finish_reason=length), so this tool call's arguments are incomplete. \
+             Don't retry the same oversized call — produce smaller output (e.g. write \
+             the file in several smaller chunks via multiple calls), or ask the user to \
+             raise the chat \"max output tokens\" setting for this model."
+                .to_string(),
+        )
+    } else {
+        (
+            error,
+            "Tool arguments JSON is invalid or incomplete. Retry this tool call with a \
+             compact, valid JSON object for arguments."
+                .to_string(),
+        )
+    };
+    let mut record = invalid_tool_arguments_record(tool_call, tool, ctx.round, record_error);
     attach_tool_trace(ctx, &mut record);
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
     ToolExecutionResult {
-        response_message: tool_message(
-            tool_call.id.clone(),
-            "Tool arguments JSON is invalid or incomplete. Retry this tool call with a compact, valid JSON object for arguments.",
-        ),
+        response_message: tool_message(tool_call.id.clone(), model_hint),
         record: Some(record),
         cancelled: false,
     }

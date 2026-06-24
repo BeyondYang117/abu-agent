@@ -13,7 +13,7 @@ type DbEntry = {
     webSearch?: boolean
     imageGeneration?: boolean
   }
-  pricing: {
+  pricing?: {
     input: number
     output: number
     cachedInput?: number
@@ -136,9 +136,9 @@ function toModelInfo(entry: DbEntry): ModelInfo {
       imageGeneration: entry.capabilities.imageGeneration ?? false,
     },
     pricing: {
-      input: entry.pricing.input,
-      output: entry.pricing.output,
-      cachedInput: entry.pricing.cachedInput,
+      input: entry.pricing?.input,
+      output: entry.pricing?.output,
+      cachedInput: entry.pricing?.cachedInput,
     },
   }
 }
