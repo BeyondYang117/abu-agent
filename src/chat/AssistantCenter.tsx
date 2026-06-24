@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
+import { Select } from '../settings/components'
 import { builtinAssistantGlyph } from './assistantIcons'
 import { chatApi } from './api'
 import { usesNativeTitlebar } from './platform'
@@ -716,35 +717,33 @@ export function AssistantCenter({
               <div className="text-[12px] font-semibold text-neutral-700 dark:text-neutral-200">运行设置</div>
               <label className="block">
                 <span className="mb-1 block text-[11px] text-neutral-500 dark:text-neutral-400">模型供应商</span>
-                <select
+                <Select
                   value={draft.provider_id ?? ''}
-                  onChange={(event) => {
-                    const providerId = event.target.value
+                  onChange={(providerId) => {
                     const provider = providers.find((item) => item.id === providerId)
                     updateDraft('provider_id', providerId)
                     updateDraft('model', providerModels(provider)[0] ?? '')
                   }}
-                  className="h-9 w-full rounded-md border border-neutral-200 bg-white px-2 text-[12px] outline-none dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                >
-                  <option value="">跟随聊天默认</option>
-                  {enabledProviders.map((provider) => (
-                    <option key={provider.id} value={provider.id}>{provider.name}</option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: '跟随聊天默认' },
+                    ...enabledProviders.map((provider) => ({
+                      value: provider.id,
+                      label: provider.name,
+                    })),
+                  ]}
+                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-[11px] text-neutral-500 dark:text-neutral-400">模型</span>
-                <select
+                <Select
                   value={draft.model ?? ''}
-                  disabled={!draft.provider_id}
-                  onChange={(event) => updateDraft('model', event.target.value)}
-                  className="h-9 w-full rounded-md border border-neutral-200 bg-white px-2 text-[12px] outline-none disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
-                >
-                  {!draft.provider_id && <option value="">跟随聊天默认</option>}
-                  {models.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
+                  onChange={(model) => updateDraft('model', model)}
+                  options={
+                    draft.provider_id
+                      ? models.map((model) => ({ value: model, label: model }))
+                      : [{ value: '', label: '跟随聊天默认' }]
+                  }
+                />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md bg-neutral-50 px-2.5 py-2 text-[12px] text-neutral-700 dark:bg-neutral-800/70 dark:text-neutral-200">
                 <span>启用助手</span>

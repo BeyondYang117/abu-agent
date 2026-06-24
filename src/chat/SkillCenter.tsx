@@ -25,6 +25,7 @@ import {
   type SkillMeta,
 } from '../api/tauri'
 import { usesNativeTitlebar } from './platform'
+import { Select } from '../settings/components'
 
 interface SkillCenterProps {
   /** 返回对话视图 */
@@ -505,16 +506,15 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                     <div className="mb-1.5 text-[13px] font-medium text-neutral-800 dark:text-neutral-100">
                       无 Tools 降级模式
                     </div>
-                    <select
+                    <Select
                       value={chatTools.skillFallbackMode || 'progressive'}
-                      onChange={(event) => persistChatTools({ skillFallbackMode: event.target.value })}
-                      className="h-9 w-full rounded-md border border-neutral-200 bg-white px-2.5 text-[13px] text-neutral-800 outline-none focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                      data-tauri-drag-region="false"
-                    >
-                      <option value="progressive">渐进式（仅 catalog）</option>
-                      <option value="skill_md_only">仅 SKILL.md</option>
-                      <option value="legacy_full_body">旧版全量注入</option>
-                    </select>
+                      onChange={(value) => persistChatTools({ skillFallbackMode: value })}
+                      options={[
+                        { value: 'progressive', label: '渐进式（仅 catalog）' },
+                        { value: 'skill_md_only', label: '仅 SKILL.md' },
+                        { value: 'legacy_full_body', label: '旧版全量注入' },
+                      ]}
+                    />
                   </div>
                   <div className="min-w-0">
                     <div className="mb-1.5 text-[13px] font-medium text-neutral-800 dark:text-neutral-100">

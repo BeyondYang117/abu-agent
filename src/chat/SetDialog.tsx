@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Select } from '../settings/components'
 import type { ChatAssistant, ChatSet } from './types'
 
 interface SetDialogProps {
@@ -99,18 +100,18 @@ export function SetDialog({
           默认助手
           <span className="ml-1 font-normal text-neutral-400">（在集下新建对话时使用）</span>
         </label>
-        <select
+        <Select
           value={defaultAssistantId}
-          onChange={(e) => setDefaultAssistantId(e.target.value)}
-          className="mt-1.5 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[13px] text-neutral-900 outline-none transition-colors focus:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-        >
-          <option value="">不指定（用全局默认）</option>
-          {selectableAssistants.map((assistant) => (
-            <option key={assistant.id} value={assistant.id}>
-              {assistant.name}
-            </option>
-          ))}
-        </select>
+          onChange={setDefaultAssistantId}
+          options={[
+            { value: '', label: '不指定（用全局默认）' },
+            ...selectableAssistants.map((assistant) => ({
+              value: assistant.id,
+              label: assistant.name,
+            })),
+          ]}
+          className="mt-1.5"
+        />
 
         {error && <p className="mt-2 text-[12px] text-red-600 dark:text-red-400">{error}</p>}
         <div className="mt-4 flex justify-end gap-2">
