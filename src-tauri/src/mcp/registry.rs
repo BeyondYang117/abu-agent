@@ -8,7 +8,8 @@ use tokio::sync::oneshot;
 
 use crate::{
     native_tools::{
-        resolve_tool_read_path, FileMutationResult, NativeToolWorkspace, ReadFileResult,
+        resolve_tool_read_path, resolve_tool_write_path, FileMutationResult, NativeToolWorkspace,
+        ReadFileResult,
     },
     settings::{
         ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
@@ -669,7 +670,19 @@ async fn call_native_tool(
         }
         NativeToolCall::BlockingMutation(call) => {
             let result = run_blocking_file_mutation(&workspace, &arguments, *call).await?;
-            file_mutation_tool_result(result)
+            let mut tool_result = file_mutation_tool_result(result)?;
+            // Delivery channel: if `write` landed a file inside the conversation's
+            // persistent delivery directory (~/Kivio/outputs/<conversation>/),
+            // attach a downloadable file-card artifact. Writes anywhere else (the
+            // project/workspace) get no artifact — behavior unchanged.
+            if tool.name == "write" {
+                if let Some(artifact) =
+                    delivery_artifact_for_write(&workspace, &arguments, native_ctx.as_ref())
+                {
+                    tool_result.artifacts.push(artifact);
+                }
+            }
+            Ok(tool_result)
         }
         NativeToolCall::Async(call) => {
             call(NativeCallCtx {
@@ -742,6 +755,27 @@ pub fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCa
         artifacts: Vec::new(),
         structured_content: Some(structured),
     })
+}
+
+/// Delivery channel for `write_file`: build a downloadable file-card artifact
+/// when (and only when) the written path resolves inside the conversation's
+/// persistent delivery directory `~/Kivio/outputs/<conversation>/`. Returns
+/// `None` for project/workspace/temp writes (no card) and for standalone calls
+/// without a conversation context. Re-resolves the write path the same way
+/// `write_file` did (pure path resolution, no IO) so the absolute on-disk path
+/// is reliable across project vs. global workspaces.
+fn delivery_artifact_for_write(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+    native_ctx: Option<&NativeToolContext>,
+) -> Option<crate::mcp::types::ChatToolArtifact> {
+    let native_ctx = native_ctx?;
+    let raw_path = arguments.get("path").and_then(|v| v.as_str())?;
+    let resolved = resolve_tool_write_path(workspace, raw_path).ok()?;
+    if !crate::native_tools::path_under_delivery_dir(&native_ctx.conversation_id, &resolved) {
+        return None;
+    }
+    crate::native_tools::build_delivery_artifact_for_path(&resolved).ok()
 }
 
 pub fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCallResult, String> {

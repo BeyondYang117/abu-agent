@@ -1708,6 +1708,11 @@ async fn complete_assistant_reply(
     let agent_plan_prompt =
         crate::chat::plan::format_prompt(&conversation.agent_plan_state, &language);
     let project_prompt_context = project_prompt_context_for(app, conversation);
+    // Persistent per-conversation delivery directory surfaced to the model so it
+    // can write deliverable files there (which auto-render as downloadable cards).
+    let delivery_dir = crate::native_tools::delivery_dir(&conversation.id)
+        .ok()
+        .map(|path| path.display().to_string());
     // 集的系统提示词：按对话 set_id 实时取（不冻结），随集编辑立即对集内对话生效。
     let set_system_prompt = conversation
         .set_id
@@ -1733,6 +1738,7 @@ async fn complete_assistant_reply(
         Some(&agent_ask_user_prompt),
         Some(&agent_todo_prompt),
         project_prompt_context.as_ref(),
+        delivery_dir.as_deref(),
     );
 
     let runtime_messages = build_chat_api_messages(
@@ -1768,6 +1774,7 @@ async fn complete_assistant_reply(
             false,
         )),
         project_prompt_context.as_ref(),
+        delivery_dir.as_deref(),
     );
 
     let host = ChatAgentHost {
@@ -3354,6 +3361,10 @@ async fn compute_context_state(
             todo_tools_available,
         )),
         project_prompt_context_for(app, conversation).as_ref(),
+        crate::native_tools::delivery_dir(&conversation.id)
+            .ok()
+            .map(|path| path.display().to_string())
+            .as_deref(),
     );
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let request_messages = build_chat_api_messages(

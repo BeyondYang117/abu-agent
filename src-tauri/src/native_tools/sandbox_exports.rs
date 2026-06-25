@@ -10,9 +10,16 @@ use serde::{Deserialize, Serialize};
 use super::user_home_dir;
 use crate::mcp::types::ChatToolArtifact;
 
-const RUNS_ROOT: &str = "Kivio/runs";
-const LEGACY_OUTPUTS_DIR: &str = "Kivio/outputs";
-const DEFAULT_RETENTION_DAYS: u64 = 7;
+/// Persistent per-conversation delivery directory. Files here are finished
+/// deliverables for the user (produced by `write_file` writing into this dir, or
+/// by `run_python` artifacts), shown as downloadable file cards. **Persistent:
+/// never auto-pruned** — only removed when the conversation itself is deleted.
+const OUTPUTS_ROOT: &str = "Kivio/outputs";
+/// Legacy ephemeral exports tree from prior versions (`run_python` used to write
+/// here under `<conversation>/<message>/`). Still GC'd at startup so old runs go
+/// away; nothing writes here anymore.
+const LEGACY_RUNS_ROOT: &str = "Kivio/runs";
+const LEGACY_RUNS_RETENTION_DAYS: u64 = 7;
 const MAX_EXPORT_FILE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_EXPORT_FILES_PER_RUN: usize = 16;
 
@@ -65,18 +72,71 @@ fn sanitize_path_segment(raw: &str) -> String {
     }
 }
 
-pub fn sandbox_run_export_dir(ctx: &SandboxExportContext) -> Result<PathBuf, String> {
-    let home = user_home_dir()?;
-    Ok(home
-        .join(RUNS_ROOT)
-        .join(sanitize_path_segment(&ctx.conversation_id))
-        .join(sanitize_path_segment(&ctx.message_id)))
+fn outputs_root() -> Result<PathBuf, String> {
+    Ok(user_home_dir()?.join(OUTPUTS_ROOT))
 }
 
-fn sandbox_exports_root() -> Result<PathBuf, String> {
-    Ok(user_home_dir()?.join(RUNS_ROOT))
+/// Resolve the persistent delivery directory for a conversation:
+/// `~/Kivio/outputs/<sanitized_conversation_id>/`. The conversation id segment
+/// is sanitized so it can never escape the outputs root.
+pub fn delivery_dir(conversation_id: &str) -> Result<PathBuf, String> {
+    Ok(outputs_root()?.join(sanitize_path_segment(conversation_id)))
 }
 
+/// Resolve and create the delivery directory for a conversation.
+pub fn ensure_delivery_dir(conversation_id: &str) -> Result<PathBuf, String> {
+    let dir = delivery_dir(conversation_id)?;
+    fs::create_dir_all(&dir).map_err(|err| format!("Create delivery dir failed: {err}"))?;
+    Ok(dir)
+}
+
+/// True when `path` resolves to a location inside the conversation's delivery
+/// directory. Used by `write_file` to decide whether a successful write should
+/// be surfaced as a downloadable file card. Compares canonicalized paths so a
+/// `..` or symlink cannot spoof membership.
+pub fn path_under_delivery_dir(conversation_id: &str, path: &Path) -> bool {
+    let Ok(dir) = delivery_dir(conversation_id) else {
+        return false;
+    };
+    // The delivery dir may not exist yet; canonicalize the deepest existing
+    // ancestor of each side so the comparison is stable on both platforms.
+    let canon = |p: &Path| -> PathBuf { canonicalize_lenient(p) };
+    let dir_canon = canon(&dir);
+    let path_canon = canon(path);
+    path_canon.starts_with(&dir_canon)
+}
+
+/// Canonicalize a path, falling back to canonicalizing the nearest existing
+/// ancestor and re-appending the missing tail (so a not-yet-created file still
+/// resolves symlinks/`..` in its parent chain).
+fn canonicalize_lenient(path: &Path) -> PathBuf {
+    if let Ok(canon) = fs::canonicalize(path) {
+        return canon;
+    }
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(canon) = fs::canonicalize(current) {
+            let mut resolved = canon;
+            for name in missing.iter().rev() {
+                resolved.push(name);
+            }
+            return resolved;
+        }
+        match current.parent() {
+            Some(parent) => {
+                if let Some(name) = current.file_name() {
+                    missing.push(name.to_os_string());
+                }
+                current = parent;
+            }
+            None => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Confine an arbitrary host path to the Kivio outputs (delivery) tree. Used by
+/// the open/reveal commands so the UI can only act on generated deliverables.
 pub fn resolve_sandbox_export_file_path(path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -91,10 +151,10 @@ pub fn resolve_sandbox_export_file_path(path: &str) -> Result<PathBuf, String> {
     }
     let canonical_path = fs::canonicalize(full)
         .map_err(|err| format!("Resolve generated file path failed: {err}"))?;
-    let canonical_root = fs::canonicalize(sandbox_exports_root()?)
+    let canonical_root = fs::canonicalize(outputs_root()?)
         .map_err(|err| format!("Resolve generated file root failed: {err}"))?;
     if !canonical_path.starts_with(&canonical_root) {
-        return Err("Generated file is outside the Kivio runs directory".to_string());
+        return Err("Generated file is outside the Kivio outputs directory".to_string());
     }
     Ok(canonical_path)
 }
@@ -193,7 +253,11 @@ fn merged_export_meta(
     }
 }
 
-/// Export Pyodide artifacts for one tool run into `~/Kivio/runs/{conversation}/{message}/`.
+/// Export Pyodide artifacts for one tool run into the conversation's persistent
+/// delivery directory `~/Kivio/outputs/<conversation>/`. The written files are
+/// the same downloadable deliverables surfaced by `write_file` writing into that
+/// dir, so python output and plain writes share one persistent area and render
+/// with the identical file card.
 pub fn export_sandbox_artifacts(
     ctx: &SandboxExportContext,
     artifacts: &[ChatToolArtifact],
@@ -202,9 +266,7 @@ pub fn export_sandbox_artifacts(
         return Ok(Vec::new());
     }
 
-    let export_dir = sandbox_run_export_dir(ctx)?;
-    fs::create_dir_all(&export_dir)
-        .map_err(|err| format!("Create sandbox export dir failed: {err}"))?;
+    let export_dir = ensure_delivery_dir(&ctx.conversation_id)?;
 
     let mut exported = Vec::new();
     let mut meta_files = Vec::new();
@@ -243,8 +305,9 @@ pub fn export_sandbox_artifacts(
     Ok(exported)
 }
 
-/// Guess a MIME type from a file extension. Used by `deliver_file` when the
-/// caller omits `mime`. Falls back to `application/octet-stream`.
+/// Guess a MIME type from a file extension. Used to label deliverables (e.g.
+/// `write_file` writing into the delivery dir) when no explicit mime is known.
+/// Falls back to `application/octet-stream`.
 pub fn guess_mime_from_name(name: &str) -> String {
     let ext = Path::new(name)
         .extension()
@@ -280,70 +343,38 @@ pub fn guess_mime_from_name(name: &str) -> String {
     mime.to_string()
 }
 
-/// Deliver a finished file to the user as a downloadable artifact, writing it
-/// into the same sandbox-exports tree that `run_python` uses (so it gets the
-/// identical sanitize / path-guard / size-cap / retention/cleanup behavior and
-/// renders via the same generic file card). `encoding` is `"text"` (default) or
-/// `"base64"`. Returns a card-ready [`ChatToolArtifact`] with `path`,
-/// `data_url`, `mime_type`, and `size_bytes` populated.
-pub fn deliver_file_artifact(
-    ctx: &SandboxExportContext,
-    name: &str,
-    content: &str,
-    encoding: &str,
-    mime: Option<&str>,
-) -> Result<ChatToolArtifact, String> {
-    let bytes = match encoding {
-        "" | "text" => content.as_bytes().to_vec(),
-        "base64" => {
-            let trimmed: String = content.split_whitespace().collect();
-            general_purpose::STANDARD
-                .decode(trimmed.as_bytes())
-                .map_err(|err| format!("deliver_file: invalid base64 content: {err}"))?
-        }
-        other => {
-            return Err(format!(
-                "deliver_file: unsupported encoding '{other}' (use 'text' or 'base64')"
-            ));
-        }
+/// Build a card-ready [`ChatToolArtifact`] from a file that already lives on
+/// disk inside the delivery directory. Used by `write_file`: after a successful
+/// write into `~/Kivio/outputs/<conversation>/`, the file is surfaced as a
+/// downloadable card. The `data_url` (read back) is only populated for files at
+/// or under the export size cap so previews/downloads of small files work; for
+/// larger files only `path`/`size_bytes` are set (the UI can still open it).
+pub fn build_delivery_artifact_for_path(path: &Path) -> Result<ChatToolArtifact, String> {
+    let metadata =
+        fs::metadata(path).map_err(|err| format!("Stat delivery file failed: {err}"))?;
+    let size_bytes = metadata.len();
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output")
+        .to_string();
+    let mime_type = guess_mime_from_name(&name);
+    let data_url = if size_bytes <= MAX_EXPORT_FILE_BYTES {
+        let bytes = fs::read(path).map_err(|err| format!("Read delivery file failed: {err}"))?;
+        Some(format!(
+            "data:{mime_type};base64,{}",
+            general_purpose::STANDARD.encode(&bytes)
+        ))
+    } else {
+        None
     };
-    if bytes.is_empty() {
-        return Err("deliver_file: content is empty".to_string());
-    }
-    if bytes.len() as u64 > MAX_EXPORT_FILE_BYTES {
-        return Err(format!(
-            "deliver_file: content exceeds the {} MB limit",
-            MAX_EXPORT_FILE_BYTES / (1024 * 1024)
-        ));
-    }
-    let mime_type = mime
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| guess_mime_from_name(name));
-
-    // Reuse the exact export path/guard/cleanup machinery: build an in-memory
-    // artifact (data_url), hand it to export_sandbox_artifacts (which sanitizes
-    // the filename, enforces the size cap, writes under the runs tree, and
-    // confines the write to the export dir), then read back the on-disk path.
-    let data_url = format!(
-        "data:{mime_type};base64,{}",
-        general_purpose::STANDARD.encode(&bytes)
-    );
-    let mut artifact = ChatToolArtifact {
-        name: name.to_string(),
+    Ok(ChatToolArtifact {
+        name,
         mime_type,
-        data_url,
-        size_bytes: Some(bytes.len() as u64),
-        path: None,
-    };
-    let exported = export_sandbox_artifacts(ctx, std::slice::from_ref(&artifact))?;
-    let written = exported
-        .into_iter()
-        .next()
-        .ok_or_else(|| "deliver_file: nothing was written".to_string())?;
-    artifact.path = Some(written.path.display().to_string());
-    Ok(artifact)
+        data_url: data_url.unwrap_or_default(),
+        size_bytes: Some(size_bytes),
+        path: Some(path.display().to_string()),
+    })
 }
 
 pub fn format_exported_paths(exports: &[SandboxExportedArtifact]) -> String {
@@ -351,7 +382,8 @@ pub fn format_exported_paths(exports: &[SandboxExportedArtifact]) -> String {
         return String::new();
     }
     let mut lines = vec![
-        "exported files (~/Kivio/runs/<conversation>/<message>/; retained ~7 days):".to_string(),
+        "delivered files (~/Kivio/outputs/<conversation>/; shown as downloadable cards):"
+            .to_string(),
     ];
     for export in exports {
         lines.push(format!("- {}", export.path.display()));
@@ -360,20 +392,28 @@ pub fn format_exported_paths(exports: &[SandboxExportedArtifact]) -> String {
 }
 
 pub fn format_export_error(err: &str) -> String {
-    format!("export warning: failed to save sandbox files to ~/Kivio/runs/: {err}")
+    format!("export warning: failed to save files to ~/Kivio/outputs/: {err}")
 }
 
-/// Remove all sandbox exports for one conversation (e.g. when the chat is deleted).
+/// Remove the persistent delivery directory for one conversation (when the chat
+/// is deleted).
 pub fn remove_sandbox_exports_for_conversation(conversation_id: &str) {
     let home = match user_home_dir() {
         Ok(home) => home,
         Err(_) => return,
     };
     let path = home
-        .join(RUNS_ROOT)
+        .join(OUTPUTS_ROOT)
         .join(sanitize_path_segment(conversation_id));
     if path.is_dir() {
         let _ = fs::remove_dir_all(path);
+    }
+    // Also sweep any leftover legacy ephemeral exports for this conversation.
+    let legacy = home
+        .join(LEGACY_RUNS_ROOT)
+        .join(sanitize_path_segment(conversation_id));
+    if legacy.is_dir() {
+        let _ = fs::remove_dir_all(legacy);
     }
 }
 
@@ -413,9 +453,13 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
-/// Remove sandbox run folders older than the default retention window. Also prunes legacy flat `outputs/`.
+/// Startup GC. The persistent delivery tree (`~/Kivio/outputs/`) is intentionally
+/// NOT pruned — deliverables are long-lived and only removed when their
+/// conversation is deleted. This only sweeps the LEGACY ephemeral exports tree
+/// (`~/Kivio/runs/`) from prior versions, so old `run_python` runs eventually go
+/// away. Nothing writes to `~/Kivio/runs/` anymore.
 pub fn cleanup_stale_sandbox_exports() {
-    let retention = Duration::from_secs(DEFAULT_RETENTION_DAYS * 24 * 60 * 60);
+    let retention = Duration::from_secs(LEGACY_RUNS_RETENTION_DAYS * 24 * 60 * 60);
     let home = match user_home_dir() {
         Ok(home) => home,
         Err(err) => {
@@ -427,7 +471,7 @@ pub fn cleanup_stale_sandbox_exports() {
     let mut removed = 0u32;
     let mut bytes_freed = 0u64;
 
-    let runs_root = home.join(RUNS_ROOT);
+    let runs_root = home.join(LEGACY_RUNS_ROOT);
     if runs_root.is_dir() {
         let cutoff = SystemTime::now()
             .checked_sub(retention)
@@ -457,37 +501,9 @@ pub fn cleanup_stale_sandbox_exports() {
         }
     }
 
-    let legacy_outputs = home.join(LEGACY_OUTPUTS_DIR);
-    if legacy_outputs.is_dir() {
-        let cutoff = SystemTime::now()
-            .checked_sub(retention)
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        if let Ok(entries) = fs::read_dir(&legacy_outputs) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    remove_dir_if_stale(&path, cutoff, &mut removed, &mut bytes_freed);
-                    continue;
-                }
-                let modified = match fs::metadata(&path).and_then(|meta| meta.modified()) {
-                    Ok(value) => value,
-                    Err(_) => continue,
-                };
-                if modified >= cutoff {
-                    continue;
-                }
-                let size = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-                if fs::remove_file(&path).is_ok() {
-                    removed += 1;
-                    bytes_freed += size;
-                }
-            }
-        }
-    }
-
     if removed > 0 {
         eprintln!(
-            "[sandbox-export-cleanup] removed {removed} stale export folder(s), freed {} KB",
+            "[sandbox-export-cleanup] removed {removed} stale legacy run folder(s), freed {} KB",
             bytes_freed / 1024
         );
     }
@@ -498,7 +514,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn export_sandbox_artifacts_writes_under_runs_tree() {
+    fn export_sandbox_artifacts_writes_under_outputs_tree() {
         let png = general_purpose::STANDARD.encode([137u8, 80, 78, 71, 13, 10, 26, 10]);
         let artifacts = vec![ChatToolArtifact {
             name: "chart.png".to_string(),
@@ -516,18 +532,14 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert!(paths[0].path.exists());
         assert_eq!(paths[0].artifact_index, 0);
+        // Persistent delivery dir keyed by conversation only (no message subdir).
         assert!(paths[0]
             .path
             .to_string_lossy()
-            .contains("Kivio/runs/conv_test/msg_test/chart.png"));
+            .contains("Kivio/outputs/conv_test/chart.png"));
         let meta_path = paths[0].path.parent().expect("parent").join("meta.json");
         assert!(meta_path.exists());
-        let _ = fs::remove_dir_all(
-            sandbox_run_export_dir(&ctx)
-                .expect("dir")
-                .parent()
-                .expect("conv"),
-        );
+        let _ = fs::remove_dir_all(delivery_dir(&ctx.conversation_id).expect("dir"));
     }
 
     #[test]
@@ -548,7 +560,7 @@ mod tests {
         let paths = export_sandbox_artifacts(&ctx, &artifacts).expect("export csv");
         assert_eq!(paths.len(), 1);
         assert!(paths[0].path.to_string_lossy().ends_with("summary.csv"));
-        let _ = fs::remove_dir_all(sandbox_run_export_dir(&ctx).expect("dir"));
+        let _ = fs::remove_dir_all(delivery_dir(&ctx.conversation_id).expect("dir"));
     }
 
     #[test]
@@ -558,106 +570,76 @@ mod tests {
 
         let err = resolve_sandbox_export_file_path(&outside.to_string_lossy())
             .expect_err("outside files must be rejected");
-        assert!(err.contains("outside the Kivio runs directory"));
+        assert!(err.contains("outside the Kivio outputs directory"));
 
         let _ = fs::remove_file(outside);
     }
 
     #[test]
-    fn deliver_file_writes_text_artifact() {
-        let ctx = SandboxExportContext {
-            conversation_id: "conv_deliver_text".to_string(),
-            message_id: "msg_deliver_text".to_string(),
-            tool_call_id: Some("call_text".to_string()),
-        };
-        let artifact = deliver_file_artifact(&ctx, "notes.md", "# Hello\n\nWorld\n", "text", None)
-            .expect("deliver text");
+    fn delivery_dir_sanitizes_conversation_id_and_confines() {
+        // A traversal-style conv id is reduced to a single safe segment under
+        // the outputs root — it cannot escape into a sibling/parent directory.
+        let dir = delivery_dir("../../etc").expect("dir");
+        let root = outputs_root().expect("root");
+        assert!(dir.starts_with(&root), "must stay under outputs root: {dir:?}");
+        assert!(!dir.to_string_lossy().contains(".."));
+    }
+
+    #[test]
+    fn path_under_delivery_dir_matches_only_inside() {
+        let conv = format!("conv_member_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        let inside = dir.join("report.csv");
+        fs::write(&inside, "a,b\n1,2\n").expect("write inside");
+        assert!(path_under_delivery_dir(&conv, &inside));
+
+        // A path in the project/temp area is NOT under the delivery dir.
+        let outside = std::env::temp_dir().join(format!("kivio_outside_{}.txt", uuid::Uuid::new_v4()));
+        fs::write(&outside, "x").expect("write outside");
+        assert!(!path_under_delivery_dir(&conv, &outside));
+
+        // A traversal attempt out of the delivery dir is rejected by canonicalization.
+        let escape = dir.join("../escape.txt");
+        assert!(!path_under_delivery_dir(&conv, &escape));
+
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_delivery_artifact_for_small_file_has_data_url() {
+        let conv = format!("conv_artifact_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        let file = dir.join("notes.md");
+        fs::write(&file, "# Hello\n\nWorld\n").expect("write");
+
+        let artifact = build_delivery_artifact_for_path(&file).expect("artifact");
         assert_eq!(artifact.name, "notes.md");
         assert_eq!(artifact.mime_type, "text/markdown");
         assert_eq!(artifact.size_bytes, Some("# Hello\n\nWorld\n".len() as u64));
-        let path = artifact.path.as_ref().expect("path set");
-        assert!(path.ends_with("notes.md"));
-        assert!(path.contains("Kivio/runs/conv_deliver_text/msg_deliver_text"));
-        let on_disk = fs::read_to_string(path).expect("read back");
-        assert_eq!(on_disk, "# Hello\n\nWorld\n");
+        assert_eq!(artifact.path.as_deref(), Some(file.to_string_lossy().as_ref()));
         assert!(artifact.data_url.starts_with("data:text/markdown;base64,"));
-        let _ = fs::remove_dir_all(sandbox_run_export_dir(&ctx).expect("dir").parent().unwrap());
+        let payload = artifact.data_url.split_once(',').expect("data url").1;
+        let decoded = general_purpose::STANDARD.decode(payload).expect("decode");
+        assert_eq!(decoded, b"# Hello\n\nWorld\n");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn deliver_file_writes_base64_binary_artifact() {
-        // 1x1 transparent PNG header bytes are enough to assert byte fidelity.
-        let png_bytes: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
-        let b64 = general_purpose::STANDARD.encode(png_bytes);
-        let ctx = SandboxExportContext {
-            conversation_id: "conv_deliver_bin".to_string(),
-            message_id: "msg_deliver_bin".to_string(),
-            tool_call_id: None,
-        };
-        let artifact = deliver_file_artifact(&ctx, "pixel.png", &b64, "base64", None)
-            .expect("deliver base64");
-        assert_eq!(artifact.mime_type, "image/png");
-        let path = artifact.path.as_ref().expect("path set");
-        let on_disk = fs::read(path).expect("read back");
-        assert_eq!(on_disk, png_bytes);
-        let _ = fs::remove_dir_all(sandbox_run_export_dir(&ctx).expect("dir").parent().unwrap());
-    }
+    fn build_delivery_artifact_for_oversize_file_omits_data_url() {
+        let conv = format!("conv_oversize_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        let file = dir.join("big.bin");
+        let huge = vec![0u8; (MAX_EXPORT_FILE_BYTES + 1) as usize];
+        fs::write(&file, &huge).expect("write big");
 
-    #[test]
-    fn deliver_file_sanitizes_filename_and_blocks_traversal() {
-        let ctx = SandboxExportContext {
-            conversation_id: "conv_deliver_sanitize".to_string(),
-            message_id: "msg_deliver_sanitize".to_string(),
-            tool_call_id: None,
-        };
-        // A traversal-style name is reduced to its file_name and sanitized, so
-        // the write stays inside the message export dir.
-        let artifact = deliver_file_artifact(&ctx, "../../etc/passwd", "x", "text", None)
-            .expect("deliver sanitized");
-        let path = artifact.path.as_ref().expect("path set");
-        let export_dir = sandbox_run_export_dir(&ctx).expect("dir");
-        assert!(Path::new(path).starts_with(&export_dir), "must stay under export dir");
-        assert!(!path.contains(".."));
-        // resolve_sandbox_export_file_path agrees the file is inside the runs root.
-        assert!(resolve_sandbox_export_file_path(path).is_ok());
-        let _ = fs::remove_dir_all(export_dir.parent().unwrap());
-    }
+        let artifact = build_delivery_artifact_for_path(&file).expect("artifact");
+        assert_eq!(artifact.size_bytes, Some(MAX_EXPORT_FILE_BYTES + 1));
+        assert!(artifact.data_url.is_empty(), "oversize file omits data_url");
+        assert_eq!(artifact.path.as_deref(), Some(file.to_string_lossy().as_ref()));
 
-    #[test]
-    fn deliver_file_rejects_bad_base64() {
-        let ctx = SandboxExportContext {
-            conversation_id: "conv_deliver_badb64".to_string(),
-            message_id: "msg_deliver_badb64".to_string(),
-            tool_call_id: None,
-        };
-        let err = deliver_file_artifact(&ctx, "x.bin", "not*valid*base64!!!", "base64", None)
-            .expect_err("bad base64 must error");
-        assert!(err.contains("invalid base64"), "got: {err}");
-    }
-
-    #[test]
-    fn deliver_file_rejects_oversize_content() {
-        let ctx = SandboxExportContext {
-            conversation_id: "conv_deliver_oversize".to_string(),
-            message_id: "msg_deliver_oversize".to_string(),
-            tool_call_id: None,
-        };
-        let huge = "a".repeat((MAX_EXPORT_FILE_BYTES + 1) as usize);
-        let err = deliver_file_artifact(&ctx, "big.txt", &huge, "text", None)
-            .expect_err("oversize must error");
-        assert!(err.contains("exceeds"), "got: {err}");
-    }
-
-    #[test]
-    fn deliver_file_rejects_unknown_encoding() {
-        let ctx = SandboxExportContext {
-            conversation_id: "conv_deliver_enc".to_string(),
-            message_id: "msg_deliver_enc".to_string(),
-            tool_call_id: None,
-        };
-        let err = deliver_file_artifact(&ctx, "x.txt", "data", "hex", None)
-            .expect_err("unknown encoding must error");
-        assert!(err.contains("unsupported encoding"), "got: {err}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -665,7 +647,7 @@ mod tests {
         let first = general_purpose::STANDARD.encode(b"a,b\n1,2\n");
         let second = general_purpose::STANDARD.encode(b"# Report\n\nDone.\n");
         let ctx = SandboxExportContext {
-            conversation_id: "conv_merge".to_string(),
+            conversation_id: format!("conv_merge_{}", uuid::Uuid::new_v4().simple()),
             message_id: "msg_merge".to_string(),
             tool_call_id: Some("call_latest".to_string()),
         };
@@ -693,7 +675,7 @@ mod tests {
         )
         .expect("second export");
 
-        let export_dir = sandbox_run_export_dir(&ctx).expect("dir");
+        let export_dir = delivery_dir(&ctx.conversation_id).expect("dir");
         let meta = read_export_meta(&export_dir).expect("meta should deserialize");
         let meta_paths = meta.files.iter().map(|file| &file.path).collect::<Vec<_>>();
 
@@ -703,6 +685,6 @@ mod tests {
         assert!(meta_paths.contains(&&first_paths[0].path.display().to_string()));
         assert!(meta_paths.contains(&&second_paths[0].path.display().to_string()));
 
-        let _ = fs::remove_dir_all(export_dir.parent().expect("conv"));
+        let _ = fs::remove_dir_all(&export_dir);
     }
 }

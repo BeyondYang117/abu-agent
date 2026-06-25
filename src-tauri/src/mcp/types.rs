@@ -597,35 +597,11 @@ pub fn native_save_assistant_tool() -> ChatToolDefinition {
     }
 }
 
-pub fn native_deliver_file_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "native__deliver_file".to_string(),
-        name: "deliver_file".to_string(),
-        description: "Deliver a finished, downloadable file to the user (shows a file card in chat). Use this for content you can write directly: reports, notes, CSV/JSON/MD/TXT/HTML, code, or base64-encoded binary (png/pdf/xlsx/...). Args: name (filename, used for the card label and to infer the mime type), content (the file text, or base64 when encoding=base64), optional encoding ('text' default, or 'base64' for any binary), optional mime (inferred from the extension when omitted). For content that requires computation, data analysis, charts/plots, or a Python library to produce (e.g. a formatted xlsx, a rendered chart image, a generated pdf), use run_python instead — its output is delivered as the same kind of file card. This does NOT edit files in the user's project/workspace; use write_file for that.".to_string(),
-        source: "native".to_string(),
-        server_id: None,
-        server_name: Some("Kivio".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "name": { "type": "string", "description": "File name for the downloadable card (e.g. report.md, data.csv, image.png). Used to infer the mime type." },
-                "content": { "type": "string", "description": "File content. Plain text when encoding is 'text' (default); base64 string when encoding is 'base64'." },
-                "encoding": { "type": "string", "enum": ["text", "base64"], "description": "How content is encoded. 'text' (default) for text files; 'base64' for any binary (png/pdf/xlsx/...)." },
-                "mime": { "type": "string", "description": "Optional MIME type. Inferred from the file extension when omitted." }
-            },
-            "required": ["name", "content"]
-        }),
-        sensitive: false,
-        annotations: None,
-        output_schema: None,
-    }
-}
-
 pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for computation, statistics, data analysis (numpy/pandas), reading and analyzing documents (PDF/XLSX), charts and plots (matplotlib), sandbox-compatible package installs, and generating files that REQUIRE a Python library to produce (formatted XLSX, PDF, rendered images). Its generated files are delivered to the user as file cards. Do NOT use run_python merely to write a file from content you already have — for that, use deliver_file (no Python) for new downloadable files, or write_file to edit the user's project/workspace. Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as the read tool; in project conversations these resolve from the project root by default. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. report.xlsx, chart.png, summary.csv); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts and caches them under ~/Kivio/runs/<conversation>/<message>/ for ~7 days; use write_file when the user explicitly wants a durable deliverable at a specific host path (e.g. ~/Desktop). In chart text (titles, labels, legends, annotations) use only Latin and Chinese/Japanese/Korean characters; the sandbox bundles only a CJK+Latin font and has no emoji or symbol fonts, so emoji and decorative glyphs render as empty boxes—omit them. stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for computation, statistics, data analysis (numpy/pandas), reading and analyzing documents (PDF/XLSX), charts and plots (matplotlib), sandbox-compatible package installs, and generating files that REQUIRE a Python library to produce (formatted XLSX, PDF, rendered images). Its generated files are delivered to the user as file cards. Do NOT use run_python merely to write a file from content you already have — for that, use write_file (to the delivery directory for a downloadable card, or to a project path to edit the user's workspace). Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as the read tool; in project conversations these resolve from the project root by default. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. report.xlsx, chart.png, summary.csv); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts into the conversation's delivery directory (~/Kivio/outputs/<conversation>/) and shows them as downloadable file cards. In chart text (titles, labels, legends, annotations) use only Latin and Chinese/Japanese/Korean characters; the sandbox bundles only a CJK+Latin font and has no emoji or symbol fonts, so emoji and decorative glyphs render as empty boxes—omit them. stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -969,31 +945,18 @@ mod tests {
         assert!(tool.description.contains("report.xlsx"));
         assert!(tool.description.contains("Kivio auto-captures"));
         // The old "just write a file" catch-all language is gone, and it now
-        // points at deliver_file for content you already have.
+        // points at write_file (to the delivery dir) for content you already have.
         assert!(!tool
             .description
             .contains("user-requested chat deliverable files"));
         assert!(!tool
             .description
             .contains("does not need to mention Python or run_python"));
-        assert!(tool.description.contains("use deliver_file"));
-    }
-
-    #[test]
-    fn deliver_file_tool_is_no_compute_delivery() {
-        let tool = native_deliver_file_tool();
-        assert_eq!(tool.name, "deliver_file");
-        assert_eq!(tool.source, "native");
-        assert!(!tool.sensitive);
-        assert!(tool.description.contains("downloadable file"));
-        assert!(tool.description.contains("base64"));
-        // Points compute work at run_python and project edits at write_file.
-        assert!(tool.description.contains("run_python"));
-        assert!(tool.description.contains("write_file"));
-        // Required args present in schema.
-        let required = tool.input_schema["required"].as_array().expect("required");
-        assert!(required.iter().any(|v| v == "name"));
-        assert!(required.iter().any(|v| v == "content"));
+        // No reference to the removed deliver_file tool; deliverables are a
+        // path-driven channel via write_file into the delivery directory.
+        assert!(!tool.description.contains("deliver_file"));
+        assert!(tool.description.contains("use write_file"));
+        assert!(tool.description.contains("delivery directory"));
     }
 
     #[test]

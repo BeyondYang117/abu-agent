@@ -947,6 +947,13 @@ pub fn handle_agent_spawn<'a>(
             None,
             None,
             None,
+            // Sub-agent native tools run against the PARENT conversation
+            // (tool_conversation_id), so deliverables land in the parent's
+            // delivery directory — surface that exact path.
+            crate::native_tools::delivery_dir(&parent_conversation_id)
+                .ok()
+                .map(|path| path.display().to_string())
+                .as_deref(),
         );
 
         let task_id = format!("agent-{}", uuid::Uuid::new_v4().simple());
