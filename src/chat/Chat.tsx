@@ -1544,8 +1544,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const setupListener = async () => {
       unlisten = await api.onChatSubagent((payload) => {
         if (cancelled) return
-        if (!isConversationInFlight(inFlightConversationsRef.current, payload.parentConversationId)) return
+        // Background sub-agents (dispatch-and-return) finalize via a terminal
+        // chat-subagent event that may arrive while the parent run is still
+        // in-flight OR just after invoke returned. Accept the event whenever a
+        // snapshot exists for the parent conversation (do NOT create one — that
+        // would resurrect a finalized conversation). The original in-flight path
+        // is unchanged; this only stops dropping events for a known snapshot.
+        const existingSnapshot = streamSnapshotsRef.current[payload.parentConversationId]
+        const inFlight = isConversationInFlight(
+          inFlightConversationsRef.current,
+          payload.parentConversationId,
+        )
+        if (!inFlight && !existingSnapshot) return
         const snapshot = ensureStreamSnapshot(payload.parentConversationId)
+        // Match the active run when known. A background terminal event may carry
+        // the parent run id; only drop it when both ids are set and differ.
         if (payload.parentRunId && snapshot.runId && snapshot.runId !== payload.parentRunId) return
         const index = snapshot.toolCalls.findIndex((item) => item.id === payload.parentToolCallId)
         if (index < 0) return

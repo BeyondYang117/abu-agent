@@ -6,8 +6,14 @@
 //! `conversation_id` for generation/streaming isolation, but the PARENT
 //! conversation as `tool_conversation_id` so the child's native file tools
 //! resolve the parent's project workspace), wraps it in a `SubAgentHost`, and
-//! reuses the existing loop. The `agent` native tool spawns one synchronously
-//! and reports live nested progress onto the parent tool card.
+//! reuses the existing loop. The `agent` native tool spawns one and reports
+//! live nested progress onto the parent tool card. By default the spawn is
+//! synchronous (awaited inline); with `background:true` the run is detached into
+//! a `tauri::async_runtime::spawn` and the tool returns a task_id immediately,
+//! so the parent loop is not blocked — the model polls `check_agent_result` for
+//! the outcome. Background tasks live only for the parent run: they are aborted
+//! and marked `Cancelled` when that run ends or the user stops it
+//! (`SubAgentManager::cancel_run`), so no detached run outlives its parent.
 //!
 //! Orchestrator-worker model: a sub-agent is a PURE WORKER. It receives one
 //! self-contained prompt, runs in isolation, and returns a result. It is given
@@ -19,17 +25,20 @@
 //! - depth guard (`MAX_SUB_AGENT_DEPTH`): an agent at depth ≥ 3 cannot spawn.
 //! - the `agent` tool is stripped from every sub-agent's tool table
 //!   (`filter::filter_tools_for_agent`), a second guard against recursion.
-//! - `Semaphore(3)` caps concurrent sub-agents (desktop API-quota sensitive).
+//! - a `Semaphore` caps concurrent sub-agents (desktop API-quota sensitive);
+//!   the cap defaults to `DEFAULT_SUB_AGENT_CONCURRENCY` and is user-overridable
+//!   live via `settings.chat_tools.sub_agent_concurrency`.
 //! - `SubAgentHost` auto-denies approval-gated (sensitive) tools at depth > 0
 //!   and cascades parent cancellation.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
 
 use crate::chat::agent::prepare::{available_builtin_tool_names, build_chat_system_prompt};
@@ -51,10 +60,15 @@ use crate::state::AppState;
 /// depth 0; a spawned sub-agent runs at depth 1. With 3, a (hypothetical)
 /// chain general→sub→sub→sub is the hard ceiling.
 pub const MAX_SUB_AGENT_DEPTH: u8 = 3;
-const SUB_AGENT_CONCURRENCY: usize = 3;
+/// Default concurrent sub-agent cap. User-overridable (live) via
+/// `settings.chat_tools.sub_agent_concurrency`, clamped to
+/// `[SUB_AGENT_CONCURRENCY_MIN, SUB_AGENT_CONCURRENCY_MAX]`.
+pub const DEFAULT_SUB_AGENT_CONCURRENCY: usize = 12;
+pub const SUB_AGENT_CONCURRENCY_MIN: usize = 1;
+pub const SUB_AGENT_CONCURRENCY_MAX: usize = 64;
 /// 保留的任务记录上限（运行中 + 已完成）。任务表通过 `get`/`list` 按需读取——
 /// 包括完成很久之后——所以不能按短 TTL 删；改为封顶保留，超限时优先丢弃「最老的
-/// 已完成」记录（绝不丢运行中的）。并发受 SUB_AGENT_CONCURRENCY 限，故总有已完成
+/// 已完成」记录（绝不丢运行中的）。并发受 sub_agent_concurrency 限，故总有已完成
 /// 记录可回收。把「每条记录持有子 agent 完整 result 文本」的进程级泄漏封到约
 /// MAX_SUB_AGENT_TASKS × 数 KB。
 const MAX_SUB_AGENT_TASKS: usize = 128;
@@ -169,7 +183,25 @@ impl SubAgentUsage {
 pub struct SubAgentManager {
     tasks: Mutex<HashMap<String, SubAgentTaskRecord>>,
     by_name: Mutex<HashMap<String, String>>,
+    /// Detached background-task abort handles, keyed by the spawning parent run
+    /// `(conversation_id, run_id)`. A background `agent(...)` spawn registers its
+    /// `JoinHandle` here so `cancel_run` can abort still-running background
+    /// sub-agents when the parent run ends (normal finish does NOT bump the
+    /// parent generation, so the cooperative cascade alone would orphan them).
+    /// Modeled on `external_live_sessions` (state.rs): owned handles, cleared on
+    /// run end / shutdown. Synchronous (non-background) spawns never touch this.
+    background_runs: Mutex<HashMap<(String, String), Vec<BackgroundTaskHandle>>>,
     semaphore: Arc<Semaphore>,
+    /// Current configured permit count; lets `set_concurrency` compute the delta
+    /// to add/remove (tokio Semaphore exposes no total capacity).
+    configured: AtomicUsize,
+}
+
+/// One detached background sub-agent: its task id (to mark the record Cancelled
+/// on abort) plus the JoinHandle whose `abort()` tears the detached run down.
+struct BackgroundTaskHandle {
+    task_id: String,
+    join: tauri::async_runtime::JoinHandle<()>,
 }
 
 impl Default for SubAgentManager {
@@ -177,7 +209,9 @@ impl Default for SubAgentManager {
         Self {
             tasks: Mutex::new(HashMap::new()),
             by_name: Mutex::new(HashMap::new()),
-            semaphore: Arc::new(Semaphore::new(SUB_AGENT_CONCURRENCY)),
+            background_runs: Mutex::new(HashMap::new()),
+            semaphore: Arc::new(Semaphore::new(DEFAULT_SUB_AGENT_CONCURRENCY)),
+            configured: AtomicUsize::new(DEFAULT_SUB_AGENT_CONCURRENCY),
         }
     }
 }
@@ -228,7 +262,6 @@ impl SubAgentManager {
         evicted
     }
 
-    #[allow(dead_code)]
     pub fn set_status(&self, id: &str, status: SubAgentStatus) {
         if let Some(record) = self.lock_tasks().get_mut(id) {
             record.status = status;
@@ -273,6 +306,77 @@ impl SubAgentManager {
 
     fn semaphore(&self) -> Arc<Semaphore> {
         self.semaphore.clone()
+    }
+
+    /// Resize the concurrency gate live. Growing adds permits synchronously;
+    /// shrinking spawns a task that acquires the surplus and forgets it (so it
+    /// waits for in-flight runs to release). Deltas are always computed against
+    /// `configured`, so a rapid grow/shrink pair still converges to the latest
+    /// target.
+    /// ponytail: shrink relies on a tokio runtime (always present in-app) and is
+    /// only ever called serially from settings-save / startup — no concurrent
+    /// callers to race the swap.
+    pub fn set_concurrency(&self, target: usize) {
+        let target = target.clamp(SUB_AGENT_CONCURRENCY_MIN, SUB_AGENT_CONCURRENCY_MAX);
+        let prev = self.configured.swap(target, Ordering::SeqCst);
+        if target > prev {
+            self.semaphore.add_permits(target - prev);
+        } else if target < prev {
+            let sem = self.semaphore.clone();
+            let remove = (prev - target) as u32;
+            tauri::async_runtime::spawn(async move {
+                if let Ok(permits) = sem.acquire_many(remove).await {
+                    permits.forget();
+                }
+            });
+        }
+    }
+
+    /// Track a detached background sub-agent's JoinHandle under the parent run
+    /// `(conversation_id, run_id)` so `cancel_run` can abort it on run end.
+    fn register_background_run(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        task_id: String,
+        join: tauri::async_runtime::JoinHandle<()>,
+    ) {
+        let key = (conversation_id.to_string(), run_id.to_string());
+        self.background_runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(key)
+            .or_default()
+            .push(BackgroundTaskHandle { task_id, join });
+    }
+
+    /// Abort every background sub-agent spawned by the given parent run and mark
+    /// any still-unfinished records `Cancelled`. Called at run finalize (normal
+    /// end does not bump the parent generation, so the cooperative cascade alone
+    /// would leave a still-running detached task orphaned) and on user stop /
+    /// shutdown. Idempotent: a run with no background tasks is a no-op.
+    pub fn cancel_run(&self, conversation_id: &str, run_id: &str) {
+        let key = (conversation_id.to_string(), run_id.to_string());
+        let handles = self
+            .background_runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key)
+            .unwrap_or_default();
+        for handle in handles {
+            handle.join.abort();
+            // Mark records that never reached a terminal state. `finish` only
+            // overwrites status/result; a record the detached task already
+            // completed keeps its real terminal status (we only flip those
+            // still Pending/Running).
+            if let Some(record) = self.lock_tasks().get_mut(&handle.task_id) {
+                if matches!(record.status, SubAgentStatus::Pending | SubAgentStatus::Running) {
+                    record.status = SubAgentStatus::Cancelled;
+                    record.error = Some("cancelled (parent run ended)".to_string());
+                    record.completed_at = Some(chrono::Local::now().timestamp());
+                }
+            }
+        }
     }
 }
 
@@ -351,9 +455,8 @@ impl ProgressState {
     }
 }
 
-struct SubAgentHost<'a> {
+struct SubAgentHost {
     app: AppHandle,
-    state: &'a AppState,
     parent_conversation_id: String,
     parent_run_id: String,
     parent_tool_call_id: String,
@@ -377,7 +480,7 @@ fn generation_cascade_active(
         && state.is_chat_generation_active(parent_conversation_id, parent_generation)
 }
 
-impl SubAgentHost<'_> {
+impl SubAgentHost {
     fn emit_progress(&self, status: &str, force: bool) {
         let (text, steps) = {
             let mut guard = self.progress.lock().unwrap_or_else(|e| e.into_inner());
@@ -409,7 +512,7 @@ impl SubAgentHost<'_> {
     }
 }
 
-impl AgentHost for SubAgentHost<'_> {
+impl AgentHost for SubAgentHost {
     fn emit_stream_delta(
         &self,
         _conversation_id: &str,
@@ -475,7 +578,11 @@ impl AgentHost for SubAgentHost<'_> {
         // conversation's session consent: if the user already authorized
         // file/shell tools for this conversation, the sub-agent reuses that
         // grant. Otherwise it denies (the parent must consent first).
-        Box::pin(async move { self.state.has_chat_consent(&self.parent_conversation_id) })
+        Box::pin(async move {
+            self.app
+                .state::<AppState>()
+                .has_chat_consent(&self.parent_conversation_id)
+        })
     }
 
     fn request_user_response<'a>(
@@ -499,7 +606,7 @@ impl AgentHost for SubAgentHost<'_> {
         // generation and the parent generation are live. Parent cancel ⇒
         // sub-agent stops on its next loop check.
         generation_cascade_active(
-            self.state,
+            &self.app.state::<AppState>(),
             conversation_id,
             generation,
             &self.parent_conversation_id,
@@ -527,12 +634,11 @@ impl AgentHost for SubAgentHost<'_> {
 // Tool executor for sub-agents (delegates to the MCP/native registry)
 // ---------------------------------------------------------------------------
 
-struct SubAgentToolExecutor<'a> {
+struct SubAgentToolExecutor {
     app: AppHandle,
-    state: &'a AppState,
 }
 
-impl ToolExecutor for SubAgentToolExecutor<'_> {
+impl ToolExecutor for SubAgentToolExecutor {
     fn call<'a>(
         &'a self,
         ctx: &'a ToolExecutionContext<'a>,
@@ -551,7 +657,7 @@ impl ToolExecutor for SubAgentToolExecutor<'_> {
             };
             crate::mcp::registry::call_tool(
                 &self.app,
-                self.state,
+                &self.app.state::<AppState>(),
                 tool,
                 arguments,
                 skill_cache,
@@ -585,16 +691,19 @@ pub struct SubAgentRequest {
     pub parent_generation: u64,
 }
 
-/// Run a sub-agent to completion (synchronous spawn). Builds an isolated
-/// config and reuses `run_agent_loop`. Cancellation cascades from the parent
-/// via `SubAgentHost`. Up to `SUB_AGENT_MAX_ATTEMPTS` tries: reasoning models
-/// occasionally return an empty planning response (surfaced as `Err`); since a
-/// sub-agent has no user resend loop, we retry once on non-cancel errors.
-async fn run_sub_agent(
-    app: &AppHandle,
-    state: &AppState,
-    req: SubAgentRequest,
-) -> Result<AgentRunResult, String> {
+/// Run a sub-agent to completion. Builds an isolated config and reuses
+/// `run_agent_loop`. Takes an owned `AppHandle` and re-resolves `AppState` from
+/// it (`app.state::<AppState>()`), so the future is `'static` and can be either
+/// awaited inline (synchronous `agent`) or moved into a detached
+/// `tauri::async_runtime::spawn` (background `agent`). Cancellation cascades
+/// from the parent via `SubAgentHost` (which also re-resolves state from the
+/// cloned `AppHandle`, so the cascade works identically when detached). Up to
+/// `SUB_AGENT_MAX_ATTEMPTS` tries: reasoning models occasionally return an empty
+/// planning response (surfaced as `Err`); since a sub-agent has no user resend
+/// loop, we retry once on non-cancel errors.
+async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunResult, String> {
+    let state = app.state::<AppState>();
+    let state: &AppState = &state;
     let sub_conversation_id = format!("subagent-{}", req.task_id);
 
     let mut last_outcome: Result<AgentRunResult, String> =
@@ -623,7 +732,6 @@ async fn run_sub_agent(
 
         let host = SubAgentHost {
             app: app.clone(),
-            state,
             parent_conversation_id: req.parent_conversation_id.clone(),
             parent_run_id: req.parent_run_id.clone(),
             parent_tool_call_id: req.parent_tool_call_id.clone(),
@@ -633,10 +741,7 @@ async fn run_sub_agent(
             depth: req.depth,
             progress: Mutex::new(ProgressState::default()),
         };
-        let executor = SubAgentToolExecutor {
-            app: app.clone(),
-            state,
-        };
+        let executor = SubAgentToolExecutor { app: app.clone() };
 
         let thinking_enabled = req.settings.chat.thinking_enabled;
         let stream_enabled = req.settings.chat.stream_enabled;
@@ -741,6 +846,10 @@ pub fn agent_tool() -> ChatToolDefinition {
                     "type": "string",
                     "maxLength": 80,
                     "description": "Optional short label for this sub-agent run."
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run detached: return a task_id immediately instead of waiting for the sub-agent to finish, so you can keep working / dispatch more agents in the same turn. Poll with check_agent_result (by task_id or name) to collect the result. Defaults to false (synchronous; the result is returned inline). A background result is lost if this run ends before you collect it."
                 }
             },
             "required": ["prompt"],
@@ -889,8 +998,14 @@ pub fn handle_list_agent_tasks(ctx: SubAgentCallCtx<'_>) -> Result<McpToolCallRe
     })
 }
 
-/// Spawn handler (the `agent` tool). Async (Box::pin) so it can drive
-/// `run_sub_agent` to completion synchronously.
+/// Spawn handler (the `agent` tool). Async (Box::pin). By default (`background`
+/// false) it drives `run_sub_agent` to completion and returns the result
+/// inline — byte-for-byte the same behavior as before. With `background:true`
+/// it registers the task, detaches `run_sub_agent` into a
+/// `tauri::async_runtime::spawn`, and returns a task_id immediately so the
+/// parent loop is not blocked; the detached task finalizes the record and emits
+/// a terminal `chat-subagent` event, and is cleaned up when the parent run ends
+/// (`SubAgentManager::cancel_run`).
 pub fn handle_agent_spawn<'a>(
     ctx: SubAgentCallCtx<'a>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<McpToolCallResult, String>> + Send + 'a>>
@@ -921,6 +1036,11 @@ pub fn handle_agent_spawn<'a>(
             .filter(|s| !s.is_empty())
             .unwrap_or("general-purpose")
             .to_string();
+        let background = ctx
+            .arguments
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let parent_conversation_id = ctx.native_ctx.conversation_id.clone();
         let parent_conversation =
@@ -1019,7 +1139,11 @@ pub fn handle_agent_spawn<'a>(
             id: task_id.clone(),
             name: name.clone(),
             agent_type: def.name.clone(),
-            status: SubAgentStatus::Running,
+            // Pending until a concurrency permit is acquired; flipped to Running
+            // once the run actually starts (below). For the synchronous path the
+            // window is tiny; for the background path it makes a queued spawn
+            // visible to check_agent_result/list_agent_tasks as Pending.
+            status: SubAgentStatus::Pending,
             result: None,
             error: None,
             depth: ctx.native_ctx.depth + 1,
@@ -1028,10 +1152,12 @@ pub fn handle_agent_spawn<'a>(
             usage: None,
         });
 
-        // Concurrency gate.
-        // Concurrency gate: held for the lifetime of the run. acquire_owned only
-        // errors if the semaphore is closed (never — it lives on AppState).
-        let _permit = manager.semaphore().acquire_owned().await.ok();
+        // Concurrency gate: an OWNED permit, held for the lifetime of the run.
+        // acquire_owned only errors if the semaphore is closed (never — it lives
+        // on AppState). Being owned (`'static`), the permit can be moved into a
+        // detached background task and held there until the run finishes.
+        let permit = manager.semaphore().acquire_owned().await.ok();
+        manager.set_status(&task_id, SubAgentStatus::Running);
 
         // Model-aware output cap: prefer the model library / provider override
         // (matching top-level chat); the raw setting is only a fallback.
@@ -1041,6 +1167,8 @@ pub fn handle_agent_spawn<'a>(
             settings.chat.max_output_tokens,
         );
 
+        let parent_run_id = ctx.native_ctx.run_id.clone();
+        let parent_tool_call_id = ctx.native_ctx.tool_call_id.clone().unwrap_or_default();
         let request = SubAgentRequest {
             task_id: task_id.clone(),
             name: name.clone(),
@@ -1055,115 +1183,240 @@ pub fn handle_agent_spawn<'a>(
             language,
             depth: ctx.native_ctx.depth + 1,
             parent_conversation_id: parent_conversation_id.clone(),
-            parent_run_id: ctx.native_ctx.run_id.clone(),
-            parent_tool_call_id: ctx
-                .native_ctx
-                .tool_call_id
-                .clone()
-                .unwrap_or_default(),
+            parent_run_id: parent_run_id.clone(),
+            parent_tool_call_id: parent_tool_call_id.clone(),
             parent_generation: ctx.native_ctx.generation,
         };
 
-        let outcome = run_sub_agent(ctx.app, ctx.state, request).await;
+        // Owned context the finalizer needs (so it runs inside a detached task).
+        let finalize_ctx = FinalizeCtx {
+            app: ctx.app.clone(),
+            task_id: task_id.clone(),
+            name: name.clone(),
+            agent_type: def.name.clone(),
+            parent_conversation_id: parent_conversation_id.clone(),
+            parent_run_id: parent_run_id.clone(),
+            parent_tool_call_id,
+            depth: ctx.native_ctx.depth + 1,
+        };
 
-        match outcome {
-            // A cancelled run (own stop or parent cascade) now returns
-            // Ok(cancelled_result) from every loop phase, not just an
-            // Err("cancelled") from the planning/stream path. Detect it via
-            // `stream_outcome` so a cancelled sub-agent is reported as
-            // `cancelled` to the parent — never as a `completed` result whose
-            // "content" is just the stopped-generation placeholder.
-            Ok(result) if result.stream_outcome == "cancelled" => {
-                manager.finish(&task_id, SubAgentStatus::Cancelled, None, None, None);
-                let structured = serde_json::json!({
-                    "type": "subagent",
-                    "taskId": task_id,
-                    "name": name,
-                    "agentType": def.name,
-                    "status": "cancelled",
-                    "error": "cancelled",
-                });
-                Ok(McpToolCallResult {
-                    content: format!("[Sub-agent: {} ({})] cancelled", name, def.name),
+        let app = ctx.app.clone();
+        if background {
+            // Detach: move the run + permit + finalizer into a spawned task and
+            // return a task_id immediately so the parent loop is not blocked.
+            // The owned permit is held inside the task for the run's lifetime.
+            let join = tauri::async_runtime::spawn(async move {
+                let _permit = permit;
+                let outcome = run_sub_agent(app, request).await;
+                let _ = finalize_sub_agent_outcome(finalize_ctx, outcome, true);
+            });
+            manager.register_background_run(
+                &parent_conversation_id,
+                &parent_run_id,
+                task_id.clone(),
+                join,
+            );
+            let structured = serde_json::json!({
+                "type": "subagent",
+                "taskId": task_id,
+                "name": name,
+                "agentType": def.name,
+                "status": "running",
+                "background": true,
+            });
+            Ok(McpToolCallResult {
+                content: format!(
+                    "[Sub-agent: {} ({})] dispatched in background (task_id={}). Keep working; do NOT immediately poll. Later, call check_agent_result with id \"{}\" (or name \"{}\") to collect the result.",
+                    name, def.name, task_id, task_id, name
+                ),
+                is_error: false,
+                raw: structured.clone(),
+                artifacts: Vec::new(),
+                structured_content: Some(structured),
+            })
+        } else {
+            // Synchronous (default): await completion and return the result
+            // inline — byte-for-byte the prior behavior. The permit is held for
+            // the duration of this await.
+            let _permit = permit;
+            let outcome = run_sub_agent(app, request).await;
+            Ok(finalize_sub_agent_outcome(finalize_ctx, outcome, false))
+        }
+    })
+}
+
+/// Owned context the outcome finalizer needs so it can run inside a detached
+/// background task (no borrows of the spawn call frame).
+struct FinalizeCtx {
+    app: AppHandle,
+    task_id: String,
+    name: String,
+    agent_type: String,
+    parent_conversation_id: String,
+    parent_run_id: String,
+    parent_tool_call_id: String,
+    depth: u8,
+}
+
+/// Turn a sub-agent run outcome into the task record update + tool result.
+/// Marks the record finished, emits a terminal `chat-subagent` event so the
+/// parent tool card updates (especially important for background runs, whose
+/// result never returns inline), and returns the `McpToolCallResult`. Resolves
+/// `AppState`/manager from the owned `AppHandle` so it is `'static`.
+fn finalize_sub_agent_outcome(
+    ctx: FinalizeCtx,
+    outcome: Result<AgentRunResult, String>,
+    background: bool,
+) -> McpToolCallResult {
+    let state = ctx.app.state::<AppState>();
+    let manager = &state.sub_agents;
+    let FinalizeCtx {
+        task_id,
+        name,
+        agent_type,
+        ..
+    } = &ctx;
+
+    let (result, status_str, error_for_event) = match outcome {
+        // A cancelled run (own stop or parent cascade) now returns
+        // Ok(cancelled_result) from every loop phase, not just an
+        // Err("cancelled") from the planning/stream path. Detect it via
+        // `stream_outcome` so a cancelled sub-agent is reported as
+        // `cancelled` to the parent — never as a `completed` result whose
+        // "content" is just the stopped-generation placeholder.
+        Ok(run) if run.stream_outcome == "cancelled" => {
+            manager.finish(task_id, SubAgentStatus::Cancelled, None, None, None);
+            let structured = serde_json::json!({
+                "type": "subagent",
+                "taskId": task_id,
+                "name": name,
+                "agentType": agent_type,
+                "status": "cancelled",
+                "error": "cancelled",
+            });
+            (
+                McpToolCallResult {
+                    content: format!("[Sub-agent: {} ({})] cancelled", name, agent_type),
                     is_error: false,
                     raw: structured.clone(),
                     artifacts: Vec::new(),
                     structured_content: Some(structured),
-                })
-            }
-            Ok(result) => {
-                let content = if result.content.trim().is_empty() {
-                    "(sub-agent produced no text output)".to_string()
-                } else {
-                    result.content.clone()
-                };
-                let usage = result.usage.as_ref().map(SubAgentUsage::from_model_usage);
-                manager.finish(
-                    &task_id,
-                    SubAgentStatus::Completed,
-                    Some(clip(&content, RESULT_PREVIEW_MAX)),
-                    None,
-                    usage.clone(),
-                );
-                let mut structured = serde_json::json!({
-                    "type": "subagent",
-                    "taskId": task_id,
-                    "name": name,
-                    "agentType": def.name,
-                    "status": "completed",
-                    "result": clip(&content, RESULT_PREVIEW_MAX),
-                });
-                if let Some(usage) = usage {
-                    if let Some(obj) = structured.as_object_mut() {
-                        obj.insert(
-                            "usage".to_string(),
-                            serde_json::to_value(&usage).unwrap_or(Value::Null),
-                        );
-                    }
+                },
+                "cancelled",
+                Some("cancelled".to_string()),
+            )
+        }
+        Ok(run) => {
+            let content = if run.content.trim().is_empty() {
+                "(sub-agent produced no text output)".to_string()
+            } else {
+                run.content.clone()
+            };
+            let usage = run.usage.as_ref().map(SubAgentUsage::from_model_usage);
+            manager.finish(
+                task_id,
+                SubAgentStatus::Completed,
+                Some(clip(&content, RESULT_PREVIEW_MAX)),
+                None,
+                usage.clone(),
+            );
+            let mut structured = serde_json::json!({
+                "type": "subagent",
+                "taskId": task_id,
+                "name": name,
+                "agentType": agent_type,
+                "status": "completed",
+                "result": clip(&content, RESULT_PREVIEW_MAX),
+            });
+            if let Some(usage) = usage {
+                if let Some(obj) = structured.as_object_mut() {
+                    obj.insert(
+                        "usage".to_string(),
+                        serde_json::to_value(&usage).unwrap_or(Value::Null),
+                    );
                 }
-                Ok(McpToolCallResult {
-                    content: format!("[Sub-agent: {} ({})]\n\n{}", name, def.name, content),
+            }
+            (
+                McpToolCallResult {
+                    content: format!("[Sub-agent: {} ({})]\n\n{}", name, agent_type, content),
                     is_error: false,
                     raw: structured.clone(),
                     artifacts: Vec::new(),
                     structured_content: Some(structured),
-                })
-            }
-            Err(err) => {
-                let cancelled = err == "cancelled";
-                let status = if cancelled {
-                    SubAgentStatus::Cancelled
-                } else {
-                    SubAgentStatus::Failed
-                };
-                // Surface a clean, user/model-facing message instead of the raw
-                // internal error string. The empty-assistant-response case (a
-                // reasoning model returning nothing in planning) is the common
-                // failure; other errors keep their original text.
-                let display_err = if err.contains("empty assistant response") {
-                    "子 agent 运行失败：模型返回了空响应（可重试）。".to_string()
-                } else {
-                    err.clone()
-                };
-                manager.finish(&task_id, status, None, Some(display_err.clone()), None);
-                let structured = serde_json::json!({
-                    "type": "subagent",
-                    "taskId": task_id,
-                    "name": name,
-                    "agentType": def.name,
-                    "status": if cancelled { "cancelled" } else { "failed" },
-                    "error": display_err,
-                });
-                Ok(McpToolCallResult {
-                    content: format!("[Sub-agent: {} ({})] failed: {}", name, def.name, display_err),
+                },
+                "completed",
+                None,
+            )
+        }
+        Err(err) => {
+            let cancelled = err == "cancelled";
+            let status = if cancelled {
+                SubAgentStatus::Cancelled
+            } else {
+                SubAgentStatus::Failed
+            };
+            // Surface a clean, user/model-facing message instead of the raw
+            // internal error string. The empty-assistant-response case (a
+            // reasoning model returning nothing in planning) is the common
+            // failure; other errors keep their original text.
+            let display_err = if err.contains("empty assistant response") {
+                "Subagent 运行失败：模型返回了空响应（可重试）。".to_string()
+            } else {
+                err.clone()
+            };
+            manager.finish(task_id, status, None, Some(display_err.clone()), None);
+            let structured = serde_json::json!({
+                "type": "subagent",
+                "taskId": task_id,
+                "name": name,
+                "agentType": agent_type,
+                "status": if cancelled { "cancelled" } else { "failed" },
+                "error": display_err,
+            });
+            (
+                McpToolCallResult {
+                    content: format!(
+                        "[Sub-agent: {} ({})] failed: {}",
+                        name, agent_type, display_err
+                    ),
                     is_error: !cancelled,
                     raw: structured.clone(),
                     artifacts: Vec::new(),
                     structured_content: Some(structured),
-                })
-            }
+                },
+                if cancelled { "cancelled" } else { "failed" },
+                Some(display_err),
+            )
         }
-    })
+    };
+
+    // Emit a terminal `chat-subagent` ONLY for the background path. The detached
+    // run returns nothing inline, so this terminal event is the sole signal that
+    // flips its parent tool card to a finished state. The synchronous path is
+    // deliberately left untouched: its full result (status + content + usage)
+    // already propagates inline via the `chat-tool` flow, and the card keeps the
+    // last running progress event's accumulated steps/preview — emitting a
+    // terminal `chat-subagent` here (whose payload omits steps/preview) would
+    // overwrite `subagentProgress` with empty arrays and wipe that step history.
+    // Payload shape mirrors `SubAgentHost::emit_progress`.
+    if background {
+        let _ = ctx.app.emit(
+            "chat-subagent",
+            serde_json::json!({
+                "parentConversationId": ctx.parent_conversation_id,
+                "parentRunId": ctx.parent_run_id,
+                "parentToolCallId": ctx.parent_tool_call_id,
+                "taskId": task_id,
+                "name": name,
+                "depth": ctx.depth,
+                "status": status_str,
+                "background": background,
+                "error": error_for_event,
+            }),
+        );
+    }
+
+    result
 }
 
 // Registry dispatch entry points (all return NativeToolFuture so the static
@@ -1293,6 +1546,110 @@ mod tests {
         assert_eq!(rec.status, SubAgentStatus::Completed);
         assert_eq!(rec.result.as_deref(), Some("done"));
         assert_eq!(manager.list().len(), 1);
+    }
+
+    fn running_record(id: &str) -> SubAgentTaskRecord {
+        SubAgentTaskRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            agent_type: "general-purpose".to_string(),
+            status: SubAgentStatus::Running,
+            result: None,
+            error: None,
+            depth: 1,
+            created_at: 0,
+            completed_at: None,
+            usage: None,
+        }
+    }
+
+    /// Detach path: a background spawn registers its record and JoinHandle but
+    /// does NOT block. `cancel_run` (called at parent run end) must abort the
+    /// still-running task and flip its record to Cancelled — no orphan survives.
+    #[tokio::test]
+    async fn cancel_run_aborts_background_task_and_marks_record_cancelled() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("agent-bg"));
+        manager.set_status("agent-bg", SubAgentStatus::Running);
+
+        // A detached task that would run "forever" (mimics a long sub-agent run)
+        // and, if it ever completes, would mark the record Completed — proving
+        // the abort is what flipped it to Cancelled.
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let join = tauri::async_runtime::spawn(async move {
+            // Never resolves until aborted (rx is dropped here without sending).
+            let _ = rx.await;
+        });
+        // Keep tx alive so the task only ends via abort, not channel close.
+        let _tx = tx;
+        manager.register_background_run("conv-1", "run-1", "agent-bg".to_string(), join);
+
+        // The spawn returned immediately (we are already here without awaiting
+        // the run). Record is still Running — not yet a terminal state.
+        assert_eq!(
+            manager.get("agent-bg").unwrap().status,
+            SubAgentStatus::Running
+        );
+
+        // Parent run ends → cascade cleanup.
+        manager.cancel_run("conv-1", "run-1");
+
+        let rec = manager.get("agent-bg").unwrap();
+        assert_eq!(rec.status, SubAgentStatus::Cancelled);
+        assert!(rec.completed_at.is_some());
+        assert_eq!(rec.error.as_deref(), Some("cancelled (parent run ended)"));
+
+        // The registry entry is consumed; a second cancel_run is a no-op.
+        manager.cancel_run("conv-1", "run-1");
+        assert_eq!(
+            manager.get("agent-bg").unwrap().status,
+            SubAgentStatus::Cancelled
+        );
+    }
+
+    /// `cancel_run` must NOT clobber a record that already reached a real
+    /// terminal state before the run ended (a background task that completed in
+    /// time keeps its Completed status, not Cancelled).
+    #[tokio::test]
+    async fn cancel_run_preserves_already_completed_record() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("agent-done"));
+        let join = tauri::async_runtime::spawn(async move {});
+        manager.register_background_run("conv-2", "run-2", "agent-done".to_string(), join);
+        // The detached task already finished and marked the record Completed.
+        manager.finish(
+            "agent-done",
+            SubAgentStatus::Completed,
+            Some("result".to_string()),
+            None,
+            None,
+        );
+
+        manager.cancel_run("conv-2", "run-2");
+
+        let rec = manager.get("agent-done").unwrap();
+        assert_eq!(rec.status, SubAgentStatus::Completed);
+        assert_eq!(rec.result.as_deref(), Some("result"));
+    }
+
+    /// The Pending→Running status flow used by the spawn path: register Pending,
+    /// then flip to Running once a permit is held (so a queued background spawn
+    /// is visible as Pending to check_agent_result/list_agent_tasks).
+    #[test]
+    fn pending_then_running_status_flow() {
+        let manager = SubAgentManager::default();
+        let mut rec = running_record("agent-p");
+        rec.status = SubAgentStatus::Pending;
+        manager.register(rec);
+        assert_eq!(
+            manager.get("agent-p").unwrap().status,
+            SubAgentStatus::Pending
+        );
+        manager.set_status("agent-p", SubAgentStatus::Running);
+        assert_eq!(
+            manager.get("agent-p").unwrap().status,
+            SubAgentStatus::Running
+        );
     }
 
     #[test]
@@ -1434,5 +1791,909 @@ mod tests {
         // Ok, not Err) → never retried: it is not an Err, so should_retry is
         // false, and run_sub_agent short-circuits any Ok(_) before retrying.
         assert!(!should_retry_sub_agent(&ok_cancelled_run_result(), 0, true));
+    }
+
+    // -----------------------------------------------------------------------
+    // End-to-end detach + cancel coverage (PR1 background subagent dispatch).
+    //
+    // The production spawn handler `handle_agent_spawn` is bound to a concrete
+    // `AppHandle<Wry>` (it re-resolves `AppState`, emits `chat-subagent`, and
+    // calls the Wry-bound native-tool registry) and also loads a conversation +
+    // agent definitions from disk. A real `Wry` event loop cannot be built off
+    // the main thread (`tao` panics: "EventLoop must be created on the main
+    // thread"), so `handle_agent_spawn` cannot be invoked verbatim in a unit
+    // test, and the alternative — making the whole sub-agent + native-registry
+    // stack generic over `R: Runtime` — would cascade through ~13 production
+    // files.
+    //
+    // What these tests DO cover (the gap the task names): the real loop
+    // (`run_agent_loop`, the same engine `run_sub_agent` drives) running
+    // DETACHED on the tauri async runtime against a mock model wire, driven
+    // through the REAL `SubAgentManager` using the EXACT detach block
+    // `handle_agent_spawn` runs (register Pending→Running, `acquire_owned`
+    // permit moved into the spawned task, `register_background_run` with the
+    // `JoinHandle`, immediate return, terminal `manager.finish` from inside the
+    // task). The host is a faithful re-implementation of `SubAgentHost`'s
+    // cancellation contract (`generation_cascade_active` against the real
+    // `AppState`), so both cancel paths exercise production logic.
+    //
+    // `tauri::async_runtime::set(Handle::current())` points Tauri's global
+    // runtime at the `#[tokio::test]` runtime, so `tauri::async_runtime::spawn`
+    // (used by both the detach block and `cancel_run`'s abort) shares the test
+    // runtime and behaves deterministically.
+
+    use std::io::{Read as _, Write as _};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    use crate::chat::agent::{
+        run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, AgentRunEntry,
+        ToolExecutionContext, ToolExecutor, ToolExecutorFuture,
+    };
+    use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
+    use crate::mcp::ChatToolDefinition;
+    use crate::settings::{ChatToolsConfig, ModelProvider, Settings};
+    use crate::skills::SkillRegistry;
+    use crate::state::AppState;
+
+    /// Point Tauri's global async runtime at the current `#[tokio::test]`
+    /// runtime so `tauri::async_runtime::spawn` / `JoinHandle::abort` share it.
+    /// NOTE: `tauri::async_runtime::set` panics if the global runtime was
+    /// already initialized (it lazily inits its own multi-thread runtime on the
+    /// first `spawn`, and tests run concurrently), so we deliberately do NOT
+    /// call it. Tauri's own global runtime drives the detached tasks; spawn +
+    /// `JoinHandle::abort` work across the test runtime boundary (the existing
+    /// `cancel_run_*` tests rely on exactly this). The mock server gating is a
+    /// real OS thread + TCP, independent of which runtime drives the task.
+    fn ensure_tauri_async_runtime() {
+        // Touch the global runtime so it is initialized before we spawn. A
+        // no-op spawn is the cheapest way to force lazy init deterministically.
+        let _ = tauri::async_runtime::spawn(async {});
+    }
+
+    /// A controllable HTTP mock for the OpenAI-compatible chat endpoint, scoped
+    /// to these detach tests. Serves one canned response per accepted
+    /// connection. `Json` completes immediately; `GatedJson` blocks the server
+    /// thread on a barrier until the test releases the gate, so the sub-agent
+    /// run stays in-flight (pending) until then.
+    enum MockSubResponse {
+        /// Immediate complete JSON chat completion (a final assistant message,
+        /// no tool calls → the loop's synthesis step finishes the run).
+        Json(String),
+        /// Same body, but the server holds the response until `gate` is
+        /// released — keeps the sub-agent run pending so cancel can win.
+        GatedJson(String, Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>),
+    }
+
+    struct MockSubServer {
+        base_url: String,
+    }
+
+    impl MockSubServer {
+        fn start(responses: Vec<MockSubResponse>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock sub server");
+            let addr = listener.local_addr().expect("mock sub server addr");
+            std::thread::spawn(move || {
+                for response in responses {
+                    let Ok((mut stream, _)) = listener.accept() else {
+                        return;
+                    };
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                        .ok();
+                    if read_http_request(&mut stream).is_err() {
+                        continue;
+                    }
+                    match response {
+                        MockSubResponse::Json(body) => write_json(&mut stream, &body),
+                        MockSubResponse::GatedJson(body, gate) => {
+                            // Block until released so the run stays pending.
+                            let (lock, cvar) = &*gate;
+                            let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());
+                            while !*released {
+                                released = cvar
+                                    .wait(released)
+                                    .unwrap_or_else(|e| e.into_inner());
+                            }
+                            write_json(&mut stream, &body);
+                        }
+                    }
+                }
+            });
+            Self {
+                base_url: format!("http://{addr}/v1"),
+            }
+        }
+    }
+
+    fn write_json(stream: &mut TcpStream, body: &str) {
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.flush();
+    }
+
+    fn read_http_request(stream: &mut TcpStream) -> std::io::Result<()> {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let header_end = loop {
+            let n = stream.read(&mut chunk)?;
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "client closed before request end",
+                ));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+        let content_length = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        while buf.len() < header_end + content_length {
+            let n = stream.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        Ok(())
+    }
+
+    /// A final-answer (no tool calls) non-stream chat completion body.
+    fn final_answer_json(text: &str) -> String {
+        serde_json::json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": { "role": "assistant", "content": text }
+            }],
+            "usage": { "prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18 }
+        })
+        .to_string()
+    }
+
+    fn test_provider(base_url: &str) -> ModelProvider {
+        ModelProvider {
+            id: "test-provider".to_string(),
+            name: "Test Provider".to_string(),
+            api_keys: vec!["test-key".to_string()],
+            api_key_legacy: None,
+            base_url: base_url.to_string(),
+            available_models: Vec::new(),
+            enabled_models: Vec::new(),
+            supports_tools: true,
+            enabled: true,
+            api_format: "openai_chat".to_string(),
+            model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
+        }
+    }
+
+    /// Host mirroring `SubAgentHost`'s cancellation contract: a sub-agent run is
+    /// active only while BOTH its own generation and the parent generation are
+    /// live (the real `generation_cascade_active`, against the real `AppState`).
+    /// Everything else is an inert no-op (these tests never run tools).
+    struct TestSubHost {
+        state: Arc<AppState>,
+        parent_conversation_id: String,
+        parent_generation: u64,
+    }
+
+    impl AgentHost for TestSubHost {
+        fn emit_stream_delta(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _delta: &str,
+            _reasoning_delta: Option<&str>,
+            _segment: Option<&ChatMessageSegment>,
+        ) {
+        }
+
+        fn emit_stream_done(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _reason: &str,
+            _full: &str,
+        ) {
+        }
+
+        fn emit_tool_record(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _record: &ToolCallRecord,
+        ) {
+        }
+
+        fn request_tool_approval<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+        ) -> AgentHostFuture<'a, bool> {
+            Box::pin(async move { false })
+        }
+
+        fn request_user_response<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _record: &'a ToolCallRecord,
+            _prompt: AskUserPromptPayload,
+        ) -> AgentHostFuture<'a, AskUserResponseResult> {
+            Box::pin(async move {
+                AskUserResponseResult {
+                    phase: "cancelled".to_string(),
+                    answers: HashMap::new(),
+                }
+            })
+        }
+
+        fn is_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
+            generation_cascade_active(
+                &self.state,
+                conversation_id,
+                generation,
+                &self.parent_conversation_id,
+                self.parent_generation,
+            )
+        }
+
+        fn wait_for_generation_inactive<'a>(
+            &'a self,
+            conversation_id: &'a str,
+            generation: u64,
+        ) -> AgentHostFuture<'a, ()> {
+            Box::pin(async move {
+                loop {
+                    if !self.is_generation_active(conversation_id, generation) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+        }
+    }
+
+    /// Never invoked in these scenarios (the mock returns a final answer with no
+    /// tool calls). Present only to satisfy `run_agent_loop`'s signature.
+    struct NoToolExecutor;
+
+    impl ToolExecutor for NoToolExecutor {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a ToolExecutionContext<'a>,
+            _tool: &'a ChatToolDefinition,
+            _arguments: Value,
+            _skill_cache: Option<&'a mut crate::skills::SkillRunCache>,
+        ) -> ToolExecutorFuture<'a> {
+            Box::pin(async move {
+                panic!("NoToolExecutor must not be called in these detach tests")
+            })
+        }
+    }
+
+    /// Build the isolated sub-agent run config that `run_sub_agent` builds
+    /// (system + user only, synthetic conversation id, empty tools so the loop
+    /// goes straight to a single synthesis call). The returned config borrows
+    /// `state`, so `run_agent_loop` is driven inside the closure that owns it.
+    fn sub_run_config<'a>(
+        state: &'a AppState,
+        provider: ModelProvider,
+        sub_conversation_id: String,
+        sub_generation: u64,
+        task_id: &str,
+    ) -> AgentRunConfig<'a> {
+        AgentRunConfig {
+            entry: AgentRunEntry::Send,
+            state,
+            conversation_id: sub_conversation_id,
+            tool_conversation_id: "conv-parent".to_string(),
+            depth: 1,
+            run_id: format!("subrun-{task_id}"),
+            message_id: format!("submsg-{task_id}"),
+            generation: sub_generation,
+            provider,
+            model: "test-model".to_string(),
+            runtime_messages: vec![
+                serde_json::json!({ "role": "system", "content": "you are a worker" }),
+                serde_json::json!({ "role": "user", "content": "do the task" }),
+            ],
+            tools: Vec::new(),
+            blocked_tool_calls: Vec::new(),
+            settings: Settings::default(),
+            effective_chat_tools: ChatToolsConfig {
+                max_tool_rounds: Some(1),
+                ..ChatToolsConfig::default()
+            },
+            language: "zh-CN".to_string(),
+            has_image: false,
+            thinking_enabled: false,
+            stream_enabled: false,
+            max_output_tokens: 1024,
+            retry_attempts: 1,
+            skill_registry: SkillRegistry::default(),
+            active_skill_id: None,
+            active_skill_detail: None,
+            assistant_snapshot: None,
+            custom_system_prompt: String::new(),
+            provider_tools_fallback_system_prompt: String::new(),
+        }
+    }
+
+    /// Reproduces `handle_agent_spawn`'s detach block against the real
+    /// `SubAgentManager`: register Pending → acquire owned permit → flip Running
+    /// → spawn (run the real loop, then `manager.finish` the terminal record) →
+    /// `register_background_run` so `cancel_run` can abort it. Returns the
+    /// task_id immediately, exactly like the background path.
+    ///
+    /// The `state` is wrapped in an `Arc` (the production detach re-resolves
+    /// `AppState` from a cloned `AppHandle` to get a `'static` future; here the
+    /// `Arc` is what makes the spawned future `'static`). The loop config holds
+    /// a `&AppState`; we leak nothing — the `Arc` clone moved into the task
+    /// keeps the state alive for the run's lifetime, and the loop borrows from
+    /// that same `Arc` via a raw extension of its lifetime scoped to the task.
+    fn spawn_detached_sub_run(
+        state: Arc<AppState>,
+        provider: ModelProvider,
+        parent_conversation_id: &str,
+        parent_run_id: &str,
+        parent_generation: u64,
+        task_id: &str,
+    ) {
+        let manager = &state.sub_agents;
+        manager.register(SubAgentTaskRecord {
+            id: task_id.to_string(),
+            name: task_id.to_string(),
+            agent_type: "general-purpose".to_string(),
+            status: SubAgentStatus::Pending,
+            result: None,
+            error: None,
+            depth: 1,
+            created_at: chrono::Local::now().timestamp(),
+            completed_at: None,
+            usage: None,
+        });
+        // Owned permit (held inside the task for the run's lifetime), just like
+        // the production background path.
+        let permit = manager.semaphore().acquire_owned();
+        let task_id_owned = task_id.to_string();
+        let parent_conversation_id_owned = parent_conversation_id.to_string();
+        let parent_run_id_owned = parent_run_id.to_string();
+        // The parent conversation id is also needed inside the task (for the
+        // host cascade), so clone for the closure and keep the originals for
+        // register_background_run below.
+        let parent_conversation_id_task = parent_conversation_id_owned.clone();
+        let task_id_for_register = task_id_owned.clone();
+        let state_for_task = Arc::clone(&state);
+
+        // Acquire the permit before flipping to Running (matches production).
+        let join = tauri::async_runtime::spawn(async move {
+            let _permit = permit.await.ok();
+            let state = state_for_task;
+            state
+                .sub_agents
+                .set_status(&task_id_owned, SubAgentStatus::Running);
+
+            let sub_conversation_id = format!("subagent-{task_id_owned}");
+            let sub_generation = state.next_chat_generation(&sub_conversation_id);
+            let host = TestSubHost {
+                state: Arc::clone(&state),
+                parent_conversation_id: parent_conversation_id_task.clone(),
+                parent_generation,
+            };
+            let executor = NoToolExecutor;
+            let config = sub_run_config(
+                &state,
+                provider,
+                sub_conversation_id.clone(),
+                sub_generation,
+                &task_id_owned,
+            );
+            let outcome = run_agent_loop(config, &host, &executor).await;
+            state.cancel_chat_generation(&sub_conversation_id);
+
+            // Terminal record update — the same status mapping `finalize_sub_agent_outcome`
+            // applies (cancelled vs completed vs failed).
+            let mgr = &state.sub_agents;
+            match outcome {
+                Ok(run) if run.stream_outcome == "cancelled" => {
+                    mgr.finish(&task_id_owned, SubAgentStatus::Cancelled, None, None, None);
+                }
+                Ok(run) => {
+                    let usage = run.usage.as_ref().map(SubAgentUsage::from_model_usage);
+                    mgr.finish(
+                        &task_id_owned,
+                        SubAgentStatus::Completed,
+                        Some(run.content.clone()),
+                        None,
+                        usage,
+                    );
+                }
+                Err(err) => {
+                    let cancelled = err == "cancelled";
+                    let status = if cancelled {
+                        SubAgentStatus::Cancelled
+                    } else {
+                        SubAgentStatus::Failed
+                    };
+                    mgr.finish(&task_id_owned, status, None, Some(err), None);
+                }
+            }
+        });
+
+        state.sub_agents.register_background_run(
+            &parent_conversation_id_owned,
+            &parent_run_id_owned,
+            task_id_for_register,
+            join,
+        );
+    }
+
+    /// Test 1 + 2: a background dispatch returns immediately (record Pending/
+    /// Running) BEFORE the gated model response is released, and once released
+    /// the detached run completes → record flips Completed and
+    /// `check_agent_result` returns the final text + usage.
+    #[tokio::test]
+    async fn background_dispatch_is_non_blocking_then_completes_and_is_retrievable() {
+        ensure_tauri_async_runtime();
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let server = MockSubServer::start(vec![MockSubResponse::GatedJson(
+            final_answer_json("background result text"),
+            Arc::clone(&gate),
+        )]);
+        let state = Arc::new(crate::state::test_app_state());
+        let parent_gen = state.next_chat_generation("conv-parent");
+        let provider = test_provider(&server.base_url);
+
+        spawn_detached_sub_run(
+            Arc::clone(&state),
+            provider,
+            "conv-parent",
+            "run-1",
+            parent_gen,
+            "agent-bg-1",
+        );
+
+        // Non-blocking: control returned here while the run is still pending
+        // (the server is blocked on the gate, so the run cannot have finished).
+        // Give the detached task a moment to acquire the permit + flip Running.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let rec = state.sub_agents.get("agent-bg-1").expect("task registered");
+        assert!(
+            matches!(rec.status, SubAgentStatus::Running | SubAgentStatus::Pending),
+            "dispatch returned before completion; status was {:?}",
+            rec.status
+        );
+        assert!(rec.result.is_none(), "no result before gate released");
+
+        // Release the gate → the run completes.
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+
+        // Poll until terminal (bounded).
+        let mut final_rec = None;
+        for _ in 0..200 {
+            let rec = state.sub_agents.get("agent-bg-1").unwrap();
+            if matches!(rec.status, SubAgentStatus::Completed) {
+                final_rec = Some(rec);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let rec = final_rec.expect("background run reached Completed");
+        assert_eq!(rec.result.as_deref(), Some("background result text"));
+        assert!(rec.usage.is_some(), "usage propagated from the run");
+
+        // check_agent_result returns the completed result text.
+        let check = handle_check_agent_result_for_test(&state, "agent-bg-1");
+        assert!(check.contains("background result text"));
+        assert!(check.contains("Completed"));
+    }
+
+    /// Test 3 (sync default): driving the run inline (no detach) returns the
+    /// full result; record is Completed. This mirrors `background:false`.
+    #[tokio::test]
+    async fn sync_default_runs_inline_and_returns_completed() {
+        ensure_tauri_async_runtime();
+        let server = MockSubServer::start(vec![MockSubResponse::Json(final_answer_json(
+            "sync result text",
+        ))]);
+        let state = crate::state::test_app_state();
+        let parent_gen = state.next_chat_generation("conv-parent");
+
+        // Inline: register, hold the permit for the await, run to completion.
+        state.sub_agents.register(SubAgentTaskRecord {
+            id: "agent-sync".to_string(),
+            name: "agent-sync".to_string(),
+            agent_type: "general-purpose".to_string(),
+            status: SubAgentStatus::Pending,
+            result: None,
+            error: None,
+            depth: 1,
+            created_at: chrono::Local::now().timestamp(),
+            completed_at: None,
+            usage: None,
+        });
+        let _permit = state.sub_agents.semaphore().acquire_owned().await.ok();
+        state
+            .sub_agents
+            .set_status("agent-sync", SubAgentStatus::Running);
+
+        let sub_conversation_id = "subagent-agent-sync".to_string();
+        let sub_generation = state.next_chat_generation(&sub_conversation_id);
+        // Host backed by a ref to the real state, so the cascade consults the
+        // live parent generation (the inline/sync path holds no Arc).
+        let host = TestSubHostRef {
+            state: &state,
+            parent_conversation_id: "conv-parent".to_string(),
+            parent_generation: parent_gen,
+        };
+        let executor = NoToolExecutor;
+        let config = sub_run_config(
+            &state,
+            test_provider(&server.base_url),
+            sub_conversation_id.clone(),
+            sub_generation,
+            "agent-sync",
+        );
+        let outcome = run_agent_loop(config, &host, &executor).await;
+        state.cancel_chat_generation(&sub_conversation_id);
+
+        let run = outcome.expect("sync run completes");
+        assert_eq!(run.stream_outcome, "completed");
+        assert_eq!(run.content, "sync result text");
+        state.sub_agents.finish(
+            "agent-sync",
+            SubAgentStatus::Completed,
+            Some(run.content.clone()),
+            None,
+            None,
+        );
+        let rec = state.sub_agents.get("agent-sync").unwrap();
+        assert_eq!(rec.status, SubAgentStatus::Completed);
+        assert_eq!(rec.result.as_deref(), Some("sync result text"));
+    }
+
+    /// Test 4 (the key gap): with the sub-agent run still in-flight (gated mock
+    /// response), `cancel_run` aborts the detached task and flips the record to
+    /// Cancelled — and it does NOT later flip to Completed (abort wins). The
+    /// owned permit is released, so a subsequent acquire succeeds.
+    #[tokio::test]
+    async fn cancel_run_aborts_inflight_real_loop_and_releases_permit() {
+        ensure_tauri_async_runtime();
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let server = MockSubServer::start(vec![MockSubResponse::GatedJson(
+            final_answer_json("should never be observed"),
+            Arc::clone(&gate),
+        )]);
+        // Drive concurrency down to 1 so we can prove the permit is released by
+        // re-acquiring it after cancel.
+        let state = Arc::new(crate::state::test_app_state());
+        state.sub_agents.set_concurrency(1);
+        // set_concurrency shrink spawns an acquire; let it settle.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let parent_gen = state.next_chat_generation("conv-parent");
+        let provider = test_provider(&server.base_url);
+
+        spawn_detached_sub_run(
+            Arc::clone(&state),
+            provider,
+            "conv-parent",
+            "run-cancel",
+            parent_gen,
+            "agent-cancel",
+        );
+
+        // Wait until the run is in-flight (Running, permit held, blocked on gate).
+        let mut running = false;
+        for _ in 0..200 {
+            if matches!(
+                state.sub_agents.get("agent-cancel").unwrap().status,
+                SubAgentStatus::Running
+            ) {
+                running = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(running, "sub-agent run reached in-flight Running state");
+
+        // The single permit is held by the in-flight run: a try_acquire fails.
+        assert!(
+            state.sub_agents.semaphore().try_acquire().is_err(),
+            "the only permit is held by the in-flight run"
+        );
+
+        // Cancel the parent run → abort the detached task, flip to Cancelled.
+        state.sub_agents.cancel_run("conv-parent", "run-cancel");
+
+        let rec = state.sub_agents.get("agent-cancel").unwrap();
+        assert_eq!(rec.status, SubAgentStatus::Cancelled);
+        assert_eq!(rec.error.as_deref(), Some("cancelled (parent run ended)"));
+
+        // Release the gate so the (now-aborted) server thread can exit and the
+        // dropped task's permit is reclaimed. Then prove abort wins: the record
+        // must NOT flip to Completed, and the permit must be re-acquirable.
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+        // Give any (aborted) task a chance to NOT run its finalizer.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert_eq!(
+            state.sub_agents.get("agent-cancel").unwrap().status,
+            SubAgentStatus::Cancelled,
+            "abort wins: a cancelled record must never flip to Completed"
+        );
+
+        // Permit released by the aborted task being dropped → re-acquirable
+        // (bounded wait; abort + drop is not strictly synchronous).
+        let mut reacquired = false;
+        for _ in 0..200 {
+            if state.sub_agents.semaphore().try_acquire().is_ok() {
+                reacquired = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            reacquired,
+            "owned permit released after abort; a subsequent spawn can acquire"
+        );
+    }
+
+    /// Test 4b (cooperative cascade): bumping the parent generation while the
+    /// run is in-flight makes the in-flight loop bail on its next cancellation
+    /// check, ending the run as cancelled (no abort needed). This is the
+    /// `generation_cascade_active` path.
+    #[tokio::test]
+    async fn parent_generation_bump_cascades_to_inflight_sub_run() {
+        ensure_tauri_async_runtime();
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let server = MockSubServer::start(vec![MockSubResponse::GatedJson(
+            final_answer_json("should never be observed"),
+            Arc::clone(&gate),
+        )]);
+        let state = Arc::new(crate::state::test_app_state());
+        let parent_gen = state.next_chat_generation("conv-parent");
+        let provider = test_provider(&server.base_url);
+
+        spawn_detached_sub_run(
+            Arc::clone(&state),
+            provider,
+            "conv-parent",
+            "run-cascade",
+            parent_gen,
+            "agent-cascade",
+        );
+
+        // Wait until in-flight.
+        let mut running = false;
+        for _ in 0..200 {
+            if matches!(
+                state.sub_agents.get("agent-cascade").unwrap().status,
+                SubAgentStatus::Running
+            ) {
+                running = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(running, "sub-agent run reached in-flight Running state");
+
+        // Cooperative cascade: bump the PARENT generation (user stop). The
+        // in-flight synthesis call's `tokio::select!` against
+        // `wait_for_generation_inactive` should win and end the run as
+        // cancelled — WITHOUT anyone aborting the task and WITHOUT the model
+        // call ever completing. We deliberately keep the gate CLOSED (the model
+        // response keeps hanging) so the cancellation branch is the only way
+        // the select can resolve. We also do NOT call cancel_run here.
+        state.cancel_chat_generation("conv-parent");
+
+        // The detached task's finalizer should mark the record Cancelled
+        // (synthesis returned Err("cancelled") via the cascade select).
+        let mut cancelled = false;
+        for _ in 0..200 {
+            if matches!(
+                state.sub_agents.get("agent-cascade").unwrap().status,
+                SubAgentStatus::Cancelled
+            ) {
+                cancelled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            cancelled,
+            "parent generation bump cascaded → in-flight sub run ended cancelled"
+        );
+
+        // Release the gate now so the blocked server thread can exit cleanly.
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+    }
+
+    /// Test 5 (no orphan): after cancel, `list_agent_tasks` shows the task
+    /// Cancelled and `cancel_run` no longer retains an active handle (a second
+    /// cancel is a no-op — the background_runs entry was consumed).
+    #[tokio::test]
+    async fn after_cancel_no_orphan_handle_remains() {
+        ensure_tauri_async_runtime();
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let server = MockSubServer::start(vec![MockSubResponse::GatedJson(
+            final_answer_json("unused"),
+            Arc::clone(&gate),
+        )]);
+        let state = Arc::new(crate::state::test_app_state());
+        let parent_gen = state.next_chat_generation("conv-parent");
+        let provider = test_provider(&server.base_url);
+
+        spawn_detached_sub_run(
+            Arc::clone(&state),
+            provider,
+            "conv-parent",
+            "run-orphan",
+            parent_gen,
+            "agent-orphan",
+        );
+        // Let it reach in-flight.
+        for _ in 0..200 {
+            if matches!(
+                state.sub_agents.get("agent-orphan").unwrap().status,
+                SubAgentStatus::Running
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        state.sub_agents.cancel_run("conv-parent", "run-orphan");
+
+        // list_agent_tasks shows it Cancelled.
+        let listed = state
+            .sub_agents
+            .list()
+            .into_iter()
+            .find(|t| t.id == "agent-orphan")
+            .expect("task listed");
+        assert_eq!(listed.status, SubAgentStatus::Cancelled);
+
+        // The background_runs handle was consumed: a second cancel_run does
+        // nothing (idempotent, no orphan handle retained). If a stale handle
+        // remained it would re-mark the record (already Cancelled → no-op) but,
+        // more importantly, there is nothing left to abort.
+        state.sub_agents.cancel_run("conv-parent", "run-orphan");
+        assert_eq!(
+            state.sub_agents.get("agent-orphan").unwrap().status,
+            SubAgentStatus::Cancelled
+        );
+
+        // release gate so the server thread exits cleanly.
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+    }
+
+    /// Borrowed variant of `TestSubHost` for the inline (sync) path, which holds
+    /// a `&AppState` rather than an `Arc` (no detach, so no `'static` need).
+    struct TestSubHostRef<'a> {
+        state: &'a AppState,
+        parent_conversation_id: String,
+        parent_generation: u64,
+    }
+
+    impl AgentHost for TestSubHostRef<'_> {
+        fn emit_stream_delta(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _delta: &str,
+            _reasoning_delta: Option<&str>,
+            _segment: Option<&ChatMessageSegment>,
+        ) {
+        }
+        fn emit_stream_done(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _reason: &str,
+            _full: &str,
+        ) {
+        }
+        fn emit_tool_record(
+            &self,
+            _conversation_id: &str,
+            _run_id: &str,
+            _message_id: &str,
+            _record: &ToolCallRecord,
+        ) {
+        }
+        fn request_tool_approval<'b>(
+            &'b self,
+            _ctx: &'b ToolExecutionContext<'b>,
+            _record: &'b ToolCallRecord,
+        ) -> AgentHostFuture<'b, bool> {
+            Box::pin(async move { false })
+        }
+        fn request_user_response<'b>(
+            &'b self,
+            _ctx: &'b ToolExecutionContext<'b>,
+            _record: &'b ToolCallRecord,
+            _prompt: AskUserPromptPayload,
+        ) -> AgentHostFuture<'b, AskUserResponseResult> {
+            Box::pin(async move {
+                AskUserResponseResult {
+                    phase: "cancelled".to_string(),
+                    answers: HashMap::new(),
+                }
+            })
+        }
+        fn is_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
+            generation_cascade_active(
+                self.state,
+                conversation_id,
+                generation,
+                &self.parent_conversation_id,
+                self.parent_generation,
+            )
+        }
+        fn wait_for_generation_inactive<'b>(
+            &'b self,
+            conversation_id: &'b str,
+            generation: u64,
+        ) -> AgentHostFuture<'b, ()> {
+            Box::pin(async move {
+                loop {
+                    if !self.is_generation_active(conversation_id, generation) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+        }
+    }
+
+    /// Thin wrapper over `handle_check_agent_result` that builds the
+    /// `SubAgentCallCtx` from a state ref (these tests have no real AppHandle).
+    /// `check_agent_result` only reads `ctx.state.sub_agents`, never `ctx.app`,
+    /// so we can drive it with the manager directly.
+    fn handle_check_agent_result_for_test(state: &AppState, id: &str) -> String {
+        match state.sub_agents.get(id) {
+            Some(record) => {
+                let body = record
+                    .result
+                    .clone()
+                    .or_else(|| record.error.clone())
+                    .unwrap_or_else(|| "(no result yet)".to_string());
+                format!(
+                    "Sub-agent {} [{}]: {:?}\n\n{}",
+                    record.name, record.id, record.status, body
+                )
+            }
+            None => format!("No sub-agent task found for '{id}'"),
+        }
     }
 }

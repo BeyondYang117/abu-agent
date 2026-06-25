@@ -509,6 +509,67 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn native_bash_output_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__bash_output".to_string(),
+        name: "bash_output".to_string(),
+        description: "Read new output from a background command started by bash (background:true). Pass the job_id returned by that call. Returns the captured stdout/stderr since since_offset (default 0), the current status (running / exited with exit_code / killed / error), and next_offset to pass on the next poll for incremental reads. After dispatching a background command, do NOT poll immediately — keep working, then poll a bounded number of times (≤20). Always refresh once with bash_output before reporting a background command's result to the user.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "job_id": { "type": "string", "description": "The job_id returned when the background command was started" },
+                "since_offset": { "type": "integer", "description": "Byte offset to read from (use next_offset from the previous bash_output call for incremental reads; default 0)" }
+            },
+            "required": ["job_id"]
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_list_background_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__list_background".to_string(),
+        name: "list_background".to_string(),
+        description: "List all background commands tracked in this app session, with their job_id, status (running / exited / killed / error), command, working directory, and age. Background commands survive across turns until you kill them or the app exits.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
+pub fn native_kill_background_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__kill_background".to_string(),
+        name: "kill_background".to_string(),
+        description: "Stop a background command started by bash (background:true) by killing its process group. Pass the job_id. Use this to stop a dev server or other long-running background process when you are done with it; otherwise it keeps running until the app exits.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "job_id": { "type": "string", "description": "The job_id of the background command to kill" }
+            },
+            "required": ["job_id"]
+        }),
+        sensitive: true,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
 pub fn native_save_assistant_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__save_assistant".to_string(),

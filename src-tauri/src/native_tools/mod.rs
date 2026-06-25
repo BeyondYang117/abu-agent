@@ -14,6 +14,10 @@ pub use sandbox_exports::{
     SandboxExportContext,
 };
 pub use shell::run_command;
+pub use shell::{
+    bash_output, kill_background, kill_process_group, list_background, BackgroundCommand,
+    BackgroundCommandStatus, BG_CMD_LOG_PREFIX,
+};
 
 use std::{
     fs,

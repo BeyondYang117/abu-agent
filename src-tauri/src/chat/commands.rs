@@ -1817,7 +1817,18 @@ async fn complete_assistant_reply(
         &host,
         &executor,
     )
-    .await?;
+    .await;
+
+    // Run-end cleanup: abort any background sub-agents this run dispatched and
+    // mark their records Cancelled. Normal completion does NOT bump the parent
+    // generation, so the cooperative cascade alone would orphan a still-running
+    // detached sub-agent; user-stop already bumps the generation (cascade), and
+    // this also covers it. Runs on BOTH the success and error paths (before `?`
+    // propagates the error) so no detached task survives a finished/failed run.
+    state
+        .sub_agents
+        .cancel_run(&conversation.id, &run_id);
+    let result = result?;
 
     merge_latest_agent_todo_state(app, conversation);
     merge_latest_agent_plan_state(app, conversation);

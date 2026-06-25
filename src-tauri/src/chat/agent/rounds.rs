@@ -17,7 +17,10 @@ use super::planning::PlannedToolRound;
 use super::stop::{assistant_api_message_for_tool_calls, step_limit_system_message};
 use super::types::{AgentPhase, AgentRunResult, AgentStepResult, AgentStopReason};
 
-pub(crate) const MAX_PARALLEL_TOOL_CALLS_PER_ROUND: usize = 4;
+/// 单回合内并行工具调用的批宽上限。与 `SubAgentManager` 的默认并发(12)对齐,
+/// 使一回合 fan-out 多个 subagent 时信号量成为真正的瓶颈而非这里。批内用
+/// `join_all` 并发执行,故任意 ≤ 此值的批宽都安全。
+pub(crate) const MAX_PARALLEL_TOOL_CALLS_PER_ROUND: usize = 12;
 
 pub(crate) enum ToolRoundOutcome {
     /// The round completed; the skeleton continues to the next planning round.
@@ -410,46 +413,15 @@ async fn execute_parallel_chunk(
     ctx: &ToolRoundContext<'_>,
     chunk: &mut [ExecutableToolCall<'_>],
 ) -> Vec<ToolExecutionResult> {
-    match chunk.len() {
-        0 => Vec::new(),
-        1 => {
-            let item = &chunk[0];
-            vec![execute_parallel_tool_call(host, executor, settings, ctx, item).await]
-        }
-        2 => {
-            let (a, rest) = chunk.split_at(1);
-            let (b, _) = rest.split_at(1);
-            let (ra, rb) = tokio::join!(
-                execute_parallel_tool_call(host, executor, settings, ctx, &a[0]),
-                execute_parallel_tool_call(host, executor, settings, ctx, &b[0]),
-            );
-            vec![ra, rb]
-        }
-        3 => {
-            let (a, rest) = chunk.split_at(1);
-            let (b, rest) = rest.split_at(1);
-            let (c, _) = rest.split_at(1);
-            let (ra, rb, rc) = tokio::join!(
-                execute_parallel_tool_call(host, executor, settings, ctx, &a[0]),
-                execute_parallel_tool_call(host, executor, settings, ctx, &b[0]),
-                execute_parallel_tool_call(host, executor, settings, ctx, &c[0]),
-            );
-            vec![ra, rb, rc]
-        }
-        _ => {
-            let (a, rest) = chunk.split_at(1);
-            let (b, rest) = rest.split_at(1);
-            let (c, rest) = rest.split_at(1);
-            let (d, _) = rest.split_at(1);
-            let (ra, rb, rc, rd) = tokio::join!(
-                execute_parallel_tool_call(host, executor, settings, ctx, &a[0]),
-                execute_parallel_tool_call(host, executor, settings, ctx, &b[0]),
-                execute_parallel_tool_call(host, executor, settings, ctx, &c[0]),
-                execute_parallel_tool_call(host, executor, settings, ctx, &d[0]),
-            );
-            vec![ra, rb, rc, rd]
-        }
-    }
+    // join_all preserves input order and drives the whole chunk concurrently,
+    // so the batch width can be anything up to MAX_PARALLEL_TOOL_CALLS_PER_ROUND
+    // without per-arity hand-wiring (and without silently dropping calls past 4).
+    futures::future::join_all(
+        chunk
+            .iter()
+            .map(|item| execute_parallel_tool_call(host, executor, settings, ctx, item)),
+    )
+    .await
 }
 
 async fn execute_parallel_tool_call(

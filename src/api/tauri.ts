@@ -245,6 +245,10 @@ export type ChatSubagentPayload = {
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   preview?: string
   steps?: string[]
+  /** True on the terminal event of a detached (background:true) spawn. */
+  background?: boolean
+  /** Failure/cancellation reason on a terminal event. */
+  error?: string | null
 }
 
 export type AskUserPhase = 'awaiting' | 'answered' | 'skipped' | 'timeout' | 'cancelled'
@@ -484,6 +488,8 @@ export type ChatToolsConfig = {
   mcpIdleTimeoutMs?: number
   maxToolOutputChars: number | null
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
+  /** 同一时刻最多并行运行的子 agent 数（后端钳制 1..64，默认 12）。 */
+  subAgentConcurrency?: number
   nativeTools: ChatNativeToolsConfig
 }
 
@@ -876,6 +882,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     mcpIdleTimeoutMs: current.mcpIdleTimeoutMs ?? 600_000,
     maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
+    subAgentConcurrency: Math.min(64, Math.max(1, Math.round(current.subAgentConcurrency ?? 12))),
     nativeTools: {
       ...defaultNativeTools(),
       ...current.nativeTools,

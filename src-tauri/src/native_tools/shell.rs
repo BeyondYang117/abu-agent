@@ -1,10 +1,13 @@
 use std::path::PathBuf;
+use std::time::SystemTime;
 
+use serde::Serialize;
 use serde_json::Value;
 use tokio::process::Command;
 
 use super::{resolve_tool_existing_dir, NativeToolWorkspace};
 use crate::settings::{CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS};
+use crate::state::AppState;
 
 const COMMAND_DENYLIST: &[&str] = &[
     "sudo ",
@@ -48,6 +51,7 @@ pub async fn run_command(
     workspace: &NativeToolWorkspace,
     default_timeout_ms: u64,
     arguments: &Value,
+    state: Option<&AppState>,
 ) -> Result<String, String> {
     let command = arguments
         .get("command")
@@ -117,7 +121,7 @@ pub async fn run_command(
         .and_then(|v| v.as_bool())
         .unwrap_or_else(|| is_long_running_dev_command(&command));
     if background {
-        return run_shell_command_background(&command, cwd).await;
+        return run_shell_command_background(&command, cwd, state).await;
     }
 
     let timeout_ms = arguments
@@ -301,7 +305,93 @@ fn is_long_running_dev_command(command: &str) -> bool {
         || lowered.contains("; vite")
 }
 
-async fn run_shell_command_background(command: &str, cwd: PathBuf) -> Result<String, String> {
+/// Filename prefix for per-job background-command logs in temp_dir. App startup
+/// GC and the app-exit sweep both look for this prefix.
+pub const BG_CMD_LOG_PREFIX: &str = "kivio-bgcmd-";
+
+/// Lifecycle of a tracked background command. Mirrors the MCP Tasks status
+/// vocabulary (running/completed/failed/cancelled) in Kivio terms.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum BackgroundCommandStatus {
+    /// Process still alive (or we have not yet observed it exit).
+    Running,
+    /// Process exited on its own; `code` is the OS exit code if available.
+    Exited { code: Option<i32> },
+    /// Process group was killed via `kill_background` or an app-exit sweep.
+    Killed,
+    /// We failed to spawn / wait on the process; `message` describes why.
+    Error { message: String },
+}
+
+impl BackgroundCommandStatus {
+    fn is_terminal(&self) -> bool {
+        !matches!(self, BackgroundCommandStatus::Running)
+    }
+}
+
+/// A registered background command. Holds the leader pid (for process-group
+/// kill) and the path to the per-job output log. Survives across turns; cleaned
+/// up only by `kill_background` or the app-exit sweep.
+#[derive(Debug)]
+pub struct BackgroundCommand {
+    pub job_id: String,
+    pub pid: Option<u32>,
+    pub command: String,
+    pub cwd: String,
+    pub log_path: PathBuf,
+    pub status: BackgroundCommandStatus,
+    pub started_at: SystemTime,
+}
+
+/// Kill an entire process group / tree given the leader pid. Unix: SIGTERM the
+/// process group then SIGKILL as a fallback. Windows: `taskkill /T /F` walks the
+/// child tree. macOS+Linux both spawn the group via `setsid`, so `-pid` targets
+/// the whole group.
+pub fn kill_process_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let gid = pid as libc::pid_t;
+        unsafe {
+            // Graceful first; if the group ignores SIGTERM, follow with SIGKILL.
+            libc::kill(-gid, libc::SIGTERM);
+            libc::kill(-gid, libc::SIGKILL);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        // /T kills the whole tree, /F forces it. Detached background commands
+        // are their own process group (CREATE_NEW_PROCESS_GROUP), so this
+        // reaches the children too. CREATE_NO_WINDOW suppresses the taskkill
+        // console flash.
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+    }
+}
+
+async fn run_shell_command_background(
+    command: &str,
+    cwd: PathBuf,
+    state: Option<&AppState>,
+) -> Result<String, String> {
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
+
+    // Open the per-job log for stdout+stderr capture. Two independent handles so
+    // both streams write concurrently (the OS interleaves appends).
+    let stdout_file = std::fs::File::create(&log_path)
+        .map_err(|err| format!("Failed to create background log file: {err}"))?;
+    let stderr_file = stdout_file
+        .try_clone()
+        .map_err(|err| format!("Failed to clone background log handle: {err}"))?;
+
     let mut cmd = {
         #[cfg(target_os = "windows")]
         {
@@ -321,13 +411,16 @@ async fn run_shell_command_background(command: &str, cwd: PathBuf) -> Result<Str
     };
     cmd.current_dir(cwd.as_path())
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(std::process::Stdio::from(stdout_file))
+        .stderr(std::process::Stdio::from(stderr_file));
     #[cfg(target_os = "windows")]
     {
         const DETACHED_PROCESS: u32 = 0x00000008;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
+    // Keep the child alive when its handle is dropped: background commands
+    // survive across turns and are killed only by kill_background / app-exit.
     cmd.kill_on_drop(false);
     #[cfg(unix)]
     unsafe {
@@ -339,18 +432,164 @@ async fn run_shell_command_background(command: &str, cwd: PathBuf) -> Result<Str
         });
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|err| format!("Failed to start background command: {err}"))?;
-    let pid = child
-        .id()
+    let pid = child.id();
+    let pid_text = pid
         .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    // No registry (e.g. headless kivio-code without an AppState): fall back to
+    // the legacy fire-and-forget shape so behavior never regresses.
+    let Some(state) = state else {
+        return Ok(format!(
+            "background: true\npid: {pid_text}\ncwd: {}\ncommand: {command}\n\nStarted in the background. (No job registry available in this context; the process keeps running and is not tracked.)\n",
+            cwd.display()
+        ));
+    };
+
+    state.register_background_command(BackgroundCommand {
+        job_id: job_id.clone(),
+        pid,
+        command: command.to_string(),
+        cwd: cwd.display().to_string(),
+        log_path: log_path.clone(),
+        status: BackgroundCommandStatus::Running,
+        started_at: SystemTime::now(),
+    });
+
+    // Reap the child off-thread: wait for exit, record the exit code, and flip
+    // status to Exited. The OS keeps writing the log until the process exits.
+    let waiter_state = state.background_commands_handle();
+    let waiter_job = job_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let status = match child.wait().await {
+            Ok(exit) => BackgroundCommandStatus::Exited { code: exit.code() },
+            Err(err) => BackgroundCommandStatus::Error {
+                message: format!("wait failed: {err}"),
+            },
+        };
+        let mut map = waiter_state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(job) = map.get_mut(&waiter_job) {
+            // Do not clobber a Killed status set by kill_background.
+            if !matches!(job.status, BackgroundCommandStatus::Killed) {
+                job.status = status;
+            }
+        }
+    });
+
     Ok(format!(
-        "background: true\npid: {pid}\ncwd: {}\ncommand: {command}\n\nLong-running dev server started in the background. It keeps running after this tool returns; check the app window or terminal output manually. Do not start the same dev server again unless you have stopped it first.\n",
+        "background: true\njob_id: {job_id}\npid: {pid_text}\ncwd: {}\ncommand: {command}\n\nStarted in the background; it keeps running after this tool returns and survives across turns until you call kill_background or the app exits. Poll its output and exit status with bash_output (job_id: {job_id}); list all background jobs with list_background; stop it with kill_background (job_id: {job_id}). Do not start the same dev server twice.\n",
         cwd.display()
     ))
+}
+
+/// `bash_output` tool: incremental read of a tracked background job's captured
+/// output since `since_offset`, plus current status and exit code.
+pub fn bash_output(state: &AppState, arguments: &Value) -> Result<String, String> {
+    let job_id = arguments
+        .get("job_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "bash_output requires job_id".to_string())?;
+    let since_offset = arguments
+        .get("since_offset")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let (status, log_path, command) = {
+        let map = state.background_commands_handle();
+        let map = map.lock().unwrap_or_else(|e| e.into_inner());
+        let job = map
+            .get(job_id)
+            .ok_or_else(|| format!("No background job with job_id {job_id}"))?;
+        (job.status.clone(), job.log_path.clone(), job.command.clone())
+    };
+
+    let bytes = std::fs::read(&log_path).unwrap_or_default();
+    let start = (since_offset as usize).min(bytes.len());
+    let new_text = String::from_utf8_lossy(&bytes[start..]).into_owned();
+    let new_offset = bytes.len() as u64;
+
+    let status_line = match &status {
+        BackgroundCommandStatus::Running => "status: running".to_string(),
+        BackgroundCommandStatus::Exited { code } => match code {
+            Some(c) => format!("status: exited\nexit_code: {c}"),
+            None => "status: exited\nexit_code: unknown".to_string(),
+        },
+        BackgroundCommandStatus::Killed => "status: killed".to_string(),
+        BackgroundCommandStatus::Error { message } => format!("status: error\nerror: {message}"),
+    };
+
+    let header =
+        format!("job_id: {job_id}\ncommand: {command}\n{status_line}\nnext_offset: {new_offset}\n");
+    let body = if new_text.is_empty() {
+        if status.is_terminal() {
+            "(no new output)".to_string()
+        } else {
+            "(no new output yet; poll again)".to_string()
+        }
+    } else {
+        offload_large_output(format!("output:\n{new_text}"))
+    };
+    Ok(format!("{header}\n{body}"))
+}
+
+/// `list_background` tool: list all tracked background jobs with status.
+pub fn list_background(state: &AppState, _arguments: &Value) -> Result<String, String> {
+    let map = state.background_commands_handle();
+    let map = map.lock().unwrap_or_else(|e| e.into_inner());
+    if map.is_empty() {
+        return Ok("(no background jobs)".to_string());
+    }
+    let mut jobs: Vec<&BackgroundCommand> = map.values().collect();
+    jobs.sort_by_key(|j| j.started_at);
+    let mut out = String::new();
+    for job in jobs {
+        let status = match &job.status {
+            BackgroundCommandStatus::Running => "running".to_string(),
+            BackgroundCommandStatus::Exited { code } => match code {
+                Some(c) => format!("exited(code={c})"),
+                None => "exited".to_string(),
+            },
+            BackgroundCommandStatus::Killed => "killed".to_string(),
+            BackgroundCommandStatus::Error { message } => format!("error({message})"),
+        };
+        let age_secs = job.started_at.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+        out.push_str(&format!(
+            "job_id: {}\n  status: {status}\n  command: {}\n  cwd: {}\n  started: {age_secs}s ago\n",
+            job.job_id, job.command, job.cwd
+        ));
+    }
+    Ok(out)
+}
+
+/// `kill_background` tool: kill a tracked job's process group and mark it Killed.
+pub fn kill_background(state: &AppState, arguments: &Value) -> Result<String, String> {
+    let job_id = arguments
+        .get("job_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "kill_background requires job_id".to_string())?;
+
+    let map = state.background_commands_handle();
+    let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+    let job = map
+        .get_mut(job_id)
+        .ok_or_else(|| format!("No background job with job_id {job_id}"))?;
+    if job.status.is_terminal() {
+        return Ok(format!(
+            "job_id: {job_id} already finished (status unchanged); nothing to kill."
+        ));
+    }
+    if let Some(pid) = job.pid {
+        kill_process_group(pid);
+    }
+    job.status = BackgroundCommandStatus::Killed;
+    Ok(format!("job_id: {job_id} killed."))
 }
 
 #[derive(Debug)]
@@ -517,6 +756,180 @@ mod tests {
         assert_eq!(offload_large_output(small.clone()), small);
     }
 
+    // ---- Background command registry + polling (PR2) ----
+
+    fn bg_test_state() -> AppState {
+        AppState::new_headless(
+            crate::settings::Settings::default(),
+            std::env::temp_dir().join("kivio-bgcmd-test-usage"),
+        )
+    }
+
+    /// A short cross-platform command that prints a known token and exits 0.
+    fn echo_command(token: &str) -> String {
+        #[cfg(target_os = "windows")]
+        {
+            format!("echo {token}")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            format!("printf '%s' {token}")
+        }
+    }
+
+    async fn poll_until_terminal(state: &AppState, args: &Value) -> String {
+        for _ in 0..100 {
+            let out = bash_output(state, args).expect("bash_output should succeed");
+            if !out.contains("status: running") {
+                return out;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("background job never reached a terminal status");
+    }
+
+    #[tokio::test]
+    async fn background_command_is_tracked_and_output_polls_to_exit() {
+        let state = bg_test_state();
+        let token = "KIVIO_BG_OK";
+        let workspace = NativeToolWorkspace::global(&[]);
+        let started = run_command(
+            &workspace,
+            5_000,
+            &serde_json::json!({
+                "command": echo_command(token),
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "background": true,
+            }),
+            Some(&state),
+        )
+        .await
+        .expect("background run_command should return immediately");
+
+        // The dispatch result carries a job_id and tells the model how to poll.
+        assert!(started.contains("background: true"), "missing banner: {started}");
+        let job_id = started
+            .lines()
+            .find_map(|l| l.strip_prefix("job_id: "))
+            .map(str::to_string)
+            .expect("job_id in background result");
+        assert!(started.contains("bash_output"));
+
+        // Registry insert is observable immediately.
+        let listed = list_background(&state, &serde_json::json!({})).expect("list_background");
+        assert!(listed.contains(&job_id), "job not listed: {listed}");
+
+        // Poll bash_output until the process exits; assert captured output + code.
+        let args = serde_json::json!({ "job_id": job_id });
+        let out = poll_until_terminal(&state, &args).await;
+        assert!(out.contains("status: exited"), "expected exit: {out}");
+        assert!(out.contains("exit_code: 0"), "expected exit_code 0: {out}");
+        assert!(out.contains(token), "captured output should contain token: {out}");
+    }
+
+    #[tokio::test]
+    async fn bash_output_incremental_offset_reads_only_new_bytes() {
+        let state = bg_test_state();
+        let job_id = uuid::Uuid::new_v4().to_string();
+        let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
+        std::fs::write(&log_path, b"hello").expect("seed log");
+        state.register_background_command(BackgroundCommand {
+            job_id: job_id.clone(),
+            pid: None,
+            command: "seed".to_string(),
+            cwd: ".".to_string(),
+            log_path: log_path.clone(),
+            status: BackgroundCommandStatus::Exited { code: Some(0) },
+            started_at: SystemTime::now(),
+        });
+
+        // First read from offset 0 sees all bytes and reports next_offset = 5.
+        let first = bash_output(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+        assert!(first.contains("hello"), "{first}");
+        assert!(first.contains("next_offset: 5"), "{first}");
+
+        // Append more, then read from the prior offset → only the new bytes.
+        std::fs::write(&log_path, b"helloWORLD").expect("append log");
+        let second =
+            bash_output(&state, &serde_json::json!({ "job_id": job_id, "since_offset": 5 }))
+                .unwrap();
+        assert!(second.contains("WORLD"), "{second}");
+        assert!(!second.contains("hello\n"), "should not re-read old bytes: {second}");
+        assert!(second.contains("next_offset: 10"), "{second}");
+
+        let _ = std::fs::remove_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn kill_background_marks_killed_and_terminal_is_noop() {
+        let state = bg_test_state();
+        let workspace = NativeToolWorkspace::global(&[]);
+        // A long-lived command so it is still running when we kill it.
+        #[cfg(target_os = "windows")]
+        let long = "ping -n 30 127.0.0.1 > NUL";
+        #[cfg(not(target_os = "windows"))]
+        let long = "sleep 30";
+        let started = run_command(
+            &workspace,
+            5_000,
+            &serde_json::json!({
+                "command": long,
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "background": true,
+            }),
+            Some(&state),
+        )
+        .await
+        .expect("background spawn");
+        let job_id = started
+            .lines()
+            .find_map(|l| l.strip_prefix("job_id: "))
+            .map(str::to_string)
+            .expect("job_id");
+
+        let killed = kill_background(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+        assert!(killed.contains("killed"), "{killed}");
+
+        // Status is Killed and stays Killed even after the waiter reaps the child.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let out = bash_output(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+        assert!(out.contains("status: killed"), "expected killed status: {out}");
+
+        // Killing an already-terminal job is a no-op (no error).
+        let again = kill_background(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+        assert!(again.contains("already finished"), "{again}");
+    }
+
+    #[tokio::test]
+    async fn bash_output_unknown_job_errors() {
+        let state = bg_test_state();
+        let err = bash_output(&state, &serde_json::json!({ "job_id": "nope" }))
+            .expect_err("unknown job should error");
+        assert!(err.contains("No background job"), "{err}");
+    }
+
+    #[test]
+    fn kill_all_background_commands_clears_registry_and_logs() {
+        let state = bg_test_state();
+        let job_id = uuid::Uuid::new_v4().to_string();
+        let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
+        std::fs::write(&log_path, b"x").expect("seed log");
+        state.register_background_command(BackgroundCommand {
+            job_id: job_id.clone(),
+            pid: None, // no real process → no kill, just registry/log cleanup
+            command: "seed".to_string(),
+            cwd: ".".to_string(),
+            log_path: log_path.clone(),
+            status: BackgroundCommandStatus::Exited { code: Some(0) },
+            started_at: SystemTime::now(),
+        });
+        let _ = state.kill_all_background_commands();
+        // Registry cleared and the per-job log removed.
+        let listed = list_background(&state, &serde_json::json!({})).unwrap();
+        assert!(listed.contains("no background jobs"), "{listed}");
+        assert!(!log_path.exists(), "log should be removed on sweep");
+    }
+
     #[test]
     fn offload_large_output_writes_temp_file_and_notes_path() {
         let big = "x".repeat(MAX_INLINE_COMMAND_OUTPUT_BYTES + 1);
@@ -606,6 +1019,7 @@ mod tests {
             &NativeToolWorkspace::global(&[]),
             1_000,
             &serde_json::json!({ "command": "python3 -m pip install matplotlib" }),
+            None,
         )
         .await
         .expect_err("pip installs should be blocked");
@@ -635,6 +1049,7 @@ mod tests {
                 &workspace,
                 2_000,
                 &serde_json::json!({ "command": "cat" }),
+                None,
             ),
         )
         .await

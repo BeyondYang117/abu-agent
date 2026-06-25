@@ -716,6 +716,10 @@ fn default_chat_tool_timeout_ms() -> u64 {
     60_000
 }
 
+fn default_sub_agent_concurrency() -> usize {
+    crate::chat::sub_agent::DEFAULT_SUB_AGENT_CONCURRENCY
+}
+
 fn default_mcp_idle_timeout_ms() -> u64 {
     600_000
 }
@@ -772,6 +776,9 @@ pub struct ChatToolsConfig {
     pub max_tool_output_chars: Option<usize>,
     #[serde(default = "default_chat_approval_policy")]
     pub approval_policy: String,
+    /// 同一时刻最多并行运行的子 agent 数。受 [`SUB_AGENT_CONCURRENCY_MIN`]..[`MAX`] 钳制。
+    #[serde(default = "default_sub_agent_concurrency")]
+    pub sub_agent_concurrency: usize,
     pub native_tools: ChatNativeToolsConfig,
 }
 
@@ -790,6 +797,7 @@ impl Default for ChatToolsConfig {
             mcp_idle_timeout_ms: default_mcp_idle_timeout_ms(),
             max_tool_output_chars: default_max_tool_output_chars(),
             approval_policy: default_chat_approval_policy(),
+            sub_agent_concurrency: default_sub_agent_concurrency(),
             native_tools: ChatNativeToolsConfig::default(),
         }
     }
@@ -1365,6 +1373,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .chat_tools
         .tool_timeout_ms
         .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS);
+    settings.chat_tools.sub_agent_concurrency = settings.chat_tools.sub_agent_concurrency.clamp(
+        crate::chat::sub_agent::SUB_AGENT_CONCURRENCY_MIN,
+        crate::chat::sub_agent::SUB_AGENT_CONCURRENCY_MAX,
+    );
     settings.chat_tools.mcp_idle_timeout_ms = settings
         .chat_tools
         .mcp_idle_timeout_ms

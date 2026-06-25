@@ -16,7 +16,9 @@
 //!   approval-free. Do not widen or narrow it here without a spec change.
 //!   memory_read is read-only and approval-free but deliberately NOT
 //!   parallel-safe. `agent` is also parallel-safe (multi-agent fan-out): each
-//!   spawn runs isolated and is Semaphore(3)-capped.
+//!   spawn runs isolated and is capped by the SubAgentManager semaphore
+//!   (default `DEFAULT_SUB_AGENT_CONCURRENCY` = 12, user-configurable). A spawn
+//!   may also be detached (`background:true`), returning a task_id immediately.
 //! - Table order is the model-facing tool list order; keep it stable.
 
 use std::future::Future;
@@ -31,11 +33,12 @@ use crate::state::AppState;
 
 use super::registry::NativeToolContext;
 use super::types::{
-    native_edit_file_tool, native_glob_files_tool, native_list_dir_tool, native_memory_modify_tool,
-    native_memory_read_tool, native_memory_search_tool, native_read_file_tool,
-    native_run_command_tool, native_run_python_tool, native_save_assistant_tool,
-    native_search_files_tool, native_web_fetch_tool, native_web_search_tool, native_write_file_tool,
-    ChatToolDefinition, McpToolCallResult,
+    native_bash_output_tool, native_edit_file_tool, native_glob_files_tool,
+    native_kill_background_tool, native_list_background_tool, native_list_dir_tool,
+    native_memory_modify_tool, native_memory_read_tool, native_memory_search_tool,
+    native_read_file_tool, native_run_command_tool, native_run_python_tool,
+    native_save_assistant_tool, native_search_files_tool, native_web_fetch_tool,
+    native_web_search_tool, native_write_file_tool, ChatToolDefinition, McpToolCallResult,
 };
 
 /// Gate signature mirrors `list_native_builtin_tool_defs(native,
@@ -200,6 +203,41 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         requires_session_consent: true,
         call: NativeToolCall::Async(call_run_command),
     },
+    // Background-command observability tools (PR2). Gated by the same
+    // `run_command` toggle + session consent as `bash` (they expose host-shell
+    // job state/control). bash_output/list_background are read-only and
+    // parallel-safe (pure registry/log reads); kill_background is a control
+    // action and is neither. None bypass approval — they ride bash's consent.
+    NativeToolEntry {
+        name: "bash_output",
+        def: native_bash_output_tool,
+        enabled: |native, _, _| native.run_command,
+        parallel_safe: true,
+        bypasses_approval: false,
+        read_only: true,
+        requires_session_consent: true,
+        call: NativeToolCall::Async(call_bash_output),
+    },
+    NativeToolEntry {
+        name: "list_background",
+        def: native_list_background_tool,
+        enabled: |native, _, _| native.run_command,
+        parallel_safe: true,
+        bypasses_approval: false,
+        read_only: true,
+        requires_session_consent: true,
+        call: NativeToolCall::Async(call_list_background),
+    },
+    NativeToolEntry {
+        name: "kill_background",
+        def: native_kill_background_tool,
+        enabled: |native, _, _| native.run_command,
+        parallel_safe: false,
+        bypasses_approval: false,
+        read_only: false,
+        requires_session_consent: true,
+        call: NativeToolCall::Async(call_kill_background),
+    },
     NativeToolEntry {
         // 仅在「对话搭建专家」会话里手动 append(见 commands.rs);全局列表永不暴露。
         // call_native_tool 按名分发、调用期不复查 enabled,故手动 append 仍可执行。
@@ -295,9 +333,10 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         enabled: |_, _, _| false,
         // parallel_safe = true: each `agent` spawn runs in isolation (its own
         // synthetic conversation/generation/message history), bypasses approval,
-        // and is capped by the SubAgentManager `Semaphore(3)`. Concurrent fan-out
-        // is the core value of multi-agent, so a single round may dispatch
-        // several spawns in parallel (scheduler caps at 4, semaphore at 3).
+        // and is capped by the SubAgentManager semaphore (default 12, user-
+        // configurable). Concurrent fan-out is the core value of multi-agent, so
+        // a single round may dispatch several spawns in parallel (scheduler caps
+        // at MAX_PARALLEL_TOOL_CALLS_PER_ROUND = 12, semaphore at the setting).
         parallel_safe: true,
         bypasses_approval: true,
         read_only: false,
@@ -435,8 +474,30 @@ fn call_run_command(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
             ctx.workspace,
             ctx.settings.chat_tools.tool_timeout_ms,
             ctx.arguments,
+            Some(ctx.state),
         )
         .await?;
+        Ok(text_tool_result(content))
+    })
+}
+
+fn call_bash_output(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let content = crate::native_tools::bash_output(ctx.state, ctx.arguments)?;
+        Ok(text_tool_result(content))
+    })
+}
+
+fn call_list_background(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let content = crate::native_tools::list_background(ctx.state, ctx.arguments)?;
+        Ok(text_tool_result(content))
+    })
+}
+
+fn call_kill_background(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let content = crate::native_tools::kill_background(ctx.state, ctx.arguments)?;
         Ok(text_tool_result(content))
     })
 }
@@ -476,6 +537,9 @@ mod tests {
         "write",
         "edit",
         "bash",
+        "bash_output",
+        "list_background",
+        "kill_background",
         "save_assistant",
         "run_python",
         "memory_read",
@@ -498,9 +562,21 @@ mod tests {
             .collect();
         assert_eq!(
             consent,
-            ["read", "ls", "grep", "find", "write", "edit", "bash"],
-            "session-consent set must be exactly Pi's 7 file/shell tools; a new \
-             file/shell tool MUST set requires_session_consent or it silently \
+            [
+                "read",
+                "ls",
+                "grep",
+                "find",
+                "write",
+                "edit",
+                "bash",
+                "bash_output",
+                "list_background",
+                "kill_background"
+            ],
+            "session-consent set must be exactly Pi's 7 file/shell tools plus the \
+             background-command observability trio (gated identically to bash); a \
+             new file/shell tool MUST set requires_session_consent or it silently \
              bypasses the consent gate"
         );
         // The predicate agrees with the flag, and non-file tools are excluded.
@@ -541,12 +617,16 @@ mod tests {
                 "ls",
                 "grep",
                 "find",
+                "bash_output",
+                "list_background",
                 "agent",
             ],
             "parallel-safe set is intentionally narrow per agent-runtime spec; \
-             `agent` joins it because each spawn runs in isolation (own \
-             conversation/generation/message history), bypasses approval, and is \
-             Semaphore(3)-capped, making concurrent fan-out the core multi-agent value"
+             bash_output/list_background join it because they are pure read-only \
+             registry/log reads; `agent` joins it because each spawn runs in \
+             isolation (own conversation/generation/message history), bypasses \
+             approval, and is capped by the SubAgentManager semaphore (default \
+             12), making concurrent fan-out the core multi-agent value"
         );
     }
 
@@ -589,6 +669,8 @@ mod tests {
                 "ls",
                 "grep",
                 "find",
+                "bash_output",
+                "list_background",
                 "memory_read",
                 "memory_search",
                 "check_agent_result",
@@ -709,6 +791,9 @@ mod tests {
                 "write",
                 "edit",
                 "bash",
+                "bash_output",
+                "list_background",
+                "kill_background",
                 "run_python",
                 "memory_read",
                 "memory_modify",

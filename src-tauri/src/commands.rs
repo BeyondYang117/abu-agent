@@ -157,6 +157,9 @@ fn apply_settings(
         let mut guard = state.settings_write();
         *guard = sanitized.clone();
     }
+    state
+        .sub_agents
+        .set_concurrency(sanitized.chat_tools.sub_agent_concurrency);
 
     if let Err(err) = register_hotkeys(app) {
         restore_runtime_settings(app, state, &previous_settings);

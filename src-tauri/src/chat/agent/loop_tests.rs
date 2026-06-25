@@ -513,6 +513,9 @@
             macos_ocr: crate::macos_ocr::MacOcrClient::disabled(),
             rapidocr: crate::rapidocr::RapidOcrClient::disabled(),
             sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
+            background_commands: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 

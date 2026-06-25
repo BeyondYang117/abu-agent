@@ -144,6 +144,12 @@ pub struct AppState {
     pub rapidocr: std::sync::Arc<RapidOcrClient>,
     /// 多 agent / 子 agent 任务表（P3）：spawn 的子 agent 状态、按名寻址、并发上限。
     pub sub_agents: crate::chat::sub_agent::SubAgentManager,
+    /// 后台 run_command 进程注册表：job_id → 跟踪中的后台命令。
+    /// 与后台 subagent 不同：这些命令**跨 turn 存活**，只由显式 `kill_background`
+    /// 或 app 退出 sweep 清理（对齐 Claude Code background bash，dev-server 友好），
+    /// 不随发起的 run 取消。仅在 insert/lookup/sweep 时短暂持锁。
+    pub background_commands:
+        Arc<Mutex<HashMap<String, crate::native_tools::BackgroundCommand>>>,
 }
 
 /// 单个 key 触发 failover 后的冷却时长。
@@ -217,9 +223,9 @@ impl AppState {
             macos_ocr: MacOcrClient::headless(),
             rapidocr: RapidOcrClient::headless(crate::api::build_http_client()),
             sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
+            background_commands: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-
     /// 安全读取设置（锁中毒时返回内部数据，不 panic）
     pub fn settings_read(&self) -> std::sync::RwLockReadGuard<'_, Settings> {
         self.settings.read().unwrap_or_else(|e| e.into_inner())
@@ -532,6 +538,73 @@ impl AppState {
             .clear();
     }
 
+    /// Shared handle to the background-command registry. Returned as a cloned
+    /// `Arc` so a detached waiter task can update job status after the spawning
+    /// stack frame is gone (background commands survive across turns).
+    pub fn background_commands_handle(
+        &self,
+    ) -> Arc<Mutex<HashMap<String, crate::native_tools::BackgroundCommand>>> {
+        Arc::clone(&self.background_commands)
+    }
+
+    /// Register a tracked background command. Reaps already-terminated entries
+    /// opportunistically so the map does not grow unbounded across a long
+    /// session, but keeps the most recent terminal jobs so `bash_output` can
+    /// still return their final output + exit code right after they finish.
+    pub fn register_background_command(
+        &self,
+        job: crate::native_tools::BackgroundCommand,
+    ) {
+        const MAX_TRACKED_BACKGROUND_COMMANDS: usize = 64;
+        let mut map = self
+            .background_commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Evict oldest terminal jobs first if we are over the cap; never evict a
+        // still-running job (it owns a live process group).
+        while map.len() >= MAX_TRACKED_BACKGROUND_COMMANDS {
+            let oldest_terminal = map
+                .values()
+                .filter(|j| !matches!(j.status, crate::native_tools::BackgroundCommandStatus::Running))
+                .min_by_key(|j| j.started_at)
+                .map(|j| j.job_id.clone());
+            match oldest_terminal {
+                Some(id) => {
+                    map.remove(&id);
+                }
+                // All remaining jobs are still running; stop evicting.
+                None => break,
+            }
+        }
+        map.insert(job.job_id.clone(), job);
+    }
+
+    /// Kill all tracked background command process groups and clear the registry
+    /// (e.g. on app shutdown). Each running job's process group is SIGKILLed /
+    /// taskkill'd; their log files are best-effort removed. Returns how many
+    /// process groups were killed.
+    pub fn kill_all_background_commands(&self) -> usize {
+        let mut map = self
+            .background_commands
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut killed = 0;
+        for job in map.values() {
+            if matches!(
+                job.status,
+                crate::native_tools::BackgroundCommandStatus::Running
+            ) {
+                if let Some(pid) = job.pid {
+                    crate::native_tools::kill_process_group(pid);
+                    killed += 1;
+                }
+            }
+            let _ = std::fs::remove_file(&job.log_path);
+        }
+        map.clear();
+        killed
+    }
+
     /// 标记某个 key 失败：进入冷却 + 不变更 active_key_idx
     pub fn mark_key_failed(&self, provider_id: &str, idx: usize) {
         let mut cooldowns = self.key_cooldowns.lock().unwrap_or_else(|e| e.into_inner());
@@ -593,6 +666,7 @@ pub(crate) fn test_app_state() -> AppState {
         macos_ocr: MacOcrClient::disabled(),
         rapidocr: RapidOcrClient::disabled(),
         sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
+        background_commands: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 

@@ -1637,6 +1637,7 @@ mod tests {
             &json!({
                 "command": "for i in $(seq 1 4000); do echo \"line $i ----------------------------------------------------------------\"; done"
             }),
+            None,
         )
         .await
         .expect("bash large output");

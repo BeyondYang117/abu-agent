@@ -214,7 +214,11 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                        let state: State<AppState> = sweeper.state();
+                        // 启动竞态加固：AppState 可能尚未 manage（极早期 tick），此时跳过本轮，
+                        // 120s 后再试，避免 state() panic。
+                        let Some(state) = sweeper.try_state::<AppState>() else {
+                            continue;
+                        };
                         state.sweep_idle_external_live_sessions(std::time::Duration::from_secs(600));
                     }
                 });
@@ -282,7 +286,16 @@ pub fn run() {
                 macos_ocr: macos_ocr::MacOcrClient::new(&app.handle()),
                 rapidocr: rapidocr::RapidOcrClient::new(&app.handle(), build_http_client()),
                 sub_agents: chat::sub_agent::SubAgentManager::default(),
+                background_commands: std::sync::Arc::new(Mutex::new(HashMap::new())),
             });
+
+            // Apply the stored sub-agent concurrency cap (default sizes the gate
+            // to DEFAULT_SUB_AGENT_CONCURRENCY; reconcile to the user's setting).
+            {
+                let state: State<AppState> = app.state();
+                let n = state.settings_read().chat_tools.sub_agent_concurrency;
+                state.sub_agents.set_concurrency(n);
+            }
 
             if let Err(err) = register_hotkeys(&app.handle()) {
                 eprintln!(
@@ -300,7 +313,10 @@ pub fn run() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                let state: State<AppState> = app_handle.state();
+                // 启动竞态加固：若 AppState 尚未 manage（异常早期），直接跳过本次更新检查。
+                let Some(state) = app_handle.try_state::<AppState>() else {
+                    return;
+                };
                 if !state.settings_read().auto_check_update {
                     return;
                 }
@@ -323,7 +339,10 @@ pub fn run() {
                     let mut ticker = tokio::time::interval(Duration::from_secs(60));
                     loop {
                         ticker.tick().await;
-                        let state: State<AppState> = app_handle.state();
+                        // 启动竞态加固：AppState 可能尚未 manage（极早期 tick），跳过本轮，60s 后再试。
+                        let Some(state) = app_handle.try_state::<AppState>() else {
+                            continue;
+                        };
                         let idle_timeout = state.mcp_idle_timeout();
                         let evicted = state.mcp_reap_idle(idle_timeout).await;
                         for (server_id, _) in evicted {
@@ -344,7 +363,10 @@ pub fn run() {
             {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    let state: State<AppState> = app_handle.state();
+                    // 启动竞态加固：若 AppState 尚未 manage，跳过预热（首次使用时会 lazy 连接）。
+                    let Some(state) = app_handle.try_state::<AppState>() else {
+                        return;
+                    };
                     let settings = state.settings_read().clone();
                     if !settings.chat_tools.enabled {
                         return;
@@ -360,7 +382,10 @@ pub fn run() {
                     for server in servers {
                         let app_handle = app_handle.clone();
                         warmups.spawn(async move {
-                            let state: State<AppState> = app_handle.state();
+                            // 启动竞态加固：若 AppState 尚未 manage，跳过该 server 预热（lazy 连接兜底）。
+                            let Some(state) = app_handle.try_state::<AppState>() else {
+                                return;
+                            };
                             let _ = state.mcp_get_or_connect(&app_handle, &server).await;
                         });
                     }
@@ -505,6 +530,12 @@ pub fn run() {
                     tauri::async_runtime::block_on(state.mcp_disconnect_all());
                     // 丢弃所有活的外部 CLI 会话；每个 actor 关闭其子进程（kill_on_drop 兜底）。
                     state.close_all_external_live_sessions();
+                    // 杀掉所有跟踪中的后台 run_command 进程组（跨 turn 存活，只在这里或
+                    // 显式 kill_background 才清理），删除其 per-job 日志，避免孤儿进程/文件。
+                    let killed = state.kill_all_background_commands();
+                    if killed > 0 {
+                        eprintln!("Killed {killed} background command process group(s) on exit.");
+                    }
                 }
             }
             #[cfg(target_os = "macos")]

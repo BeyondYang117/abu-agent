@@ -124,9 +124,22 @@ impl CliToolExecutor {
                     &self.workspace,
                     self.default_timeout_ms,
                     &arguments,
+                    Some(&self.state),
                 )
                 .await?,
             )),
+            "bash_output" => Ok(text_tool_result(crate::native_tools::bash_output(
+                &self.state,
+                &arguments,
+            )?)),
+            "list_background" => Ok(text_tool_result(crate::native_tools::list_background(
+                &self.state,
+                &arguments,
+            )?)),
+            "kill_background" => Ok(text_tool_result(crate::native_tools::kill_background(
+                &self.state,
+                &arguments,
+            )?)),
             "web_fetch" => Ok(text_tool_result(web_fetch(&self.http, &arguments).await?)),
             "web_search" => self.dispatch_web_search(&arguments).await,
             "enter_plan_mode" => {

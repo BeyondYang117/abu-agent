@@ -68,6 +68,10 @@ const CHAT_TOOL_TIMEOUT_PRESETS_MS = [30_000, 60_000, 120_000, 300_000]
 const MCP_IDLE_TIMEOUT_PRESETS_MS = [60_000, 300_000, 600_000, 1_800_000, 3_600_000]
 const MCP_IDLE_TIMEOUT_MIN_MS = 60_000
 const MCP_IDLE_TIMEOUT_MAX_MS = 24 * 60 * 60 * 1_000
+// 子 agent 并发预设。后端钳制范围 1..64，默认 12。
+const SUB_AGENT_CONCURRENCY_PRESETS = [3, 6, 12, 24, 48]
+const SUB_AGENT_CONCURRENCY_MIN = 1
+const SUB_AGENT_CONCURRENCY_MAX = 64
 const textEncoder = new TextEncoder()
 
 function utf8ByteLength(value: string): number {
@@ -90,6 +94,12 @@ function clampMcpIdleTimeoutMs(value: string | number | null | undefined): numbe
   const parsed = Number(value ?? 600_000)
   if (!Number.isFinite(parsed)) return 600_000
   return Math.min(MCP_IDLE_TIMEOUT_MAX_MS, Math.max(MCP_IDLE_TIMEOUT_MIN_MS, Math.round(parsed)))
+}
+
+function clampSubAgentConcurrency(value: string | number | null | undefined): number {
+  const parsed = Number(value ?? 12)
+  if (!Number.isFinite(parsed)) return 12
+  return Math.min(SUB_AGENT_CONCURRENCY_MAX, Math.max(SUB_AGENT_CONCURRENCY_MIN, Math.round(parsed)))
 }
 
 function formatToolRoundsLabel(rounds: number, lang: string): string {
@@ -303,6 +313,7 @@ function defaultChatTools(): ChatToolsConfig {
     mcpIdleTimeoutMs: 600_000,
     maxToolOutputChars: null,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
+    subAgentConcurrency: 12,
     nativeTools: defaultNativeTools(),
   }
 }
@@ -3337,6 +3348,36 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                               label: formatToolRoundsLabel(rounds, lang),
                             })),
                             { value: 'unlimited', label: lang === 'zh' ? '无限制' : 'Unlimited' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 子 agent 并发 */}
+                    <div className="flex h-full flex-col">
+                      <div className="mb-2">
+                        <div className="kv-row-label">{lang === 'zh' ? 'Subagent 并发' : 'Subagent concurrency'}</div>
+                        <p className="kv-row-desc">
+                          {lang === 'zh'
+                            ? '同一时刻最多并行运行的 Subagent 数。调高更快但更吃 API 配额。'
+                            : 'Max subagents running at once. Higher is faster but more API-quota intensive.'}
+                        </p>
+                      </div>
+                      <div className="mt-auto">
+                        <Select
+                          className="w-full"
+                          value={String(clampSubAgentConcurrency(chatTools.subAgentConcurrency))}
+                          onChange={(value) => updateChatTools({ subAgentConcurrency: clampSubAgentConcurrency(value) })}
+                          options={[
+                            ...(!SUB_AGENT_CONCURRENCY_PRESETS.includes(clampSubAgentConcurrency(chatTools.subAgentConcurrency))
+                              ? [{
+                                  value: String(clampSubAgentConcurrency(chatTools.subAgentConcurrency)),
+                                  label: lang === 'zh'
+                                    ? `当前 ${clampSubAgentConcurrency(chatTools.subAgentConcurrency)}`
+                                    : `Current ${clampSubAgentConcurrency(chatTools.subAgentConcurrency)}`,
+                                }]
+                              : []),
+                            ...SUB_AGENT_CONCURRENCY_PRESETS.map((n) => ({ value: String(n), label: String(n) })),
                           ]}
                         />
                       </div>

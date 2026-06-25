@@ -444,6 +444,27 @@ pub fn build_chat_system_prompt_with_segments(
                 &native_prompt,
             );
         }
+        // Background sub-agent dispatch rules — only when the `agent` spawn tool
+        // is available. Counters the SOTA failure modes (dispatch-then-poll-
+        // immediately degenerates async back to blocking; unbounded polling burns
+        // tokens; acting on stale history). Concise on purpose.
+        if available_builtin_tools
+            .iter()
+            .any(|tool| tool.as_str() == crate::chat::sub_agent::AGENT_TOOL_NAME)
+        {
+            let background_prompt = if language.starts_with("zh") {
+                "后台 agent（agent 的 background:true）：派发后立即返回 task_id 并夺回控制权——继续规划或派发别的工作，不要马上轮询。用 check_agent_result（按 task_id 或 name）查状态/取结果，轮询要克制（总计 ≤20 次）。历史里的状态可能已过时：在向用户汇报或基于子 agent 结果行动之前，必须先刷新一次状态。后台任务只在本次运行内存活——本轮结束就会被清理，结果没取到就会丢失。无需并发或本轮不会再做别的事时，用默认的同步 agent（不传 background）。"
+            } else {
+                "Background sub-agents (agent with background:true): the call returns a task_id immediately and hands control back to you — keep planning or dispatch more work; do NOT poll right away. Use check_agent_result (by task_id or name) to check status / collect results, and keep polling bounded (≤20 checks total). Status in the history may be stale: always refresh status once before reporting to the user or acting on a sub-agent's result. Background tasks live only for this run — they are cleaned up when this run ends, so an uncollected result is lost. When you don't need concurrency, use the default synchronous agent (omit background)."
+            };
+            append_context_segment(
+                &mut prompt,
+                &mut segments,
+                "native_tools",
+                "Native tools",
+                background_prompt,
+            );
+        }
     }
 
     let include_catalog = chat_tools.skill_auto_match
@@ -718,7 +739,8 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
 - Touch files only when the user explicitly asks to save/modify/delete local files or gives a target path: edit for small edits, write for new files or whole-file overwrites. If asked for a code block without saving, answer inline. After a write, state the path briefly; do not repeat the file content.\n\
 - Write/edit tools and bash may need user approval; memory_read (L2 on demand; L1 is auto-injected), memory_search (keyword search over L2; prefer it when you are unsure of the exact heading), and memory_modify do not.\n\
 - Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax (Windows: `%VAR%`, `dir`, `\\`; Unix: `$VAR`, `ls`, `/`). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
-- bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a pid immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Skill scripts go through skill_run_script; never use host pip to bypass the run_python sandbox.\n\
+- bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Skill scripts go through skill_run_script; never use host pip to bypass the run_python sandbox.\n\
+- Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list jobs with list_background, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and chat deliverable file generation; never use it to generate or print code answers — write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.md, summary.csv, data.json, page.html, report.xlsx, chart.png); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {en_live_access_hint}"
         ) + generated_file_hint + image_generation_hint
