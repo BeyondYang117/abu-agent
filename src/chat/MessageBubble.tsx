@@ -35,6 +35,7 @@ import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
+import { knowledgeSearchHits, type KbHitView } from './knowledgeBaseHits'
 import { compareTimelineSegments, groupTimelineSegments, segmentToolCallId, summarizeToolGroup, toolRecordId } from './segments'
 import type { TimelineGroupItem, ToolGroupIcon } from './segments'
 
@@ -232,9 +233,11 @@ function TimelineToolSegment({
 function TimelineTextSegment({
   segment,
   artifacts,
+  citations,
 }: {
   segment: ChatMessageSegment
   artifacts: ChatToolArtifact[]
+  citations?: Map<number, KbHitView>
 }) {
   const text = segmentText(segment).trim()
   if (!text) return null
@@ -244,6 +247,7 @@ function TimelineTextSegment({
       <ChatMarkdown
         content={text}
         artifacts={artifacts}
+        citations={citations}
         onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
       />
     </div>
@@ -256,6 +260,7 @@ function TimelineSegmentNode({
   segmentCount,
   toolCalls,
   artifacts,
+  citations,
   reasoningStreaming,
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
@@ -266,6 +271,7 @@ function TimelineSegmentNode({
   segmentCount: number
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
+  citations?: Map<number, KbHitView>
   reasoningStreaming: boolean
   reasoningDurationMs?: number | null
   reasoningDurationMsBySegmentId?: Record<string, number>
@@ -289,7 +295,7 @@ function TimelineSegmentNode({
     )
   }
   if (!segmentText(segment).trim()) return null
-  return <TimelineTextSegment segment={segment} artifacts={artifacts} />
+  return <TimelineTextSegment segment={segment} artifacts={artifacts} citations={citations} />
 }
 
 function TimelineStepsIcon({ size = 16, className }: { size?: number; className?: string }) {
@@ -384,6 +390,7 @@ function TimelineGroupBlock({
   segments,
   toolCalls,
   artifacts,
+  citations,
   isLastGroup,
   messageStreaming,
   reasoningStreaming,
@@ -394,6 +401,7 @@ function TimelineGroupBlock({
   segments: ChatMessageSegment[]
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
+  citations?: Map<number, KbHitView>
   isLastGroup: boolean
   messageStreaming: boolean
   reasoningStreaming: boolean
@@ -465,6 +473,7 @@ function TimelineGroupBlock({
                 segmentCount={segments.length}
                 toolCalls={toolCalls}
                 artifacts={artifacts}
+                citations={citations}
                 reasoningStreaming={reasoningStreaming && isLastGroup}
                 reasoningDurationMs={reasoningDurationMs}
                 reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
@@ -476,6 +485,18 @@ function TimelineGroupBlock({
       </div>
     </section>
   )
+}
+
+/** 汇总本条消息所有 knowledge_search 命中，按 n 建索引，供答案里的 `[n]` 角标查源。
+ *  多次检索 n 会重叠 —— 后写覆盖（罕见，且只影响弹窗预览内容）。 */
+function buildCitationMap(toolCalls: ToolCallRecord[]): Map<number, KbHitView> {
+  const map = new Map<number, KbHitView>()
+  for (const toolCall of toolCalls) {
+    for (const hit of knowledgeSearchHits(toolCall) ?? []) {
+      map.set(hit.n, hit)
+    }
+  }
+  return map
 }
 
 function TimelineSegments({
@@ -496,6 +517,7 @@ function TimelineSegments({
   reasoningDurationMsBySegmentId?: Record<string, number>
 }) {
   const ordered = orderedSegments(segments)
+  const citations = buildCitationMap(toolCalls)
   const reasoningSegmentCount = ordered.filter((segment) => segment.kind === 'reasoning').length
   const referencedToolIds = new Set(
     ordered
@@ -528,7 +550,7 @@ function TimelineSegments({
           // 每个时间线分段单独淡入：流式中新分段顺次出现而非"啪"地弹出。
           return (
             <div key={item.segment.id} className="chat-motion-fade">
-              <TimelineTextSegment segment={item.segment} artifacts={artifacts} />
+              <TimelineTextSegment segment={item.segment} artifacts={artifacts} citations={citations} />
             </div>
           )
         }
@@ -539,6 +561,7 @@ function TimelineSegments({
               segments={item.segments}
               toolCalls={toolCalls}
               artifacts={artifacts}
+              citations={citations}
               isLastGroup={index === lastGroupIndex}
               messageStreaming={messageStreaming}
               reasoningStreaming={reasoningStreaming}

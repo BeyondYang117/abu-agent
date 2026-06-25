@@ -1,7 +1,8 @@
-import { isValidElement, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Check, Code2, Copy, ExternalLink, Eye, Loader2 } from 'lucide-react'
 import type { Components, UrlTransform } from 'react-markdown'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
+import type { PluggableList } from 'unified'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -9,6 +10,8 @@ import 'katex/dist/katex.min.css'
 import { normalizeMarkdownForRender } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
 import type { ChatToolArtifact } from './types'
+import type { KbHitView } from './knowledgeBaseHits'
+import { remarkCitations } from './citations'
 import { api } from '../api/tauri'
 import { copyToClipboard } from '../utils/clipboard'
 
@@ -17,6 +20,8 @@ interface ChatMarkdownProps {
   artifacts?: ChatToolArtifact[]
   onImageClick?: (src: string, alt: string, name?: string) => void
   variant?: 'default' | 'reasoning'
+  /** 知识库引用：把答案里的 `[n]` 渲染成可点来源片段（n → 命中片段）。 */
+  citations?: Map<number, KbHitView>
 }
 
 const proseClass =
@@ -489,26 +494,73 @@ const markdownComponents: Components = {
       {children}
     </td>
   ),
-  a: ({ href, children }) => {
-    const url = typeof href === 'string' ? href : ''
-    const isWeb = /^https?:\/\//i.test(url)
-    return (
-      <a
-        href={url || undefined}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(event) => {
-          // A plain <a> click would navigate the Tauri webview itself and
-          // blow away the chat UI. Open web links in the system browser.
-          if (!isWeb) return
-          event.preventDefault()
-          void api.openExternal(url).catch((err) => console.error('openExternal failed', err))
-        }}
+  a: ({ href, children }) => <LinkAnchor href={typeof href === 'string' ? href : ''}>{children}</LinkAnchor>,
+}
+
+function LinkAnchor({ href, children }: { href: string; children?: ReactNode }) {
+  const isWeb = /^https?:\/\//i.test(href)
+  return (
+    <a
+      href={href || undefined}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => {
+        // A plain <a> click would navigate the Tauri webview itself and
+        // blow away the chat UI. Open web links in the system browser.
+        if (!isWeb) return
+        event.preventDefault()
+        void api.openExternal(href).catch((err) => console.error('openExternal failed', err))
+      }}
+    >
+      {children}
+    </a>
+  )
+}
+
+/** 知识库引用角标 `[n]`：点击弹出对应来源片段（文档名 · 标题 · 正文）。 */
+function CitationChip({ n, hit }: { n: number; hit?: KbHitView }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+  return (
+    <span ref={ref} className="relative inline-block align-baseline">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="mx-0.5 rounded bg-indigo-500/15 px-1 align-baseline text-[0.82em] font-medium text-indigo-500 transition hover:bg-indigo-500/25"
+        aria-label={`来源 ${n}`}
       >
-        {children}
-      </a>
-    )
-  },
+        [{n}]
+      </button>
+      {open && (
+        <span className="absolute left-0 top-full z-30 mt-1 block w-80 max-w-[80vw] rounded-lg border border-black/[0.08] bg-white p-2.5 text-left text-xs shadow-lg dark:border-white/[0.12] dark:bg-neutral-900">
+          {hit ? (
+            <>
+              <span className="mb-1 flex items-center gap-1 font-medium text-neutral-700 dark:text-neutral-200">
+                <span className="shrink-0 rounded bg-indigo-500/15 px-1 text-indigo-500">[{n}]</span>
+                <span className="truncate">
+                  {hit.docName}
+                  {hit.headingPath ? ` · ${hit.headingPath}` : ''}
+                </span>
+              </span>
+              <span className="block max-h-48 overflow-auto whitespace-pre-wrap break-words leading-relaxed text-neutral-600 dark:text-neutral-300">
+                {hit.text}
+              </span>
+            </>
+          ) : (
+            <span className="text-neutral-400">未找到对应来源片段</span>
+          )}
+        </span>
+      )}
+    </span>
+  )
 }
 
 function artifactDataUrl(artifact: ChatToolArtifact): string {
@@ -566,12 +618,29 @@ function ChatMarkdownComponent({
   artifacts = [],
   onImageClick,
   variant = 'default',
+  citations,
 }: ChatMarkdownProps) {
   const normalized = useMemo(() => normalizeMarkdownForRender(content), [content])
+  const remarkPlugins = useMemo<PluggableList>(() => {
+    const plugins: PluggableList = [remarkGfm, remarkMath]
+    if (citations && citations.size > 0) {
+      plugins.push(remarkCitations(new Set(citations.keys())))
+    }
+    return plugins
+  }, [citations])
   const components = useMemo<Components>(() => {
     const artifactLookup = buildArtifactLookup(artifacts)
     return {
       ...markdownComponents,
+      a: ({ href, children }) => {
+        const url = typeof href === 'string' ? href : ''
+        const cite = /^#kb-cite-(\d{1,3})$/.exec(url)
+        if (cite) {
+          const n = Number(cite[1])
+          return <CitationChip n={n} hit={citations?.get(n)} />
+        }
+        return <LinkAnchor href={url}>{children}</LinkAnchor>
+      },
       img: ({ src, alt }) => {
         const rawSrc = typeof src === 'string' ? src : ''
         const resolvedSrc = rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)
@@ -597,13 +666,13 @@ function ChatMarkdownComponent({
         )
       },
     }
-  }, [artifacts, onImageClick])
+  }, [artifacts, onImageClick, citations])
 
   return (
     <div className={variant === 'reasoning' ? reasoningProseClass : proseClass}>
       <MarkdownErrorBoundary fallbackText={content}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
+          remarkPlugins={remarkPlugins}
           rehypePlugins={[rehypeKatex]}
           components={components}
           urlTransform={chatMarkdownUrlTransform}
