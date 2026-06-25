@@ -1751,9 +1751,9 @@ export function InputBar({
             </div>
           </div>
         </div>
-        {(projectEntryEnabled || showAssistantEntry || Boolean(onChangeKnowledgeBaseIds)) && (
+        {(projectEntryEnabled || showAssistantEntry || (layout === 'inline' && Boolean(onChangeKnowledgeBaseIds))) && (
           <div className="relative z-10 mt-2 flex items-center justify-start gap-1.5 px-3">
-            {onChangeKnowledgeBaseIds && (
+            {layout === 'inline' && onChangeKnowledgeBaseIds && (
               <KnowledgeBaseChip
                 value={knowledgeBaseIds}
                 onChange={(ids) => void onChangeKnowledgeBaseIds(ids)}
