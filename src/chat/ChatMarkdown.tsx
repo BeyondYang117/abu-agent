@@ -5,7 +5,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import type { PluggableList } from 'unified'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
-import rehypeKatex from 'rehype-katex'
+import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { normalizeMarkdownForRender } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
@@ -613,6 +613,69 @@ function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, string>
   return lookup
 }
 
+// 视口懒渲染数学公式：KaTeX 公式 DOM(几十~上百 span)的 paint 是滚动卡顿主因。
+// 不再用 rehype-katex 在解析期一次性渲染全部公式，改为每个公式进视口前只显示原始 LaTeX 文本
+// (近零 DOM)，进视口(提前 800px)才 katex.renderToString。离屏公式几乎不参与 layout/paint。
+function renderTex(tex: string, display: boolean): string {
+  try {
+    return katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' })
+  } catch {
+    return ''
+  }
+}
+
+function LazyMath({ tex, display }: { tex: string; display: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [html, setHtml] = useState<string | null>(null)
+  // tex 变化(如流式)时丢弃旧渲染，重新走懒渲染
+  useEffect(() => setHtml(null), [tex, display])
+  useEffect(() => {
+    if (html != null) return
+    const el = ref.current
+    if (!el) return
+    if (typeof IntersectionObserver === 'undefined') {
+      setHtml(renderTex(tex, display) || tex)
+      return
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          io.disconnect()
+          setHtml(renderTex(tex, display) || tex)
+        }
+      },
+      { rootMargin: '800px 0px' },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [tex, display, html])
+
+  const cls = display ? 'katex-lazy katex-lazy--display' : 'katex-lazy'
+  if (html != null) {
+    return <span ref={ref} className={cls} dangerouslySetInnerHTML={{ __html: html }} />
+  }
+  return <span ref={ref} className={`${cls} katex-lazy--pending`}>{tex}</span>
+}
+
+// remark-math 产出的 math/inlineMath 节点 → 自定义 <kvmath> 元素(携带 tex + display)，
+// 由下方 components 的 kvmath 映射到 <LazyMath>。替代 rehype-katex 的即时渲染。
+const remarkRehypeOptions = {
+  handlers: {
+    math: (_state: unknown, node: { value?: string }) => ({
+      type: 'element',
+      tagName: 'kvmath',
+      properties: { display: 'true', tex: node.value ?? '' },
+      children: [],
+    }),
+    inlineMath: (_state: unknown, node: { value?: string }) => ({
+      type: 'element',
+      tagName: 'kvmath',
+      properties: { display: 'false', tex: node.value ?? '' },
+      children: [],
+    }),
+  },
+}
+
 function ChatMarkdownComponent({
   content,
   artifacts = [],
@@ -632,6 +695,10 @@ function ChatMarkdownComponent({
     const artifactLookup = buildArtifactLookup(artifacts)
     return {
       ...markdownComponents,
+      kvmath: ({ node }: { node?: { properties?: { tex?: string; display?: string } } }) => {
+        const props = node?.properties ?? {}
+        return <LazyMath tex={String(props.tex ?? '')} display={props.display === 'true'} />
+      },
       a: ({ href, children }) => {
         const url = typeof href === 'string' ? href : ''
         const cite = /^#kb-cite-(\d{1,3})$/.exec(url)
@@ -673,7 +740,7 @@ function ChatMarkdownComponent({
       <MarkdownErrorBoundary fallbackText={content}>
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
-          rehypePlugins={[rehypeKatex]}
+          remarkRehypeOptions={remarkRehypeOptions as never}
           components={components}
           urlTransform={chatMarkdownUrlTransform}
         >

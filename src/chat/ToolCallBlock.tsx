@@ -1,4 +1,4 @@
-import { type ComponentType, useEffect, useMemo, useRef, useState } from 'react'
+import { type ComponentType, memo, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   Bot,
@@ -1177,7 +1177,7 @@ function DefaultToolCallBlock({
                 </div>
               </div>
             )}
-            {resultPreview && !knowledgeHits && (
+            {open && resultPreview && !knowledgeHits && (
               <div>
                 <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
                   {mergedLabels.result}
@@ -1187,7 +1187,7 @@ function DefaultToolCallBlock({
                 </div>
               </div>
             )}
-            {knowledgeHits && <KnowledgeHits hits={knowledgeHits} />}
+            {open && knowledgeHits && <KnowledgeHits hits={knowledgeHits} />}
             {fileMutation && hasFileMutationDetails && (
               <FileMutationDetails mutation={fileMutation} />
             )}
@@ -1203,7 +1203,7 @@ function DefaultToolCallBlock({
   )
 }
 
-export function ToolCallBlock(props: ToolCallBlockProps) {
+function ToolCallBlockComponent(props: ToolCallBlockProps) {
   if (isAskUserTool(props.toolCall)) {
     return <AskUserBlock toolCall={props.toolCall} />
   }
@@ -1212,3 +1212,6 @@ export function ToolCallBlock(props: ToolCallBlockProps) {
   }
   return <DefaultToolCallBlock {...props} />
 }
+
+// memo：折叠某块 / 流式更新时，props 不变的工具块跳过重渲染（尤其 knowledge_search 的大段源卡片）
+export const ToolCallBlock = memo(ToolCallBlockComponent)

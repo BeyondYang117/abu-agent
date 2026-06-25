@@ -346,6 +346,34 @@ body {
   background-color: rgba(255, 255, 255, 0.32);
 }
 
+/* 关键性能：KaTeX 公式 DOM 的绘制(Paint/GPU 合成)是滚动卡顿主因(实测 JS 渲染仅 ~47ms，
+   真实 Chrome trace 显示成本压倒性在 Painting)。组合三招：
+   1) 每条消息提升为独立合成层 → 滚动靠 GPU 移动图层而非主线程重绘整片公式；
+   2) 每个公式 contain → 隔离 layout/style，公式 mount/卸载不牵动整条消息重排；
+   3) 视口懒渲染(见 ChatMarkdown LazyMath)→ 离屏公式只是纯文本占位，几乎不参与 layout/paint。
+   ponytail: contain 暂不加 paint(会裁剪溢出，恐切到大公式上沿)；验证无裁剪后再视情况加。 */
+.chat-message-list-inner > * {
+  transform: translateZ(0);
+}
+
+.chat-markdown .katex {
+  contain: layout style;
+}
+
+/* 懒渲染占位：未进视口的公式只渲染原始 LaTeX 文本，极轻。display 预留行高减少进视口时跳动。 */
+.katex-lazy--pending {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.katex-lazy--display {
+  display: block;
+}
+.katex-lazy--pending.katex-lazy--display {
+  min-height: 1.7em;
+}
+
 /* ===== Settings 卡片 / 控件统一令牌 =====
    单点定义阴影/边框/底色，避免内联 box-shadow 在每个 section 重复，
    也让 light/dark 切换的视觉层级一致。 */
