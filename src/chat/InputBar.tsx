@@ -159,10 +159,10 @@ const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
     id: 'orchestrate',
     slash: '/orchestrate',
     title: '/orchestrate',
-    description: 'Enter orchestrate mode (proactive sub-agents)',
+    description: 'Enter orchestrate mode (proactive subagents)',
     category: 'Local',
     kind: 'action',
-    keywords: ['orchestrate', 'agent', 'subagent', 'fanout', 'mode', '编排', '子代理', '模式', '切换'],
+    keywords: ['orchestrate', 'agent', 'subagent', 'fanout', 'mode', '编排', 'subagents', '子代理', '模式', '切换'],
   },
   {
     id: 'new',
@@ -272,7 +272,7 @@ const AGENT_MODE_OPTIONS: {
   {
     mode: 'orchestrate',
     label: 'Orchestrate',
-    description: '主动派子 agent · Proactive sub-agents',
+    description: '主动派 Subagent · Proactive subagents',
     icon: Network,
   },
 ]

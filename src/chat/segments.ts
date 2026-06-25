@@ -217,7 +217,7 @@ function categoryFragment(category: ToolGroupCategory, count: number): string {
     case 'memory':
       return '检索记忆'
     case 'subAgent':
-      return '调度子 Agent'
+      return '调度 Subagent'
     case 'skill':
       return '运行技能'
     case 'image':

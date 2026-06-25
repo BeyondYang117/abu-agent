@@ -354,7 +354,7 @@ function structuredSubagent(toolCall: ToolCallRecord): SubagentView | null {
   const progress = objectValue(structured.subagentProgress)
   if (!isFinal && !progress) return null
   return {
-    name: stringValue(progress?.name) || stringValue(structured.name) || 'sub-agent',
+    name: stringValue(progress?.name) || stringValue(structured.name) || 'subagent',
     agentType: stringValue(structured.agentType) || undefined,
     depth: numberValue(progress?.depth ?? structured.depth),
     status: stringValue(progress?.status) || stringValue(structured.status) || 'running',
@@ -382,7 +382,7 @@ function subagentName(view: SubagentView | null, args: Record<string, unknown> |
     view?.name ||
     stringValue(args?.name) ||
     stringValue(args?.subagent_type) ||
-    'sub-agent'
+    'subagent'
   )
 }
 
@@ -391,7 +391,7 @@ function subagentPrompt(args: Record<string, unknown> | null): string {
 }
 
 function subagentTitle(agentType: string, name: string): string {
-  const parts = ['子 Agent']
+  const parts = ['Subagent']
   if (agentType) parts.push(agentType)
   if (name && name !== agentType) parts.push(name)
   return parts.join(' · ')
