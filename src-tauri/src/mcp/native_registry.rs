@@ -363,6 +363,19 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         requires_session_consent: false,
         call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_list_agent_tasks),
     },
+    NativeToolEntry {
+        name: crate::chat::sub_agent::AWAIT_AGENTS_TOOL_NAME,
+        def: crate::chat::sub_agent::await_agents_tool,
+        enabled: |_, _, _| false,
+        // NOT parallel_safe: it blocks the runtime joining other sub-agents and
+        // must run on its own (a single await call collects everything). NOT
+        // read_only: it is a control/synchronization tool, not a registry peek.
+        parallel_safe: false,
+        bypasses_approval: true,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_await_agents),
+    },
 ];
 
 pub fn find_entry(name: &str) -> Option<&'static NativeToolEntry> {
@@ -551,6 +564,7 @@ mod tests {
         "agent",
         "check_agent_result",
         "list_agent_tasks",
+        "await_agents",
     ];
 
     #[test]
@@ -649,6 +663,7 @@ mod tests {
                 "agent",
                 "check_agent_result",
                 "list_agent_tasks",
+                "await_agents",
             ]
         );
     }

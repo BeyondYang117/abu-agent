@@ -453,9 +453,9 @@ pub fn build_chat_system_prompt_with_segments(
             .any(|tool| tool.as_str() == crate::chat::sub_agent::AGENT_TOOL_NAME)
         {
             let background_prompt = if language.starts_with("zh") {
-                "后台 agent（agent 的 background:true）：派发后立即返回 task_id 并夺回控制权——继续规划或派发别的工作，不要马上轮询。用 check_agent_result（按 task_id 或 name）查状态/取结果，轮询要克制（总计 ≤20 次）。历史里的状态可能已过时：在向用户汇报或基于子 agent 结果行动之前，必须先刷新一次状态。后台任务只在本次运行内存活——本轮结束就会被清理，结果没取到就会丢失。无需并发或本轮不会再做别的事时，用默认的同步 agent（不传 background）。"
+                "委派子 agent：单个委派用默认（同步）agent——会等子 agent 跑完并直接返回结果。需要并行处理多个互相独立的子任务时，用 agent 的 background:true 逐个派发（它们并行运行），然后调用一次 await_agents 一次性收齐全部结果；不要循环轮询 check_agent_result。后台任务只在本次运行内存活——本轮结束就会被清理。check_agent_result / list_agent_tasks 仅用于手动/临时查看状态，不是收结果的途径。"
             } else {
-                "Background sub-agents (agent with background:true): the call returns a task_id immediately and hands control back to you — keep planning or dispatch more work; do NOT poll right away. Use check_agent_result (by task_id or name) to check status / collect results, and keep polling bounded (≤20 checks total). Status in the history may be stale: always refresh status once before reporting to the user or acting on a sub-agent's result. Background tasks live only for this run — they are cleaned up when this run ends, so an uncollected result is lost. When you don't need concurrency, use the default synchronous agent (omit background)."
+                "Delegating to sub-agents: for a SINGLE delegation use a normal (synchronous) agent call — it waits for the sub-agent and returns the result directly. For MULTIPLE independent subtasks, dispatch each with agent background:true (they run in parallel), then call await_agents ONCE to collect ALL results — do NOT poll check_agent_result in a loop. Background tasks live only for this run and are cleaned up when it ends. check_agent_result / list_agent_tasks are for manual/ad-hoc status peeks only, not the way to collect results."
             };
             append_context_segment(
                 &mut prompt,

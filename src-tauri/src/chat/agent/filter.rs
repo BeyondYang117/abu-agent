@@ -20,8 +20,11 @@ pub fn filter_tools_for_agent(
     let mut removed = Vec::new();
     let allow = &def.tools;
     tools.retain(|tool| {
-        // The `agent` spawn tool is never available inside a sub-agent.
-        if is_agent_spawn_tool(tool) {
+        // Sub-agent control tools (agent / check_agent_result / list_agent_tasks
+        // / await_agents) are never available inside a sub-agent: a worker must
+        // not spawn, inspect, or join sibling agents (recursion + orchestration
+        // are top-down only).
+        if is_sub_agent_control_tool(tool) {
             removed.push(tool.clone());
             return false;
         }
@@ -49,8 +52,11 @@ pub fn filter_tools_for_agent(
     removed
 }
 
-fn is_agent_spawn_tool(tool: &ChatToolDefinition) -> bool {
-    tool.source == "native" && tool.name == crate::chat::sub_agent::AGENT_TOOL_NAME
+/// Whether `tool` is a sub-agent control tool (spawn / inspect / list / await).
+/// All are stripped from a sub-agent's table: a worker cannot spawn siblings,
+/// nor inspect/join the orchestrator's other agents.
+fn is_sub_agent_control_tool(tool: &ChatToolDefinition) -> bool {
+    tool.source == "native" && crate::chat::sub_agent::is_sub_agent_tool_name(&tool.name)
 }
 
 /// Keep the public surface honest: `is_kivio_builtin_tool` is intentionally not

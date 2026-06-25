@@ -10,9 +10,14 @@
 //! live nested progress onto the parent tool card. By default the spawn is
 //! synchronous (awaited inline); with `background:true` the run is detached into
 //! a `tauri::async_runtime::spawn` and the tool returns a task_id immediately,
-//! so the parent loop is not blocked — the model polls `check_agent_result` for
-//! the outcome. Background tasks live only for the parent run: they are aborted
-//! and marked `Cancelled` when that run ends or the user stops it
+//! so the parent loop is not blocked. The orchestrator collects background
+//! results by calling `await_agents` ONCE (a runtime-blocking join that returns
+//! every in-flight background sub-agent's result in a single tool result) — it
+//! does NOT poll `check_agent_result` in a loop (polling burns tokens / bloats
+//! context; the wait belongs in the runtime, not the model token loop).
+//! `check_agent_result` / `list_agent_tasks` remain as manual status peeks.
+//! Background tasks live only for the parent run: they are aborted and marked
+//! `Cancelled` when that run ends or the user stops it
 //! (`SubAgentManager::cancel_run`), so no detached run outlives its parent.
 //!
 //! Orchestrator-worker model: a sub-agent is a PURE WORKER. It receives one
@@ -39,7 +44,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::chat::agent::prepare::{available_builtin_tool_names, build_chat_system_prompt};
 use crate::chat::agent::types::AgentRunResult;
@@ -90,12 +95,15 @@ const RESULT_PREVIEW_MAX: usize = 4000;
 pub const AGENT_TOOL_NAME: &str = "agent";
 pub const CHECK_AGENT_RESULT_TOOL_NAME: &str = "check_agent_result";
 pub const LIST_AGENT_TASKS_TOOL_NAME: &str = "list_agent_tasks";
+pub const AWAIT_AGENTS_TOOL_NAME: &str = "await_agents";
 
-#[allow(dead_code)]
 pub fn is_sub_agent_tool_name(name: &str) -> bool {
     matches!(
         name,
-        AGENT_TOOL_NAME | CHECK_AGENT_RESULT_TOOL_NAME | LIST_AGENT_TASKS_TOOL_NAME
+        AGENT_TOOL_NAME
+            | CHECK_AGENT_RESULT_TOOL_NAME
+            | LIST_AGENT_TASKS_TOOL_NAME
+            | AWAIT_AGENTS_TOOL_NAME
     )
 }
 
@@ -132,6 +140,17 @@ pub enum SubAgentStatus {
     Completed,
     Failed,
     Cancelled,
+}
+
+impl SubAgentStatus {
+    /// Whether this is a terminal state (the run is over). `await_agents` waits
+    /// until every target record is terminal.
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            SubAgentStatus::Completed | SubAgentStatus::Failed | SubAgentStatus::Cancelled
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,6 +214,13 @@ pub struct SubAgentManager {
     /// Current configured permit count; lets `set_concurrency` compute the delta
     /// to add/remove (tokio Semaphore exposes no total capacity).
     configured: AtomicUsize,
+    /// Signaled whenever any task record reaches a terminal state (`finish` /
+    /// `cancel_run`). `await_agents` waits on this instead of busy-polling the
+    /// registry: it re-checks the target records' status on each notification and
+    /// returns once all are terminal. A single shared `Notify` (not per-task) is
+    /// enough — a waiter re-scans all its targets on every wake, so a stray wake
+    /// for an unrelated task is just a cheap re-scan, never a missed completion.
+    terminal_notify: Arc<Notify>,
 }
 
 /// One detached background sub-agent: its task id (to mark the record Cancelled
@@ -212,6 +238,7 @@ impl Default for SubAgentManager {
             background_runs: Mutex::new(HashMap::new()),
             semaphore: Arc::new(Semaphore::new(DEFAULT_SUB_AGENT_CONCURRENCY)),
             configured: AtomicUsize::new(DEFAULT_SUB_AGENT_CONCURRENCY),
+            terminal_notify: Arc::new(Notify::new()),
         }
     }
 }
@@ -283,6 +310,8 @@ impl SubAgentManager {
             record.usage = usage;
             record.completed_at = Some(chrono::Local::now().timestamp());
         }
+        // Wake any `await_agents` waiter so it can re-scan and collect this result.
+        self.terminal_notify.notify_waiters();
     }
 
     pub fn get(&self, id_or_name: &str) -> Option<SubAgentTaskRecord> {
@@ -379,6 +408,27 @@ impl SubAgentManager {
                 }
             }
         }
+        // Wake any `await_agents` waiter: a run-end cancel may have flipped its
+        // targets to Cancelled, which is terminal, so it should stop waiting.
+        self.terminal_notify.notify_waiters();
+    }
+
+    /// Task ids of background sub-agents spawned by the given parent run that are
+    /// still tracked in `background_runs` (i.e. dispatched in this run). Used by
+    /// `await_agents` to default to "all in-flight background subagents from this
+    /// run" when no explicit ids/names are given. Order is dispatch order.
+    fn background_task_ids_for_run(&self, conversation_id: &str, run_id: &str) -> Vec<String> {
+        let key = (conversation_id.to_string(), run_id.to_string());
+        self.background_runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .map(|handles| handles.iter().map(|h| h.task_id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    fn terminal_notify(&self) -> Arc<Notify> {
+        self.terminal_notify.clone()
     }
 }
 
@@ -851,7 +901,7 @@ pub fn agent_tool() -> ChatToolDefinition {
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Run detached: return a task_id immediately instead of waiting for the sub-agent to finish, so you can keep working / dispatch more agents in the same turn. Poll with check_agent_result (by task_id or name) to collect the result. Defaults to false (synchronous; the result is returned inline). A background result is lost if this run ends before you collect it."
+                    "description": "Run detached: return a task_id immediately instead of waiting, so you can dispatch several agents in parallel in the same turn. After dispatching all of them, call await_agents ONCE to collect every result — do NOT poll check_agent_result in a loop. Defaults to false (synchronous; the result is returned inline). A background result is lost if this run ends before you collect it."
                 }
             },
             "required": ["prompt"],
@@ -871,7 +921,7 @@ pub fn check_agent_result_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__check_agent_result".to_string(),
         name: CHECK_AGENT_RESULT_TOOL_NAME.to_string(),
-        description: "Look up the status and result of a previously spawned sub-agent by its task id or name.".to_string(),
+        description: "Manually look up the current status (and any final result) of a sub-agent by its task id or name. This is a quick status peek only — to collect results from background sub-agents, call await_agents instead of polling this in a loop.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -893,7 +943,7 @@ pub fn list_agent_tasks_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__list_agent_tasks".to_string(),
         name: LIST_AGENT_TASKS_TOOL_NAME.to_string(),
-        description: "List all sub-agent tasks spawned in this session with their status.".to_string(),
+        description: "List all sub-agent tasks spawned in this session with their status. Manual/ad-hoc status peek only — use await_agents to collect background results.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -908,8 +958,38 @@ pub fn list_agent_tasks_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn await_agents_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__await_agents".to_string(),
+        name: AWAIT_AGENTS_TOOL_NAME.to_string(),
+        description: "Block until background sub-agents finish, then return ALL of their results in a single response. Call this ONCE after dispatching multiple agent(background:true) tasks — do NOT poll check_agent_result in a loop. With no arguments it waits for every still-running background sub-agent dispatched in this turn. Optionally pass `task_ids` and/or `names` to wait for a specific subset. Already-finished tasks return immediately.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task_ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional: specific sub-agent task ids to wait for. Default = all background sub-agents dispatched in this turn."
+                },
+                "names": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional: sub-agent names to wait for (resolved to task ids)."
+                }
+            },
+            "additionalProperties": false
+        }),
+        sensitive: false,
+        annotations: Some(serde_json::json!({ "readOnlyHint": false })),
+        output_schema: None,
+    }
+}
+
 pub fn tool_definitions() -> Vec<ChatToolDefinition> {
-    vec![agent_tool(), check_agent_result_tool(), list_agent_tasks_tool()]
+    vec![agent_tool(), check_agent_result_tool(), list_agent_tasks_tool(), await_agents_tool()]
 }
 
 /// Append sub-agent management tools (model-facing), skipping the `agent`
@@ -998,6 +1078,172 @@ pub fn handle_list_agent_tasks(ctx: SubAgentCallCtx<'_>) -> Result<McpToolCallRe
         artifacts: Vec::new(),
         structured_content: Some(structured),
     })
+}
+
+/// Resolve the set of target task ids for an `await_agents` call. With no
+/// explicit `task_ids`/`names`, defaults to every background sub-agent dispatched
+/// in the current parent run. Names are resolved to ids via the manager's
+/// reverse lookup; unknown names are reported.
+fn resolve_await_targets(
+    manager: &SubAgentManager,
+    arguments: &Value,
+    parent_conversation_id: &str,
+    parent_run_id: &str,
+) -> Result<Vec<String>, String> {
+    let task_ids: Vec<String> = arguments
+        .get("task_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let names: Vec<String> = arguments
+        .get("names")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Default: all background sub-agents dispatched in this run.
+    if task_ids.is_empty() && names.is_empty() {
+        return Ok(manager.background_task_ids_for_run(parent_conversation_id, parent_run_id));
+    }
+
+    let mut resolved: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for id in task_ids {
+        match manager.get(&id) {
+            Some(record) => {
+                if !resolved.contains(&record.id) {
+                    resolved.push(record.id);
+                }
+            }
+            None => unknown.push(id),
+        }
+    }
+    for name in names {
+        match manager.get(&name) {
+            Some(record) => {
+                if !resolved.contains(&record.id) {
+                    resolved.push(record.id);
+                }
+            }
+            None => unknown.push(name),
+        }
+    }
+    if !unknown.is_empty() {
+        return Err(format!(
+            "Unknown sub-agent task id(s)/name(s): {}",
+            unknown.join(", ")
+        ));
+    }
+    Ok(resolved)
+}
+
+/// Build the aggregated `await_agents` tool result from the (now terminal) target
+/// records, one labeled block per agent in `targets` order.
+fn build_await_result(manager: &SubAgentManager, targets: &[String]) -> McpToolCallResult {
+    let mut blocks: Vec<String> = Vec::new();
+    let mut structured_tasks: Vec<Value> = Vec::new();
+    for id in targets {
+        let Some(record) = manager.get(id) else {
+            blocks.push(format!("[{id}] (record evicted — result unavailable)"));
+            continue;
+        };
+        let body = record
+            .result
+            .clone()
+            .or_else(|| record.error.clone())
+            .unwrap_or_else(|| "(no output)".to_string());
+        blocks.push(format!(
+            "[Sub-agent: {} ({})] {:?}\n\n{}",
+            record.name, record.id, record.status, body
+        ));
+        structured_tasks.push(serde_json::to_value(&record).unwrap_or(Value::Null));
+    }
+    let content = if blocks.is_empty() {
+        "No background sub-agents to await.".to_string()
+    } else {
+        blocks.join("\n\n---\n\n")
+    };
+    let structured = serde_json::json!({ "tasks": structured_tasks });
+    McpToolCallResult {
+        content,
+        is_error: false,
+        raw: structured.clone(),
+        artifacts: Vec::new(),
+        structured_content: Some(structured),
+    }
+}
+
+/// `await_agents` handler. Blocks IN THE RUNTIME (not the model token loop)
+/// until every target background sub-agent reaches a terminal state, then returns
+/// ALL of their results in one tool result. Waits on the manager's
+/// `terminal_notify` (no busy-polling) and re-scans target status on each wake.
+/// Cooperatively cancellable: a parent-generation bump (user stop / run end)
+/// short-circuits the await via the same generation check the sub-agent host
+/// uses, so it never hangs.
+pub async fn handle_await_agents(
+    state: &AppState,
+    native_ctx: &crate::mcp::registry::NativeToolContext,
+    arguments: &Value,
+) -> Result<McpToolCallResult, String> {
+    let manager = &state.sub_agents;
+    let parent_conversation_id = native_ctx.conversation_id.clone();
+    let parent_run_id = native_ctx.run_id.clone();
+    let parent_generation = native_ctx.generation;
+
+    let targets = resolve_await_targets(manager, arguments, &parent_conversation_id, &parent_run_id)?;
+    if targets.is_empty() {
+        return Ok(McpToolCallResult {
+            content: "No in-flight background sub-agents to await.".to_string(),
+            is_error: false,
+            raw: Value::Null,
+            artifacts: Vec::new(),
+            structured_content: None,
+        });
+    }
+
+    let all_terminal = |mgr: &SubAgentManager| -> bool {
+        targets.iter().all(|id| {
+            mgr.get(id)
+                // An evicted record can no longer be waited on — treat as done.
+                .map_or(true, |r| r.status.is_terminal())
+        })
+    };
+
+    let notify = manager.terminal_notify();
+    loop {
+        if all_terminal(manager) {
+            return Ok(build_await_result(manager, &targets));
+        }
+        if !state.is_chat_generation_active(&parent_conversation_id, parent_generation) {
+            // Parent run cancelled/ended: stop waiting promptly. cancel_run will
+            // have (or will shortly) flipped the records to Cancelled; return
+            // whatever terminal/partial state exists rather than hanging.
+            return Ok(build_await_result(manager, &targets));
+        }
+        // Register interest BEFORE re-checking would race a notify; tokio's
+        // Notify::notified() future captures the permit on poll. Bound the wait
+        // so a missed wake (or a generation cancel with no terminal flip) is
+        // re-checked at most ~100ms later — matching the host's cancel latency.
+        let notified = notify.notified();
+        tokio::select! {
+            _ = notified => {}
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+    }
 }
 
 /// Spawn handler (the `agent` tool). Async (Box::pin). By default (`background`
@@ -1228,8 +1474,8 @@ pub fn handle_agent_spawn<'a>(
             });
             Ok(McpToolCallResult {
                 content: format!(
-                    "[Sub-agent: {} ({})] dispatched in background (task_id={}). Keep working; do NOT immediately poll. Later, call check_agent_result with id \"{}\" (or name \"{}\") to collect the result.",
-                    name, def.name, task_id, task_id, name
+                    "[Sub-agent: {} ({})] dispatched in background (task_id={}). Keep dispatching any other parallel agents, then call await_agents ONCE to collect all results — do NOT poll check_agent_result in a loop.",
+                    name, def.name, task_id
                 ),
                 is_error: false,
                 raw: structured.clone(),
@@ -1494,6 +1740,10 @@ pub fn dispatch_list_agent_tasks(ctx: SubAgentCallCtx<'_>) -> NativeToolFuture<'
     Box::pin(async move { handle_list_agent_tasks(ctx) })
 }
 
+pub fn dispatch_await_agents(ctx: SubAgentCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move { handle_await_agents(ctx.state, ctx.native_ctx, ctx.arguments).await })
+}
+
 fn compose_persona(persona: &str) -> String {
     let persona = persona.trim();
     if persona.is_empty() {
@@ -1567,6 +1817,15 @@ mod tests {
         assert!(!names.contains(&"agent"), "spawn tool must be hidden in sub-agents");
         assert!(names.contains(&"check_agent_result"));
         assert!(names.contains(&"list_agent_tasks"));
+    }
+
+    #[test]
+    fn append_tools_includes_await_agents_when_allowed() {
+        let mut tools = Vec::new();
+        append_tool_definitions(&mut tools, true);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"agent"));
+        assert!(names.contains(&"await_agents"));
     }
 
     #[test]
@@ -1691,7 +1950,153 @@ mod tests {
         assert_eq!(rec.result.as_deref(), Some("result"));
     }
 
-    /// The Pending→Running status flow used by the spawn path: register Pending,
+    // --- await_agents (PR3: runtime join, no model poll) ---
+
+    fn await_ctx(conversation_id: &str, run_id: &str, generation: u64) -> crate::mcp::registry::NativeToolContext {
+        crate::mcp::registry::NativeToolContext {
+            conversation_id: conversation_id.to_string(),
+            message_id: "msg".to_string(),
+            tool_call_id: Some("tc".to_string()),
+            run_id: run_id.to_string(),
+            generation,
+            depth: 0,
+        }
+    }
+
+    /// Default (no args) waits for ALL background sub-agents dispatched in the
+    /// current run and returns every result in ONE call once they finish — no
+    /// model polling. Ordering/labeling follows dispatch order.
+    #[tokio::test]
+    async fn await_agents_collects_all_background_results_in_one_call() {
+        let state = crate::state::test_app_state();
+        let manager = &state.sub_agents;
+        let generation = state.next_chat_generation("conv-a");
+
+        // Two background sub-agents registered + tracked under this run, still
+        // running. A detached task finishes each after a short delay.
+        for id in ["agent-x", "agent-y"] {
+            manager.register(running_record(id));
+            manager.set_status(id, SubAgentStatus::Running);
+            let join = tauri::async_runtime::spawn(async move {});
+            manager.register_background_run("conv-a", "run-a", id.to_string(), join);
+        }
+
+        // Finish both records while the awaiter is parked on terminal_notify.
+        let ctx = await_ctx("conv-a", "run-a", generation);
+        let args = serde_json::json!({});
+        let await_fut = handle_await_agents(&state, &ctx, &args);
+        tokio::pin!(await_fut);
+        // Drive the awaiter briefly so it registers on terminal_notify and blocks
+        // (the targets are still Running, so it cannot complete yet).
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut await_fut)
+                .await
+                .is_err(),
+            "await must block while both targets are still running"
+        );
+        manager.finish(
+            "agent-x",
+            SubAgentStatus::Completed,
+            Some("X result".into()),
+            None,
+            None,
+        );
+        manager.finish("agent-y", SubAgentStatus::Failed, None, Some("Y failed".into()), None);
+
+        let result = tokio::time::timeout(Duration::from_millis(500), &mut await_fut)
+            .await
+            .expect("await_agents must complete once targets finish")
+            .expect("await_agents ok");
+        assert!(!result.is_error);
+        // Both results present, labeled, in dispatch order.
+        let body = &result.content;
+        assert!(body.contains("agent-x"), "missing agent-x block: {body}");
+        assert!(body.contains("X result"), "missing X result: {body}");
+        assert!(body.contains("agent-y"), "missing agent-y block: {body}");
+        assert!(body.contains("Y failed"), "missing Y error: {body}");
+        let pos_x = body.find("agent-x").unwrap();
+        let pos_y = body.find("agent-y").unwrap();
+        assert!(pos_x < pos_y, "results must be in dispatch order");
+    }
+
+    /// Already-terminal targets return immediately (no waiting), and explicit
+    /// task_ids are honored.
+    #[tokio::test]
+    async fn await_agents_returns_immediately_for_terminal_targets() {
+        let state = crate::state::test_app_state();
+        let manager = &state.sub_agents;
+        let generation = state.next_chat_generation("conv-b");
+        manager.register(running_record("agent-done"));
+        manager.finish("agent-done", SubAgentStatus::Completed, Some("ready".into()), None, None);
+
+        let args = serde_json::json!({ "task_ids": ["agent-done"] });
+        let result = tokio::time::timeout(
+            Duration::from_millis(200),
+            handle_await_agents(&state, &await_ctx("conv-b", "run-b", generation), &args),
+        )
+        .await
+        .expect("await_agents must not block on terminal targets")
+        .expect("ok");
+        assert!(result.content.contains("ready"));
+    }
+
+    /// Unknown id/name errors cleanly (no panic, no hang).
+    #[tokio::test]
+    async fn await_agents_unknown_id_errors() {
+        let state = crate::state::test_app_state();
+        let generation = state.next_chat_generation("conv-c");
+        let args = serde_json::json!({ "task_ids": ["does-not-exist"] });
+        let err = handle_await_agents(&state, &await_ctx("conv-c", "run-c", generation), &args)
+            .await
+            .expect_err("unknown id must error");
+        assert!(err.contains("does-not-exist"), "error should name the bad id: {err}");
+    }
+
+    /// Empty target set (no background sub-agents dispatched) returns a clean
+    /// no-op immediately.
+    #[tokio::test]
+    async fn await_agents_no_targets_is_noop() {
+        let state = crate::state::test_app_state();
+        let generation = state.next_chat_generation("conv-d");
+        let result = handle_await_agents(&state, &await_ctx("conv-d", "run-d", generation), &serde_json::json!({}))
+            .await
+            .expect("ok");
+        assert!(!result.is_error);
+        assert!(result.content.to_lowercase().contains("no in-flight"));
+    }
+
+    /// Cooperative cancel: bumping the parent generation (user stop / run end)
+    /// must unblock a still-waiting await_agents promptly, not hang forever.
+    #[tokio::test]
+    async fn await_agents_cancelled_on_parent_generation_bump() {
+        let state = crate::state::test_app_state();
+        let manager = &state.sub_agents;
+        let generation = state.next_chat_generation("conv-e");
+        // One background sub-agent that never finishes on its own.
+        manager.register(running_record("agent-stuck"));
+        manager.set_status("agent-stuck", SubAgentStatus::Running);
+        let join = tauri::async_runtime::spawn(async move {});
+        manager.register_background_run("conv-e", "run-e", "agent-stuck".to_string(), join);
+
+        let await_ctx_e = await_ctx("conv-e", "run-e", generation);
+        let args_e = serde_json::json!({});
+        let await_fut = handle_await_agents(&state, &await_ctx_e, &args_e);
+        tokio::pin!(await_fut);
+        // It must NOT be ready while the generation is live and the task is stuck.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut await_fut).await.is_err(),
+            "await must block while target is still running"
+        );
+        // User stop: bump the parent generation. The awaiter should return
+        // promptly (within a couple of its ~100ms re-check intervals).
+        state.cancel_chat_generation("conv-e");
+        let result = tokio::time::timeout(Duration::from_millis(500), &mut await_fut)
+            .await
+            .expect("await_agents must unblock promptly on cancel")
+            .expect("ok");
+        assert!(!result.is_error);
+    }
+
     /// then flip to Running once a permit is held (so a queued background spawn
     /// is visible as Pending to check_agent_result/list_agent_tasks).
     #[test]
