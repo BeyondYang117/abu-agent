@@ -80,13 +80,7 @@ fn set_doc_status(
     chunk_count: usize,
     error: Option<String>,
 ) -> Result<(), String> {
-    let mut docs = super::load_docs(app, kb_id)?;
-    if let Some(doc) = docs.iter_mut().find(|d| d.id == doc_id) {
-        doc.status = status;
-        doc.chunk_count = chunk_count;
-        doc.error = error;
-    }
-    super::save_docs(app, kb_id, &docs)
+    super::set_doc_status(app, kb_id, doc_id, status, chunk_count, error.as_deref())
 }
 
 /// The actual pipeline for one document. Returns the chunk count on success.
@@ -126,9 +120,7 @@ async fn index_one(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<usize, 
 
     if pieces.is_empty() {
         // Nothing to embed — drop any stale chunks for this doc and finish.
-        let mut all = super::load_chunks(app, kb_id)?;
-        all.retain(|c| c.doc_id != doc_id);
-        super::save_chunks(app, kb_id, &all)?;
+        super::replace_doc_chunks(app, kb_id, doc_id, 0, &[])?;
         return Ok(0);
     }
 
@@ -161,13 +153,12 @@ async fn index_one(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<usize, 
         })
         .collect();
 
-    // Replace this doc's chunks atomically (remove old, append new).
-    let mut all = super::load_chunks(app, kb_id)?;
-    all.retain(|c| c.doc_id != doc_id);
-    all.extend(new_chunks);
-    let n = all.iter().filter(|c| c.doc_id == doc_id).count();
-    super::save_chunks(app, kb_id, &all)?;
-    Ok(n)
+    // Replace this doc's chunks (delete old + insert new) + persist the
+    // library's embedding dimension (learned from the first vector).
+    let dim = new_chunks.first().map(|c| c.embedding.len()).unwrap_or(0);
+    super::replace_doc_chunks(app, kb_id, doc_id, dim, &new_chunks)?;
+    super::set_library_dim(app, kb_id, dim)?;
+    Ok(new_chunks.len())
 }
 
 /// Per-kb async lock registry. Indexing a library is a non-atomic
@@ -255,10 +246,9 @@ pub(crate) async fn kb_upload_document(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "untitled".to_string());
 
-    let mut docs = super::load_docs(&app, &kb_id)?;
     // Dedup by content hash: re-uploading the same file is a no-op.
-    if let Some(existing) = docs.iter().find(|d| d.hash == hash) {
-        return Ok(existing.clone());
+    if let Some(existing) = super::doc_by_hash(&app, &kb_id, &hash)? {
+        return Ok(existing);
     }
 
     let doc_id = super::gen_id("doc");
@@ -278,10 +268,9 @@ pub(crate) async fn kb_upload_document(
         error: None,
         created_at: chrono::Local::now().timestamp(),
     };
-    docs.push(doc.clone());
     // Roll back the just-written source snapshot if registration fails, so a
     // failed upload doesn't leave an unreachable orphan file under sources/.
-    if let Err(e) = super::save_docs(&app, &kb_id, &docs) {
+    if let Err(e) = super::insert_doc(&app, &kb_id, &doc) {
         let _ = fs::remove_file(&dest);
         return Err(e);
     }
@@ -302,12 +291,10 @@ pub(crate) async fn kb_upload_document(
 #[tauri::command]
 pub(crate) async fn kb_reindex_library(app: AppHandle, kb_id: String) -> Result<(), String> {
     let _lib = super::get_library(&app, &kb_id)?;
-    let mut docs = super::load_docs(&app, &kb_id)?;
-    for doc in docs.iter_mut() {
-        doc.status = DocStatus::Indexing;
-        doc.error = None;
+    let docs = super::load_docs(&app, &kb_id)?;
+    for doc in &docs {
+        let _ = super::set_doc_status(&app, &kb_id, &doc.id, DocStatus::Indexing, doc.chunk_count, None);
     }
-    super::save_docs(&app, &kb_id, &docs)?;
 
     let ids: Vec<String> = docs.into_iter().map(|d| d.id).collect();
     let app2 = app.clone();
@@ -319,7 +306,7 @@ pub(crate) async fn kb_reindex_library(app: AppHandle, kb_id: String) -> Result<
         let lock = kb_lock_for(&kb_id);
         let _guard = lock.lock().await;
         // Drop all chunks now — they may be the wrong dimension after a model swap.
-        let _ = super::save_chunks(&app2, &kb_id, &[]);
+        let _ = super::clear_chunks(&app2, &kb_id);
         for doc_id in &ids {
             let result = index_one(&app2, &kb_id, doc_id).await;
             finish_index(&app2, &kb_id, doc_id, result);

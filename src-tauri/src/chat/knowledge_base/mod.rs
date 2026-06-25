@@ -32,6 +32,7 @@ pub mod commands;
 pub mod embeddings;
 pub mod ingest;
 pub mod parse;
+pub mod store;
 
 /// A knowledge library. `embedding_dim` is 0 until the first chunk is indexed
 /// (the dimension is learned from the first embedding response).
@@ -266,65 +267,132 @@ fn delete_library_at(root: &Path, kb_id: &str) -> Result<(), String> {
 }
 
 fn refresh_library_counts_at(root: &Path, kb_id: &str) -> Result<(), String> {
-    let docs = load_docs_at(root, kb_id)?;
-    let chunks = load_chunks_at(root, kb_id)?;
-    let dim = chunks.first().map(|c| c.embedding.len()).unwrap_or(0);
+    let (ndocs, nchunks) = store::counts(&open_kb_at(root, kb_id)?)?;
     let mut libs = load_libraries_at(root)?;
     if let Some(lib) = libs.iter_mut().find(|l| l.id == kb_id) {
-        lib.doc_count = docs.len();
-        lib.chunk_count = chunks.len();
-        if dim > 0 {
-            lib.embedding_dim = dim;
-        }
+        lib.doc_count = ndocs;
+        lib.chunk_count = nchunks;
         lib.updated_at = chrono::Local::now().timestamp();
         save_libraries_at(root, &libs)?;
     }
     Ok(())
 }
 
+/// Persist the learned embedding dimension on the library record (set on first
+/// successful index; dimension is fixed per library).
+fn set_library_dim_at(root: &Path, kb_id: &str, dim: usize) -> Result<(), String> {
+    if dim == 0 {
+        return Ok(());
+    }
+    let mut libs = load_libraries_at(root)?;
+    if let Some(lib) = libs.iter_mut().find(|l| l.id == kb_id) {
+        if lib.embedding_dim != dim {
+            lib.embedding_dim = dim;
+            lib.updated_at = chrono::Local::now().timestamp();
+            save_libraries_at(root, &libs)?;
+        }
+    }
+    Ok(())
+}
+
+// ===== per-kb SQLite store access =====
+
+fn kb_db_path(root: &Path, kb_id: &str) -> Result<PathBuf, String> {
+    Ok(kb_dir_at(root, kb_id)?.join("store.db"))
+}
+
+fn open_kb_at(root: &Path, kb_id: &str) -> Result<rusqlite::Connection, String> {
+    let conn = store::open_db(&kb_db_path(root, kb_id)?)?;
+    migrate_json_if_needed(root, kb_id, &conn)?;
+    Ok(conn)
+}
+
+/// One-time migration of legacy V1 `docs.json` / `chunks.json` into store.db,
+/// then rename them so we don't re-import. No-op once the store has data.
+fn migrate_json_if_needed(
+    root: &Path,
+    kb_id: &str,
+    conn: &rusqlite::Connection,
+) -> Result<(), String> {
+    let dir = kb_dir_at(root, kb_id)?;
+    let docs_json = dir.join("docs.json");
+    if !docs_json.exists() || store::counts(conn)?.0 > 0 {
+        return Ok(());
+    }
+    let docs: Vec<KnowledgeDocument> = fs::read_to_string(&docs_json)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let chunks_json = dir.join("chunks.json");
+    let chunks: Vec<KnowledgeChunk> = fs::read_to_string(&chunks_json)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let dim = chunks.first().map(|c| c.embedding.len()).unwrap_or(0);
+    for doc in &docs {
+        let _ = store::insert_doc(conn, doc);
+    }
+    let mut by_doc: std::collections::HashMap<String, Vec<KnowledgeChunk>> =
+        std::collections::HashMap::new();
+    for c in chunks {
+        by_doc.entry(c.doc_id.clone()).or_default().push(c);
+    }
+    for (doc_id, cs) in by_doc {
+        let _ = store::replace_doc_chunks(conn, &doc_id, dim, &cs);
+    }
+    let _ = fs::rename(&docs_json, dir.join("docs.json.migrated"));
+    let _ = fs::rename(&chunks_json, dir.join("chunks.json.migrated"));
+    eprintln!("knowledge_base: migrated {kb_id} JSON → store.db ({} docs)", docs.len());
+    Ok(())
+}
+
 fn load_docs_at(root: &Path, kb_id: &str) -> Result<Vec<KnowledgeDocument>, String> {
-    let path = kb_dir_at(root, kb_id)?.join("docs.json");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(&path).map_err(|e| format!("read docs.json: {e}"))?;
-    serde_json::from_str(&content).map_err(|e| format!("docs.json corrupt: {e}"))
+    store::load_docs(&open_kb_at(root, kb_id)?)
 }
 
-fn save_docs_at(root: &Path, kb_id: &str, docs: &[KnowledgeDocument]) -> Result<(), String> {
-    let path = kb_dir_at(root, kb_id)?.join("docs.json");
-    let content = serde_json::to_string_pretty(docs).map_err(|e| format!("serialize docs: {e}"))?;
-    atomic_write(&path, &content, "docs")
+fn insert_doc_at(root: &Path, kb_id: &str, doc: &KnowledgeDocument) -> Result<(), String> {
+    store::insert_doc(&open_kb_at(root, kb_id)?, doc)
 }
 
-fn load_chunks_at(root: &Path, kb_id: &str) -> Result<Vec<KnowledgeChunk>, String> {
-    let path = kb_dir_at(root, kb_id)?.join("chunks.json");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(&path).map_err(|e| format!("read chunks.json: {e}"))?;
-    serde_json::from_str(&content).map_err(|e| format!("chunks.json corrupt: {e}"))
+fn doc_by_hash_at(
+    root: &Path,
+    kb_id: &str,
+    hash: &str,
+) -> Result<Option<KnowledgeDocument>, String> {
+    store::doc_by_hash(&open_kb_at(root, kb_id)?, hash)
 }
 
-fn save_chunks_at(root: &Path, kb_id: &str, chunks: &[KnowledgeChunk]) -> Result<(), String> {
-    let path = kb_dir_at(root, kb_id)?.join("chunks.json");
-    let content = serde_json::to_string(chunks).map_err(|e| format!("serialize chunks: {e}"))?;
-    atomic_write(&path, &content, "chunks")
+fn set_doc_status_at(
+    root: &Path,
+    kb_id: &str,
+    doc_id: &str,
+    status: DocStatus,
+    count: usize,
+    error: Option<&str>,
+) -> Result<(), String> {
+    store::set_doc_status(&open_kb_at(root, kb_id)?, doc_id, status, count, error)
+}
+
+fn replace_doc_chunks_at(
+    root: &Path,
+    kb_id: &str,
+    doc_id: &str,
+    dim: usize,
+    chunks: &[KnowledgeChunk],
+) -> Result<(), String> {
+    store::replace_doc_chunks(&open_kb_at(root, kb_id)?, doc_id, dim, chunks)
+}
+
+fn clear_chunks_at(root: &Path, kb_id: &str) -> Result<(), String> {
+    store::clear_chunks(&open_kb_at(root, kb_id)?)
 }
 
 fn delete_document_at(root: &Path, kb_id: &str, doc_id: &str) -> Result<(), String> {
-    let mut docs = load_docs_at(root, kb_id)?;
-    let before = docs.len();
-    docs.retain(|d| d.id != doc_id);
-    if docs.len() == before {
+    let removed = store::delete_doc(&open_kb_at(root, kb_id)?, doc_id)?;
+    if !removed {
         return Err(format!("Document not found: {doc_id}"));
     }
-    save_docs_at(root, kb_id, &docs)?;
-
-    let mut chunks = load_chunks_at(root, kb_id)?;
-    remove_doc_chunks(&mut chunks, doc_id);
-    save_chunks_at(root, kb_id, &chunks)?;
-
+    // remove source snapshot(s) for this doc
     if let Ok(dir) = sources_dir_at(root, kb_id) {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -347,23 +415,30 @@ fn search_at(
     query: &[f32],
     top_k: usize,
 ) -> Result<Vec<ScoredChunk>, String> {
-    let mut candidates: Vec<(String, KnowledgeChunk)> = Vec::new();
+    let mut all: Vec<ScoredChunk> = Vec::new();
     for kb_id in kb_ids {
-        // Tolerate a single corrupt library: skip it (logged) rather than
-        // failing the entire cross-library search and starving the model of
-        // every other library's hits.
-        match load_chunks_at(root, kb_id) {
-            Ok(chunks) => {
-                for chunk in chunks {
-                    candidates.push((kb_id.clone(), chunk));
+        // Tolerate a single broken/corrupt library: skip (logged) so it can't
+        // starve the rest of a cross-library search.
+        match open_kb_at(root, kb_id).and_then(|c| store::vector_search(&c, query, top_k)) {
+            Ok(hits) => {
+                for (chunk, score) in hits {
+                    all.push(ScoredChunk {
+                        kb_id: kb_id.clone(),
+                        score,
+                        chunk,
+                    });
                 }
             }
-            Err(e) => {
-                eprintln!("kb search: skipping library {kb_id}: {e}");
-            }
+            Err(e) => eprintln!("kb search: skipping library {kb_id}: {e}"),
         }
     }
-    Ok(top_k_by_cosine(candidates, query, top_k))
+    all.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    all.truncate(top_k);
+    Ok(all)
 }
 
 // ===== public app wrappers =====
@@ -406,20 +481,53 @@ pub fn refresh_library_counts(app: &AppHandle, kb_id: &str) -> Result<(), String
     refresh_library_counts_at(&kb_root(app)?, kb_id)
 }
 
+/// Persist the learned embedding dimension (set on first successful index).
+pub fn set_library_dim(app: &AppHandle, kb_id: &str, dim: usize) -> Result<(), String> {
+    set_library_dim_at(&kb_root(app)?, kb_id, dim)
+}
+
 pub fn load_docs(app: &AppHandle, kb_id: &str) -> Result<Vec<KnowledgeDocument>, String> {
     load_docs_at(&kb_root(app)?, kb_id)
 }
 
-pub fn save_docs(app: &AppHandle, kb_id: &str, docs: &[KnowledgeDocument]) -> Result<(), String> {
-    save_docs_at(&kb_root(app)?, kb_id, docs)
+pub fn insert_doc(app: &AppHandle, kb_id: &str, doc: &KnowledgeDocument) -> Result<(), String> {
+    insert_doc_at(&kb_root(app)?, kb_id, doc)
 }
 
-pub fn load_chunks(app: &AppHandle, kb_id: &str) -> Result<Vec<KnowledgeChunk>, String> {
-    load_chunks_at(&kb_root(app)?, kb_id)
+pub fn doc_by_hash(
+    app: &AppHandle,
+    kb_id: &str,
+    hash: &str,
+) -> Result<Option<KnowledgeDocument>, String> {
+    doc_by_hash_at(&kb_root(app)?, kb_id, hash)
 }
 
-pub fn save_chunks(app: &AppHandle, kb_id: &str, chunks: &[KnowledgeChunk]) -> Result<(), String> {
-    save_chunks_at(&kb_root(app)?, kb_id, chunks)
+pub fn set_doc_status(
+    app: &AppHandle,
+    kb_id: &str,
+    doc_id: &str,
+    status: DocStatus,
+    count: usize,
+    error: Option<&str>,
+) -> Result<(), String> {
+    set_doc_status_at(&kb_root(app)?, kb_id, doc_id, status, count, error)
+}
+
+/// Replace all of a document's chunks (used by indexing). `dim` lazily creates
+/// the per-library vector table.
+pub fn replace_doc_chunks(
+    app: &AppHandle,
+    kb_id: &str,
+    doc_id: &str,
+    dim: usize,
+    chunks: &[KnowledgeChunk],
+) -> Result<(), String> {
+    replace_doc_chunks_at(&kb_root(app)?, kb_id, doc_id, dim, chunks)
+}
+
+/// Drop every chunk + vector (used by full reindex before refilling).
+pub fn clear_chunks(app: &AppHandle, kb_id: &str) -> Result<(), String> {
+    clear_chunks_at(&kb_root(app)?, kb_id)
 }
 
 /// Remove a document and all its chunks + source snapshot, then refresh counts.
@@ -434,20 +542,28 @@ pub fn delete_document(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<(),
 fn heal_stale_indexing_at(root: &Path) -> usize {
     let mut healed = 0usize;
     for lib in load_libraries_at(root).unwrap_or_default() {
-        let Ok(mut docs) = load_docs_at(root, &lib.id) else {
+        let Ok(conn) = open_kb_at(root, &lib.id) else {
+            continue;
+        };
+        let Ok(docs) = store::load_docs(&conn) else {
             continue;
         };
         let mut changed = false;
-        for doc in docs.iter_mut() {
+        for doc in &docs {
             if doc.status == DocStatus::Indexing {
-                doc.status = DocStatus::Error;
-                doc.error = Some("索引被中断，请重试 / Indexing was interrupted; please retry".to_string());
+                let _ = store::set_doc_status(
+                    &conn,
+                    &doc.id,
+                    DocStatus::Error,
+                    doc.chunk_count,
+                    Some("索引被中断，请重试 / Indexing was interrupted; please retry"),
+                );
                 changed = true;
                 healed += 1;
             }
         }
+        drop(conn);
         if changed {
-            let _ = save_docs_at(root, &lib.id, &docs);
             let _ = refresh_library_counts_at(root, &lib.id);
         }
     }
@@ -543,10 +659,6 @@ pub fn top_k_by_cosine(
     scored
 }
 
-fn remove_doc_chunks(chunks: &mut Vec<KnowledgeChunk>, doc_id: &str) {
-    chunks.retain(|c| c.doc_id != doc_id);
-}
-
 /// Load chunks across the given libraries and return the top-k by cosine.
 pub fn search(
     app: &AppHandle,
@@ -600,19 +712,6 @@ mod tests {
         assert_eq!(out[0].kb_id, "kb_a");
         assert_eq!(out[1].chunk.id, "mid");
         assert!(out[0].score >= out[1].score);
-    }
-
-    #[test]
-    fn delete_removes_only_target_doc_chunks() {
-        let mut chunks = vec![
-            chunk("c1", "doc_keep", vec![1.0]),
-            chunk("c2", "doc_drop", vec![1.0]),
-            chunk("c3", "doc_keep", vec![1.0]),
-            chunk("c4", "doc_drop", vec![1.0]),
-        ];
-        remove_doc_chunks(&mut chunks, "doc_drop");
-        assert_eq!(chunks.len(), 2);
-        assert!(chunks.iter().all(|c| c.doc_id == "doc_keep"));
     }
 
     #[test]
@@ -670,26 +769,37 @@ mod tests {
         assert_eq!(load_libraries_at(&root).unwrap().len(), 1);
 
         // 2) ingest output: two docs, three chunks with known vectors
-        save_docs_at(&root, &kb, &[doc("doc_a", "a.md", 2), doc("doc_b", "b.md", 1)]).unwrap();
-        save_chunks_at(
+        insert_doc_at(&root, &kb, &doc("doc_a", "a.md", 2)).unwrap();
+        insert_doc_at(&root, &kb, &doc("doc_b", "b.md", 1)).unwrap();
+        replace_doc_chunks_at(
             &root,
             &kb,
+            "doc_a",
+            3,
             &[
                 chunk_emb("c1", "doc_a", "a.md", Some("Intro > Setup"), vec![1.0, 0.0, 0.0]),
                 chunk_emb("c2", "doc_a", "a.md", None, vec![0.0, 1.0, 0.0]),
-                chunk_emb("c3", "doc_b", "b.md", None, vec![0.9, 0.1, 0.0]),
             ],
         )
         .unwrap();
+        replace_doc_chunks_at(
+            &root,
+            &kb,
+            "doc_b",
+            3,
+            &[chunk_emb("c3", "doc_b", "b.md", None, vec![0.9, 0.1, 0.0])],
+        )
+        .unwrap();
+        set_library_dim_at(&root, &kb, 3).unwrap();
 
-        // 3) counts + dimension learned from chunks
+        // 3) counts + dimension
         refresh_library_counts_at(&root, &kb).unwrap();
         let lib = get_library_at(&root, &kb).unwrap();
         assert_eq!(lib.doc_count, 2);
         assert_eq!(lib.chunk_count, 3);
         assert_eq!(lib.embedding_dim, 3);
 
-        // 4) search: query near [1,0,0] → c1 (exact) then c3 (close); citation metadata intact
+        // 4) search (vec0 cosine): query near [1,0,0] → c1 (exact) then c3 (close)
         let hits = search_at(&root, &[kb.clone()], &[1.0, 0.0, 0.0], 2).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].chunk.id, "c1");
@@ -700,8 +810,9 @@ mod tests {
 
         // 5) delete doc_a → its chunks gone, doc_b intact, counts refreshed
         delete_document_at(&root, &kb, "doc_a").unwrap();
-        let remaining = load_chunks_at(&root, &kb).unwrap();
-        assert!(remaining.iter().all(|c| c.doc_id == "doc_b"));
+        let remaining = load_docs_at(&root, &kb).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "doc_b");
         let lib = get_library_at(&root, &kb).unwrap();
         assert_eq!(lib.doc_count, 1);
         assert_eq!(lib.chunk_count, 1);
@@ -722,8 +833,8 @@ mod tests {
         let root = temp_root();
         let a = create_library_at(&root, "A", "openai", "m").unwrap().id;
         let b = create_library_at(&root, "B", "openai", "m").unwrap().id;
-        save_chunks_at(&root, &a, &[chunk_emb("a1", "d", "a.md", None, vec![1.0, 0.0])]).unwrap();
-        save_chunks_at(&root, &b, &[chunk_emb("b1", "d", "b.md", None, vec![0.2, 1.0])]).unwrap();
+        replace_doc_chunks_at(&root, &a, "d", 2, &[chunk_emb("a1", "d", "a.md", None, vec![1.0, 0.0])]).unwrap();
+        replace_doc_chunks_at(&root, &b, "d", 2, &[chunk_emb("b1", "d", "b.md", None, vec![0.2, 1.0])]).unwrap();
 
         // Query closest to a1; both libraries searched, hit tagged with its kb id.
         let hits = search_at(&root, &[a.clone(), b.clone()], &[1.0, 0.0], 5).unwrap();
@@ -740,17 +851,22 @@ mod tests {
         // Models the index_one replace step: drop a doc's old chunks, add new.
         let root = temp_root();
         let kb = create_library_at(&root, "L", "openai", "m").unwrap().id;
-        save_chunks_at(&root, &kb, &[chunk_emb("old1", "doc_x", "x.md", None, vec![1.0])]).unwrap();
+        replace_doc_chunks_at(&root, &kb, "doc_x", 1, &[chunk_emb("old1", "doc_x", "x.md", None, vec![1.0])]).unwrap();
+        replace_doc_chunks_at(
+            &root,
+            &kb,
+            "doc_x",
+            1,
+            &[
+                chunk_emb("new1", "doc_x", "x.md", None, vec![1.0]),
+                chunk_emb("new2", "doc_x", "x.md", None, vec![1.0]),
+            ],
+        )
+        .unwrap();
 
-        let mut all = load_chunks_at(&root, &kb).unwrap();
-        all.retain(|c| c.doc_id != "doc_x");
-        all.push(chunk_emb("new1", "doc_x", "x.md", None, vec![1.0]));
-        all.push(chunk_emb("new2", "doc_x", "x.md", None, vec![1.0]));
-        save_chunks_at(&root, &kb, &all).unwrap();
-
-        let chunks = load_chunks_at(&root, &kb).unwrap();
-        assert_eq!(chunks.len(), 2);
-        assert!(chunks.iter().all(|c| c.id.starts_with("new")));
+        let hits = search_at(&root, &[kb.clone()], &[1.0], 5).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|c| c.chunk.id.starts_with("new")));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -778,19 +894,13 @@ mod tests {
     fn heal_flips_stale_indexing_to_error() {
         let root = temp_root();
         let kb = create_library_at(&root, "L", "openai", "m").unwrap().id;
-        save_docs_at(
-            &root,
-            &kb,
-            &[
-                {
-                    let mut d = doc("doc_stuck", "a.md", 0);
-                    d.status = DocStatus::Indexing;
-                    d
-                },
-                doc("doc_ok", "b.md", 3),
-            ],
-        )
+        insert_doc_at(&root, &kb, &{
+            let mut d = doc("doc_stuck", "a.md", 0);
+            d.status = DocStatus::Indexing;
+            d
+        })
         .unwrap();
+        insert_doc_at(&root, &kb, &doc("doc_ok", "b.md", 3)).unwrap();
 
         let healed = heal_stale_indexing_at(&root);
         assert_eq!(healed, 1);
@@ -810,11 +920,11 @@ mod tests {
         let root = temp_root();
         let good = create_library_at(&root, "good", "openai", "m").unwrap().id;
         let bad = create_library_at(&root, "bad", "openai", "m").unwrap().id;
-        save_chunks_at(&root, &good, &[chunk_emb("g1", "d", "g.md", None, vec![1.0, 0.0])]).unwrap();
-        // Corrupt the bad library's chunks.json with non-JSON garbage.
-        let bad_chunks = kb_dir_at(&root, &bad).unwrap().join("chunks.json");
-        std::fs::create_dir_all(bad_chunks.parent().unwrap()).unwrap();
-        std::fs::write(&bad_chunks, "{ not valid json").unwrap();
+        replace_doc_chunks_at(&root, &good, "d", 2, &[chunk_emb("g1", "d", "g.md", None, vec![1.0, 0.0])]).unwrap();
+        // Corrupt the bad library's store.db with non-SQLite garbage.
+        let bad_db = kb_db_path(&root, &bad).unwrap();
+        std::fs::create_dir_all(bad_db.parent().unwrap()).unwrap();
+        std::fs::write(&bad_db, "not a sqlite database").unwrap();
 
         let hits = search_at(&root, &[good.clone(), bad.clone()], &[1.0, 0.0], 5).unwrap();
         assert_eq!(hits.len(), 1, "healthy library's hit must survive a corrupt sibling");
