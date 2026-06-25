@@ -383,22 +383,9 @@ fn fts_rows(
     Ok(out)
 }
 
-/// Pure vector search (cosine), kept for callers that don't want hybrid.
-/// `score = 1 - cosine_distance`.
-pub fn vector_search(
-    conn: &Connection,
-    query: &[f32],
-    top_k: usize,
-) -> Result<Vec<(KnowledgeChunk, f32)>, String> {
-    Ok(vector_rows(conn, query, top_k)?
-        .into_iter()
-        .map(|(_, chunk, dist)| (chunk, 1.0 - dist))
-        .collect())
-}
-
 /// Hybrid search: fuse vector (cosine) + FTS5 (BM25) rankings with Reciprocal
 /// Rank Fusion (k=60). Weights gate each lane (0 disables it); with only the
-/// vector lane on this is equivalent to `vector_search`. Returns (chunk, score)
+/// vector lane on this is equivalent to pure vector search. Returns (chunk, score)
 /// best-first where score is the (unnormalized) fused RRF score.
 pub fn hybrid_search(
     conn: &Connection,

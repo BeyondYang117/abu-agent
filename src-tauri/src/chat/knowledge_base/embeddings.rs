@@ -93,23 +93,6 @@ pub fn parse_embeddings_response(value: &Value) -> Result<Vec<Vec<f32>>, String>
     Ok(indexed.into_iter().map(|(_, e)| e).collect())
 }
 
-/// Embed many texts, batching to keep request bodies sane. Order preserved.
-pub async fn embed_all(
-    state: &AppState,
-    provider: &ModelProvider,
-    model: &str,
-    texts: &[String],
-    attempts: usize,
-) -> Result<Vec<Vec<f32>>, String> {
-    const BATCH: usize = 64;
-    let mut out = Vec::with_capacity(texts.len());
-    for batch in texts.chunks(BATCH) {
-        let mut got = embed_batch(state, provider, model, batch, attempts).await?;
-        out.append(&mut got);
-    }
-    Ok(out)
-}
-
 /// Embed a single query string.
 pub async fn embed_query(
     state: &AppState,

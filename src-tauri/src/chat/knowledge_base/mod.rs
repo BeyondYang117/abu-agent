@@ -620,55 +620,6 @@ pub fn mount_system_prompt(app: &AppHandle, kb_ids: &[String], language: &str) -
 }
 
 
-// ===== pure retrieval math (unit-tested without an AppHandle) =====
-
-/// Cosine similarity. Returns 0.0 for mismatched-length or zero vectors so a
-/// stray bad row can't poison a ranking with NaN.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0f32;
-    let mut na = 0.0f32;
-    let mut nb = 0.0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    if na == 0.0 || nb == 0.0 {
-        return 0.0;
-    }
-    dot / (na.sqrt() * nb.sqrt())
-}
-
-/// Brute-force top-k by cosine over `(kb_id, chunk)` pairs. Sorted by score
-/// descending; ties broken by insertion order (stable).
-pub fn top_k_by_cosine(
-    candidates: Vec<(String, KnowledgeChunk)>,
-    query: &[f32],
-    top_k: usize,
-) -> Vec<ScoredChunk> {
-    let mut scored: Vec<ScoredChunk> = candidates
-        .into_iter()
-        .map(|(kb_id, chunk)| {
-            let score = cosine_similarity(query, &chunk.embedding);
-            ScoredChunk {
-                kb_id,
-                score,
-                chunk,
-            }
-        })
-        .collect();
-    scored.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    scored.truncate(top_k);
-    scored
-}
-
 /// Hybrid (vector + keyword RRF) search across libraries, top-k best-first.
 /// `weight_keyword = 0` ⇒ pure vector.
 pub fn search(
@@ -694,47 +645,6 @@ pub fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn chunk(id: &str, doc_id: &str, emb: Vec<f32>) -> KnowledgeChunk {
-        KnowledgeChunk {
-            id: id.to_string(),
-            doc_id: doc_id.to_string(),
-            doc_name: "d.txt".to_string(),
-            text: id.to_string(),
-            heading_path: None,
-            page: None,
-            char_start: 0,
-            char_end: 0,
-            order_index: 0,
-            embedding: emb,
-        }
-    }
-
-    #[test]
-    fn cosine_basics() {
-        assert!((cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
-        assert!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
-        // opposite vectors → -1
-        assert!((cosine_similarity(&[1.0, 0.0], &[-1.0, 0.0]) + 1.0).abs() < 1e-6);
-        // mismatched length / zero vector → 0, never NaN
-        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
-        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
-    }
-
-    #[test]
-    fn top_k_ranks_nearest_first_and_truncates() {
-        let cands = vec![
-            ("kb_a".to_string(), chunk("near", "d1", vec![0.9, 0.1])),
-            ("kb_a".to_string(), chunk("far", "d1", vec![0.0, 1.0])),
-            ("kb_b".to_string(), chunk("mid", "d2", vec![0.6, 0.6])),
-        ];
-        let out = top_k_by_cosine(cands, &[1.0, 0.0], 2);
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0].chunk.id, "near");
-        assert_eq!(out[0].kb_id, "kb_a");
-        assert_eq!(out[1].chunk.id, "mid");
-        assert!(out[0].score >= out[1].score);
-    }
 
     #[test]
     fn kb_id_validation() {

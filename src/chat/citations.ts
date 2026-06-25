@@ -10,8 +10,7 @@ export interface MdNode {
   children?: MdNode[]
 }
 
-/** 把一个文本节点里的 `[n]`（且 n 是有效引用）切成 text / link 混排。
- *  无有效引用时原样返回单个文本节点。 */
+/** 把一个文本节点里的 `[n]`（且 n 是有效引用）切成 text / link 混排。 */
 export function splitCitations(value: string, validNs: Set<number>): MdNode[] {
   const out: MdNode[] = []
   let last = 0
@@ -25,7 +24,7 @@ export function splitCitations(value: string, validNs: Set<number>): MdNode[] {
     last = m.index + m[0].length
   }
   if (last < value.length) out.push({ type: 'text', value: value.slice(last) })
-  return out.length ? out : [{ type: 'text', value }]
+  return out
 }
 
 /** remark 插件：遍历树，把 text 节点里的有效 `[n]` 换成 `#kb-cite-n` 链接。

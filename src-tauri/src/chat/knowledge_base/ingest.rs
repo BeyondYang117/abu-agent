@@ -16,6 +16,13 @@ use super::{
     KnowledgeDocument,
 };
 
+/// Lowercase hex SHA256 of `bytes` — content hash used for upload/import dedup.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct KbIndexEvent {
@@ -70,17 +77,6 @@ fn find_source(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<PathBuf, St
         }
     }
     Err(format!("source snapshot missing for {doc_id}"))
-}
-
-fn set_doc_status(
-    app: &AppHandle,
-    kb_id: &str,
-    doc_id: &str,
-    status: DocStatus,
-    chunk_count: usize,
-    error: Option<String>,
-) -> Result<(), String> {
-    super::set_doc_status(app, kb_id, doc_id, status, chunk_count, error.as_deref())
 }
 
 /// The actual pipeline for one document. Returns the chunk count on success.
@@ -190,12 +186,12 @@ fn kb_lock_for(kb_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
 fn finish_index(app: &AppHandle, kb_id: &str, doc_id: &str, result: Result<usize, String>) {
     match result {
         Ok(n) => {
-            let _ = set_doc_status(app, kb_id, doc_id, DocStatus::Ready, n, None);
+            let _ = super::set_doc_status(app, kb_id, doc_id, DocStatus::Ready, n, None);
             let _ = refresh_library_counts(app, kb_id);
             emit_index(app, kb_id, doc_id, "ready", n, n, None);
         }
         Err(e) => {
-            let _ = set_doc_status(app, kb_id, doc_id, DocStatus::Error, 0, Some(e.clone()));
+            let _ = super::set_doc_status(app, kb_id, doc_id, DocStatus::Error, 0, Some(e.as_str()));
             let _ = refresh_library_counts(app, kb_id);
             emit_index(app, kb_id, doc_id, "error", 0, 0, Some(e));
         }
@@ -241,11 +237,7 @@ pub(crate) async fn kb_upload_document(
             parse::MAX_DOC_BYTES
         ));
     }
-    let hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        format!("{:x}", hasher.finalize())
-    };
+    let hash = sha256_hex(&bytes);
 
     let file_name = src
         .file_name()
@@ -349,11 +341,7 @@ pub(crate) async fn kb_import_url(
     );
 
     let bytes = text.into_bytes();
-    let hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        format!("{:x}", hasher.finalize())
-    };
+    let hash = sha256_hex(&bytes);
     // Dedup by extracted-content hash: re-importing an unchanged page is a no-op.
     if let Some(existing) = super::doc_by_hash(&app, &kb_id, &hash)? {
         return Ok(existing);
@@ -393,12 +381,7 @@ pub(crate) async fn kb_import_url(
 
 /// Cap a derived document name (and the filename built from it) to a sane length.
 fn truncate_name(s: &str) -> String {
-    let t = s.trim();
-    if t.chars().count() <= 120 {
-        t.to_string()
-    } else {
-        t.chars().take(120).collect()
-    }
+    s.trim().chars().take(120).collect()
 }
 
 /// Re-index every document in a library from its stored source snapshot. Used

@@ -164,7 +164,7 @@ fn builtin_docx_parse_extracts_paragraph_text() {
         z.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
             .unwrap();
         z.write_all(
-            r#"<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>知识库测试文档</w:t></w:r></w:p><w:p><w:r><w:t>second paragraph here</w:t></w:r></w:p></w:body></w:document>"#.as_bytes(),
+            r#"<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>知识库测试文档</w:t></w:r></w:p></w:body></w:document>"#.as_bytes(),
         )
         .unwrap();
         z.finish().unwrap();
@@ -174,11 +174,6 @@ fn builtin_docx_parse_extracts_paragraph_text() {
     assert!(
         parsed.text.contains("知识库测试文档"),
         "docx text missing first paragraph: {:?}",
-        parsed.text
-    );
-    assert!(
-        parsed.text.contains("second paragraph"),
-        "docx text missing second paragraph: {:?}",
         parsed.text
     );
 

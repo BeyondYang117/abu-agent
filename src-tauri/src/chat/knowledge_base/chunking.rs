@@ -89,7 +89,6 @@ fn split_long_line(line: &str, base: usize, target: usize) -> Vec<(String, usize
     let mut start = 0usize;
     let mut i = 0usize;
     while i < chars.len() {
-        let piece_len = i - start + 1;
         let at_breakpoint = matches!(
             chars[i],
             '。' | '！' | '？' | '；' | '.' | '!' | '?' | ';' | '\n'
@@ -101,7 +100,6 @@ fn split_long_line(line: &str, base: usize, target: usize) -> Vec<(String, usize
             start = i + 1;
         }
         i += 1;
-        let _ = piece_len;
     }
     if start < chars.len() {
         let text: String = chars[start..].iter().collect();
@@ -162,7 +160,7 @@ pub fn chunk_with(
 
     // Iterate lines, tracking char offsets (newline counts as 1 char).
     let mut offset = 0usize;
-    for line in split_lines_keep(text) {
+    for line in text.split('\n') {
         let line_chars = line.chars().count();
         let content = line.trim_end_matches(['\r']);
         // char_end points at the end of the stored content (CRLF '\r' excluded),
@@ -270,12 +268,6 @@ fn merge_tiny_tail(pieces: &mut Vec<ChunkPiece>, min_tokens: usize) {
     } else {
         pieces.push(last); // different section — keep as-is
     }
-}
-
-/// Split on '\n' without dropping a trailing empty segment difference; mirrors
-/// the offset math in `chunk_with` (each '\n' is one char).
-fn split_lines_keep(text: &str) -> Vec<&str> {
-    text.split('\n').collect()
 }
 
 #[cfg(test)]
