@@ -2,12 +2,13 @@
 // 文档列表 + 实时索引进度 / 删除 / 换 embedding 重建。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload, FileCog, Library } from 'lucide-react'
-import { type ModelProvider, type DocumentProcessingConfig } from '../api/tauri'
+import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload, FileCog, Library, SlidersHorizontal } from 'lucide-react'
+import { type ModelProvider, type DocumentProcessingConfig, type KnowledgeBaseConfig } from '../api/tauri'
 import { type Lang } from './i18n'
 import { SettingsGroup, Input, Select } from './components'
 import { resolveModelInfo } from '../data/modelMatching'
 import { DocumentProcessingPanel } from './DocumentProcessingPanel'
+import { RetrievalPanel } from './RetrievalPanel'
 import {
   kbListLibraries,
   kbCreateLibrary,
@@ -123,18 +124,22 @@ export function KnowledgeBasePanel({
   lang,
   docProcessing,
   onChangeDocProcessing,
+  kbConfig,
+  onChangeKbConfig,
 }: {
   providers: ModelProvider[]
   lang: Lang
   docProcessing?: DocumentProcessingConfig
   onChangeDocProcessing: (next: DocumentProcessingConfig) => void
+  kbConfig?: KnowledgeBaseConfig
+  onChangeKbConfig: (next: KnowledgeBaseConfig) => void
 }) {
   const t = (zh: string, en: string) => (lang === 'zh' ? zh : en)
 
   const [libraries, setLibraries] = useState<KnowledgeLibrary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // 右栏视图：某个库 / 新建 / 文档处理设置
-  const [rightView, setRightView] = useState<'library' | 'new' | 'docproc'>('library')
+  // 右栏视图：某个库 / 新建 / 文档处理 / 检索设置
+  const [rightView, setRightView] = useState<'library' | 'new' | 'docproc' | 'retrieval'>('library')
   const [docs, setDocs] = useState<KnowledgeDocument[]>([])
   const [progress, setProgress] = useState<Record<string, Progress>>({})
   const [busy, setBusy] = useState(false)
@@ -351,6 +356,18 @@ export function KnowledgeBasePanel({
           <FileCog size={14} className="shrink-0 text-zinc-400" /> {t('文档处理', 'Doc processing')}
         </button>
 
+        <button
+          type="button"
+          onClick={() => setRightView('retrieval')}
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+            rightView === 'retrieval'
+              ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
+              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800'
+          }`}
+        >
+          <SlidersHorizontal size={14} className="shrink-0 text-zinc-400" /> {t('检索', 'Retrieval')}
+        </button>
+
         <div className="my-1.5 border-t border-zinc-200/70 dark:border-zinc-800" />
 
         <div className="px-2 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
@@ -447,6 +464,16 @@ export function KnowledgeBasePanel({
             config={docProcessing}
             lang={lang}
             onChange={onChangeDocProcessing}
+          />
+        )}
+
+        {/* 检索设置 */}
+        {rightView === 'retrieval' && (
+          <RetrievalPanel
+            config={kbConfig}
+            providers={providers}
+            lang={lang}
+            onChange={onChangeKbConfig}
           />
         )}
 

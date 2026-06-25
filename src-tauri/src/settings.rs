@@ -831,6 +831,33 @@ pub struct DocumentProcessingConfig {
     pub providers: Vec<DocProcessorProvider>,
 }
 
+/// 知识库检索配置：hybrid(向量+关键词 RRF) 权重 + 可选全局 rerank。
+/// 只配 embedding 即可用：hybrid 免配可关，rerank 留空即关、失败降级。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KnowledgeBaseConfig {
+    /// 是否启用关键词(BM25)+向量 hybrid 融合（关掉=纯向量）。
+    pub hybrid_enabled: bool,
+    /// RRF 融合权重（hybrid 开启时生效）。
+    pub weight_vector: f32,
+    pub weight_keyword: f32,
+    /// 全局 rerank：留空即关闭。provider 引用 providers[]，model 为该 provider 的 rerank 模型。
+    pub rerank_provider_id: String,
+    pub rerank_model: String,
+}
+
+impl Default for KnowledgeBaseConfig {
+    fn default() -> Self {
+        Self {
+            hybrid_enabled: true,
+            weight_vector: 1.0,
+            weight_keyword: 1.0,
+            rerank_provider_id: String::new(),
+            rerank_model: String::new(),
+        }
+    }
+}
+
 /**
  * 应用完整设置
  */
@@ -877,6 +904,8 @@ pub struct Settings {
     pub chat_tools: ChatToolsConfig,
     #[serde(default)]
     pub document_processing: DocumentProcessingConfig,
+    #[serde(default)]
+    pub knowledge_base: KnowledgeBaseConfig,
     /// 一次性：将 Lens 的流式/思考开关复制到独立的 Chat 配置（旧版共用 Lens 行为）。
     #[serde(default)]
     pub chat_behavior_migrated_from_lens: bool,
@@ -1006,6 +1035,7 @@ impl Default for Settings {
             chat_memory: ChatMemoryConfig::default(),
             chat_tools: ChatToolsConfig::default(),
             document_processing: DocumentProcessingConfig::default(),
+            knowledge_base: KnowledgeBaseConfig::default(),
             chat_behavior_migrated_from_lens: false,
             settings_language: Some("zh".to_string()),
             retry_enabled: default_retry_enabled(),

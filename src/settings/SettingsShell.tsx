@@ -3773,6 +3773,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 lang={lang}
                 docProcessing={settings?.documentProcessing}
                 onChangeDocProcessing={(dp) => updateSettings({ documentProcessing: dp })}
+                kbConfig={settings?.knowledgeBase}
+                onChangeKbConfig={(kb) => updateSettings({ knowledgeBase: kb })}
               />
             )}
 

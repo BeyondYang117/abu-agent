@@ -634,6 +634,17 @@ export type DocumentProcessingConfig = {
   providers: DocProcessorProvider[]
 }
 
+/** 知识库检索配置：hybrid(向量+关键词 RRF) 权重 + 可选全局 rerank。 */
+export type KnowledgeBaseConfig = {
+  /** 关键词(BM25)+向量 hybrid 融合开关（关掉=纯向量）。 */
+  hybridEnabled: boolean
+  weightVector: number
+  weightKeyword: number
+  /** 全局 rerank：留空即关闭。providerId 引用 providers[]。 */
+  rerankProviderId: string
+  rerankModel: string
+}
+
 export type Settings = {
   hotkey: string
   theme: 'system' | 'light' | 'dark'
@@ -653,6 +664,7 @@ export type Settings = {
   providers: ModelProvider[]
   chatTools: ChatToolsConfig
   documentProcessing?: DocumentProcessingConfig
+  knowledgeBase?: KnowledgeBaseConfig
   retryEnabled: boolean
   retryAttempts: number
   screenshotTranslation: {

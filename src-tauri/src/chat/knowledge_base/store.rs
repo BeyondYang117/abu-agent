@@ -80,7 +80,7 @@ pub fn open_db(path: &Path) -> Result<Connection, String> {
          );
          CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
          CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-            text, content='chunks', content_rowid='id'
+            text, content='chunks', content_rowid='id', tokenize='trigram'
          );
          CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
             INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
@@ -317,18 +317,17 @@ fn row_to_chunk(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeChunk> {
     })
 }
 
-/// Vector KNN via sqlite-vec. Returns (chunk, cosine_score) best-first.
-/// `score = 1 - cosine_distance`.
-pub fn vector_search(
+/// Vector KNN via sqlite-vec. Returns (rowid, chunk, cosine_distance) best-first.
+fn vector_rows(
     conn: &Connection,
     query: &[f32],
-    top_k: usize,
-) -> Result<Vec<(KnowledgeChunk, f32)>, String> {
-    if top_k == 0 || query.is_empty() || !vec_table_exists(conn)? {
+    limit: usize,
+) -> Result<Vec<(i64, KnowledgeChunk, f32)>, String> {
+    if limit == 0 || query.is_empty() || !vec_table_exists(conn)? {
         return Ok(Vec::new());
     }
-    let sql = "SELECT c.chunk_id, c.doc_id, c.doc_name, c.text, c.heading_path, c.page,
-                      c.char_start, c.char_end, c.order_index, v.distance AS distance
+    let sql = "SELECT c.id AS rowid, c.chunk_id, c.doc_id, c.doc_name, c.text, c.heading_path,
+                      c.page, c.char_start, c.char_end, c.order_index, v.distance AS distance
                FROM vec_chunks v
                JOIN chunks c ON c.id = v.rowid
                WHERE v.embedding MATCH ?1 AND k = ?2
@@ -336,16 +335,106 @@ pub fn vector_search(
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let blob = embedding_to_blob(query);
     let rows = stmt
-        .query_map(rusqlite::params![blob, top_k as i64], |row| {
-            let chunk = row_to_chunk(row)?;
+        .query_map(rusqlite::params![blob, limit as i64], |row| {
+            let rowid: i64 = row.get("rowid")?;
             let distance: f64 = row.get("distance")?;
-            Ok((chunk, 1.0 - distance as f32))
+            Ok((rowid, row_to_chunk(row)?, distance as f32))
         })
         .map_err(|e| format!("vector search: {e}"))?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r.map_err(|e| e.to_string())?);
     }
+    Ok(out)
+}
+
+/// FTS5 BM25 keyword search. Returns (rowid, chunk) best-first.
+fn fts_rows(
+    conn: &Connection,
+    query_text: &str,
+    limit: usize,
+) -> Result<Vec<(i64, KnowledgeChunk)>, String> {
+    let q = query_text.trim();
+    if limit == 0 || q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = "SELECT c.id AS rowid, c.chunk_id, c.doc_id, c.doc_name, c.text, c.heading_path,
+                      c.page, c.char_start, c.char_end, c.order_index
+               FROM chunks_fts f
+               JOIN chunks c ON c.id = f.rowid
+               WHERE chunks_fts MATCH ?1
+               ORDER BY f.rank
+               LIMIT ?2";
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    // Pass the raw text as a single MATCH string; trigram tokenizer handles
+    // CJK + substrings. Quote it so punctuation/operators in user text don't
+    // get parsed as FTS5 query syntax.
+    let match_query = format!("\"{}\"", q.replace('"', "\"\""));
+    let rows = stmt
+        .query_map(rusqlite::params![match_query, limit as i64], |row| {
+            let rowid: i64 = row.get("rowid")?;
+            Ok((rowid, row_to_chunk(row)?))
+        })
+        .map_err(|e| format!("fts search: {e}"))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// Pure vector search (cosine), kept for callers that don't want hybrid.
+/// `score = 1 - cosine_distance`.
+pub fn vector_search(
+    conn: &Connection,
+    query: &[f32],
+    top_k: usize,
+) -> Result<Vec<(KnowledgeChunk, f32)>, String> {
+    Ok(vector_rows(conn, query, top_k)?
+        .into_iter()
+        .map(|(_, chunk, dist)| (chunk, 1.0 - dist))
+        .collect())
+}
+
+/// Hybrid search: fuse vector (cosine) + FTS5 (BM25) rankings with Reciprocal
+/// Rank Fusion (k=60). Weights gate each lane (0 disables it); with only the
+/// vector lane on this is equivalent to `vector_search`. Returns (chunk, score)
+/// best-first where score is the (unnormalized) fused RRF score.
+pub fn hybrid_search(
+    conn: &Connection,
+    query_vec: &[f32],
+    query_text: &str,
+    top_k: usize,
+    weight_vector: f32,
+    weight_keyword: f32,
+) -> Result<Vec<(KnowledgeChunk, f32)>, String> {
+    use std::collections::HashMap;
+    const RRF_K: f32 = 60.0;
+    // Over-fetch each lane so fusion sees beyond the final top_k.
+    let fetch = (top_k * 5).max(20);
+
+    let mut score: HashMap<i64, f32> = HashMap::new();
+    let mut chunk_by_id: HashMap<i64, KnowledgeChunk> = HashMap::new();
+
+    if weight_vector > 0.0 {
+        for (rank, (rowid, chunk, _dist)) in vector_rows(conn, query_vec, fetch)?.into_iter().enumerate() {
+            *score.entry(rowid).or_insert(0.0) += weight_vector / (RRF_K + (rank as f32 + 1.0));
+            chunk_by_id.entry(rowid).or_insert(chunk);
+        }
+    }
+    if weight_keyword > 0.0 {
+        for (rank, (rowid, chunk)) in fts_rows(conn, query_text, fetch)?.into_iter().enumerate() {
+            *score.entry(rowid).or_insert(0.0) += weight_keyword / (RRF_K + (rank as f32 + 1.0));
+            chunk_by_id.entry(rowid).or_insert(chunk);
+        }
+    }
+
+    let mut out: Vec<(KnowledgeChunk, f32)> = score
+        .into_iter()
+        .filter_map(|(id, s)| chunk_by_id.remove(&id).map(|c| (c, s)))
+        .collect();
+    out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    out.truncate(top_k);
     Ok(out)
 }
 
@@ -402,5 +491,55 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert_eq!(hits, vec![1]);
+    }
+
+    fn tmp_db() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("kivio-store-test-{}.db", uuid::Uuid::new_v4()))
+    }
+
+    fn mk_chunk(id: &str, text: &str, emb: Vec<f32>) -> KnowledgeChunk {
+        KnowledgeChunk {
+            id: id.to_string(),
+            doc_id: "d".to_string(),
+            doc_name: "d.md".to_string(),
+            text: text.to_string(),
+            heading_path: None,
+            page: None,
+            char_start: 0,
+            char_end: 0,
+            order_index: 0,
+            embedding: emb,
+        }
+    }
+
+    #[test]
+    fn hybrid_fuses_vector_and_keyword_lanes() {
+        let path = tmp_db();
+        let conn = open_db(&path).unwrap();
+        replace_doc_chunks(
+            &conn,
+            "d",
+            2,
+            &[
+                mk_chunk("c1", "rust memory safety and ownership", vec![1.0, 0.0]),
+                mk_chunk("c2", "cats are independent pets", vec![0.0, 1.0]),
+                mk_chunk("c3", "the weather is nice today", vec![0.9, 0.1]),
+            ],
+        )
+        .unwrap();
+
+        // Query vector points at c2's direction, but the keyword "memory" only
+        // matches c1 — hybrid must surface BOTH (vector lane c2, keyword lane c1).
+        let hits = hybrid_search(&conn, &[0.0, 1.0], "memory", 3, 1.0, 1.0).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|(c, _)| c.id.as_str()).collect();
+        assert!(ids.contains(&"c1"), "keyword lane should surface c1: {ids:?}");
+        assert!(ids.contains(&"c2"), "vector lane should surface c2: {ids:?}");
+
+        // Pure vector (keyword weight 0): query [1,0] → c1 ranks first, keyword ignored.
+        let v = hybrid_search(&conn, &[1.0, 0.0], "nonexistentword", 3, 1.0, 0.0).unwrap();
+        assert_eq!(v[0].0.id, "c1");
+
+        drop(conn);
+        std::fs::remove_file(&path).ok();
     }
 }

@@ -32,6 +32,7 @@ pub mod commands;
 pub mod embeddings;
 pub mod ingest;
 pub mod parse;
+pub mod rerank;
 pub mod store;
 
 /// A knowledge library. `embedding_dim` is 0 until the first chunk is indexed
@@ -413,13 +414,18 @@ fn search_at(
     root: &Path,
     kb_ids: &[String],
     query: &[f32],
+    query_text: &str,
     top_k: usize,
+    weight_vector: f32,
+    weight_keyword: f32,
 ) -> Result<Vec<ScoredChunk>, String> {
     let mut all: Vec<ScoredChunk> = Vec::new();
     for kb_id in kb_ids {
         // Tolerate a single broken/corrupt library: skip (logged) so it can't
         // starve the rest of a cross-library search.
-        match open_kb_at(root, kb_id).and_then(|c| store::vector_search(&c, query, top_k)) {
+        match open_kb_at(root, kb_id)
+            .and_then(|c| store::hybrid_search(&c, query, query_text, top_k, weight_vector, weight_keyword))
+        {
             Ok(hits) => {
                 for (chunk, score) in hits {
                     all.push(ScoredChunk {
@@ -659,14 +665,26 @@ pub fn top_k_by_cosine(
     scored
 }
 
-/// Load chunks across the given libraries and return the top-k by cosine.
+/// Hybrid (vector + keyword RRF) search across libraries, top-k best-first.
+/// `weight_keyword = 0` ⇒ pure vector.
 pub fn search(
     app: &AppHandle,
     kb_ids: &[String],
     query: &[f32],
+    query_text: &str,
     top_k: usize,
+    weight_vector: f32,
+    weight_keyword: f32,
 ) -> Result<Vec<ScoredChunk>, String> {
-    search_at(&kb_root(app)?, kb_ids, query, top_k)
+    search_at(
+        &kb_root(app)?,
+        kb_ids,
+        query,
+        query_text,
+        top_k,
+        weight_vector,
+        weight_keyword,
+    )
 }
 
 #[cfg(test)]
@@ -800,7 +818,7 @@ mod tests {
         assert_eq!(lib.embedding_dim, 3);
 
         // 4) search (vec0 cosine): query near [1,0,0] → c1 (exact) then c3 (close)
-        let hits = search_at(&root, &[kb.clone()], &[1.0, 0.0, 0.0], 2).unwrap();
+        let hits = search_at(&root, &[kb.clone()], &[1.0, 0.0, 0.0], "", 2, 1.0, 0.0).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].chunk.id, "c1");
         assert_eq!(hits[0].chunk.doc_name, "a.md");
@@ -816,7 +834,7 @@ mod tests {
         let lib = get_library_at(&root, &kb).unwrap();
         assert_eq!(lib.doc_count, 1);
         assert_eq!(lib.chunk_count, 1);
-        let hits = search_at(&root, &[kb.clone()], &[1.0, 0.0, 0.0], 5).unwrap();
+        let hits = search_at(&root, &[kb.clone()], &[1.0, 0.0, 0.0], "", 5, 1.0, 0.0).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].chunk.doc_id, "doc_b");
 
@@ -837,7 +855,7 @@ mod tests {
         replace_doc_chunks_at(&root, &b, "d", 2, &[chunk_emb("b1", "d", "b.md", None, vec![0.2, 1.0])]).unwrap();
 
         // Query closest to a1; both libraries searched, hit tagged with its kb id.
-        let hits = search_at(&root, &[a.clone(), b.clone()], &[1.0, 0.0], 5).unwrap();
+        let hits = search_at(&root, &[a.clone(), b.clone()], &[1.0, 0.0], "", 5, 1.0, 0.0).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].chunk.id, "a1");
         assert_eq!(hits[0].kb_id, a);
@@ -864,7 +882,7 @@ mod tests {
         )
         .unwrap();
 
-        let hits = search_at(&root, &[kb.clone()], &[1.0], 5).unwrap();
+        let hits = search_at(&root, &[kb.clone()], &[1.0], "", 5, 1.0, 0.0).unwrap();
         assert_eq!(hits.len(), 2);
         assert!(hits.iter().all(|c| c.chunk.id.starts_with("new")));
 
@@ -926,7 +944,7 @@ mod tests {
         std::fs::create_dir_all(bad_db.parent().unwrap()).unwrap();
         std::fs::write(&bad_db, "not a sqlite database").unwrap();
 
-        let hits = search_at(&root, &[good.clone(), bad.clone()], &[1.0, 0.0], 5).unwrap();
+        let hits = search_at(&root, &[good.clone(), bad.clone()], &[1.0, 0.0], "", 5, 1.0, 0.0).unwrap();
         assert_eq!(hits.len(), 1, "healthy library's hit must survive a corrupt sibling");
         assert_eq!(hits[0].chunk.id, "g1");
         std::fs::remove_dir_all(&root).ok();
