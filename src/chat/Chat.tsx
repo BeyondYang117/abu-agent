@@ -71,7 +71,6 @@ import {
   createEmptyStreamSnapshot,
   isConversationBusy,
   isConversationInFlight,
-  terminalSubagentToolCallStatus,
   type ConversationStreamSnapshot,
 } from './conversationRuns'
 import { compareTimelineSegments, segmentStepNumber, segmentToolCallId } from './segments'
@@ -1545,12 +1544,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const setupListener = async () => {
       unlisten = await api.onChatSubagent((payload) => {
         if (cancelled) return
-        // Background sub-agents (dispatch-and-return) finalize via a terminal
-        // chat-subagent event that may arrive while the parent run is still
-        // in-flight OR just after invoke returned. Accept the event whenever a
-        // snapshot exists for the parent conversation (do NOT create one — that
-        // would resurrect a finalized conversation). The original in-flight path
-        // is unchanged; this only stops dropping events for a known snapshot.
+        // A `chat-subagent` progress event must address an existing snapshot for
+        // the parent conversation (do NOT create one — that would resurrect a
+        // finalized conversation). Accept whenever the conversation is in-flight
+        // or a snapshot already exists.
         const existingSnapshot = streamSnapshotsRef.current[payload.parentConversationId]
         const inFlight = isConversationInFlight(
           inFlightConversationsRef.current,
@@ -1558,8 +1555,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         )
         if (!inFlight && !existingSnapshot) return
         const snapshot = ensureStreamSnapshot(payload.parentConversationId)
-        // Match the active run when known. A background terminal event may carry
-        // the parent run id; only drop it when both ids are set and differ.
+        // Match the active run when known; only drop when both ids are set and differ.
         if (payload.parentRunId && snapshot.runId && snapshot.runId !== payload.parentRunId) return
         const index = snapshot.toolCalls.findIndex((item) => item.id === payload.parentToolCallId)
         if (index < 0) return
@@ -1571,15 +1567,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           preview: payload.preview ?? '',
           steps: payload.steps ?? [],
         }
-        // A detached (background:true) spawn dispatches `is_error:false`
-        // immediately, so the parent tool call is pinned to `completed`. On its
-        // terminal event, fold the real outcome back onto the tool record: merge
-        // the failure/cancellation reason into structuredContent.error and remap
-        // the tool call status (failed→error, cancelled→cancelled) so the card
-        // stops rendering a failed/cancelled sub-agent as a green "completed".
-        const terminalStatus = payload.background
-          ? terminalSubagentToolCallStatus(payload.status)
-          : null
+        // Sub-agents run blocking + single-result: the parent tool card transitions
+        // running→done via the `chat-tool` flow (the inline result), while these
+        // `chat-subagent` events drive the live nested progress (steps/preview).
         snapshot.toolCalls = snapshot.toolCalls.map((item, i) => {
           if (i !== index) return item
           const existing =
@@ -1590,13 +1580,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             ...existing,
             subagentProgress: progress,
           }
-          if (terminalStatus && payload.error) {
-            nextStructured.error = payload.error
-          }
           return {
             ...item,
             structuredContent: nextStructured,
-            ...(terminalStatus ? { status: terminalStatus } : {}),
           }
         })
         showStreamSnapshotIfCurrent(payload.parentConversationId, snapshot)

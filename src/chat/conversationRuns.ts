@@ -61,30 +61,3 @@ export function createEmptyStreamSnapshot(): ConversationStreamSnapshot {
     reasoningDurationMsBySegmentId: {},
   }
 }
-
-/** Terminal status carried on a background sub-agent `chat-subagent` event. */
-export type SubagentTerminalStatus = 'completed' | 'failed' | 'cancelled'
-
-/**
- * Map a background sub-agent's terminal event status onto the parent tool
- * call's {@link import('./types').ToolCallStatus}. A detached (`background:true`)
- * spawn dispatches `is_error:false` immediately, pinning the tool call to
- * `completed`; without this remap a failed/cancelled sub-agent would keep
- * rendering as a green "completed" card (the card derives its visible status
- * from `normalizeToolCallStatus(toolCall.status)`, not from the progress view).
- * Returns `null` for a non-terminal status so callers leave the status as-is.
- */
-export function terminalSubagentToolCallStatus(
-  status: string | null | undefined,
-): import('./types').ToolCallStatus | null {
-  switch (status) {
-    case 'failed':
-      return 'error'
-    case 'cancelled':
-      return 'cancelled'
-    case 'completed':
-      return 'completed'
-    default:
-      return null
-  }
-}

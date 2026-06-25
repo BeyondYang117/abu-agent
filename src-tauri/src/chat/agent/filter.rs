@@ -20,10 +20,9 @@ pub fn filter_tools_for_agent(
     let mut removed = Vec::new();
     let allow = &def.tools;
     tools.retain(|tool| {
-        // Sub-agent control tools (agent / check_agent_result / list_agent_tasks
-        // / await_agents) are never available inside a sub-agent: a worker must
-        // not spawn, inspect, or join sibling agents (recursion + orchestration
-        // are top-down only).
+        // The `agent` spawn tool is never available inside a sub-agent: a worker
+        // must not spawn sibling agents (recursion is top-down only). This is the
+        // second recursion guard alongside the depth check.
         if is_sub_agent_control_tool(tool) {
             removed.push(tool.clone());
             return false;
@@ -52,9 +51,8 @@ pub fn filter_tools_for_agent(
     removed
 }
 
-/// Whether `tool` is a sub-agent control tool (spawn / inspect / list / await).
-/// All are stripped from a sub-agent's table: a worker cannot spawn siblings,
-/// nor inspect/join the orchestrator's other agents.
+/// Whether `tool` is the `agent` spawn tool. It is stripped from a sub-agent's
+/// table: a worker cannot spawn sibling agents.
 fn is_sub_agent_control_tool(tool: &ChatToolDefinition) -> bool {
     tool.source == "native" && crate::chat::sub_agent::is_sub_agent_tool_name(&tool.name)
 }

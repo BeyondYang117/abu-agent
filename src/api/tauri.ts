@@ -245,10 +245,6 @@ export type ChatSubagentPayload = {
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   preview?: string
   steps?: string[]
-  /** True on the terminal event of a detached (background:true) spawn. */
-  background?: boolean
-  /** Failure/cancellation reason on a terminal event. */
-  error?: string | null
 }
 
 export type AskUserPhase = 'awaiting' | 'answered' | 'skipped' | 'timeout' | 'cancelled'

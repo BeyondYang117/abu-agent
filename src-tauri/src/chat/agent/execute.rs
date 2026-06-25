@@ -554,12 +554,11 @@ fn effective_tool_timeout_ms(
             .max(default_timeout_ms);
     }
     // The `agent` spawn tool runs a whole sub-agent loop whose own budget
-    // (SUB_AGENT_SYNC_TIMEOUT_SECS × SUB_AGENT_MAX_ATTEMPTS) is far longer than the
-    // default generic tool timeout (120s). Without a longer outer timeout, the
-    // generic 120s would fire first and mis-kill a still-running sub-agent. Give
-    // the outer call a large backstop and let the sub-agent's inner timeout +
-    // cascade cancel govern its lifecycle. check_agent_result / list_agent_tasks
-    // are instant queries, so they intentionally keep the default timeout.
+    // (SUB_AGENT_MAX_ATTEMPTS × the inner run) is far longer than the default
+    // generic tool timeout (120s). Without a longer outer timeout, the generic
+    // 120s would fire first and mis-kill a still-running sub-agent. Give the
+    // outer call a large backstop and let the sub-agent's inner lifecycle +
+    // cascade cancel govern it.
     if tool.source == "native" && tool.name == crate::chat::sub_agent::AGENT_TOOL_NAME {
         return crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS.max(default_timeout_ms);
     }

@@ -444,18 +444,19 @@ pub fn build_chat_system_prompt_with_segments(
                 &native_prompt,
             );
         }
-        // Background sub-agent dispatch rules — only when the `agent` spawn tool
-        // is available. Counters the SOTA failure modes (dispatch-then-poll-
-        // immediately degenerates async back to blocking; unbounded polling burns
-        // tokens; acting on stale history). Concise on purpose.
+        // Sub-agent delegation rules — only when the `agent` spawn tool is
+        // available. The `agent` call is BLOCKING + single-result (Claude Code
+        // Task model); to run sub-agents in parallel, emit MULTIPLE `agent` calls
+        // in ONE message — they execute concurrently and each returns its result.
+        // No polling/collection tool exists. Concise on purpose.
         if available_builtin_tools
             .iter()
             .any(|tool| tool.as_str() == crate::chat::sub_agent::AGENT_TOOL_NAME)
         {
             let background_prompt = if language.starts_with("zh") {
-                "委派子 agent：单个委派用默认（同步）agent——会等子 agent 跑完并直接返回结果。需要并行处理多个互相独立的子任务时，用 agent 的 background:true 逐个派发（它们并行运行），然后调用一次 await_agents 一次性收齐全部结果；不要循环轮询 check_agent_result。后台任务只在本次运行内存活——本轮结束就会被清理。check_agent_result / list_agent_tasks 仅用于手动/临时查看状态，不是收结果的途径。"
+                "委派子 agent：每个 agent 调用都会阻塞、等子 agent 跑完并直接返回完整结果。要并行处理多个互相独立的子任务，就在同一条消息里发出多个 agent 调用——它们会并发执行，各自返回自己的结果。没有任何轮询或收集工具，也不要去找。"
             } else {
-                "Delegating to sub-agents: for a SINGLE delegation use a normal (synchronous) agent call — it waits for the sub-agent and returns the result directly. For MULTIPLE independent subtasks, dispatch each with agent background:true (they run in parallel), then call await_agents ONCE to collect ALL results — do NOT poll check_agent_result in a loop. Background tasks live only for this run and are cleaned up when it ends. check_agent_result / list_agent_tasks are for manual/ad-hoc status peeks only, not the way to collect results."
+                "Delegating to sub-agents: each agent call BLOCKS, waits for the sub-agent to finish, and returns its full result directly. To run sub-agents in PARALLEL, emit MULTIPLE agent tool calls in a SINGLE message — they execute concurrently and each returns its own result. There is no polling or collection tool; do not look for one."
             };
             append_context_segment(
                 &mut prompt,

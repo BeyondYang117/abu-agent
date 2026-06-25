@@ -17,8 +17,10 @@
 //!   memory_read is read-only and approval-free but deliberately NOT
 //!   parallel-safe. `agent` is also parallel-safe (multi-agent fan-out): each
 //!   spawn runs isolated and is capped by the SubAgentManager semaphore
-//!   (default `DEFAULT_SUB_AGENT_CONCURRENCY` = 12, user-configurable). A spawn
-//!   may also be detached (`background:true`), returning a task_id immediately.
+//!   (default `DEFAULT_SUB_AGENT_CONCURRENCY` = 12, user-configurable). Each
+//!   `agent` call blocks until its sub-agent finishes and returns the result
+//!   inline; parallelism comes from the model emitting several `agent` calls in
+//!   one round.
 //! - Table order is the model-facing tool list order; keep it stable.
 
 use std::future::Future;
@@ -83,10 +85,10 @@ pub enum NativeToolCall {
     /// `chat/agent/execute.rs::execute_ask_user_call` and must never reach
     /// the registry dispatcher.
     HostMediated,
-    /// Sub-agent management tools (agent / check_agent_result /
-    /// list_agent_tasks): dispatched before workspace resolution (they manage
-    /// agents, not files) with the parent run context from `NativeToolContext`
-    /// (depth, run_id, generation, parent conversation/tool-call id).
+    /// Sub-agent spawn tool (`agent`): dispatched before workspace resolution
+    /// (it manages agents, not files) with the parent run context from
+    /// `NativeToolContext` (depth, run_id, generation, parent conversation/
+    /// tool-call id).
     SubAgent(for<'a> fn(crate::chat::sub_agent::SubAgentCallCtx<'a>) -> NativeToolFuture<'a>),
 }
 
@@ -322,11 +324,10 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         requires_session_consent: false,
         call: NativeToolCall::HostMediated,
     },
-    // Sub-agent management tools (P3). Appended in chat/commands.rs
-    // (`append_agent_subagent_tools`) when the multi-agent toggle is on, so
-    // enabled = false here. bypasses_approval = true: spawning/inspecting
-    // sub-agents is governed by depth + concurrency caps, not per-call
-    // approval prompts.
+    // Sub-agent spawn tool (P3). Appended in chat/commands.rs (via
+    // `sub_agent::append_tool_definitions`) when the multi-agent toggle is on, so
+    // enabled = false here. bypasses_approval = true: spawning sub-agents is
+    // governed by depth + concurrency caps, not per-call approval prompts.
     NativeToolEntry {
         name: crate::chat::sub_agent::AGENT_TOOL_NAME,
         def: crate::chat::sub_agent::agent_tool,
@@ -334,47 +335,16 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         // parallel_safe = true: each `agent` spawn runs in isolation (its own
         // synthetic conversation/generation/message history), bypasses approval,
         // and is capped by the SubAgentManager semaphore (default 12, user-
-        // configurable). Concurrent fan-out is the core value of multi-agent, so
-        // a single round may dispatch several spawns in parallel (scheduler caps
-        // at MAX_PARALLEL_TOOL_CALLS_PER_ROUND = 12, semaphore at the setting).
+        // configurable). Concurrent fan-out is the core value of multi-agent: a
+        // single round may dispatch several `agent` calls in parallel (scheduler
+        // caps at MAX_PARALLEL_TOOL_CALLS_PER_ROUND = 12, semaphore at the
+        // setting). Each call blocks until its sub-agent finishes and returns the
+        // full result inline (Claude Code Task model).
         parallel_safe: true,
         bypasses_approval: true,
         read_only: false,
         requires_session_consent: false,
         call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_agent_spawn),
-    },
-    NativeToolEntry {
-        name: crate::chat::sub_agent::CHECK_AGENT_RESULT_TOOL_NAME,
-        def: crate::chat::sub_agent::check_agent_result_tool,
-        enabled: |_, _, _| false,
-        parallel_safe: false,
-        bypasses_approval: true,
-        read_only: true,
-        requires_session_consent: false,
-        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_check_agent_result),
-    },
-    NativeToolEntry {
-        name: crate::chat::sub_agent::LIST_AGENT_TASKS_TOOL_NAME,
-        def: crate::chat::sub_agent::list_agent_tasks_tool,
-        enabled: |_, _, _| false,
-        parallel_safe: false,
-        bypasses_approval: true,
-        read_only: true,
-        requires_session_consent: false,
-        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_list_agent_tasks),
-    },
-    NativeToolEntry {
-        name: crate::chat::sub_agent::AWAIT_AGENTS_TOOL_NAME,
-        def: crate::chat::sub_agent::await_agents_tool,
-        enabled: |_, _, _| false,
-        // NOT parallel_safe: it blocks the runtime joining other sub-agents and
-        // must run on its own (a single await call collects everything). NOT
-        // read_only: it is a control/synchronization tool, not a registry peek.
-        parallel_safe: false,
-        bypasses_approval: true,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::SubAgent(crate::chat::sub_agent::dispatch_await_agents),
     },
 ];
 
@@ -562,9 +532,6 @@ mod tests {
         "todo_update",
         "ask_user",
         "agent",
-        "check_agent_result",
-        "list_agent_tasks",
-        "await_agents",
     ];
 
     #[test]
@@ -661,9 +628,6 @@ mod tests {
                 "todo_update",
                 "ask_user",
                 "agent",
-                "check_agent_result",
-                "list_agent_tasks",
-                "await_agents",
             ]
         );
     }
@@ -688,8 +652,6 @@ mod tests {
                 "list_background",
                 "memory_read",
                 "memory_search",
-                "check_agent_result",
-                "list_agent_tasks",
             ],
             "memory_read/memory_search are read-only but deliberately not parallel-safe"
         );

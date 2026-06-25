@@ -4,7 +4,6 @@ import {
   createEmptyStreamSnapshot,
   isConversationBusy,
   isConversationInFlight,
-  terminalSubagentToolCallStatus,
 } from './conversationRuns'
 
 describe('isConversationInFlight', () => {
@@ -62,29 +61,5 @@ describe('createEmptyStreamSnapshot', () => {
     expect(snapshot.startedAt).toBeTypeOf('number')
     expect(snapshot.reasoningStartedAtBySegmentId).toEqual({})
     expect(snapshot.reasoningDurationMsBySegmentId).toEqual({})
-  })
-})
-
-describe('terminalSubagentToolCallStatus', () => {
-  it('maps a failed background sub-agent to the error tool-call status', () => {
-    // Regression for the FE bug where a failed/cancelled background sub-agent
-    // rendered as a green "completed" card (the immediate is_error:false
-    // dispatch pins the tool call to completed).
-    expect(terminalSubagentToolCallStatus('failed')).toBe('error')
-  })
-
-  it('maps a cancelled sub-agent to the cancelled tool-call status', () => {
-    expect(terminalSubagentToolCallStatus('cancelled')).toBe('cancelled')
-  })
-
-  it('maps a completed sub-agent to the completed tool-call status', () => {
-    expect(terminalSubagentToolCallStatus('completed')).toBe('completed')
-  })
-
-  it('returns null for a non-terminal / unknown status so the caller leaves it as-is', () => {
-    expect(terminalSubagentToolCallStatus('running')).toBeNull()
-    expect(terminalSubagentToolCallStatus(undefined)).toBeNull()
-    expect(terminalSubagentToolCallStatus(null)).toBeNull()
-    expect(terminalSubagentToolCallStatus('weird')).toBeNull()
   })
 })
