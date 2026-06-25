@@ -25,7 +25,7 @@ import {
   type KnowledgeDocument,
 } from '../chat/knowledgeBase'
 
-const UPLOAD_EXTS = ['txt', 'text', 'log', 'csv', 'tsv', 'md', 'markdown', 'mdown', 'mkd', 'pdf', 'docx', 'xlsx', 'html', 'htm']
+const UPLOAD_EXTS = ['txt', 'text', 'log', 'csv', 'tsv', 'md', 'markdown', 'mdown', 'mkd', 'pdf', 'docx', 'xlsx', 'html', 'htm', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tif', 'tiff', 'gif']
 
 // Embedding 模型选择器：从 provider 的 availableModels 取建议（含未启用的 embedding
 // 模型，如 bge-m3 / text-embedding-3-small），并允许自由输入——有些 provider 不在
@@ -598,7 +598,7 @@ export function KnowledgeBasePanel({
               <div className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-700">
                 {docs.length === 0 ? (
                   <p className="px-3 py-4 text-center text-sm text-zinc-400">
-                    {t('暂无文档。支持 txt / md / pdf / docx / xlsx / html，或导入网址。', 'No documents. Supports txt / md / pdf / docx / xlsx / html, or import a URL.')}
+                    {t('暂无文档。支持 txt/md/pdf/docx/xlsx/html、图片（需开启 OCR），或导入网址。', 'No documents. Supports txt/md/pdf/docx/xlsx/html, images (requires OCR), or import a URL.')}
                   </p>
                 ) : (
                   docs.map((doc) => (

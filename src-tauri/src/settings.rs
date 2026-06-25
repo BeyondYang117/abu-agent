@@ -807,28 +807,23 @@ impl Default for ChatToolsConfig {
     }
 }
 
-/// 第三方文档处理服务（PDF/扫描件/复杂版式 → markdown）。后端待接入，
-/// 当前仅作配置持久化。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct DocProcessorProvider {
-    pub id: String,
-    pub name: String,
-    /// "mineru" | "doc2x" | "custom"
-    pub kind: String,
-    pub api_keys: Vec<String>,
-    pub base_url: String,
-    pub enabled: bool,
-}
-
-/// 文档处理配置：内置 Rust 解析 + 可选第三方处理器及路由策略。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// 知识库文档处理（仅 Kivio 内置）。第三方处理器已挂起。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DocumentProcessingConfig {
-    /// "" = Kivio 内置（本地 Rust）；否则为某第三方 provider id
-    pub active_processor: String,
-    pub fallback_to_third_party: bool,
-    pub providers: Vec<DocProcessorProvider>,
+    /// 图片/可 OCR 内容用的引擎: "off"(默认) | "system" | "rapid_ocr"
+    pub ocr_engine: String,
+    /// PDF 处理: "text"(默认,文字层) | "force_ocr"(扫描版重扫——内置未启用,会报错)
+    pub pdf_strategy: String,
+}
+
+impl Default for DocumentProcessingConfig {
+    fn default() -> Self {
+        Self {
+            ocr_engine: "off".into(),
+            pdf_strategy: "text".into(),
+        }
+    }
 }
 
 /// 知识库检索配置：hybrid(向量+关键词 RRF) 权重 + 可选全局 rerank。

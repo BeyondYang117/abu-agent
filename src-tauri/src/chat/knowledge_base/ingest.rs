@@ -117,7 +117,7 @@ async fn index_one(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<usize, 
         )
     };
 
-    // Built-in parse, or route to a third-party processor per the config.
+    // Built-in parse (txt/md/html/pdf-text/docx/xlsx), or image → OCR per the config.
     let parsed = super::process::process_document(state, &doc_cfg, &path).await?;
     let pieces = chunking::chunk_document(&parsed.text, parsed.markdown);
 

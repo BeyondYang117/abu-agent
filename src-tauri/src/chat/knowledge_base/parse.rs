@@ -1,8 +1,8 @@
 //! Document parsing: extract plain text from a file by extension.
 //! Built-in (Rust, offline): txt/md + text-like, pdf (`pdf-extract`),
 //! docx (zip + WordprocessingML text), xlsx (`calamine`), html (`scraper`,
-//! reusing the `web_fetch` article extractor). Scanned/image PDFs and complex
-//! layouts route to a third-party processor — see `process.rs`.
+//! reusing the `web_fetch` article extractor). Image files are accepted here
+//! but OCR'd upstream by `process.rs` (third-party processors are suspended).
 
 use std::io::Read;
 use std::path::Path;
@@ -22,7 +22,8 @@ pub fn is_supported_ext(path: &Path) -> bool {
 
 const SUPPORTED: &[&str] = &[
     "txt", "text", "log", "csv", "tsv", "md", "markdown", "mdown", "mkd", "pdf", "docx", "xlsx",
-    "html", "htm",
+    "html", "htm", // image exts: accepted at upload time, OCR'd by process_document before parse.
+    "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif",
 ];
 
 fn ext_of(path: &Path) -> Option<String> {
@@ -75,6 +76,9 @@ pub fn parse_file(path: &Path) -> Result<ParsedDoc, String> {
                 text,
                 markdown: false,
             })
+        }
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "gif" => {
+            Err("图片需经 OCR 处理（不应直接走 parse_file）".to_string())
         }
         other => Err(format!("Unsupported file type: .{other}")),
     }
