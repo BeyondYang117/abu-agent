@@ -2,11 +2,12 @@
 // 文档列表 + 实时索引进度 / 删除 / 换 embedding 重建。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload } from 'lucide-react'
-import { type ModelProvider } from '../api/tauri'
+import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload, FileCog, Library } from 'lucide-react'
+import { type ModelProvider, type DocumentProcessingConfig } from '../api/tauri'
 import { type Lang } from './i18n'
 import { SettingsGroup, Input, Select } from './components'
 import { resolveModelInfo } from '../data/modelMatching'
+import { DocumentProcessingPanel } from './DocumentProcessingPanel'
 import {
   kbListLibraries,
   kbCreateLibrary,
@@ -117,11 +118,23 @@ function KbInfoPill({ children }: { children: React.ReactNode }) {
 
 type Progress = { indexed: number; total: number }
 
-export function KnowledgeBasePanel({ providers, lang }: { providers: ModelProvider[]; lang: Lang }) {
+export function KnowledgeBasePanel({
+  providers,
+  lang,
+  docProcessing,
+  onChangeDocProcessing,
+}: {
+  providers: ModelProvider[]
+  lang: Lang
+  docProcessing?: DocumentProcessingConfig
+  onChangeDocProcessing: (next: DocumentProcessingConfig) => void
+}) {
   const t = (zh: string, en: string) => (lang === 'zh' ? zh : en)
 
   const [libraries, setLibraries] = useState<KnowledgeLibrary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // 右栏视图：某个库 / 新建 / 文档处理设置
+  const [rightView, setRightView] = useState<'library' | 'new' | 'docproc'>('library')
   const [docs, setDocs] = useState<KnowledgeDocument[]>([])
   const [progress, setProgress] = useState<Record<string, Progress>>({})
   const [busy, setBusy] = useState(false)
@@ -207,6 +220,7 @@ export function KnowledgeBasePanel({ providers, lang }: { providers: ModelProvid
       setNewName('')
       await refreshLibraries()
       setSelectedId(lib.id)
+      setRightView('library')
     } catch (e) {
       setError(String(e))
     } finally {
@@ -322,167 +336,218 @@ export function KnowledgeBasePanel({ providers, lang }: { providers: ModelProvid
   }
 
   return (
-    <div className="space-y-4">
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400">
-          <AlertCircle size={14} />
-          <span className="flex-1">{error}</span>
-          <button type="button" onClick={() => setError(null)} className="text-xs underline">
-            {t('关闭', 'dismiss')}
-          </button>
+    <div className="flex min-h-[460px] gap-4">
+      {/* 左侧二级侧边栏：文档处理 + 库列表 + 新建 */}
+      <nav className="w-48 shrink-0 space-y-0.5 border-r border-zinc-200/70 pr-3 dark:border-zinc-800">
+        <button
+          type="button"
+          onClick={() => setRightView('docproc')}
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+            rightView === 'docproc'
+              ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
+              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800'
+          }`}
+        >
+          <FileCog size={14} className="shrink-0 text-zinc-400" /> {t('文档处理', 'Doc processing')}
+        </button>
+
+        <div className="my-1.5 border-t border-zinc-200/70 dark:border-zinc-800" />
+
+        <div className="px-2 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+          {t('知识库', 'Libraries')}
         </div>
-      )}
+        {libraries.map((lib) => {
+          const active = rightView === 'library' && lib.id === selectedId
+          return (
+            <button
+              key={lib.id}
+              type="button"
+              onClick={() => {
+                setSelectedId(lib.id)
+                setRightView('library')
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+                active
+                  ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
+                  : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800'
+              }`}
+            >
+              <Library size={14} className="shrink-0 text-zinc-400" />
+              <span className="min-w-0 flex-1 truncate">{lib.name}</span>
+              <span className="shrink-0 text-xs text-zinc-400">{lib.docCount}</span>
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          onClick={() => setRightView('new')}
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
+            rightView === 'new'
+              ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
+              : 'text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+          }`}
+        >
+          <Plus size={14} className="shrink-0" /> {t('新建知识库', 'New library')}
+        </button>
+      </nav>
 
-      {/* 建库 */}
-      <SettingsGroup title={t('新建知识库', 'New knowledge base')}>
-        <div className="flex flex-wrap items-center gap-2 py-2">
-          <Input
-            value={newName}
-            onChange={setNewName}
-            placeholder={t('知识库名称', 'Library name')}
-            className="w-44"
-          />
-          <EmbeddingModelPicker
-            providers={providers}
-            providerId={newProviderId}
-            model={newModel}
-            onChange={(p, m) => {
-              setNewProviderId(p)
-              setNewModel(m)
-            }}
-            lang={lang}
-          />
-
-          <button
-            type="button"
-            disabled={busy}
-            onClick={handleCreate}
-            className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-          >
-            <Plus size={14} /> {t('创建', 'Create')}
-          </button>
-        </div>
-        <p className="px-1 pb-1 text-xs text-zinc-500">
-          {t(
-            'embedding 模型决定向量维度，建库后更换需重建索引。需选用支持 /embeddings 接口的模型。',
-            'The embedding model fixes the vector dimension; changing it later rebuilds the index. Use a model that serves the /embeddings endpoint.'
-          )}
-        </p>
-      </SettingsGroup>
-
-      {libraries.length === 0 ? (
-        <p className="px-1 text-sm text-zinc-500">
-          {t('还没有知识库。创建一个并导入文档后，即可在对话中检索。', 'No knowledge bases yet. Create one and add documents to search them in chat.')}
-        </p>
-      ) : (
-        <SettingsGroup title={t('知识库', 'Libraries')}>
-          <div className="flex flex-wrap gap-2 py-2">
-            {libraries.map((lib) => (
-              <button
-                key={lib.id}
-                type="button"
-                onClick={() => setSelectedId(lib.id)}
-                className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition ${
-                  lib.id === selectedId
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
-                    : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-700'
-                }`}
-              >
-                <span className="font-medium">{lib.name}</span>
-                <span className="text-xs text-zinc-400">{lib.docCount}</span>
-              </button>
-            ))}
+      {/* 右侧内容 */}
+      <div className="min-w-0 flex-1 space-y-4">
+        {error && (
+          <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/40 dark:text-red-400">
+            <AlertCircle size={14} />
+            <span className="flex-1">{error}</span>
+            <button type="button" onClick={() => setError(null)} className="text-xs underline">
+              {t('关闭', 'dismiss')}
+            </button>
           </div>
-        </SettingsGroup>
-      )}
+        )}
 
-      {/* 选中库详情 */}
-      {selected && (
-        <SettingsGroup title={selected.name}>
-          <div className="space-y-3 py-2">
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-zinc-500">{t('Embedding：', 'Embedding: ')}</span>
+        {/* 新建知识库 */}
+        {rightView === 'new' && (
+          <SettingsGroup title={t('新建知识库', 'New knowledge base')}>
+            <div className="flex flex-wrap items-center gap-2 py-2">
+              <Input
+                value={newName}
+                onChange={setNewName}
+                placeholder={t('知识库名称', 'Library name')}
+                className="w-44"
+              />
               <EmbeddingModelPicker
                 providers={providers}
-                providerId={editProviderId}
-                model={editModel}
+                providerId={newProviderId}
+                model={newModel}
                 onChange={(p, m) => {
-                  setEditProviderId(p)
-                  setEditModel(m)
+                  setNewProviderId(p)
+                  setNewModel(m)
                 }}
                 lang={lang}
               />
-              {(editProviderId !== selected.embeddingProviderId || editModel !== selected.embeddingModel) && (
-                <button
-                  type="button"
-                  disabled={busy || !editProviderId || !editModel}
-                  onClick={() => handleChangeEmbedding(editProviderId, editModel)}
-                  className="rounded-lg bg-amber-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                >
-                  {t('应用并重建', 'Apply & rebuild')}
-                </button>
-              )}
-              <span className="text-xs text-zinc-400">
-                {selected.embeddingDim > 0
-                  ? t(`${selected.embeddingDim} 维 · ${selected.chunkCount} 块`, `${selected.embeddingDim}d · ${selected.chunkCount} chunks`)
-                  : t('尚未索引', 'not indexed yet')}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 disabled={busy}
-                onClick={handleUpload}
+                onClick={handleCreate}
                 className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
               >
-                <Upload size={14} /> {t('导入文档', 'Add documents')}
-              </button>
-              <button
-                type="button"
-                disabled={busy || docs.length === 0}
-                onClick={handleReindex}
-                className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                <RefreshCw size={14} /> {t('重建索引', 'Rebuild')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleRename(selected.id, selected.name)}
-                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                {t('重命名', 'Rename')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDeleteLibrary(selected.id)}
-                className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-950/40"
-              >
-                <Trash2 size={14} /> {t('删除库', 'Delete')}
+                <Plus size={14} /> {t('创建', 'Create')}
               </button>
             </div>
-
-            {/* 文档列表 */}
-            <div className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-700">
-              {docs.length === 0 ? (
-                <p className="px-3 py-4 text-center text-sm text-zinc-400">
-                  {t('暂无文档。支持 txt / md / pdf。', 'No documents. Supports txt / md / pdf.')}
-                </p>
-              ) : (
-                docs.map((doc) => (
-                  <DocRow
-                    key={doc.id}
-                    doc={doc}
-                    progress={progress[doc.id]}
-                    lang={lang}
-                    onDelete={() => handleDeleteDoc(doc.id)}
-                  />
-                ))
+            <p className="px-1 pb-1 text-xs text-zinc-500">
+              {t(
+                'embedding 模型决定向量维度，建库后更换需重建索引。需选用支持 /embeddings 接口的模型。',
+                'The embedding model fixes the vector dimension; changing it later rebuilds the index. Use a model that serves the /embeddings endpoint.'
               )}
+            </p>
+          </SettingsGroup>
+        )}
+
+        {/* 文档处理 */}
+        {rightView === 'docproc' && (
+          <DocumentProcessingPanel
+            config={docProcessing}
+            lang={lang}
+            onChange={onChangeDocProcessing}
+          />
+        )}
+
+        {/* 选中库为空时的提示 */}
+        {rightView === 'library' && !selected && (
+          <p className="px-1 pt-6 text-sm text-zinc-500">
+            {t(
+              '从左侧选择一个知识库，或点「新建知识库」。',
+              'Pick a library on the left, or click “New library”.'
+            )}
+          </p>
+        )}
+
+        {/* 选中库详情 */}
+        {rightView === 'library' && selected && (
+          <SettingsGroup title={selected.name}>
+            <div className="space-y-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-zinc-500">{t('Embedding：', 'Embedding: ')}</span>
+                <EmbeddingModelPicker
+                  providers={providers}
+                  providerId={editProviderId}
+                  model={editModel}
+                  onChange={(p, m) => {
+                    setEditProviderId(p)
+                    setEditModel(m)
+                  }}
+                  lang={lang}
+                />
+                {(editProviderId !== selected.embeddingProviderId || editModel !== selected.embeddingModel) && (
+                  <button
+                    type="button"
+                    disabled={busy || !editProviderId || !editModel}
+                    onClick={() => handleChangeEmbedding(editProviderId, editModel)}
+                    className="rounded-lg bg-amber-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {t('应用并重建', 'Apply & rebuild')}
+                  </button>
+                )}
+                <span className="text-xs text-zinc-400">
+                  {selected.embeddingDim > 0
+                    ? t(`${selected.embeddingDim} 维 · ${selected.chunkCount} 块`, `${selected.embeddingDim}d · ${selected.chunkCount} chunks`)
+                    : t('尚未索引', 'not indexed yet')}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handleUpload}
+                  className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  <Upload size={14} /> {t('导入文档', 'Add documents')}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || docs.length === 0}
+                  onClick={handleReindex}
+                  className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  <RefreshCw size={14} /> {t('重建索引', 'Rebuild')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRename(selected.id, selected.name)}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  {t('重命名', 'Rename')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteLibrary(selected.id)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:border-red-900 dark:hover:bg-red-950/40"
+                >
+                  <Trash2 size={14} /> {t('删除库', 'Delete')}
+                </button>
+              </div>
+
+              {/* 文档列表 */}
+              <div className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-700">
+                {docs.length === 0 ? (
+                  <p className="px-3 py-4 text-center text-sm text-zinc-400">
+                    {t('暂无文档。支持 txt / md / pdf。', 'No documents. Supports txt / md / pdf.')}
+                  </p>
+                ) : (
+                  docs.map((doc) => (
+                    <DocRow
+                      key={doc.id}
+                      doc={doc}
+                      progress={progress[doc.id]}
+                      lang={lang}
+                      onDelete={() => handleDeleteDoc(doc.id)}
+                    />
+                  ))
+                )}
+              </div>
             </div>
-          </div>
-        </SettingsGroup>
-      )}
+          </SettingsGroup>
+        )}
+      </div>
     </div>
   )
 }

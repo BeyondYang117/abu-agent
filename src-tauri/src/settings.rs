@@ -807,6 +807,30 @@ impl Default for ChatToolsConfig {
     }
 }
 
+/// 第三方文档处理服务（PDF/扫描件/复杂版式 → markdown）。后端待接入，
+/// 当前仅作配置持久化。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DocProcessorProvider {
+    pub id: String,
+    pub name: String,
+    /// "mineru" | "doc2x" | "custom"
+    pub kind: String,
+    pub api_keys: Vec<String>,
+    pub base_url: String,
+    pub enabled: bool,
+}
+
+/// 文档处理配置：内置 Rust 解析 + 可选第三方处理器及路由策略。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DocumentProcessingConfig {
+    /// "" = Kivio 内置（本地 Rust）；否则为某第三方 provider id
+    pub active_processor: String,
+    pub fallback_to_third_party: bool,
+    pub providers: Vec<DocProcessorProvider>,
+}
+
 /**
  * 应用完整设置
  */
@@ -851,6 +875,8 @@ pub struct Settings {
     pub chat_memory: ChatMemoryConfig,
     #[serde(default)]
     pub chat_tools: ChatToolsConfig,
+    #[serde(default)]
+    pub document_processing: DocumentProcessingConfig,
     /// 一次性：将 Lens 的流式/思考开关复制到独立的 Chat 配置（旧版共用 Lens 行为）。
     #[serde(default)]
     pub chat_behavior_migrated_from_lens: bool,
@@ -979,6 +1005,7 @@ impl Default for Settings {
             chat: ChatConfig::default(),
             chat_memory: ChatMemoryConfig::default(),
             chat_tools: ChatToolsConfig::default(),
+            document_processing: DocumentProcessingConfig::default(),
             chat_behavior_migrated_from_lens: false,
             settings_language: Some("zh".to_string()),
             retry_enabled: default_retry_enabled(),

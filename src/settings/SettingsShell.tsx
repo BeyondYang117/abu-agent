@@ -3768,7 +3768,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
             {/* ===== 知识库标签页 ===== */}
             {activeTab === 'knowledge' && (
-              <KnowledgeBasePanel providers={settings?.providers ?? []} lang={lang} />
+              <KnowledgeBasePanel
+                providers={settings?.providers ?? []}
+                lang={lang}
+                docProcessing={settings?.documentProcessing}
+                onChangeDocProcessing={(dp) => updateSettings({ documentProcessing: dp })}
+              />
             )}
 
             {/* ===== Skill 标签页 ===== */}

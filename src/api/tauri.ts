@@ -613,6 +613,27 @@ export type DefaultModelsConfig = {
 }
 
 // 应用设置数据结构
+export type DocProcessorKind = 'mineru' | 'doc2x' | 'custom'
+
+/** 第三方文档处理服务（PDF/扫描件/复杂版式 → markdown）。后端待接入。 */
+export type DocProcessorProvider = {
+  id: string
+  name: string
+  kind: DocProcessorKind
+  apiKeys: string[]
+  baseUrl?: string
+  enabled: boolean
+}
+
+/** 文档处理配置：内置 Rust 解析 + 可选第三方处理器，及路由策略。 */
+export type DocumentProcessingConfig = {
+  /** 激活的处理器：'' = Kivio 内置（本地 Rust）；否则为某个第三方 provider id */
+  activeProcessor: string
+  /** 内置抽不出文本（如扫描件）时，是否回退到激活的第三方处理器 */
+  fallbackToThirdParty: boolean
+  providers: DocProcessorProvider[]
+}
+
 export type Settings = {
   hotkey: string
   theme: 'system' | 'light' | 'dark'
@@ -631,6 +652,7 @@ export type Settings = {
   translatorPrompt?: string
   providers: ModelProvider[]
   chatTools: ChatToolsConfig
+  documentProcessing?: DocumentProcessingConfig
   retryEnabled: boolean
   retryAttempts: number
   screenshotTranslation: {
