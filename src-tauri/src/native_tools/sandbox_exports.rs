@@ -22,6 +22,45 @@ const LEGACY_RUNS_ROOT: &str = "Kivio/runs";
 const LEGACY_RUNS_RETENTION_DAYS: u64 = 7;
 const MAX_EXPORT_FILE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_EXPORT_FILES_PER_RUN: usize = 16;
+/// Per-conversation cap on regular files kept in the persistent delivery dir
+/// `~/Kivio/outputs/<conversation>/`. After each write, the oldest files beyond
+/// this many are evicted by mtime so deliverables can't grow unbounded.
+const DELIVERY_DIR_MAX_FILES: usize = 15;
+
+/// Best-effort: after a file lands in the delivery dir, keep only the newest
+/// [`DELIVERY_DIR_MAX_FILES`] **regular files** directly inside `dir` (subdirs
+/// ignored), deleting the oldest by mtime. Any stat/remove error is swallowed so
+/// pruning never breaks the write that triggered it.
+fn prune_delivery_dir(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let meta = fs::metadata(&path).ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            // `meta.json` is bookkeeping, not a deliverable — never count/evict it.
+            if path.file_name().and_then(|n| n.to_str()) == Some("meta.json") {
+                return None;
+            }
+            let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((modified, path))
+        })
+        .collect();
+    if files.len() <= DELIVERY_DIR_MAX_FILES {
+        return;
+    }
+    // Oldest first; delete everything past the newest DELIVERY_DIR_MAX_FILES.
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let excess = files.len() - DELIVERY_DIR_MAX_FILES;
+    for (_, path) in files.into_iter().take(excess) {
+        let _ = fs::remove_file(path);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxExportContext {
@@ -302,6 +341,9 @@ pub fn export_sandbox_artifacts(
         write_export_meta(&export_dir, &meta)?;
     }
 
+    // Cap the persistent delivery dir; just-written files are newest, never evicted.
+    prune_delivery_dir(&export_dir);
+
     Ok(exported)
 }
 
@@ -352,8 +394,7 @@ pub fn guess_mime_from_name(name: &str) -> String {
 pub fn build_delivery_artifact_for_path(path: &Path) -> Result<ChatToolArtifact, String> {
     let metadata =
         fs::metadata(path).map_err(|err| format!("Stat delivery file failed: {err}"))?;
-    let size_bytes = metadata.len();
-    let name = path
+    let size_bytes = metadata.len();    let name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("output")
@@ -368,6 +409,11 @@ pub fn build_delivery_artifact_for_path(path: &Path) -> Result<ChatToolArtifact,
     } else {
         None
     };
+    // `path` is already confirmed under the delivery dir by the caller; cap the
+    // dir now that this newest file has landed (best-effort, never the evicted one).
+    if let Some(parent) = path.parent() {
+        prune_delivery_dir(parent);
+    }
     Ok(ChatToolArtifact {
         name,
         mime_type,
@@ -686,5 +732,125 @@ mod tests {
         assert!(meta_paths.contains(&&second_paths[0].path.display().to_string()));
 
         let _ = fs::remove_dir_all(&export_dir);
+    }
+
+    /// Write `count` files into `dir` named `f00.txt`, `f01.txt`, … with strictly
+    /// increasing mtimes (oldest first). Returns the created paths in write order.
+    fn write_files_with_increasing_mtime(dir: &Path, count: usize) -> Vec<PathBuf> {
+        let mut paths = Vec::with_capacity(count);
+        for index in 0..count {
+            let path = dir.join(format!("f{index:02}.txt"));
+            fs::write(&path, format!("file {index}")).expect("write");
+            // Sub-second sleep so each subsequent file has a strictly newer mtime.
+            std::thread::sleep(Duration::from_millis(20));
+            paths.push(path);
+        }
+        paths
+    }
+
+    #[test]
+    fn prune_delivery_dir_keeps_newest_and_drops_oldest() {
+        let conv = format!("conv_prune_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        // Write 16 files; oldest (index 0) must be evicted down to 15.
+        let paths = write_files_with_increasing_mtime(&dir, DELIVERY_DIR_MAX_FILES + 1);
+
+        prune_delivery_dir(&dir);
+
+        let remaining = fs::read_dir(&dir)
+            .expect("read dir")
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .count();
+        assert_eq!(remaining, DELIVERY_DIR_MAX_FILES, "exactly 15 files remain");
+        assert!(!paths[0].exists(), "oldest file was deleted");
+        assert!(
+            paths[DELIVERY_DIR_MAX_FILES].exists(),
+            "newest file is kept"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_delivery_dir_noop_when_under_cap() {
+        let conv = format!("conv_undercap_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        let paths = write_files_with_increasing_mtime(&dir, DELIVERY_DIR_MAX_FILES);
+
+        prune_delivery_dir(&dir);
+
+        for path in &paths {
+            assert!(path.exists(), "files at/under cap are untouched");
+        }
+        assert_eq!(paths.len(), DELIVERY_DIR_MAX_FILES);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_delivery_dir_ignores_subdirectories() {
+        let conv = format!("conv_subdir_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        // A subdir plus 16 regular files: subdir is neither counted nor removed.
+        let subdir = dir.join("nested");
+        fs::create_dir_all(&subdir).expect("create subdir");
+        let paths = write_files_with_increasing_mtime(&dir, DELIVERY_DIR_MAX_FILES + 1);
+
+        prune_delivery_dir(&dir);
+
+        assert!(subdir.is_dir(), "subdirectory is preserved");
+        let remaining_files = fs::read_dir(&dir)
+            .expect("read dir")
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .count();
+        assert_eq!(remaining_files, DELIVERY_DIR_MAX_FILES);
+        assert!(!paths[0].exists(), "oldest regular file evicted");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_sandbox_artifacts_prunes_to_cap() {
+        let conv = format!("conv_export_prune_{}", uuid::Uuid::new_v4().simple());
+        let dir = ensure_delivery_dir(&conv).expect("dir");
+        // Seed 15 older files so the next export pushes the dir over the cap.
+        let seeded = write_files_with_increasing_mtime(&dir, DELIVERY_DIR_MAX_FILES);
+        std::thread::sleep(Duration::from_millis(20));
+
+        let png = general_purpose::STANDARD.encode([137u8, 80, 78, 71, 13, 10, 26, 10]);
+        let ctx = SandboxExportContext {
+            conversation_id: conv.clone(),
+            message_id: "msg".to_string(),
+            tool_call_id: None,
+        };
+        let exported = export_sandbox_artifacts(
+            &ctx,
+            &[ChatToolArtifact {
+                name: "chart.png".to_string(),
+                mime_type: "image/png".to_string(),
+                data_url: format!("data:image/png;base64,{png}"),
+                size_bytes: Some(8),
+                path: None,
+            }],
+        )
+        .expect("export");
+
+        // The freshly exported file survives; the oldest seeded file is evicted.
+        assert_eq!(exported.len(), 1);
+        assert!(exported[0].path.exists(), "newly exported file kept");
+        assert!(!seeded[0].exists(), "oldest pre-existing file evicted");
+        let remaining_files = fs::read_dir(&dir)
+            .expect("read dir")
+            .flatten()
+            .filter(|e| {
+                let p = e.path();
+                p.is_file() && p.file_name().and_then(|n| n.to_str()) != Some("meta.json")
+            })
+            .count();
+        assert_eq!(remaining_files, DELIVERY_DIR_MAX_FILES);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
