@@ -1439,6 +1439,22 @@ pub(crate) fn chat_read_clipboard_files() -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Run-end cleanup ordering guard: abort any background sub-agents this run
+/// dispatched (and mark their records Cancelled), THEN propagate the run result.
+/// The cancel must happen on BOTH the success and error paths, *before* an error
+/// is propagated — otherwise a failed run would leave its detached sub-agents
+/// (and their held permits) orphaned. Extracting this into a tiny pure helper
+/// makes that ordering directly testable without an `AppHandle`-bound run.
+fn finalize_run_cancel<T, E>(
+    sub_agents: &crate::chat::sub_agent::SubAgentManager,
+    conversation_id: &str,
+    run_id: &str,
+    result: Result<T, E>,
+) -> Result<T, E> {
+    sub_agents.cancel_run(conversation_id, run_id);
+    result
+}
+
 async fn complete_assistant_reply(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -1825,10 +1841,7 @@ async fn complete_assistant_reply(
     // detached sub-agent; user-stop already bumps the generation (cascade), and
     // this also covers it. Runs on BOTH the success and error paths (before `?`
     // propagates the error) so no detached task survives a finished/failed run.
-    state
-        .sub_agents
-        .cancel_run(&conversation.id, &run_id);
-    let result = result?;
+    let result = finalize_run_cancel(&state.sub_agents, &conversation.id, &run_id, result)?;
 
     merge_latest_agent_todo_state(app, conversation);
     merge_latest_agent_plan_state(app, conversation);
@@ -5155,6 +5168,50 @@ mod tests {
         assert!(
             assistant_from_builder_args(&serde_json::json!({ "name": "x", "system_prompt": "  " }))
                 .is_err()
+        );
+    }
+
+    /// Run-end cancel ordering: `finalize_run_cancel` must abort background
+    /// sub-agents BEFORE propagating the run result — including on the error
+    /// path. We register a Running record + a long-lived background run under the
+    /// (conv, run) key, then finalize with an Err. The record must end Cancelled
+    /// (proving cancel_run executed) AND the original Err must propagate. If the
+    /// cancel were moved after `?`, the Err path would return early, the record
+    /// would stay Running, and this test would fail.
+    #[tokio::test]
+    async fn finalize_run_cancel_runs_on_error_path_before_propagating() {
+        use crate::chat::sub_agent::{SubAgentManager, SubAgentStatus, SubAgentTaskRecord};
+
+        let manager = SubAgentManager::default();
+        manager.register(SubAgentTaskRecord {
+            id: "bg-task".to_string(),
+            name: "bg-task".to_string(),
+            agent_type: "general-purpose".to_string(),
+            status: SubAgentStatus::Running,
+            result: None,
+            error: None,
+            depth: 1,
+            created_at: 0,
+            completed_at: None,
+            usage: None,
+        });
+        // A detached task that never resolves on its own: only cancel_run's abort
+        // can end it. Keep tx alive so the channel does not close prematurely.
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let join = tauri::async_runtime::spawn(async move {
+            let _ = rx.await;
+        });
+        let _tx = tx;
+        manager.register_background_run("conv-x", "run-x", "bg-task".to_string(), join);
+
+        let result: Result<(), String> =
+            finalize_run_cancel(&manager, "conv-x", "run-x", Err("boom".to_string()));
+
+        assert_eq!(result, Err("boom".to_string()), "original Err must propagate");
+        assert_eq!(
+            manager.get("bg-task").unwrap().status,
+            SubAgentStatus::Cancelled,
+            "cancel_run must run before the error propagates (cancel-before-?)"
         );
     }
 

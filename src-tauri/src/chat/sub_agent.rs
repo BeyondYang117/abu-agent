@@ -334,7 +334,9 @@ impl SubAgentManager {
 
     /// Track a detached background sub-agent's JoinHandle under the parent run
     /// `(conversation_id, run_id)` so `cancel_run` can abort it on run end.
-    fn register_background_run(
+    /// `pub(crate)` so run-finalize tests (in `chat::commands`) can register a
+    /// handle and assert the run-end cancel ordering.
+    pub(crate) fn register_background_run(
         &self,
         conversation_id: &str,
         run_id: &str,
@@ -1270,12 +1272,69 @@ fn finalize_sub_agent_outcome(
 ) -> McpToolCallResult {
     let state = ctx.app.state::<AppState>();
     let manager = &state.sub_agents;
-    let FinalizeCtx {
+    let (result, event) = compute_sub_agent_finalization(
+        manager,
+        &SubAgentFinalizeParams {
+            task_id: &ctx.task_id,
+            name: &ctx.name,
+            agent_type: &ctx.agent_type,
+            parent_conversation_id: &ctx.parent_conversation_id,
+            parent_run_id: &ctx.parent_run_id,
+            parent_tool_call_id: &ctx.parent_tool_call_id,
+            depth: ctx.depth,
+        },
+        outcome,
+        background,
+    );
+
+    // Emit a terminal `chat-subagent` ONLY for the background path. The detached
+    // run returns nothing inline, so this terminal event is the sole signal that
+    // flips its parent tool card to a finished state. The synchronous path is
+    // deliberately left untouched: its full result (status + content + usage)
+    // already propagates inline via the `chat-tool` flow, and the card keeps the
+    // last running progress event's accumulated steps/preview — emitting a
+    // terminal `chat-subagent` here (whose payload omits steps/preview) would
+    // overwrite `subagentProgress` with empty arrays and wipe that step history.
+    // Payload shape mirrors `SubAgentHost::emit_progress`.
+    if let Some(event) = event {
+        let _ = ctx.app.emit("chat-subagent", event);
+    }
+
+    result
+}
+
+/// Borrowed inputs for [`compute_sub_agent_finalization`]. Mirrors the
+/// `AppHandle`-bound fields of [`FinalizeCtx`] but free of any Tauri runtime
+/// dependency so the finalization logic can be unit-tested directly.
+#[derive(Clone, Copy)]
+struct SubAgentFinalizeParams<'a> {
+    task_id: &'a str,
+    name: &'a str,
+    agent_type: &'a str,
+    parent_conversation_id: &'a str,
+    parent_run_id: &'a str,
+    parent_tool_call_id: &'a str,
+    depth: u8,
+}
+
+/// Pure finalization: update the manager record for the outcome, build the
+/// `McpToolCallResult`, and — only for `background` runs — produce the terminal
+/// `chat-subagent` event payload to emit. Returns `(result, Some(payload))` for
+/// background and `(result, None)` for the synchronous path (which must NOT emit
+/// a terminal event; see `finalize_sub_agent_outcome`). Free of `AppHandle` so
+/// it is directly testable.
+fn compute_sub_agent_finalization(
+    manager: &SubAgentManager,
+    params: &SubAgentFinalizeParams<'_>,
+    outcome: Result<AgentRunResult, String>,
+    background: bool,
+) -> (McpToolCallResult, Option<serde_json::Value>) {
+    let SubAgentFinalizeParams {
         task_id,
         name,
         agent_type,
         ..
-    } = &ctx;
+    } = *params;
 
     let (result, status_str, error_for_event) = match outcome {
         // A cancelled run (own stop or parent cascade) now returns
@@ -1390,33 +1449,33 @@ fn finalize_sub_agent_outcome(
         }
     };
 
-    // Emit a terminal `chat-subagent` ONLY for the background path. The detached
-    // run returns nothing inline, so this terminal event is the sole signal that
-    // flips its parent tool card to a finished state. The synchronous path is
-    // deliberately left untouched: its full result (status + content + usage)
-    // already propagates inline via the `chat-tool` flow, and the card keeps the
-    // last running progress event's accumulated steps/preview — emitting a
-    // terminal `chat-subagent` here (whose payload omits steps/preview) would
-    // overwrite `subagentProgress` with empty arrays and wipe that step history.
-    // Payload shape mirrors `SubAgentHost::emit_progress`.
-    if background {
-        let _ = ctx.app.emit(
-            "chat-subagent",
-            serde_json::json!({
-                "parentConversationId": ctx.parent_conversation_id,
-                "parentRunId": ctx.parent_run_id,
-                "parentToolCallId": ctx.parent_tool_call_id,
-                "taskId": task_id,
-                "name": name,
-                "depth": ctx.depth,
-                "status": status_str,
-                "background": background,
-                "error": error_for_event,
-            }),
-        );
-    }
+    // Build the terminal `chat-subagent` payload ONLY for the background path.
+    // The detached run returns nothing inline, so this terminal event is the
+    // sole signal that flips its parent tool card to a finished state. The
+    // synchronous path is deliberately left without a terminal event: its full
+    // result (status + content + usage) already propagates inline via the
+    // `chat-tool` flow, and the card keeps the last running progress event's
+    // accumulated steps/preview — emitting a terminal `chat-subagent` here
+    // (whose payload omits steps/preview) would overwrite `subagentProgress`
+    // with empty arrays and wipe that step history. Payload shape mirrors
+    // `SubAgentHost::emit_progress`.
+    let event = if background {
+        Some(serde_json::json!({
+            "parentConversationId": params.parent_conversation_id,
+            "parentRunId": params.parent_run_id,
+            "parentToolCallId": params.parent_tool_call_id,
+            "taskId": task_id,
+            "name": name,
+            "depth": params.depth,
+            "status": status_str,
+            "background": background,
+            "error": error_for_event,
+        }))
+    } else {
+        None
+    };
 
-    result
+    (result, event)
 }
 
 // Registry dispatch entry points (all return NativeToolFuture so the static
@@ -1763,6 +1822,129 @@ mod tests {
             usage: None,
             compacted_history: None,
         })
+    }
+
+    fn finalize_params<'a>(task_id: &'a str) -> SubAgentFinalizeParams<'a> {
+        SubAgentFinalizeParams {
+            task_id,
+            name: "Researcher",
+            agent_type: "general-purpose",
+            parent_conversation_id: "conv-1",
+            parent_run_id: "run-1",
+            parent_tool_call_id: "call-1",
+            depth: 1,
+        }
+    }
+
+    /// background:true emits exactly ONE terminal event, carrying the resolved
+    /// status, and flips the record to Completed.
+    #[test]
+    fn compute_finalization_background_emits_single_terminal_completed() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("bg-ok"));
+        let (result, event) = compute_sub_agent_finalization(
+            &manager,
+            &finalize_params("bg-ok"),
+            ok_run_result(),
+            true,
+        );
+        assert!(!result.is_error);
+        let event = event.expect("background path must produce one terminal event");
+        assert_eq!(event["status"], "completed");
+        assert_eq!(event["background"], true);
+        assert_eq!(event["taskId"], "bg-ok");
+        assert!(event["error"].is_null());
+        assert_eq!(
+            manager.get("bg-ok").unwrap().status,
+            SubAgentStatus::Completed
+        );
+    }
+
+    /// background:false emits NO terminal event (would otherwise wipe the card's
+    /// accumulated step history), but still finishes the record.
+    #[test]
+    fn compute_finalization_sync_emits_no_terminal_event() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("sync-ok"));
+        let (result, event) = compute_sub_agent_finalization(
+            &manager,
+            &finalize_params("sync-ok"),
+            ok_run_result(),
+            false,
+        );
+        assert!(!result.is_error);
+        assert!(
+            event.is_none(),
+            "synchronous path must NOT emit a terminal chat-subagent event"
+        );
+        assert_eq!(
+            manager.get("sync-ok").unwrap().status,
+            SubAgentStatus::Completed
+        );
+    }
+
+    /// A cancelled run (Ok with stream_outcome == "cancelled") maps to Cancelled,
+    /// never Completed, and the terminal event carries status=cancelled.
+    #[test]
+    fn compute_finalization_cancelled_outcome_maps_to_cancelled() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("bg-cancel"));
+        let (result, event) = compute_sub_agent_finalization(
+            &manager,
+            &finalize_params("bg-cancel"),
+            ok_cancelled_run_result(),
+            true,
+        );
+        // Cancellation is not surfaced as a tool error.
+        assert!(!result.is_error);
+        let event = event.expect("terminal event");
+        assert_eq!(event["status"], "cancelled");
+        assert_eq!(event["error"], "cancelled");
+        assert_eq!(
+            manager.get("bg-cancel").unwrap().status,
+            SubAgentStatus::Cancelled
+        );
+    }
+
+    /// An Err outcome maps the record to Failed with the error preserved, and the
+    /// terminal event reports status=failed + the error (is_error true).
+    #[test]
+    fn compute_finalization_error_outcome_maps_to_failed() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("bg-fail"));
+        let (result, event) = compute_sub_agent_finalization(
+            &manager,
+            &finalize_params("bg-fail"),
+            Err("boom".to_string()),
+            true,
+        );
+        assert!(result.is_error, "a real failure must surface as a tool error");
+        let event = event.expect("terminal event");
+        assert_eq!(event["status"], "failed");
+        assert_eq!(event["error"], "boom");
+        let rec = manager.get("bg-fail").unwrap();
+        assert_eq!(rec.status, SubAgentStatus::Failed);
+        assert_eq!(rec.error.as_deref(), Some("boom"));
+    }
+
+    /// An Err("cancelled") maps to Cancelled (not Failed) and is not a tool error.
+    #[test]
+    fn compute_finalization_err_cancelled_maps_to_cancelled() {
+        let manager = SubAgentManager::default();
+        manager.register(running_record("bg-errcancel"));
+        let (result, event) = compute_sub_agent_finalization(
+            &manager,
+            &finalize_params("bg-errcancel"),
+            Err("cancelled".to_string()),
+            true,
+        );
+        assert!(!result.is_error);
+        let event = event.expect("terminal event");
+        assert_eq!(event["status"], "cancelled");
+        assert_eq!(
+            manager.get("bg-errcancel").unwrap().status,
+            SubAgentStatus::Cancelled
+        );
     }
 
     #[test]
@@ -2385,8 +2567,18 @@ mod tests {
         // re-acquiring it after cancel.
         let state = Arc::new(crate::state::test_app_state());
         state.sub_agents.set_concurrency(1);
-        // set_concurrency shrink spawns an acquire; let it settle.
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // set_concurrency shrink spawns an async acquire to forget surplus
+        // permits; poll until it has settled to a single permit instead of a
+        // fixed sleep (the sleep was flaky under CI load).
+        let mut shrunk = false;
+        for _ in 0..200 {
+            if state.sub_agents.semaphore().available_permits() <= 1 {
+                shrunk = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(shrunk, "set_concurrency(1) should settle to a single permit");
         let parent_gen = state.next_chat_generation("conv-parent");
         let provider = test_provider(&server.base_url);
 
@@ -2414,8 +2606,19 @@ mod tests {
         assert!(running, "sub-agent run reached in-flight Running state");
 
         // The single permit is held by the in-flight run: a try_acquire fails.
+        // Poll briefly rather than asserting once — there is a small window
+        // between the record flipping to Running and the permit being fully
+        // accounted for, and CI load can widen it.
+        let mut permit_held = false;
+        for _ in 0..200 {
+            if state.sub_agents.semaphore().try_acquire().is_err() {
+                permit_held = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         assert!(
-            state.sub_agents.semaphore().try_acquire().is_err(),
+            permit_held,
             "the only permit is held by the in-flight run"
         );
 

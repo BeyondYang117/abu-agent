@@ -71,6 +71,7 @@ import {
   createEmptyStreamSnapshot,
   isConversationBusy,
   isConversationInFlight,
+  terminalSubagentToolCallStatus,
   type ConversationStreamSnapshot,
 } from './conversationRuns'
 import { compareTimelineSegments, segmentStepNumber, segmentToolCallId } from './segments'
@@ -1570,13 +1571,33 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           preview: payload.preview ?? '',
           steps: payload.steps ?? [],
         }
+        // A detached (background:true) spawn dispatches `is_error:false`
+        // immediately, so the parent tool call is pinned to `completed`. On its
+        // terminal event, fold the real outcome back onto the tool record: merge
+        // the failure/cancellation reason into structuredContent.error and remap
+        // the tool call status (failed→error, cancelled→cancelled) so the card
+        // stops rendering a failed/cancelled sub-agent as a green "completed".
+        const terminalStatus = payload.background
+          ? terminalSubagentToolCallStatus(payload.status)
+          : null
         snapshot.toolCalls = snapshot.toolCalls.map((item, i) => {
           if (i !== index) return item
           const existing =
             item.structuredContent && typeof item.structuredContent === 'object'
               ? (item.structuredContent as Record<string, unknown>)
               : {}
-          return { ...item, structuredContent: { ...existing, subagentProgress: progress } }
+          const nextStructured: Record<string, unknown> = {
+            ...existing,
+            subagentProgress: progress,
+          }
+          if (terminalStatus && payload.error) {
+            nextStructured.error = payload.error
+          }
+          return {
+            ...item,
+            structuredContent: nextStructured,
+            ...(terminalStatus ? { status: terminalStatus } : {}),
+          }
         })
         showStreamSnapshotIfCurrent(payload.parentConversationId, snapshot)
       })

@@ -570,7 +570,12 @@ impl AppState {
                 .map(|j| j.job_id.clone());
             match oldest_terminal {
                 Some(id) => {
-                    map.remove(&id);
+                    // Remove the evicted job's per-job log too, otherwise long
+                    // sessions that churn >64 short-lived background commands
+                    // leak one small (now-unreachable) log file per eviction.
+                    if let Some(job) = map.remove(&id) {
+                        let _ = std::fs::remove_file(&job.log_path);
+                    }
                 }
                 // All remaining jobs are still running; stop evicting.
                 None => break,
@@ -589,14 +594,27 @@ impl AppState {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let mut killed = 0;
-        for job in map.values() {
+        for job in map.values_mut() {
             if matches!(
                 job.status,
                 crate::native_tools::BackgroundCommandStatus::Running
             ) {
-                if let Some(pid) = job.pid {
-                    crate::native_tools::kill_process_group(pid);
-                    killed += 1;
+                // Prefer signaling the owning waiter task (which still holds the
+                // live Child) so the kill targets the live process group and
+                // never a reaped/reused pid (TOCTOU). Fall back to a direct
+                // process-group kill only when there is no waiter (seeded test
+                // jobs).
+                match job.kill_tx.take() {
+                    Some(kill_tx) => {
+                        let _ = kill_tx.send(());
+                        killed += 1;
+                    }
+                    None => {
+                        if let Some(pid) = job.pid {
+                            crate::native_tools::kill_process_group(pid);
+                            killed += 1;
+                        }
+                    }
                 }
             }
             let _ = std::fs::remove_file(&job.log_path);

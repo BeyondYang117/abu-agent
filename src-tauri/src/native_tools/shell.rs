@@ -333,6 +333,14 @@ impl BackgroundCommandStatus {
 /// A registered background command. Holds the leader pid (for process-group
 /// kill) and the path to the per-job output log. Survives across turns; cleaned
 /// up only by `kill_background` or the app-exit sweep.
+///
+/// `kill_tx` signals the owning waiter task to kill the process group and reap
+/// it. Killing is driven through the waiter (which still owns the live `Child`)
+/// rather than by signaling `pid` directly from the lock holder: that closes a
+/// reap-then-kill TOCTOU where a job exits, the waiter returns from `wait()`
+/// (releasing the pid/pgid back to the OS) but has not yet taken the lock to set
+/// a terminal status, and a concurrent `kill_background` / app-exit sweep reads
+/// the still-`Running` record and `kill`s a pid the OS may have reused.
 #[derive(Debug)]
 pub struct BackgroundCommand {
     pub job_id: String,
@@ -342,6 +350,11 @@ pub struct BackgroundCommand {
     pub log_path: PathBuf,
     pub status: BackgroundCommandStatus,
     pub started_at: SystemTime,
+    /// One-shot kill signal to the owning waiter task. `None` once consumed (the
+    /// kill has been requested) or when there is no live waiter (seeded jobs in
+    /// tests). Sending requests a process-group kill + reap inside the waiter,
+    /// which is the only place that still holds the live `Child`.
+    pub kill_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 /// Kill an entire process group / tree given the leader pid. Unix: SIGTERM the
@@ -449,6 +462,11 @@ async fn run_shell_command_background(
         ));
     };
 
+    // One-shot kill channel: the waiter task owns the live Child, so it is the
+    // only place that can safely race a self-exit against a kill request. The
+    // registry only holds the sender, never kills a pid directly.
+    let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
+
     state.register_background_command(BackgroundCommand {
         job_id: job_id.clone(),
         pid,
@@ -457,22 +475,37 @@ async fn run_shell_command_background(
         log_path: log_path.clone(),
         status: BackgroundCommandStatus::Running,
         started_at: SystemTime::now(),
+        kill_tx: Some(kill_tx),
     });
 
-    // Reap the child off-thread: wait for exit, record the exit code, and flip
-    // status to Exited. The OS keeps writing the log until the process exits.
+    // Reap the child off-thread: race a self-exit against a kill request. The
+    // waiter owns the Child for its whole lifetime, so a kill always targets the
+    // still-live process group (no reap-then-kill TOCTOU). The OS keeps writing
+    // the log until the process exits.
     let waiter_state = state.background_commands_handle();
     let waiter_job = job_id.clone();
     tauri::async_runtime::spawn(async move {
-        let status = match child.wait().await {
-            Ok(exit) => BackgroundCommandStatus::Exited { code: exit.code() },
-            Err(err) => BackgroundCommandStatus::Error {
-                message: format!("wait failed: {err}"),
+        let status = tokio::select! {
+            reaped = child.wait() => match reaped {
+                Ok(exit) => BackgroundCommandStatus::Exited { code: exit.code() },
+                Err(err) => BackgroundCommandStatus::Error {
+                    message: format!("wait failed: {err}"),
+                },
             },
+            _ = kill_rx => {
+                // Kill the whole process group (children too), then reap the
+                // leader. We still own `child`, so `pid` cannot have been reused.
+                if let Some(pid) = pid {
+                    kill_process_group(pid);
+                }
+                let _ = child.wait().await;
+                BackgroundCommandStatus::Killed
+            }
         };
         let mut map = waiter_state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(job) = map.get_mut(&waiter_job) {
-            // Do not clobber a Killed status set by kill_background.
+            // Do not clobber a Killed status set by kill_background; the kill
+            // path is the authority on a killed job's terminal status.
             if !matches!(job.status, BackgroundCommandStatus::Killed) {
                 job.status = status;
             }
@@ -585,10 +618,22 @@ pub fn kill_background(state: &AppState, arguments: &Value) -> Result<String, St
             "job_id: {job_id} already finished (status unchanged); nothing to kill."
         ));
     }
-    if let Some(pid) = job.pid {
-        kill_process_group(pid);
-    }
+    // Mark Killed under the lock, then signal the waiter to kill+reap. The
+    // waiter still owns the live Child, so it kills the live process group
+    // rather than a pid this lock holder might read after a reap (TOCTOU). If
+    // there is no waiter (e.g. a seeded test job), fall back to a direct
+    // process-group kill of the recorded pid.
     job.status = BackgroundCommandStatus::Killed;
+    match job.kill_tx.take() {
+        Some(kill_tx) => {
+            let _ = kill_tx.send(());
+        }
+        None => {
+            if let Some(pid) = job.pid {
+                kill_process_group(pid);
+            }
+        }
+    }
     Ok(format!("job_id: {job_id} killed."))
 }
 
@@ -841,6 +886,7 @@ mod tests {
             log_path: log_path.clone(),
             status: BackgroundCommandStatus::Exited { code: Some(0) },
             started_at: SystemTime::now(),
+            kill_tx: None,
         });
 
         // First read from offset 0 sees all bytes and reports next_offset = 5.
@@ -900,6 +946,124 @@ mod tests {
         assert!(again.contains("already finished"), "{again}");
     }
 
+    /// Unix: poll `kill(pid, 0)` until the pid is gone (ESRCH) or the budget
+    /// expires. Returns true once the pid no longer exists. We send no signal
+    /// (sig 0 is a liveness probe). A reaped child whose pid has not been reused
+    /// reports ESRCH; we accept EPERM as "not ours / gone for our purposes".
+    #[cfg(unix)]
+    async fn wait_until_pid_dead(pid: u32, attempts: usize) -> bool {
+        for _ in 0..attempts {
+            let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+            if !alive {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    /// kill_background must ACTUALLY terminate the process, not just flip a
+    /// status string. Spawn a long sleeper, capture its pid, kill it, and poll
+    /// the OS until the pid is gone. A no-op kill (or a dropped `-pgid`) would
+    /// leave the pid alive and fail this test.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_background_actually_terminates_process() {
+        let state = bg_test_state();
+        let workspace = NativeToolWorkspace::global(&[]);
+        let started = run_command(
+            &workspace,
+            5_000,
+            &serde_json::json!({
+                "command": "sleep 30",
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "background": true,
+            }),
+            Some(&state),
+        )
+        .await
+        .expect("background spawn");
+        let job_id = started
+            .lines()
+            .find_map(|l| l.strip_prefix("job_id: "))
+            .map(str::to_string)
+            .expect("job_id");
+        let pid: u32 = started
+            .lines()
+            .find_map(|l| l.strip_prefix("pid: "))
+            .and_then(|p| p.trim().parse().ok())
+            .expect("pid");
+
+        // It is alive before the kill.
+        assert!(
+            unsafe { libc::kill(pid as libc::pid_t, 0) } == 0,
+            "sleeper should be alive before kill"
+        );
+
+        kill_background(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+        assert!(
+            wait_until_pid_dead(pid, 100).await,
+            "kill_background must actually terminate the process (pid {pid} still alive)"
+        );
+    }
+
+    /// The whole process GROUP must die, not just the leader. The `sh -c` leader
+    /// is spawned in its own session (setsid), and it backgrounds a grandchild
+    /// `sleep`. `kill_background` SIGKILLs the group (`kill(-pgid)`), so the
+    /// grandchild — which shares the group — must die too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_background_kills_whole_group_including_grandchild() {
+        let state = bg_test_state();
+        let workspace = NativeToolWorkspace::global(&[]);
+        // Print the grandchild pid, then keep the leader alive so the group
+        // stays up until we kill it.
+        let cmd = "sleep 45 & echo GRANDCHILD_PID=$!; wait";
+        let started = run_command(
+            &workspace,
+            5_000,
+            &serde_json::json!({
+                "command": cmd,
+                "cwd": std::env::temp_dir().to_string_lossy(),
+                "background": true,
+            }),
+            Some(&state),
+        )
+        .await
+        .expect("background spawn");
+        let job_id = started
+            .lines()
+            .find_map(|l| l.strip_prefix("job_id: "))
+            .map(str::to_string)
+            .expect("job_id");
+
+        // Poll bash_output until the grandchild pid appears in the captured log.
+        let mut grandchild_pid: Option<u32> = None;
+        for _ in 0..100 {
+            let out = bash_output(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+            if let Some(pid) = out
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("GRANDCHILD_PID="))
+                .and_then(|p| p.trim().parse::<u32>().ok())
+            {
+                grandchild_pid = Some(pid);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let grandchild_pid = grandchild_pid.expect("grandchild pid printed to log");
+        assert!(
+            unsafe { libc::kill(grandchild_pid as libc::pid_t, 0) } == 0,
+            "grandchild should be alive before kill"
+        );
+
+        kill_background(&state, &serde_json::json!({ "job_id": job_id })).unwrap();
+        assert!(
+            wait_until_pid_dead(grandchild_pid, 100).await,
+            "the whole group must die: grandchild pid {grandchild_pid} still alive after kill"
+        );
+    }
+
     #[tokio::test]
     async fn bash_output_unknown_job_errors() {
         let state = bg_test_state();
@@ -922,6 +1086,7 @@ mod tests {
             log_path: log_path.clone(),
             status: BackgroundCommandStatus::Exited { code: Some(0) },
             started_at: SystemTime::now(),
+            kill_tx: None,
         });
         let _ = state.kill_all_background_commands();
         // Registry cleared and the per-job log removed.
