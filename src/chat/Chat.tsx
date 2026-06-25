@@ -8,6 +8,7 @@ import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
 import { ExternalModelSelector, RuntimePicker } from './RuntimePicker'
 import { PermissionPicker } from './PermissionPicker'
+import { BackgroundJobsIndicator } from './BackgroundJobsIndicator'
 import { WindowControls } from './WindowControls'
 import { ContextIndicator } from './ContextIndicator'
 import { AgentTodoIndicator } from './AgentTodoIndicator'
@@ -2912,6 +2913,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     approvalPolicy={approvalPolicy}
                     onApprovalPolicyChange={handleApprovalPolicyChange}
                   />
+                </div>
+                <div className="shrink-0" data-tauri-drag-region="false">
+                  <BackgroundJobsIndicator />
                 </div>
               </div>
               <div className="min-w-5 flex-1" data-tauri-drag-region />

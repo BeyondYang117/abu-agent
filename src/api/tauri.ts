@@ -507,6 +507,15 @@ export type SkillDetail = SkillMeta & {
   body: string
 }
 
+/** 一个仍在运行的后台命令（chat agent run_command background:true）。 */
+export type BackgroundCommandInfo = {
+  jobId: string
+  command: string
+  cwd: string
+  pid: number | null
+  elapsedSecs: number
+}
+
 // Lens 联网搜索状态/结果负载（事件名 lens-web-search）
 export type LensWebSearchPayload = {
   imageId: string
@@ -1254,6 +1263,11 @@ export const api = {
     invoke<{ success: boolean; path?: string | null; error?: string | null }>(
       'chat_skills_open_folder',
     ),
+  /** 当前仍在运行的后台命令（chat agent run_command background:true 起的）。空数组 = 无。 */
+  chatListBackgroundCommands: () =>
+    invoke<BackgroundCommandInfo[]>('chat_list_background_commands'),
+  chatKillBackgroundCommand: (jobId: string) =>
+    invoke<void>('chat_kill_background_command', { jobId }),
   chatMemoryGet: () =>
     invoke<ChatMemoryState>('chat_memory_get'),
   chatMemorySave: (layer: 'l1' | 'l2', content: string) =>

@@ -1223,6 +1223,39 @@ pub(crate) fn chat_confirm_tool_call(
     Ok(())
 }
 
+/// 列出当前仍在运行的后台命令（chat agent 用 `run_command background:true` 起的）。
+/// 只返回 Running 的——UI 仅在有后台任务时才显示指示器，终止/退出的不必展示。
+#[tauri::command]
+pub(crate) fn chat_list_background_commands(state: State<AppState>) -> Vec<serde_json::Value> {
+    let map = state.background_commands_handle();
+    let map = map.lock().unwrap_or_else(|e| e.into_inner());
+    let mut jobs: Vec<&crate::native_tools::BackgroundCommand> = map
+        .values()
+        .filter(|j| matches!(j.status, crate::native_tools::BackgroundCommandStatus::Running))
+        .collect();
+    jobs.sort_by_key(|j| j.started_at);
+    jobs.into_iter()
+        .map(|j| {
+            serde_json::json!({
+                "jobId": j.job_id,
+                "command": j.command,
+                "cwd": j.cwd,
+                "pid": j.pid,
+                "elapsedSecs": j.started_at.elapsed().map(|d| d.as_secs()).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// 从 UI 终止一个后台命令。复用 agent 的 `kill_background`（整组杀 + 标记 Killed）。
+#[tauri::command]
+pub(crate) fn chat_kill_background_command(
+    state: State<AppState>,
+    job_id: String,
+) -> Result<(), String> {
+    crate::native_tools::kill_background(&state, &serde_json::json!({ "job_id": job_id })).map(|_| ())
+}
+
 /// 响应会话级文件/命令工具授权请求(按 conversation_id)。
 #[tauri::command]
 pub(crate) fn chat_respond_session_consent(
