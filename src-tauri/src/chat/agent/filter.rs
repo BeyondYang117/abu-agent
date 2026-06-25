@@ -124,6 +124,21 @@ mod tests {
     }
 
     #[test]
+    fn default_subagent_keeps_deliver_file() {
+        // A default (general-purpose) sub-agent has an empty allow-list, so all
+        // tools except `agent` survive — deliver_file must NOT be stripped.
+        let mut tools = vec![
+            native("agent"),
+            native("deliver_file"),
+            native("read_file"),
+        ];
+        let removed = filter_tools_for_agent(&mut tools, &def(vec![]));
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"deliver_file"), "deliver_file must remain");
+        assert!(removed.iter().all(|t| t.name != "deliver_file"));
+    }
+
+    #[test]
     fn filtering_is_idempotent() {
         let mut tools = vec![native("agent"), native("read_file"), native("write_file")];
         let d = def(vec!["read_file"]);

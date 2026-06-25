@@ -9,9 +9,9 @@ pub use files::{
     ReadFileResult, ReadFileState,
 };
 pub use sandbox_exports::{
-    cleanup_stale_sandbox_exports, export_sandbox_artifacts, format_export_error,
-    format_exported_paths, remove_sandbox_exports_for_conversation, resolve_sandbox_export_file_path,
-    SandboxExportContext,
+    cleanup_stale_sandbox_exports, deliver_file_artifact, export_sandbox_artifacts,
+    format_export_error, format_exported_paths, remove_sandbox_exports_for_conversation,
+    resolve_sandbox_export_file_path, SandboxExportContext,
 };
 pub use shell::run_command;
 pub use shell::{

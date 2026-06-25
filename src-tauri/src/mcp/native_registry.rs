@@ -35,12 +35,13 @@ use crate::state::AppState;
 
 use super::registry::NativeToolContext;
 use super::types::{
-    native_bash_output_tool, native_edit_file_tool, native_glob_files_tool,
-    native_kill_background_tool, native_list_background_tool, native_list_dir_tool,
-    native_memory_modify_tool, native_memory_read_tool, native_memory_search_tool,
-    native_read_file_tool, native_run_command_tool, native_run_python_tool,
-    native_save_assistant_tool, native_search_files_tool, native_web_fetch_tool,
-    native_web_search_tool, native_write_file_tool, ChatToolDefinition, McpToolCallResult,
+    native_bash_output_tool, native_deliver_file_tool, native_edit_file_tool,
+    native_glob_files_tool, native_kill_background_tool, native_list_background_tool,
+    native_list_dir_tool, native_memory_modify_tool, native_memory_read_tool,
+    native_memory_search_tool, native_read_file_tool, native_run_command_tool,
+    native_run_python_tool, native_save_assistant_tool, native_search_files_tool,
+    native_web_fetch_tool, native_web_search_tool, native_write_file_tool, ChatToolDefinition,
+    McpToolCallResult,
 };
 
 /// Gate signature mirrors `list_native_builtin_tool_defs(native,
@@ -261,6 +262,24 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         read_only: false,
         requires_session_consent: false,
         call: NativeToolCall::Async(call_run_python),
+    },
+    // Unified file delivery (PR1). Writes a finished file into the sandbox-
+    // exports tree and returns an artifact so the generic file card renders it —
+    // no Pyodide. It is the no-compute counterpart to run_python's artifact
+    // path, so it is exposed whenever either the write_file or run_python
+    // deliverable surface is on. bypasses_approval = true, matching the other
+    // artifact/output tools (run_python/memory) — it only writes into the
+    // ephemeral, sanitized runs dir, never the user's project. parallel_safe =
+    // true: each call writes an independent, uniquely-named export file.
+    NativeToolEntry {
+        name: "deliver_file",
+        def: native_deliver_file_tool,
+        enabled: |native, _, _| native.write_file || native.run_python,
+        parallel_safe: true,
+        bypasses_approval: true,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Async(call_deliver_file),
     },
     NativeToolEntry {
         name: "memory_read",
@@ -506,6 +525,69 @@ fn call_run_python(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     })
 }
 
+fn call_deliver_file(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let name = ctx
+            .arguments
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "deliver_file requires a non-empty name".to_string())?;
+        let content = ctx
+            .arguments
+            .get("content")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| "deliver_file requires content".to_string())?;
+        let encoding = ctx
+            .arguments
+            .get("encoding")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("text");
+        let mime = ctx.arguments.get("mime").and_then(|value| value.as_str());
+
+        // Same export context derivation as run_python: tie the file to the
+        // parent conversation/message so it lands in the right runs folder and
+        // is cleaned up with the conversation. Standalone runs (no context) get
+        // a synthetic message id.
+        let export_ctx = ctx
+            .native_ctx
+            .map(|native_ctx| crate::native_tools::SandboxExportContext {
+                conversation_id: native_ctx.conversation_id.clone(),
+                message_id: native_ctx.message_id.clone(),
+                tool_call_id: native_ctx.tool_call_id.clone(),
+            })
+            .unwrap_or_else(|| crate::native_tools::SandboxExportContext {
+                conversation_id: "standalone".to_string(),
+                message_id: uuid::Uuid::new_v4().to_string(),
+                tool_call_id: None,
+            });
+
+        let artifact =
+            crate::native_tools::deliver_file_artifact(&export_ctx, name, content, encoding, mime)?;
+        let path_note = artifact
+            .path
+            .as_deref()
+            .map(|path| format!("\n{path}"))
+            .unwrap_or_default();
+        let content_msg = format!(
+            "Delivered file '{}' ({} bytes). A downloadable file card is shown to the user.{}",
+            artifact.name,
+            artifact.size_bytes.unwrap_or_default(),
+            path_note
+        );
+        Ok(McpToolCallResult {
+            content: content_msg,
+            is_error: false,
+            raw: Value::Null,
+            artifacts: vec![artifact],
+            structured_content: None,
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,6 +607,7 @@ mod tests {
         "kill_background",
         "save_assistant",
         "run_python",
+        "deliver_file",
         "memory_read",
         "memory_modify",
         "memory_search",
@@ -600,11 +683,14 @@ mod tests {
                 "find",
                 "bash_output",
                 "list_background",
+                "deliver_file",
                 "agent",
             ],
             "parallel-safe set is intentionally narrow per agent-runtime spec; \
              bash_output/list_background join it because they are pure read-only \
-             registry/log reads; `agent` joins it because each spawn runs in \
+             registry/log reads; deliver_file joins it because each call writes an \
+             independent, uniquely-named export file (no shared mutable state); \
+             `agent` joins it because each spawn runs in \
              isolation (own conversation/generation/message history), bypasses \
              approval, and is capped by the SubAgentManager semaphore (default \
              12), making concurrent fan-out the core multi-agent value"
@@ -621,6 +707,7 @@ mod tests {
         assert_eq!(
             bypass,
             [
+                "deliver_file",
                 "memory_read",
                 "memory_modify",
                 "memory_search",
@@ -733,10 +820,14 @@ mod tests {
             ["read", "ls", "grep", "find"]
         );
 
-        // write gate exposes the whole-file write tool.
+        // write gate exposes the whole-file write tool plus deliver_file (the
+        // no-compute deliverable is on whenever write_file or run_python is).
         let mut write_only = off.clone();
         write_only.write_file = true;
-        assert_eq!(names(&write_only, false, false), ["write"]);
+        assert_eq!(
+            names(&write_only, false, false),
+            ["write", "deliver_file"]
+        );
 
         // memory gate is independent of native toggles.
         assert_eq!(
@@ -772,6 +863,7 @@ mod tests {
                 "list_background",
                 "kill_background",
                 "run_python",
+                "deliver_file",
                 "memory_read",
                 "memory_modify",
                 "memory_search",

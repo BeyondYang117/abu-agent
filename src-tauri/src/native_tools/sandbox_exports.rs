@@ -243,6 +243,109 @@ pub fn export_sandbox_artifacts(
     Ok(exported)
 }
 
+/// Guess a MIME type from a file extension. Used by `deliver_file` when the
+/// caller omits `mime`. Falls back to `application/octet-stream`.
+pub fn guess_mime_from_name(name: &str) -> String {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    let mime = match ext.as_str() {
+        "txt" | "log" => "text/plain",
+        "md" | "markdown" => "text/markdown",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "html" | "htm" => "text/html",
+        "xml" => "application/xml",
+        "yaml" | "yml" => "application/x-yaml",
+        "js" | "mjs" | "cjs" => "text/javascript",
+        "ts" | "tsx" => "text/plain",
+        "css" => "text/css",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls" => "application/vnd.ms-excel",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc" => "application/msword",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        _ => "application/octet-stream",
+    };
+    mime.to_string()
+}
+
+/// Deliver a finished file to the user as a downloadable artifact, writing it
+/// into the same sandbox-exports tree that `run_python` uses (so it gets the
+/// identical sanitize / path-guard / size-cap / retention/cleanup behavior and
+/// renders via the same generic file card). `encoding` is `"text"` (default) or
+/// `"base64"`. Returns a card-ready [`ChatToolArtifact`] with `path`,
+/// `data_url`, `mime_type`, and `size_bytes` populated.
+pub fn deliver_file_artifact(
+    ctx: &SandboxExportContext,
+    name: &str,
+    content: &str,
+    encoding: &str,
+    mime: Option<&str>,
+) -> Result<ChatToolArtifact, String> {
+    let bytes = match encoding {
+        "" | "text" => content.as_bytes().to_vec(),
+        "base64" => {
+            let trimmed: String = content.split_whitespace().collect();
+            general_purpose::STANDARD
+                .decode(trimmed.as_bytes())
+                .map_err(|err| format!("deliver_file: invalid base64 content: {err}"))?
+        }
+        other => {
+            return Err(format!(
+                "deliver_file: unsupported encoding '{other}' (use 'text' or 'base64')"
+            ));
+        }
+    };
+    if bytes.is_empty() {
+        return Err("deliver_file: content is empty".to_string());
+    }
+    if bytes.len() as u64 > MAX_EXPORT_FILE_BYTES {
+        return Err(format!(
+            "deliver_file: content exceeds the {} MB limit",
+            MAX_EXPORT_FILE_BYTES / (1024 * 1024)
+        ));
+    }
+    let mime_type = mime
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| guess_mime_from_name(name));
+
+    // Reuse the exact export path/guard/cleanup machinery: build an in-memory
+    // artifact (data_url), hand it to export_sandbox_artifacts (which sanitizes
+    // the filename, enforces the size cap, writes under the runs tree, and
+    // confines the write to the export dir), then read back the on-disk path.
+    let data_url = format!(
+        "data:{mime_type};base64,{}",
+        general_purpose::STANDARD.encode(&bytes)
+    );
+    let mut artifact = ChatToolArtifact {
+        name: name.to_string(),
+        mime_type,
+        data_url,
+        size_bytes: Some(bytes.len() as u64),
+        path: None,
+    };
+    let exported = export_sandbox_artifacts(ctx, std::slice::from_ref(&artifact))?;
+    let written = exported
+        .into_iter()
+        .next()
+        .ok_or_else(|| "deliver_file: nothing was written".to_string())?;
+    artifact.path = Some(written.path.display().to_string());
+    Ok(artifact)
+}
+
 pub fn format_exported_paths(exports: &[SandboxExportedArtifact]) -> String {
     if exports.is_empty() {
         return String::new();
@@ -458,6 +561,103 @@ mod tests {
         assert!(err.contains("outside the Kivio runs directory"));
 
         let _ = fs::remove_file(outside);
+    }
+
+    #[test]
+    fn deliver_file_writes_text_artifact() {
+        let ctx = SandboxExportContext {
+            conversation_id: "conv_deliver_text".to_string(),
+            message_id: "msg_deliver_text".to_string(),
+            tool_call_id: Some("call_text".to_string()),
+        };
+        let artifact = deliver_file_artifact(&ctx, "notes.md", "# Hello\n\nWorld\n", "text", None)
+            .expect("deliver text");
+        assert_eq!(artifact.name, "notes.md");
+        assert_eq!(artifact.mime_type, "text/markdown");
+        assert_eq!(artifact.size_bytes, Some("# Hello\n\nWorld\n".len() as u64));
+        let path = artifact.path.as_ref().expect("path set");
+        assert!(path.ends_with("notes.md"));
+        assert!(path.contains("Kivio/runs/conv_deliver_text/msg_deliver_text"));
+        let on_disk = fs::read_to_string(path).expect("read back");
+        assert_eq!(on_disk, "# Hello\n\nWorld\n");
+        assert!(artifact.data_url.starts_with("data:text/markdown;base64,"));
+        let _ = fs::remove_dir_all(sandbox_run_export_dir(&ctx).expect("dir").parent().unwrap());
+    }
+
+    #[test]
+    fn deliver_file_writes_base64_binary_artifact() {
+        // 1x1 transparent PNG header bytes are enough to assert byte fidelity.
+        let png_bytes: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+        let b64 = general_purpose::STANDARD.encode(png_bytes);
+        let ctx = SandboxExportContext {
+            conversation_id: "conv_deliver_bin".to_string(),
+            message_id: "msg_deliver_bin".to_string(),
+            tool_call_id: None,
+        };
+        let artifact = deliver_file_artifact(&ctx, "pixel.png", &b64, "base64", None)
+            .expect("deliver base64");
+        assert_eq!(artifact.mime_type, "image/png");
+        let path = artifact.path.as_ref().expect("path set");
+        let on_disk = fs::read(path).expect("read back");
+        assert_eq!(on_disk, png_bytes);
+        let _ = fs::remove_dir_all(sandbox_run_export_dir(&ctx).expect("dir").parent().unwrap());
+    }
+
+    #[test]
+    fn deliver_file_sanitizes_filename_and_blocks_traversal() {
+        let ctx = SandboxExportContext {
+            conversation_id: "conv_deliver_sanitize".to_string(),
+            message_id: "msg_deliver_sanitize".to_string(),
+            tool_call_id: None,
+        };
+        // A traversal-style name is reduced to its file_name and sanitized, so
+        // the write stays inside the message export dir.
+        let artifact = deliver_file_artifact(&ctx, "../../etc/passwd", "x", "text", None)
+            .expect("deliver sanitized");
+        let path = artifact.path.as_ref().expect("path set");
+        let export_dir = sandbox_run_export_dir(&ctx).expect("dir");
+        assert!(Path::new(path).starts_with(&export_dir), "must stay under export dir");
+        assert!(!path.contains(".."));
+        // resolve_sandbox_export_file_path agrees the file is inside the runs root.
+        assert!(resolve_sandbox_export_file_path(path).is_ok());
+        let _ = fs::remove_dir_all(export_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn deliver_file_rejects_bad_base64() {
+        let ctx = SandboxExportContext {
+            conversation_id: "conv_deliver_badb64".to_string(),
+            message_id: "msg_deliver_badb64".to_string(),
+            tool_call_id: None,
+        };
+        let err = deliver_file_artifact(&ctx, "x.bin", "not*valid*base64!!!", "base64", None)
+            .expect_err("bad base64 must error");
+        assert!(err.contains("invalid base64"), "got: {err}");
+    }
+
+    #[test]
+    fn deliver_file_rejects_oversize_content() {
+        let ctx = SandboxExportContext {
+            conversation_id: "conv_deliver_oversize".to_string(),
+            message_id: "msg_deliver_oversize".to_string(),
+            tool_call_id: None,
+        };
+        let huge = "a".repeat((MAX_EXPORT_FILE_BYTES + 1) as usize);
+        let err = deliver_file_artifact(&ctx, "big.txt", &huge, "text", None)
+            .expect_err("oversize must error");
+        assert!(err.contains("exceeds"), "got: {err}");
+    }
+
+    #[test]
+    fn deliver_file_rejects_unknown_encoding() {
+        let ctx = SandboxExportContext {
+            conversation_id: "conv_deliver_enc".to_string(),
+            message_id: "msg_deliver_enc".to_string(),
+            tool_call_id: None,
+        };
+        let err = deliver_file_artifact(&ctx, "x.txt", "data", "hex", None)
+            .expect_err("unknown encoding must error");
+        assert!(err.contains("unsupported encoding"), "got: {err}");
     }
 
     #[test]

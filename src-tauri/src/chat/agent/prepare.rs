@@ -686,6 +686,9 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
     let has_run_python = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "run_python");
+    let has_deliver_file = native_tool_names
+        .iter()
+        .any(|tool| tool.as_str() == "deliver_file");
     let zh_live_access_hint = match (has_web_search, has_web_fetch) {
         (true, true) => "实时搜索或网页读取必须优先用 web_search/web_fetch 或对应 Skill 脚本。",
         (true, false) => "实时搜索必须优先用 web_search 或对应 Skill 脚本。",
@@ -708,10 +711,11 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
         } else {
             "\n- 生图工具未启用；用户要求生成图片时，说明需要先在「混音器」里配置生图模型。"
         };
-        let generated_file_hint = if has_run_python {
-            "\n- 用户用自然语言要求“生成/整理/导出/发我”报告、摘要、表格、数据集、图表、Markdown、CSV、JSON、TXT、HTML 或 XLSX 文件时，主动调用 run_python 生成对应相对路径产物；不要要求用户说出 run_python 或 Python。成功后只简短说明已生成文件，文件卡片会展示给用户。若用户给出明确宿主路径或要求保存到本地某处，改用 write。"
-        } else {
-            ""
+        let generated_file_hint = match (has_run_python, has_deliver_file) {
+            (true, true) => "\n- 产出可下载文件时三选一,不要仅仅为了把已有内容写成文件而调用 run_python:需要计算/数据分析/画图/库生成(如带格式 XLSX、PDF、渲染图)→ run_python(产物以文件卡片交付);内容已能直接写出(文本/数据/代码/CSV/JSON/MD/HTML,无需计算)→ deliver_file(text 或 base64,会展示文件卡片);修改用户项目工作区里的文件 → write/edit。",
+            (false, true) => "\n- 用户要可下载文件且内容已能直接写出(文本/数据/代码/CSV/JSON/MD/HTML 或 base64 二进制)时,用 deliver_file 生成,会展示文件卡片;修改用户项目工作区里的文件用 write/edit。",
+            (true, false) => "\n- 需要计算/数据分析/画图/库生成(如带格式 XLSX、PDF、渲染图)的可下载文件用 run_python(产物以文件卡片交付);修改用户项目工作区里的文件用 write/edit。不要仅仅为了把已有内容写成文件而调用 run_python。",
+            (false, false) => "",
         };
         format!(
             "内置工具（已启用）：{list}。只能调用此列表中的内置工具。\n\
@@ -720,7 +724,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
 - 写入/编辑类工具和 bash 可能需要用户确认；memory_read（按需读 L2，L1 已注入）、memory_search（按关键词检索 L2，找不准标题时优先用它）和 memory_modify 无需确认。\n\
 - 运行环境：{os_name}，bash 经 {shell_name} 执行；命令语法须匹配该 shell（Windows 用 `%VAR%`、`dir`、`\\`；Unix 用 `$VAR`、`ls`、`/`）。每次 bash 都是全新进程，cwd 不跨调用保留——切目录用 `cwd` 参数，别靠上一条 `cd`。要跑多行或带引号的代码，先用 write 写成脚本再执行，或用 run_python，别塞进 `python -c \"...\"` 这类内联命令（内联引号在各 shell 下都脆弱）。工具返回硬性拒绝时换策略，别把同一动作换几种写法反复试；失败命令不要原样重跑；别为一次性探测或清理往项目里扔临时脚本。\n\
 - bash 在宿主 shell 从项目根目录执行，非零退出码即失败；含空格的路径必须用 `cwd` 参数，禁止 `cd 路径 && 命令`；不要同时传 `cwd` 又在 command 里写 `cd ... &&`。`npm run dev` / `tauri dev` / `vite` 等长驻 dev 命令会自动后台启动并立刻返回 pid，不要重复启动。破坏性、联网、改环境的命令先说明并等确认。Skill 脚本走 skill_run_script；不要用 pip 装宿主包绕过沙盒。\n\
-- run_python 在 Pyodide 沙盒运行，用于数据运算、分析、文档处理、图表和聊天产物文件生成；不要用它生成或打印代码答案，代码直接写在回答里。无宿主文件系统访问；files 挂载本地文件后用 KIVIO_INPUT_FILES[n] 路径，numpy、pandas、matplotlib、pillow、openpyxl、pypdf 可直接 import。产物保存为相对路径文件名（如 report.md、summary.csv、data.json、page.html、report.xlsx、chart.png），应用会自动捕获并显示文件卡片；不要 print base64。\n\
+- run_python 在 Pyodide 沙盒运行，用于数据运算、分析、文档处理、图表，以及需要 Python 库才能产出的文件（带格式 XLSX、PDF、渲染图）；不要用它生成或打印代码答案，也不要仅为把已有内容写成文件而调用它（那用 deliver_file）。代码直接写在回答里。无宿主文件系统访问；files 挂载本地文件后用 KIVIO_INPUT_FILES[n] 路径，numpy、pandas、matplotlib、pillow、openpyxl、pypdf 可直接 import。产物保存为相对路径文件名（如 report.xlsx、chart.png、summary.csv），应用会自动捕获并显示文件卡片；不要 print base64。\n\
 - {zh_live_access_hint}"
         ) + generated_file_hint + image_generation_hint
     } else {
@@ -729,10 +733,11 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
         } else {
             "\n- Image generation is not enabled; if asked, explain that an image model must be configured under Mixer first."
         };
-        let generated_file_hint = if has_run_python {
-            "\n- When the user naturally asks you to generate, export, send, package, or provide a report, summary, table, dataset, chart, Markdown, CSV, JSON, TXT, HTML, or XLSX file, proactively call run_python to create the artifact as a relative output file; do not ask the user to mention run_python or Python. After success, briefly say the file was generated; Kivio will show the file card. If the user gives an explicit host path or asks to save somewhere local, use write instead."
-        } else {
-            ""
+        let generated_file_hint = match (has_run_python, has_deliver_file) {
+            (true, true) => "\n- To produce a downloadable file, pick one — do not call run_python merely to write out content you already have: content that needs computation, data analysis, charts/plots, or a Python library to generate (e.g. a formatted XLSX, PDF, or rendered image) → run_python (its output is delivered as a file card); content you can write directly (text/data/code/CSV/JSON/MD/HTML, or base64 binary, no computation) → deliver_file (shows a file card); editing files in the user's project/workspace → write/edit.",
+            (false, true) => "\n- When the user wants a downloadable file and the content can be written directly (text/data/code/CSV/JSON/MD/HTML or base64 binary), use deliver_file (it shows a file card). To edit files in the user's project/workspace, use write/edit.",
+            (true, false) => "\n- Use run_python for downloadable files that need computation, data analysis, charts/plots, or a Python library to generate (e.g. a formatted XLSX, PDF, or rendered image); its output is delivered as a file card. To edit files in the user's project/workspace, use write/edit. Do not call run_python merely to write out content you already have.",
+            (false, false) => "",
         };
         format!(
             "Built-in tools enabled: {list}. Only call tools in this list.\n\
@@ -742,7 +747,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], language: &str) -> Op
 - Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax (Windows: `%VAR%`, `dir`, `\\`; Unix: `$VAR`, `ls`, `/`). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
 - bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Skill scripts go through skill_run_script; never use host pip to bypass the run_python sandbox.\n\
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list jobs with list_background, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
-- run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and chat deliverable file generation; never use it to generate or print code answers — write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.md, summary.csv, data.json, page.html, report.xlsx, chart.png); Kivio auto-captures them and shows file cards. No base64 printing.\n\
+- run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use deliver_file for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {en_live_access_hint}"
         ) + generated_file_hint + image_generation_hint
     };
@@ -862,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_prompt_treats_run_python_as_generated_file_tool() {
+    fn chat_prompt_scopes_run_python_to_compute_deliverables() {
         let registry = skills::SkillRegistry::default();
         let mut chat_tools = crate::settings::ChatToolsConfig::default();
         chat_tools.native_tools.run_python = true;
@@ -887,11 +892,52 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("主动调用 run_python"));
-        assert!(prompt.contains("不要要求用户说出 run_python 或 Python"));
+        // run_python (deliver_file absent) → only-run_python arm: scope it to
+        // compute/library deliverables and explicitly discourage using it just
+        // to write out existing content.
+        assert!(prompt.contains("run_python"));
         assert!(prompt.contains("文件卡片"));
-        assert!(prompt.contains("report.md"));
         assert!(prompt.contains("report.xlsx"));
+        assert!(prompt.contains("不要仅仅为了把已有内容写成文件而调用 run_python"));
+        // The old proactive-catch-all wording must be gone.
+        assert!(!prompt.contains("主动调用 run_python"));
+    }
+
+    #[test]
+    fn chat_prompt_offers_three_way_split_with_deliver_file() {
+        let registry = skills::SkillRegistry::default();
+        let mut chat_tools = crate::settings::ChatToolsConfig::default();
+        chat_tools.native_tools.run_python = true;
+        chat_tools.native_tools.write_file = true;
+
+        let prompt = build_chat_system_prompt(
+            "zh-CN",
+            false,
+            false,
+            &registry,
+            &chat_tools,
+            true,
+            &[
+                "run_python".to_string(),
+                "deliver_file".to_string(),
+                "write".to_string(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        // Both present → three-way split mentioning each route.
+        assert!(prompt.contains("deliver_file"));
+        assert!(prompt.contains("run_python"));
+        assert!(prompt.contains("不要仅仅为了把已有内容写成文件而调用 run_python"));
     }
 
     #[test]
