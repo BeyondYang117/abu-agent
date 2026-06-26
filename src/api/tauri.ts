@@ -1106,6 +1106,9 @@ async function on<T>(event: string, handler: (payload: T) => void): Promise<Unli
 export const api = {
   // 设置相关
   getSettings: async () => normalizeSettings(await invoke<Settings>('get_settings')),
+  // 某模型支持的思考等级列表（数据来自模型库 reasoningEfforts）。
+  reasoningEffortsForModel: (model: string, apiFormat?: string) =>
+    invoke<string[]>('chat_reasoning_efforts_for_model', { model, apiFormat }),
   // kivio-code 的独立配置（与共享 Settings 分开存储，走专用命令读写）。
   getKivioCodeConfig: () => invoke<KivioCodeConfig>('get_kivio_code_config'),
   saveKivioCodeConfig: (config: KivioCodeConfig) =>

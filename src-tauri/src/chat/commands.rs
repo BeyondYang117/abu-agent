@@ -27,7 +27,7 @@ use crate::chat::model::{
 };
 use crate::chat::model_metadata::{
     chat_max_output_tokens_for_model, context_window_for_model, model_can_generate_images_directly,
-    model_supports_image_generation, model_supports_vision,
+    model_supports_image_generation, model_supports_vision, reasoning_efforts_for_model,
 };
 use crate::external_agents::detection::EXTERNAL_AGENT_MODELS_CACHE_TTL;
 use crate::mcp::types::ChatToolArtifact;
@@ -1006,7 +1006,9 @@ pub(crate) fn chat_execute_agent_plan(
 /// 由「每对话思考等级」+ 全局思考开关，解析出实际下发给模型的 `(thinking_enabled, thinking_level)`。
 /// - `None`（未设置）→ 跟随全局开关，不带等级（维持改动前行为）。
 /// - `"off"` → 强制关思考，不带等级。
-/// - `"low"|"medium"|"high"` → 开思考并带等级（适配器按家族映射为 reasoning_effort / output_config.effort）。
+/// - `"low"|"medium"|"high"|"xhigh"|"max"` → 开思考并带等级（适配器按家族映射为
+///   reasoning_effort / output_config.effort）。等级是否被某模型接受由前端按模型 id 门控；
+///   `xhigh` 仅 OpenAI GPT-5/Anthropic，`max` 仅 Anthropic。
 /// - 其它未知值 → 当作未设置，跟随全局。
 pub(crate) fn resolve_thinking(
     conv_level: Option<&str>,
@@ -1014,9 +1016,20 @@ pub(crate) fn resolve_thinking(
 ) -> (bool, Option<String>) {
     match conv_level {
         Some("off") => (false, None),
-        Some(level @ ("low" | "medium" | "high")) => (true, Some(level.to_string())),
+        Some(level @ ("low" | "medium" | "high" | "xhigh" | "max")) => {
+            (true, Some(level.to_string()))
+        }
         _ => (global_enabled, None),
     }
+}
+
+/// 返回某模型支持的思考等级列表（数据来自模型库 `reasoningEfforts`）。供前端等级选择器决定显示哪些档。
+#[tauri::command]
+pub(crate) fn chat_reasoning_efforts_for_model(
+    model: String,
+    api_format: Option<String>,
+) -> Vec<String> {
+    reasoning_efforts_for_model(&model, api_format.as_deref().unwrap_or(""))
 }
 
 /// 发送消息
@@ -5177,7 +5190,7 @@ pub(crate) fn chat_update_conversation(
     if let Some(level) = thinking_level {
         // 仅接受已知值；空串/未知 → 清除（回到「跟随全局」）。
         conversation.thinking_level = match level.trim() {
-            "off" | "low" | "medium" | "high" => Some(level.trim().to_string()),
+            "off" | "low" | "medium" | "high" | "xhigh" | "max" => Some(level.trim().to_string()),
             _ => None,
         };
     }
@@ -5224,6 +5237,15 @@ mod tests {
         assert_eq!(
             resolve_thinking(Some("high"), false),
             (true, Some("high".to_string()))
+        );
+        // xhigh / max 也放行（是否被模型接受由前端按模型门控）。
+        assert_eq!(
+            resolve_thinking(Some("xhigh"), false),
+            (true, Some("xhigh".to_string()))
+        );
+        assert_eq!(
+            resolve_thinking(Some("max"), false),
+            (true, Some("max".to_string()))
         );
         // 未知值 → 当作未设置，跟随全局。
         assert_eq!(resolve_thinking(Some("ultra"), true), (true, None));

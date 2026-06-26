@@ -1,30 +1,78 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Brain, Check, ChevronDown } from 'lucide-react'
+import { api } from '../api/tauri'
+import { isProviderEnabled } from '../settings/utils'
 import { chatTitlebarPillButtonClass } from './platform'
 import type { ThinkingLevel } from './types'
 
 interface ThinkingLevelSelectorProps {
   /** 当前等级；null = 跟随全局思考开关。 */
   value: ThinkingLevel | null
+  currentProviderId: string
+  currentModel: string
   onChange: (level: ThinkingLevel | null) => void
 }
 
-// null 用 '' 作 key，避免 Map 里 null 的歧义。
-const OPTIONS: Array<{ value: ThinkingLevel | null; label: string }> = [
-  { value: null, label: '跟随全局' },
-  { value: 'off', label: '关闭' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-]
+// 固定项 + 各等级的中文标签。具体显示哪些等级由后端按模型库决定。
+const LABELS: Record<string, string> = {
+  off: '关闭',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '超高',
+  max: '最高',
+}
+const FOLLOW = '跟随全局'
+// 未取到模型能力时的安全兜底（全模型通用子集）。
+const FALLBACK_LEVELS = ['low', 'medium', 'high']
 
 function labelFor(value: ThinkingLevel | null): string {
-  return OPTIONS.find((o) => o.value === value)?.label ?? '跟随全局'
+  return value == null ? FOLLOW : LABELS[value] ?? value
 }
 
-export function ThinkingLevelSelector({ value, onChange }: ThinkingLevelSelectorProps) {
+export function ThinkingLevelSelector({
+  value,
+  currentProviderId,
+  currentModel,
+  onChange,
+}: ThinkingLevelSelectorProps) {
   const [open, setOpen] = useState(false)
-  // 跟随全局时只显示图标，避免占位；选了具体等级才显示文字。
+  const [levels, setLevels] = useState<string[]>(FALLBACK_LEVELS)
+
+  // 思考等级清单来自后端模型库（reasoningEfforts），按 (model, apiFormat) 解析。
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      if (!currentModel) {
+        if (alive) setLevels(FALLBACK_LEVELS)
+        return
+      }
+      try {
+        const settings = await api.getSettings()
+        const apiFormat = (settings.providers || [])
+          .filter(isProviderEnabled)
+          .find((p) => p.id === currentProviderId)?.apiFormat
+        const got = await api.reasoningEffortsForModel(currentModel, apiFormat)
+        if (alive) setLevels(got.length > 0 ? got : FALLBACK_LEVELS)
+      } catch {
+        if (alive) setLevels(FALLBACK_LEVELS)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [currentProviderId, currentModel])
+
+  const options = useMemo<Array<{ value: ThinkingLevel | null; label: string }>>(
+    () => [
+      { value: null, label: FOLLOW },
+      { value: 'off', label: LABELS.off },
+      ...levels.map((l) => ({ value: l as ThinkingLevel, label: LABELS[l] ?? l })),
+    ],
+    [levels],
+  )
+
+  // 跟随全局时只显示图标；选了具体等级才显示文字。
   const showLabel = value != null
 
   return (
@@ -52,7 +100,7 @@ export function ThinkingLevelSelector({ value, onChange }: ThinkingLevelSelector
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[160px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-            {OPTIONS.map((opt) => {
+            {options.map((opt) => {
               const active = opt.value === value
               return (
                 <button

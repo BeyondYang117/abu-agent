@@ -446,7 +446,7 @@ export interface Conversation {
   thinkingLevel?: ThinkingLevel | null
 }
 
-export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface ConversationListItem {
   id: string

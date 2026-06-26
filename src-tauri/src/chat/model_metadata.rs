@@ -136,6 +136,34 @@ fn model_database_image_generation(model: &str) -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
+/// 某模型支持的「思考等级」(reasoning effort) 列表，供前端的等级选择器决定显示哪些档。
+/// 优先取模型库 `reasoningEfforts` 显式列表（各家支持不构成单调子集，故逐模型列举，便于维护）；
+/// 库里没有时：Anthropic 家族给全档(low..max)，其余给通用安全子集 low/medium/high。
+/// 始终只保留已知合法值并去重，避免脏数据进入请求。
+pub fn reasoning_efforts_for_model(model: &str, api_format: &str) -> Vec<String> {
+    const KNOWN: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+    if let Some(list) = model_database_entry(model)
+        .and_then(|entry| entry.get("reasoningEfforts"))
+        .and_then(Value::as_array)
+    {
+        let mut out: Vec<String> = Vec::new();
+        for v in list {
+            if let Some(s) = v.as_str() {
+                if KNOWN.contains(&s) && !out.iter().any(|x| x == s) {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    if api_format == "anthropic_messages" {
+        return KNOWN.iter().map(|s| s.to_string()).collect();
+    }
+    vec!["low".into(), "medium".into(), "high".into()]
+}
+
 fn model_pricing_from_model_info(info: Option<&ModelInfo>) -> Option<ModelPricing> {
     info.and_then(|info| info.pricing.clone())
 }
@@ -283,6 +311,25 @@ mod tests {
     use crate::settings::{ModelInfo, ModelProvider};
 
     use super::*;
+
+    #[test]
+    fn reasoning_efforts_resolve_from_db_family_and_default() {
+        // 模型库显式列表：DeepSeek V4 含 xhigh+max（含用户的代理别名变体，靠前缀匹配）。
+        let ds = reasoning_efforts_for_model("DeepSeek-V4-Flash", "openai_chat");
+        assert!(ds.contains(&"max".to_string()) && ds.contains(&"xhigh".to_string()), "{ds:?}");
+        // GPT-5：有 xhigh、无 max。
+        let gpt = reasoning_efforts_for_model("gpt-5.5", "openai_chat");
+        assert!(gpt.contains(&"xhigh".to_string()) && !gpt.contains(&"max".to_string()), "{gpt:?}");
+        // Gemma：有 max、无 xhigh（非单调子集）。
+        let gemma = reasoning_efforts_for_model("gemma4:31b", "openai_chat");
+        assert!(gemma.contains(&"max".to_string()) && !gemma.contains(&"xhigh".to_string()), "{gemma:?}");
+        // 库里没有 + 非 Anthropic → 安全子集 low/medium/high。
+        let unknown = reasoning_efforts_for_model("some-random-model", "openai_chat");
+        assert_eq!(unknown, vec!["low", "medium", "high"]);
+        // Anthropic 家族兜底 → 全档。
+        let anth = reasoning_efforts_for_model("whatever", "anthropic_messages");
+        assert!(anth.contains(&"xhigh".to_string()) && anth.contains(&"max".to_string()), "{anth:?}");
+    }
 
     fn test_provider_with_overrides(model_overrides: HashMap<String, ModelInfo>) -> ModelProvider {
         ModelProvider {

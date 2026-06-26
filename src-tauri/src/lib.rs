@@ -501,6 +501,7 @@ pub fn run() {
             chat::commands::chat_read_clipboard_files,
             chat::commands::chat_delete_conversation,
             chat::commands::chat_update_conversation,
+            chat::commands::chat_reasoning_efforts_for_model,
             chat::commands::chat_update_message,
             chat::commands::chat_delete_message,
             chat::commands::chat_regenerate_message,

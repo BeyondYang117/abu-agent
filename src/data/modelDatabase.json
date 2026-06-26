@@ -22,6 +22,7 @@
     "contextWindow": 1050000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 5.00, "output": 30.00, "cachedInput": 0.50 }
   },
   "gpt-5.5-pro": {
@@ -29,6 +30,7 @@
     "contextWindow": 1050000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 30.00, "output": 180.00 }
   },
   "gpt-5.4": {
@@ -36,6 +38,7 @@
     "contextWindow": 1050000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 2.50, "output": 15.00, "cachedInput": 0.25 }
   },
   "gpt-5.4-pro": {
@@ -43,6 +46,7 @@
     "contextWindow": 1050000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 30.00, "output": 180.00 }
   },
   "gpt-5.4-mini": {
@@ -64,6 +68,7 @@
     "contextWindow": 400000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 1.25, "output": 10.00, "cachedInput": 0.125 }
   },
   "gpt-5-pro": {
@@ -71,6 +76,7 @@
     "contextWindow": 400000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 15.00, "output": 120.00 }
   },
   "gpt-5-mini": {
@@ -92,6 +98,7 @@
     "contextWindow": 400000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh"],
     "pricing": { "input": 1.25, "output": 10.00 }
   },
   "gpt-4.1": {
@@ -384,6 +391,7 @@
     "contextWindow": 1048576,
     "maxOutput": 131072,
     "capabilities": { "vision": false, "functionCalling": true, "reasoning": false, "streaming": true, "webSearch": false },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
     "pricing": { "input": 0.10, "output": 0.20, "cachedInput": 0.003 }
   },
   "deepseek-v4-pro": {
@@ -391,7 +399,15 @@
     "contextWindow": 1048576,
     "maxOutput": 384000,
     "capabilities": { "vision": false, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
     "pricing": { "input": 0.43, "output": 0.87 }
+  },
+  "gemma4": {
+    "displayName": "Gemma 4",
+    "contextWindow": 131072,
+    "maxOutput": 8192,
+    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
+    "reasoningEfforts": ["low", "medium", "high", "max"]
   },
   "deepseek-chat": {
     "displayName": "DeepSeek V3",
