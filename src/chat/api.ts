@@ -15,6 +15,7 @@ import type {
   DetectedExternalAgent,
   PendingAttachment,
 } from './types'
+import type { ThinkingLevel } from './types'
 
 export type { DetectedExternalAgent, AgentRuntimeConfig }
 
@@ -1150,12 +1151,14 @@ export const chatApi = {
       activeSkillId?: string | null
       assistantId?: string | null
       knowledgeBaseIds?: string[]
+      thinkingLevel?: ThinkingLevel | null
     }
   ): Promise<Conversation> {
     if (!isTauriRuntime()) return mockChatApi.updateConversation(conversationId, updates)
     const hasFolderUpdate = 'folder' in updates
     const hasProjectUpdate = 'projectId' in updates
     const hasSetUpdate = 'setId' in updates
+    const hasThinkingUpdate = 'thinkingLevel' in updates
     const result = await invoke<{ success: boolean; conversation: Conversation }>(
       'chat_update_conversation',
       {
@@ -1170,6 +1173,8 @@ export const chatApi = {
         activeSkillId: updates.activeSkillId,
         assistantId: updates.assistantId,
         knowledgeBaseIds: updates.knowledgeBaseIds,
+        // null/未知 → 空串，后端解析为 None（回到「跟随全局」）。
+        thinkingLevel: hasThinkingUpdate ? updates.thinkingLevel ?? '' : undefined,
       }
     )
     if (!result.success) {

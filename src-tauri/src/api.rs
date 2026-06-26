@@ -1061,9 +1061,10 @@ pub async fn call_vision_api(
     }
 
     // 关闭思考模式：仅塞 DeepSeek/Kimi 官方文档约定的 thinking={type:"disabled"} 字段。
-    // 不再注入 chat_template_kwargs / enable_thinking / reasoning_effort —— 这些是 vLLM/Qwen/OpenAI
-    // 私有字段，第三方代理（如 OpenRouter / 反代）做严格校验时会以 400 拒绝整个请求（实测 DeepSeek
-    // 路径上 chat_template_kwargs 直接报错）。提示词层的 no-think 指令是更稳的兜底。
+    // 不注入 chat_template_kwargs / enable_thinking —— 这俩是 vLLM/Qwen 私有字段，第三方代理
+    // （如 OpenRouter / 反代）做严格校验会以 400 拒绝整个请求（实测 DeepSeek 路径上 chat_template_kwargs
+    // 直接报错）。注：reasoning_effort 是 OpenAI 标准参数（非私有），chat 路径的「思考等级」按需注入；
+    // 这里是 lens/翻译路径，保持仅 thinking:disabled。提示词层的 no-think 指令是更稳的兜底。
     if !thinking_enabled && provider_supports_thinking_field(&provider.base_url) {
         body["thinking"] = serde_json::json!({ "type": "disabled" });
     }

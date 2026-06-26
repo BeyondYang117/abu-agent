@@ -155,6 +155,7 @@ pub(crate) async fn planning_step(
             Some(&prepared.active_tools),
             config.retry_attempts,
             config.thinking_enabled,
+            config.thinking_level.clone(),
             config.max_output_tokens,
             &config.conversation_id,
             &config.run_id,
@@ -264,6 +265,7 @@ pub(crate) async fn planning_step(
                     Some(&prepared.active_tools),
                     config.retry_attempts,
                     config.thinking_enabled,
+                    config.thinking_level.clone(),
                     config.max_output_tokens,
                     &config.conversation_id,
                     &config.message_id,
@@ -290,6 +292,7 @@ pub(crate) async fn planning_step(
                 Some(&prepared.active_tools),
                 config.retry_attempts,
                 config.thinking_enabled,
+                config.thinking_level.clone(),
                 config.max_output_tokens,
                 &config.conversation_id,
                 &config.message_id,
@@ -512,6 +515,7 @@ pub(crate) async fn call_chat_completion_message_with_usage(
     tools: Option<&[ChatToolDefinition]>,
     retry_attempts: usize,
     thinking_enabled: bool,
+    thinking_level: Option<String>,
     max_output_tokens: u32,
     conversation_id: &str,
     message_id: &str,
@@ -523,6 +527,7 @@ pub(crate) async fn call_chat_completion_message_with_usage(
         tools,
         GenerateOptions {
             thinking_enabled,
+            thinking_level,
             max_tokens: max_output_tokens,
             ..GenerateOptions::default()
         },
@@ -618,6 +623,7 @@ pub(crate) async fn stream_scoped_chat_completion_inner(
     tools: Option<&[ChatToolDefinition]>,
     retry_attempts: usize,
     thinking_enabled: bool,
+    thinking_level: Option<String>,
     max_output_tokens: u32,
     conversation_id: &str,
     run_id: &str,
@@ -636,6 +642,7 @@ pub(crate) async fn stream_scoped_chat_completion_inner(
         GenerateOptions {
             stream: true,
             thinking_enabled,
+            thinking_level,
             max_tokens: max_output_tokens,
             ..GenerateOptions::default()
         },

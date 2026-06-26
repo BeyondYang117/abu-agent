@@ -566,6 +566,7 @@
             language: "zh-CN".to_string(),
             has_image: false,
             thinking_enabled: false,
+            thinking_level: None,
             stream_enabled,
             max_output_tokens: 1024,
             retry_attempts: 1,

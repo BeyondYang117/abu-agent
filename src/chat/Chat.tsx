@@ -6,6 +6,7 @@ import { ChatTitlebarActions } from './ChatTitlebarActions'
 import type { AssistantStreamStats } from './MessageList'
 import { InputBar } from './InputBar'
 import { ModelSelector } from './ModelSelector'
+import { ThinkingLevelSelector } from './ThinkingLevelSelector'
 import { ExternalModelSelector, RuntimePicker } from './RuntimePicker'
 import { PermissionPicker } from './PermissionPicker'
 import { BackgroundJobsIndicator } from './BackgroundJobsIndicator'
@@ -39,6 +40,7 @@ import type {
   PendingAttachment,
   SkillMeta,
   ToolCallRecord,
+  ThinkingLevel,
 } from './types'
 import {
   api,
@@ -515,6 +517,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [draftModel, setDraftModel] = useState('')
   // 欢迎页（尚无会话）时挂载的知识库草稿；首次发送建会话时落到会话上。
   const [draftKnowledgeBaseIds, setDraftKnowledgeBaseIds] = useState<string[]>([])
+  // 欢迎页思考等级草稿；首次发送建会话时落到会话上。null=跟随全局。
+  const [draftThinkingLevel, setDraftThinkingLevel] = useState<ThinkingLevel | null>(null)
   const [draftAgentRuntime, setDraftAgentRuntime] = useState<AgentRuntimeConfig>(
     BUILTIN_AGENT_RUNTIME,
   )
@@ -2180,6 +2184,21 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
     }
 
+    // 同理：把欢迎页选好的思考等级草稿落到新会话上。
+    if (draftThinkingLevel) {
+      const convLevel = conversation.thinking_level ?? conversation.thinkingLevel ?? null
+      if (convLevel !== draftThinkingLevel) {
+        try {
+          conversation = await chatApi.updateConversation(conversation.id, {
+            thinkingLevel: draftThinkingLevel,
+          })
+          applyConversation(conversation)
+        } catch (err) {
+          console.error('Failed to apply thinking level draft before send:', err)
+        }
+      }
+    }
+
     const conversationId = conversation.id
     if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) {
       setStreamErrorForConversation(conversationId, '该对话正在生成中，请稍后再试')
@@ -2300,6 +2319,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     currentConversation,
     draftAgentRuntime,
     draftKnowledgeBaseIds,
+    draftThinkingLevel,
     effectiveSkillId,
     enabledSkills,
     ensureStreamSnapshot,
@@ -2671,6 +2691,20 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }
 
+  const handleThinkingLevelChange = async (level: ThinkingLevel | null) => {
+    setDraftThinkingLevel(level)
+    if (!currentConversation) return
+    try {
+      const updatedConv = await chatApi.updateConversation(currentConversation.id, {
+        thinkingLevel: level,
+      })
+      applyConversation(updatedConv)
+    } catch (err) {
+      console.error('Failed to change thinking level:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '思考等级切换失败')
+    }
+  }
+
   const handleChangeKnowledgeBaseIds = async (ids: string[]) => {
     // Track a draft so mounting works on the welcome page (no conversation yet);
     // the draft is applied when the conversation is created on first send.
@@ -2944,6 +2978,20 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     />
                   )}
                 </div>
+                {!usesExternalRuntime && (
+                  <div className="shrink-0" data-tauri-drag-region="false">
+                    <ThinkingLevelSelector
+                      value={
+                        currentConversation
+                          ? (currentConversation.thinking_level
+                              ?? currentConversation.thinkingLevel
+                              ?? null)
+                          : draftThinkingLevel
+                      }
+                      onChange={(level) => void handleThinkingLevelChange(level)}
+                    />
+                  </div>
+                )}
                 <div className="shrink-0" data-tauri-drag-region="false">
                   <PermissionPicker
                     agentRuntime={activeAgentRuntime}

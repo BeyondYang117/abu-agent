@@ -151,6 +151,11 @@ pub struct GenerateOptions {
     pub max_tokens: u32,
     pub stream: bool,
     pub thinking_enabled: bool,
+    /// 每对话「思考等级」(`"low"|"medium"|"high"`)。`None` = 未显式设置，维持现状
+    /// （仅受 `thinking_enabled` 控制，不发任何 effort/reasoning 字段）。仅在用户显式
+    /// 选了等级时由适配器按家族映射：OpenAI→`reasoning_effort`，Anthropic→`output_config.effort`。
+    #[serde(default)]
+    pub thinking_level: Option<String>,
     #[serde(default)]
     pub provider_options: Value,
 }
@@ -162,6 +167,7 @@ impl Default for GenerateOptions {
             max_tokens: 8192,
             stream: false,
             thinking_enabled: true,
+            thinking_level: None,
             provider_options: Value::Object(Default::default()),
         }
     }

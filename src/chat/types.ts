@@ -442,7 +442,11 @@ export interface Conversation {
   agentRuntime?: AgentRuntimeConfig
   knowledge_base_ids?: string[]
   knowledgeBaseIds?: string[]
+  thinking_level?: ThinkingLevel | null
+  thinkingLevel?: ThinkingLevel | null
 }
+
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
 
 export interface ConversationListItem {
   id: string

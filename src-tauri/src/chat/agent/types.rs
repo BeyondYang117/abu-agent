@@ -57,6 +57,9 @@ pub struct AgentRunConfig<'a> {
     pub language: String,
     pub has_image: bool,
     pub thinking_enabled: bool,
+    /// 每对话「思考等级」(`Some("low"|"medium"|"high")`)。`None` = 未设置，维持现状。
+    /// 仅作用于答案生成（planning/synthesis），不作用于压缩摘要。
+    pub thinking_level: Option<String>,
     pub stream_enabled: bool,
     pub max_output_tokens: u32,
     pub retry_attempts: usize,

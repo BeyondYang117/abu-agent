@@ -127,6 +127,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+            thinking_level: None,
         }
     }
 

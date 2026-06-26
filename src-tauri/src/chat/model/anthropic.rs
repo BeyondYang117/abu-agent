@@ -301,6 +301,17 @@ impl AnthropicMessagesProvider<'_> {
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools);
         }
+        // 思考等级（仅在用户显式选了等级时注入）。Claude 4.6+/4.7/4.8/Fable5 用
+        // adaptive thinking + output_config.effort；budget_tokens 已被移除（发了 400）。
+        if let Some(level) = request
+            .options
+            .thinking_level
+            .as_deref()
+            .filter(|l| !l.is_empty())
+        {
+            body["thinking"] = serde_json::json!({ "type": "adaptive" });
+            body["output_config"] = serde_json::json!({ "effort": level });
+        }
         if let Some(overrides) = request.options.provider_options.as_object() {
             for (key, value) in overrides {
                 body[key] = value.clone();
@@ -929,6 +940,61 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::model::GenerateOptions;
+
+    /// Build a real Anthropic request body via the production `request_body`
+    /// path and assert how `thinking_level` maps to the wire.
+    fn build_anthropic_body(thinking_level: Option<&str>) -> Value {
+        let state = crate::state::AppState::new_headless(
+            crate::settings::Settings::default(),
+            std::env::temp_dir(),
+        );
+        let provider = crate::settings::ModelProvider {
+            id: "test".into(),
+            name: "Test".into(),
+            api_keys: vec!["sk-test".into()],
+            api_key_legacy: None,
+            base_url: "https://api.anthropic.com".into(),
+            available_models: vec!["claude-opus-4-8".into()],
+            enabled_models: vec!["claude-opus-4-8".into()],
+            supports_tools: true,
+            enabled: true,
+            api_format: "anthropic_messages".into(),
+            model_overrides: Default::default(),
+            compress_request_body: false,
+        };
+        let adapter = AnthropicMessagesProvider::new(&state, &provider, 1);
+        let request = GenerateRequest {
+            model: "claude-opus-4-8".into(),
+            system: "sys".into(),
+            messages: vec![ModelMessage {
+                role: ModelRole::User,
+                content: vec![MessagePart::Text { text: "hi".into() }],
+            }],
+            tools: Vec::new(),
+            options: GenerateOptions {
+                thinking_level: thinking_level.map(|s| s.to_string()),
+                ..Default::default()
+            },
+            metadata: Default::default(),
+        };
+        adapter.request_body(&request, false)
+    }
+
+    #[test]
+    fn thinking_level_maps_to_adaptive_effort() {
+        // 未设等级 → 不发 thinking / output_config（与改动前一致：Anthropic 默认不思考）。
+        let none = build_anthropic_body(None);
+        assert!(none.get("thinking").is_none(), "body: {none}");
+        assert!(none.get("output_config").is_none(), "body: {none}");
+
+        // 选了等级 → adaptive thinking + output_config.effort（4.6+ 正确写法，非 budget_tokens）。
+        let high = build_anthropic_body(Some("high"));
+        eprintln!("[anthropic effort=high] {high}");
+        assert_eq!(high["thinking"]["type"], "adaptive");
+        assert_eq!(high["output_config"]["effort"], "high");
+        assert!(high.get("budget_tokens").is_none(), "must not send budget_tokens");
+    }
 
     #[test]
     fn canonical_text_image_and_tool_result_become_content_blocks() {

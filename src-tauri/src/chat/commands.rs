@@ -338,6 +338,7 @@ pub(crate) fn create_chat_conversation_internal(
                 agent_todo_state: AgentTodoState::default(),
                 agent_plan_state: AgentPlanState::default(),
                 knowledge_base_ids: Vec::new(),
+                thinking_level: None,
                 agent_runtime: settings.chat.default_agent_runtime.clone(),
             };
 
@@ -667,6 +668,7 @@ pub(crate) fn chat_create_builder_conversation(
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
         knowledge_base_ids: Vec::new(),
+        thinking_level: None,
         agent_runtime: crate::chat::AgentRuntimeConfig::default(),
     };
     save_conversation(&app, &conversation)?;
@@ -999,6 +1001,22 @@ pub(crate) fn chat_execute_agent_plan(
         "conversation": conversation,
         "planState": conversation.agent_plan_state,
     }))
+}
+
+/// 由「每对话思考等级」+ 全局思考开关，解析出实际下发给模型的 `(thinking_enabled, thinking_level)`。
+/// - `None`（未设置）→ 跟随全局开关，不带等级（维持改动前行为）。
+/// - `"off"` → 强制关思考，不带等级。
+/// - `"low"|"medium"|"high"` → 开思考并带等级（适配器按家族映射为 reasoning_effort / output_config.effort）。
+/// - 其它未知值 → 当作未设置，跟随全局。
+pub(crate) fn resolve_thinking(
+    conv_level: Option<&str>,
+    global_enabled: bool,
+) -> (bool, Option<String>) {
+    match conv_level {
+        Some("off") => (false, None),
+        Some(level @ ("low" | "medium" | "high")) => (true, Some(level.to_string())),
+        _ => (global_enabled, None),
+    }
 }
 
 /// 发送消息
@@ -1519,7 +1537,9 @@ async fn complete_assistant_reply(
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let language = crate::settings::resolve_chat_language(&settings);
     let stream_enabled = settings.chat.stream_enabled;
-    let thinking_enabled = settings.chat.thinking_enabled;
+    // 思考：每对话等级覆盖全局开关。None=跟随全局（现状）；"off"=强制关；low/medium/high=按家族注入。
+    let (thinking_enabled, thinking_level) =
+        resolve_thinking(conversation.thinking_level.as_deref(), settings.chat.thinking_enabled);
     let retry_attempts = if settings.retry_enabled {
         settings.retry_attempts as usize
     } else {
@@ -1845,6 +1865,7 @@ async fn complete_assistant_reply(
             language,
             has_image: !main_image_paths.is_empty(),
             thinking_enabled,
+            thinking_level,
             stream_enabled,
             max_output_tokens,
             retry_attempts,
@@ -5070,6 +5091,7 @@ pub(crate) fn chat_update_conversation(
     active_skill_id: Option<String>,
     assistant_id: Option<String>,
     knowledge_base_ids: Option<Vec<String>>,
+    thinking_level: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
 
@@ -5152,6 +5174,13 @@ pub(crate) fn chat_update_conversation(
             .filter(|s| !s.is_empty() && seen.insert(s.clone()))
             .collect();
     }
+    if let Some(level) = thinking_level {
+        // 仅接受已知值；空串/未知 → 清除（回到「跟随全局」）。
+        conversation.thinking_level = match level.trim() {
+            "off" | "low" | "medium" | "high" => Some(level.trim().to_string()),
+            _ => None,
+        };
+    }
 
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(&app, &conversation)?;
@@ -5179,6 +5208,26 @@ mod tests {
     use super::*;
     use crate::chat::Attachment;
     use std::collections::HashMap;
+
+    #[test]
+    fn resolve_thinking_maps_levels_and_falls_back_to_global() {
+        // 未设置 → 跟随全局，不带等级（两种全局状态都验证）。
+        assert_eq!(resolve_thinking(None, true), (true, None));
+        assert_eq!(resolve_thinking(None, false), (false, None));
+        // off → 强制关，覆盖全局。
+        assert_eq!(resolve_thinking(Some("off"), true), (false, None));
+        // 具体等级 → 开 + 带等级，覆盖全局关。
+        assert_eq!(
+            resolve_thinking(Some("low"), false),
+            (true, Some("low".to_string()))
+        );
+        assert_eq!(
+            resolve_thinking(Some("high"), false),
+            (true, Some("high".to_string()))
+        );
+        // 未知值 → 当作未设置，跟随全局。
+        assert_eq!(resolve_thinking(Some("ultra"), true), (true, None));
+    }
 
     #[test]
     fn builder_args_produce_valid_assistant() {
@@ -6152,6 +6201,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+        thinking_level: None,
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         }
     }
@@ -6258,6 +6308,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+        thinking_level: None,
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
         let result = AuxiliaryVisionResult {
@@ -6386,6 +6437,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+        thinking_level: None,
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 
@@ -6503,6 +6555,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+        thinking_level: None,
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 

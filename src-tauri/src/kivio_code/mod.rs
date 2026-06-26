@@ -564,6 +564,7 @@ impl TurnAssembly {
             language: self.language.clone(),
             has_image,
             thinking_enabled: self.thinking_enabled,
+            thinking_level: None,
             stream_enabled: self.stream_enabled,
             max_output_tokens: self.max_output_tokens,
             retry_attempts: self.retry_attempts,

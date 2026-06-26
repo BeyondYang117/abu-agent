@@ -287,6 +287,17 @@ impl OpenAiChatProvider<'_> {
         {
             body["thinking"] = serde_json::json!({ "type": "disabled" });
         }
+        // 思考等级（仅在用户显式选了等级时注入）。reasoning_effort 是 OpenAI Chat
+        // Completions 的标准参数（GPT-5/o 系），代理普遍接受；不发 Qwen/vLLM 私有的
+        // enable_thinking / chat_template_kwargs。
+        if let Some(level) = request
+            .options
+            .thinking_level
+            .as_deref()
+            .filter(|l| !l.is_empty())
+        {
+            body["reasoning_effort"] = Value::String(level.to_string());
+        }
         if let Some(overrides) = request.options.provider_options.as_object() {
             for (key, value) in overrides {
                 body[key] = value.clone();
@@ -697,6 +708,61 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::model::{GenerateOptions, MessagePart, ModelMessage, ModelRole};
+
+    /// Build a real OpenAI-compatible provider request body via the production
+    /// `request_body` path and assert how `thinking_level` maps to the wire.
+    fn build_openai_body(thinking_level: Option<&str>, base_url: &str) -> Value {
+        let state = AppState::new_headless(
+            crate::settings::Settings::default(),
+            std::env::temp_dir(),
+        );
+        let provider = ModelProvider {
+            id: "test".into(),
+            name: "Test".into(),
+            api_keys: vec!["sk-test".into()],
+            api_key_legacy: None,
+            base_url: base_url.into(),
+            available_models: vec!["gpt-5".into()],
+            enabled_models: vec!["gpt-5".into()],
+            supports_tools: true,
+            enabled: true,
+            api_format: "openai_chat".into(),
+            model_overrides: Default::default(),
+            compress_request_body: false,
+        };
+        let adapter = OpenAiChatProvider::new(&state, &provider, 1);
+        let request = GenerateRequest {
+            model: "gpt-5".into(),
+            system: "sys".into(),
+            messages: vec![ModelMessage {
+                role: ModelRole::User,
+                content: vec![MessagePart::Text { text: "hi".into() }],
+            }],
+            tools: Vec::new(),
+            options: GenerateOptions {
+                thinking_level: thinking_level.map(|s| s.to_string()),
+                ..Default::default()
+            },
+            metadata: Default::default(),
+        };
+        adapter.request_body(&request, false)
+    }
+
+    #[test]
+    fn thinking_level_maps_to_reasoning_effort() {
+        // 未设等级 → 不发 reasoning_effort（与改动前一致）。
+        let none = build_openai_body(None, "https://api.openai.com/v1");
+        assert!(none.get("reasoning_effort").is_none(), "body: {none}");
+
+        // 选了等级 → 发标准 reasoning_effort。
+        let mid = build_openai_body(Some("medium"), "https://api.openai.com/v1");
+        eprintln!("[openai reasoning_effort=medium] {mid}");
+        assert_eq!(mid["reasoning_effort"], "medium");
+
+        let high = build_openai_body(Some("high"), "https://api.openai.com/v1");
+        assert_eq!(high["reasoning_effort"], "high");
+    }
 
     #[test]
     fn parses_text_reasoning_and_tool_calls() {
