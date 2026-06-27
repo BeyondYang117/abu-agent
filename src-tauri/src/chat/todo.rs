@@ -317,6 +317,7 @@ pub fn tool_result(state: &AgentTodoState, changed: &[String]) -> McpToolCallRes
         raw: structured.clone(),
         artifacts: Vec::new(),
         structured_content: Some(structured),
+        follow_up_user_messages: Vec::new(),
     }
 }
 

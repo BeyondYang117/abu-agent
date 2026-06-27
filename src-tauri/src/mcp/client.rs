@@ -591,6 +591,7 @@ pub(crate) fn parse_tool_result(value: Value) -> McpToolCallResult {
         raw: value,
         artifacts,
         structured_content,
+        follow_up_user_messages: Vec::new(),
     }
 }
 

@@ -819,6 +819,7 @@ fn err_result(message: impl Into<String>) -> McpToolCallResult {
         raw: Value::Null,
         artifacts: Vec::new(),
         structured_content: None,
+        follow_up_user_messages: Vec::new(),
     }
 }
 
@@ -1115,6 +1116,7 @@ fn compute_sub_agent_finalization(
                 raw: structured.clone(),
                 artifacts: Vec::new(),
                 structured_content: Some(structured),
+                follow_up_user_messages: Vec::new(),
             }
         }
         Ok(run) => {
@@ -1153,6 +1155,7 @@ fn compute_sub_agent_finalization(
                 raw: structured.clone(),
                 artifacts: Vec::new(),
                 structured_content: Some(structured),
+                follow_up_user_messages: Vec::new(),
             }
         }
         Err(err) => {
@@ -1189,6 +1192,7 @@ fn compute_sub_agent_finalization(
                 raw: structured.clone(),
                 artifacts: Vec::new(),
                 structured_content: Some(structured),
+                follow_up_user_messages: Vec::new(),
             }
         }
     }
@@ -1860,6 +1864,7 @@ mod tests {
                     raw: Value::Null,
                     artifacts: Vec::new(),
                     structured_content: None,
+                    follow_up_user_messages: Vec::new(),
                 })
             })
         }

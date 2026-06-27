@@ -233,6 +233,7 @@ pub fn tool_read(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResult
         raw: serde_json::to_value(&memory).unwrap_or(Value::Null),
         artifacts: Vec::new(),
         structured_content: None,
+        follow_up_user_messages: Vec::new(),
     })
 }
 
@@ -289,6 +290,7 @@ pub fn tool_search(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResu
                 "layer": layer.label().to_ascii_lowercase(),
                 "matches": [],
             })),
+            follow_up_user_messages: Vec::new(),
         });
     }
 
@@ -317,6 +319,7 @@ pub fn tool_search(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResu
         raw: structured.clone(),
         artifacts: Vec::new(),
         structured_content: Some(structured),
+        follow_up_user_messages: Vec::new(),
     })
 }
 
@@ -447,6 +450,7 @@ pub fn tool_modify(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResu
         raw: serde_json::to_value(&result).unwrap_or(Value::Null),
         artifacts: Vec::new(),
         structured_content: None,
+        follow_up_user_messages: Vec::new(),
     })
 }
 

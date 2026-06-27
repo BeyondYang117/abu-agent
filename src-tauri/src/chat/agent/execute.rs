@@ -121,7 +121,7 @@ pub async fn execute_tool_call(
     tool: &ChatToolDefinition,
     call: PendingToolCall,
     skill_cache: Option<&mut skills::SkillRunCache>,
-) -> (ToolCallRecord, String) {
+) -> (ToolCallRecord, String, Vec<Value>) {
     let now = chrono::Local::now().timestamp();
     let mut record = ToolCallRecord {
         id: call.id.clone(),
@@ -153,11 +153,14 @@ pub async fn execute_tool_call(
         return (
             record,
             format!("Tool arguments failed schema validation: {err}. Retry this tool call with arguments that match the declared JSON schema."),
+            Vec::new(),
         );
     }
 
     if tool.source == "native" && ask_user::is_ask_user_tool_name(&tool.name) {
-        return execute_ask_user_call(host, settings, ctx, record, call.arguments.clone()).await;
+        let (record, content) =
+            execute_ask_user_call(host, settings, ctx, record, call.arguments.clone()).await;
+        return (record, content, Vec::new());
     }
 
     // Gate. The file/shell tools (read/write/edit/bash/grep/find/ls) are
@@ -180,13 +183,13 @@ pub async fn execute_tool_call(
                 skip(&mut record, "Tool call was not approved");
                 host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
                 let content = record.error.clone().unwrap_or_default();
-                return (record, content);
+                return (record, content, Vec::new());
             }
         } else if policy != "auto" && !host.request_session_consent(ctx).await {
             skip(&mut record, "用户未授权本会话使用文件 / 命令工具");
             host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
             let content = record.error.clone().unwrap_or_default();
-            return (record, content);
+            return (record, content, Vec::new());
         }
     } else if tool_requires_approval(settings, tool) {
         let approved = host.request_tool_approval(ctx, &record).await;
@@ -194,7 +197,7 @@ pub async fn execute_tool_call(
             skip(&mut record, "Tool call was not approved");
             host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
             let content = record.error.clone().unwrap_or_default();
-            return (record, content);
+            return (record, content, Vec::new());
         }
     }
 
@@ -214,17 +217,19 @@ pub async fn execute_tool_call(
             record.error = Some("Tool call cancelled".to_string());
             host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
             let content = record.error.clone().unwrap_or_default();
-            return (record, content);
+            return (record, content, Vec::new());
         }
     };
     record.duration_ms = Some(started.elapsed().as_millis() as u64);
     record.completed_at = Some(chrono::Local::now().timestamp());
     let max_tool_output_chars = settings.chat_tools.max_tool_output_chars;
+    let mut follow_ups: Vec<Value> = Vec::new();
     let tool_content = match result {
         Ok(Ok(output)) if !output.is_error => {
             record.status = ToolCallStatus::Success;
             record.artifacts = output.artifacts.clone();
             record.structured_content = output.structured_content.clone();
+            follow_ups = output.follow_up_user_messages.clone();
             record.result_preview = Some(limit_tool_text_for_model(
                 &format_tool_result_preview(&tool_content_with_structured_output(
                     &output,
@@ -260,7 +265,7 @@ pub async fn execute_tool_call(
         }
     };
     host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
-    (record, tool_content)
+    (record, tool_content, follow_ups)
 }
 
 async fn execute_ask_user_call(
@@ -777,6 +782,7 @@ mod tests {
                     raw: Value::Null,
                     artifacts: Vec::new(),
                     structured_content,
+                    follow_up_user_messages: Vec::new(),
                 })
             })
         }
@@ -852,7 +858,7 @@ mod tests {
         let tool = sensitive_test_tool();
         let call = test_pending_call("call_invalid", "write", serde_json::json!({}));
 
-        let (record, content) = execute_tool_call(
+        let (record, content, _) = execute_tool_call(
             &host,
             &executor,
             &settings,
@@ -907,7 +913,7 @@ mod tests {
             serde_json::json!({ "path": "/tmp/out.txt", "content": "hello" }),
         );
 
-        let (record, content) = execute_tool_call(
+        let (record, content, _) = execute_tool_call(
             &host,
             &executor,
             &settings,
@@ -949,7 +955,7 @@ mod tests {
             serde_json::json!({ "path": "/tmp/out.txt", "content": "hi" }),
         );
 
-        let (record, _content) = execute_tool_call(
+        let (record, _content, _) = execute_tool_call(
             &host,
             &executor,
             &settings,
@@ -981,7 +987,7 @@ mod tests {
             serde_json::json!({ "path": "/tmp/out.txt", "content": "hi" }),
         );
 
-        let (record, _content) = execute_tool_call(
+        let (record, _content, _) = execute_tool_call(
             &host,
             &executor,
             &settings,
@@ -1018,7 +1024,7 @@ mod tests {
             serde_json::json!({ "path": "/tmp/out.txt", "content": "hello" }),
         );
 
-        let (record, content) = execute_tool_call(
+        let (record, content, _) = execute_tool_call(
             &host,
             &executor,
             &settings,

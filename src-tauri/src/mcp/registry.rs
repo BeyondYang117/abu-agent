@@ -597,6 +597,7 @@ async fn call_skill_tool(
         raw: Value::Null,
         artifacts: Vec::new(),
         structured_content: None,
+        follow_up_user_messages: Vec::new(),
     })
 }
 
@@ -754,6 +755,7 @@ pub fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCa
         raw: structured.clone(),
         artifacts: Vec::new(),
         structured_content: Some(structured),
+        follow_up_user_messages: Vec::new(),
     })
 }
 
@@ -792,6 +794,7 @@ pub fn read_file_tool_result(result: ReadFileResult) -> Result<McpToolCallResult
         raw: structured.clone(),
         artifacts: Vec::new(),
         structured_content: Some(structured),
+        follow_up_user_messages: Vec::new(),
     })
 }
 
@@ -956,6 +959,7 @@ pub(super) async fn run_python_via_pyodide(
                     raw: Value::Null,
                     artifacts,
                     structured_content: None,
+                    follow_up_user_messages: Vec::new(),
                 })
             }
         }

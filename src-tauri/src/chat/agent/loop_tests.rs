@@ -275,6 +275,7 @@
                     raw: Value::Null,
                     artifacts: Vec::new(),
                     structured_content: None,
+                    follow_up_user_messages: Vec::new(),
                 })
             })
         }
@@ -306,6 +307,7 @@
                     raw: Value::Null,
                     artifacts: Vec::new(),
                     structured_content: None,
+                    follow_up_user_messages: Vec::new(),
                 })
             })
         }
@@ -1847,6 +1849,7 @@
                     raw: Value::Null,
                     artifacts: Vec::new(),
                     structured_content: None,
+                    follow_up_user_messages: Vec::new(),
                 })
             })
         }

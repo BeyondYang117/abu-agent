@@ -154,7 +154,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         bypasses_approval: false,
         read_only: true,
         requires_session_consent: true,
-        call: NativeToolCall::SyncResult(call_read_file),
+        call: NativeToolCall::Async(call_read_file),
     },
     NativeToolEntry {
         name: "ls",
@@ -385,15 +385,58 @@ pub fn text_tool_result(content: String) -> McpToolCallResult {
         raw: Value::Null,
         artifacts: Vec::new(),
         structured_content: None,
+        follow_up_user_messages: Vec::new(),
     }
 }
 
-fn call_read_file(
-    workspace: &NativeToolWorkspace,
-    arguments: &Value,
-) -> Result<McpToolCallResult, String> {
-    let result = crate::native_tools::read_file(workspace, arguments)?;
-    super::registry::read_file_tool_result(result)
+fn call_read_file(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let raw_path = ctx
+            .arguments
+            .get("path")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if let Ok(path) = crate::native_tools::resolve_tool_read_path(ctx.workspace, raw_path) {
+            // 图片 → 三级视觉/OCR 策略（需要会话上下文取主模型能力）。
+            if crate::chat::knowledge_base::process::is_image_ext(&path) {
+                if let Some(nc) = ctx.native_ctx {
+                    return crate::chat::commands::read_image_as_tool_result(
+                        ctx.app,
+                        ctx.settings,
+                        &nc.conversation_id,
+                        &nc.message_id,
+                        &path,
+                    )
+                    .await;
+                }
+            } else if let Some(hint) = skill_backed_document_hint(&path) {
+                // PDF / Word / Excel 等二进制文档：read 不解析，引导走对应 skill。
+                return Ok(text_tool_result(hint));
+            }
+        }
+        // 文本文件（及无法预解析为图片/文档的路径）→ 原同步文本读取。
+        let result = crate::native_tools::read_file(ctx.workspace, ctx.arguments)?;
+        super::registry::read_file_tool_result(result)
+    })
+}
+
+/// PDF/Word/Excel 由内置 skill + `run_python` 解析（pypdf / python-docx /
+/// openpyxl），read 工具不读二进制文档；命中时返回引导提示而非 UTF-8 报错。
+fn skill_backed_document_hint(path: &std::path::Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let (skill, kind) = match ext.as_str() {
+        "pdf" => ("pdf", "PDF"),
+        "doc" | "docx" => ("docx", "Word 文档"),
+        "xls" | "xlsx" | "xlsm" => ("xlsx", "Excel 表格"),
+        _ => return None,
+    };
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    Some(format!(
+        "{name} 是{kind}，read 工具不解析此类文件。请改用「{skill}」skill：调用 run_python，把该文件的绝对路径作为 files 传入，用对应库提取内容。"
+    ))
 }
 
 fn call_web_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
@@ -427,6 +470,7 @@ fn call_web_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
             raw,
             artifacts: Vec::new(),
             structured_content: None,
+            follow_up_user_messages: Vec::new(),
         })
     })
 }
@@ -603,6 +647,7 @@ fn call_knowledge_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
             raw: payload.clone(),
             artifacts: Vec::new(),
             structured_content: Some(payload),
+            follow_up_user_messages: Vec::new(),
         })
     })
 }
@@ -695,6 +740,24 @@ fn call_run_python(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_backed_document_hint_routes_by_extension() {
+        use std::path::Path;
+        assert!(skill_backed_document_hint(Path::new("/a/report.pdf"))
+            .unwrap()
+            .contains("pdf"));
+        assert!(skill_backed_document_hint(Path::new("/a/notes.docx"))
+            .unwrap()
+            .contains("docx"));
+        // Case-insensitive on extension.
+        assert!(skill_backed_document_hint(Path::new("/a/sheet.XLSX"))
+            .unwrap()
+            .contains("xlsx"));
+        // Text and image files are NOT routed to the document-skill hint.
+        assert!(skill_backed_document_hint(Path::new("/a/readme.txt")).is_none());
+        assert!(skill_backed_document_hint(Path::new("/a/shot.png")).is_none());
+    }
 
     const EXPECTED_ORDER: &[&str] = &[
         "web_search",

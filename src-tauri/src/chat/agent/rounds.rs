@@ -146,6 +146,9 @@ struct ToolExecutionResult {
     response_message: Value,
     record: Option<ToolCallRecord>,
     cancelled: bool,
+    /// Extra user-role messages (OpenAI shape) appended right after this tool's
+    /// result message — used by `read` to feed an image to a vision model.
+    follow_up_messages: Vec<Value>,
 }
 
 struct ExecutableToolCall<'a> {
@@ -371,6 +374,9 @@ fn push_tool_execution_result(
         tool_records.push(record);
     }
     response_messages.push(result.response_message);
+    // Follow-up user messages (e.g. an image for a vision model) must come
+    // after the tool-result message so tool_call_ids are answered first.
+    response_messages.extend(result.follow_up_messages);
     cancelled
 }
 
@@ -484,7 +490,7 @@ async fn execute_tool_call_result(
         tool_conversation_id: round_ctx.tool_conversation_id,
         tool_call_id: &tool_call_id,
     };
-    let (record, tool_content) = execute_tool_call(
+    let (record, tool_content, follow_up_messages) = execute_tool_call(
         host,
         executor,
         settings,
@@ -499,6 +505,7 @@ async fn execute_tool_call_result(
         response_message: tool_message(tool_call_id, tool_content),
         record: Some(record),
         cancelled,
+        follow_up_messages,
     }
 }
 
@@ -563,6 +570,7 @@ fn cancelled_tool_result(
         response_message: tool_message(tool_call.id.clone(), "Tool call cancelled"),
         record: Some(record),
         cancelled: true,
+        follow_up_messages: Vec::new(),
     }
 }
 
@@ -584,6 +592,7 @@ fn unknown_or_disabled_tool_result(
             response_message: tool_message(tool_call.id, error),
             record: Some(record),
             cancelled: false,
+            follow_up_messages: Vec::new(),
         };
     }
 
@@ -603,6 +612,7 @@ fn unknown_or_disabled_tool_result(
         response_message: tool_message(tool_call.id, content),
         record,
         cancelled: false,
+        follow_up_messages: Vec::new(),
     }
 }
 
@@ -674,6 +684,7 @@ fn invalid_tool_arguments_result(
         response_message: tool_message(tool_call.id.clone(), model_hint),
         record: Some(record),
         cancelled: false,
+        follow_up_messages: Vec::new(),
     }
 }
 
@@ -705,4 +716,56 @@ pub(crate) fn tool_call_parallel_eligible(settings: &Settings, tool: &ChatToolDe
             .is_some_and(|entry| entry.parallel_safe);
     }
     tool.source == "mcp" && tool.is_read_only_tool()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn follow_up_messages_are_appended_after_tool_result() {
+        // Mirrors `read` feeding an image to a vision model: the tool result is
+        // text, the actual image rides as a follow-up user message that must
+        // land right after the tool message so the tool_call_id is answered.
+        let image_msg = json!({
+            "role": "user",
+            "content": [{
+                "type": "image_url",
+                "image_url": { "url": "data:image/png;base64,AAAA" }
+            }]
+        });
+        let result = ToolExecutionResult {
+            response_message: tool_message("call_1".to_string(), "已读取图片 x.png，见下方。"),
+            record: None,
+            cancelled: false,
+            follow_up_messages: vec![image_msg.clone()],
+        };
+        let mut response_messages = Vec::new();
+        let mut tool_records = Vec::new();
+        let cancelled =
+            push_tool_execution_result(result, &mut response_messages, &mut tool_records);
+
+        assert!(!cancelled);
+        assert_eq!(response_messages.len(), 2);
+        assert_eq!(response_messages[0]["role"], "tool");
+        assert_eq!(response_messages[0]["tool_call_id"], "call_1");
+        assert_eq!(response_messages[1], image_msg);
+    }
+
+    #[test]
+    fn no_follow_up_leaves_single_tool_result() {
+        let result = ToolExecutionResult {
+            response_message: tool_message("call_2".to_string(), "plain text"),
+            record: None,
+            cancelled: false,
+            follow_up_messages: Vec::new(),
+        };
+        let mut response_messages = Vec::new();
+        let mut tool_records = Vec::new();
+        push_tool_execution_result(result, &mut response_messages, &mut tool_records);
+
+        assert_eq!(response_messages.len(), 1);
+        assert_eq!(response_messages[0]["role"], "tool");
+    }
 }

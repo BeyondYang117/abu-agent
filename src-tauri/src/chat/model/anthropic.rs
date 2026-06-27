@@ -942,6 +942,33 @@ mod tests {
     use super::*;
     use crate::chat::model::GenerateOptions;
 
+    #[test]
+    fn tool_result_and_following_image_user_merge_into_one_turn() {
+        // `read` appends an image as a separate user message after the tool
+        // result. Both Tool and User roles serialize to Anthropic "user", so
+        // the merge must fold tool_result + image into a single user turn.
+        let mut messages = vec![
+            serde_json::json!({
+                "role": "user",
+                "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "read it" }]
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": [{
+                    "type": "image",
+                    "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" }
+                }]
+            }),
+        ];
+        merge_consecutive_anthropic_roles(&mut messages);
+
+        assert_eq!(messages.len(), 1, "consecutive user turns must merge");
+        let blocks = messages[0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(blocks[1]["type"], "image");
+    }
+
     /// Build a real Anthropic request body via the production `request_body`
     /// path and assert how `thinking_level` maps to the wire.
     fn build_anthropic_body(thinking_level: Option<&str>) -> Value {

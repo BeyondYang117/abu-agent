@@ -15,6 +15,8 @@ Use this skill when the user attaches or references a PDF and asks to read, summ
 
 Kivio stores each uploaded file as a safe local copy and includes its absolute path in the user message under `Kivio 安全副本路径`. Pass that safe copy path to `run_python` via `files`; Kivio mounts it inside the Pyodide filesystem for the run. Python code must use the mounted virtual paths in `KIVIO_INPUT_FILES`, not the host absolute path directly.
 
+You can also process any local PDF, not just uploaded safe copies: pass its absolute path (e.g. one discovered via `glob`/`list_dir`) directly to `run_python` via `files`.
+
 ## Workflow
 
 1. Identify the PDF safe copy path from the attachment note.

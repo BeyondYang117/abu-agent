@@ -66,7 +66,7 @@ impl ChatToolDefinition {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolCallResult {
     pub content: String,
@@ -76,6 +76,12 @@ pub struct McpToolCallResult {
     pub artifacts: Vec<ChatToolArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_content: Option<serde_json::Value>,
+    /// Extra user-role messages (OpenAI wire shape) to append to the
+    /// conversation right after this tool's result message. Used by `read` to
+    /// feed an image to a vision-capable model: a tool result can only carry
+    /// text, so the actual image rides here as a follow-up user message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub follow_up_user_messages: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,7 +339,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__read_file".to_string(),
         name: "read".to_string(),
-        description: "Read a local text file. Output is line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit old_string. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading.".to_string(),
+        description: "Read a local file. Text files are line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit old_string. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading. Image files (png/jpg/webp/…) are also supported: the image is shown to you directly when your model has vision, otherwise it is described or OCR'd to text — so you can `read` screenshots and photos by path. For PDF/Word/Excel, use the matching skill instead.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),

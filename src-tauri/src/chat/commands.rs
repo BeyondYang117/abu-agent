@@ -7,7 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::ShellExt;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
@@ -4105,6 +4105,110 @@ async fn analyze_chat_images_with_auxiliary_model(
         model: auxiliary_model.model.clone(),
         content,
     })
+}
+
+/// `read` 工具读到图片文件时的三级策略，复用对话级图片附件那套现成实现：
+/// ① 主模型支持视觉 → 直喂原图（作为 follow-up user 消息，因为工具结果本身只能
+/// 回文本）；② 纯文本主模型 → 辅助视觉模型出客观文字描述；③ 兜底 → OCR。
+/// 失败/无视觉模型时逐级降级，始终返回一个可读的文本结果。
+pub(crate) async fn read_image_as_tool_result(
+    app: &AppHandle,
+    settings: &Settings,
+    conversation_id: &str,
+    message_id: &str,
+    path: &Path,
+) -> Result<mcp::types::McpToolCallResult, String> {
+    use crate::mcp::native_registry::text_tool_result;
+    // 直传 base64 不压缩；超大图片会撑爆上下文，故设上限兜底。
+    // ponytail: 不压缩直传，12MB 上限兜底；上下文吃紧再加 resize helper。
+    const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
+
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image")
+        .to_string();
+
+    if let Ok(meta) = fs::metadata(path) {
+        if meta.len() > MAX_IMAGE_BYTES {
+            return Ok(text_tool_result(format!(
+                "图片 {name} 过大（{} 字节，上限 {MAX_IMAGE_BYTES} 字节），未读取。请压缩后重试。",
+                meta.len()
+            )));
+        }
+    }
+
+    let state = app.state::<AppState>();
+    let conversation = load_conversation(app, conversation_id)?;
+    let provider = settings.get_provider(&conversation.provider_id);
+    let model = conversation.model.as_str();
+    let path_buf = path.to_path_buf();
+
+    // ① 主模型支持视觉 → 直喂原图。工具结果只能回文本，所以真正的图片作为紧随
+    // 其后的一条 user 消息追加（rounds::push_tool_execution_result 负责排在 tool
+    // 结果之后；Anthropic 侧会与 tool_result 合并进同一 user turn）。
+    if model_supports_vision(provider, model) == Some(true) {
+        let part = image_content_part(&path_buf)?;
+        let follow_up = serde_json::json!({ "role": "user", "content": [part] });
+        return Ok(mcp::types::McpToolCallResult {
+            content: format!("已读取图片 {name}，已作为图片直接提供给你查看（见下一条消息）。"),
+            is_error: false,
+            raw: Value::Null,
+            artifacts: Vec::new(),
+            structured_content: None,
+            follow_up_user_messages: vec![follow_up],
+        });
+    }
+
+    // ② 纯文本主模型 → 辅助视觉模型出客观文字描述（复用对话级图片那套）。
+    if let Some(aux) = auxiliary_vision_model_for_images(
+        settings,
+        provider,
+        model,
+        std::slice::from_ref(&path_buf),
+    ) {
+        let language = crate::settings::resolve_chat_language(settings);
+        let retry_attempts = if settings.retry_enabled {
+            settings.retry_attempts as usize
+        } else {
+            1
+        };
+        if let Ok(result) = analyze_chat_images_with_auxiliary_model(
+            &state,
+            settings,
+            &aux,
+            conversation_id,
+            message_id,
+            None,
+            std::slice::from_ref(&path_buf),
+            retry_attempts,
+            &language,
+        )
+        .await
+        {
+            return Ok(text_tool_result(format!(
+                "图片 {name} 的视觉分析（{} / {}）：\n\n{}",
+                result.provider_name, result.model, result.content
+            )));
+        }
+    }
+
+    // ③ 兜底 OCR。
+    match crate::chat::knowledge_base::process::process_document(
+        state.inner(),
+        &settings.document_processing,
+        path,
+    )
+    .await
+    {
+        Ok(doc) => Ok(text_tool_result(format!(
+            "图片 {name} 的 OCR 文本：\n\n{}",
+            doc.text
+        ))),
+        Err(err) => Ok(text_tool_result(format!(
+            "图片 {name}：当前模型不支持视觉，且无可用视觉模型，OCR 也未成功（{err}）。如需识别请在设置启用视觉模型或 OCR 引擎。"
+        ))),
+    }
 }
 
 fn auxiliary_vision_system_prompt(language: &str) -> &'static str {

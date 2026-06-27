@@ -119,6 +119,7 @@ pub async fn generate_image_with_provider(
         }),
         artifacts,
         structured_content: None,
+        follow_up_user_messages: Vec::new(),
     })
 }
 
