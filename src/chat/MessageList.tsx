@@ -1,5 +1,6 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { Virtualizer, type VirtualizerHandle } from 'virtua'
 import type { AgentPlanState, ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
 import { useStreamCoarse, useStreamSnapshot } from './streamingStore'
@@ -22,11 +23,12 @@ interface MessageListProps {
   onDeleteMessage?: (messageId: string) => Promise<void>
 }
 
+const LIST_EDGE_PADDING_PX = 16
+
 // 列表里每一项的统一形态。整条会话全量喂给虚拟列表（消息都在内存，virtua 只渲可见项），
-// 屏外的气泡连同其 KaTeX DOM 真正从 DOM 卸载——这是消除公式滚动卡顿的根治手段。
-// 流式预览 bubble / 「正在思考」/ error 占位也作为列表尾项参与虚拟化与变高测量，
-// 这样钉底逻辑只需把视口对齐到最后一项即可。
+// 屏外的气泡连同其 KaTeX host / Markdown / 图片 DOM 真正从 DOM 卸载。
 type RenderItem =
+  | { kind: 'spacer'; key: 'padding-top' | 'padding-bottom'; size: number }
   | { kind: 'plan'; key: 'agent-plan'; planState: AgentPlanState }
   | { kind: 'message'; key: string; message: ChatMessage }
   | { kind: 'streaming'; key: 'streaming-assistant'; message: ChatMessage; messageStreaming: boolean; reasoningStreaming: boolean }
@@ -57,6 +59,7 @@ function MessageListBase({
   const streamingSegments = snapshot.segments
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualizerRef = useRef<VirtualizerHandle>(null)
   // 用户是否“贴在底部”——决定流式生成时是否跟随钉底。默认 true（初次渲染贴底）
   const stickToBottomRef = useRef(true)
   const prevMessageCountRef = useRef(0)
@@ -66,7 +69,9 @@ function MessageListBase({
 
   // 把 Agent plan + 消息 + 流式预览 + 占位拼成统一的虚拟列表项数组。
   const items = useMemo<RenderItem[]>(() => {
-    const list: RenderItem[] = []
+    const list: RenderItem[] = [
+      { kind: 'spacer', key: 'padding-top', size: LIST_EDGE_PADDING_PX },
+    ]
 
     if (agentPlanState?.plan?.trim()) {
       list.push({ kind: 'plan', key: 'agent-plan', planState: agentPlanState })
@@ -102,6 +107,7 @@ function MessageListBase({
     if (error) {
       list.push({ kind: 'error', key: 'error', text: error })
     }
+    list.push({ kind: 'spacer', key: 'padding-bottom', size: LIST_EDGE_PADDING_PX })
     return list
   }, [
     agentPlanState,
@@ -118,12 +124,24 @@ function MessageListBase({
 
   // 瞬时把视口对齐到底部。自动跟随保持瞬时（平滑会抖）；smooth 仅用于用户主动点「回到底部」。
   const scrollToBottom = useCallback((smooth = false) => {
+    const index = items.length - 1
+    if (index < 0) return
+    const handle = virtualizerRef.current
+    if (handle) {
+      handle.scrollToIndex(index, {
+        align: 'end',
+        smooth: smooth && !prefersReducedMotion(),
+      })
+      lastScrollOffsetRef.current = handle.scrollOffset
+      return
+    }
+
     const el = scrollRef.current
     if (!el) return
     if (smooth && !prefersReducedMotion()) { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); return }
     el.scrollTop = el.scrollHeight
     lastScrollOffsetRef.current = el.scrollTop
-  }, [])
+  }, [items.length])
 
   const handleJumpToBottom = useCallback(() => {
     stickToBottomRef.current = true
@@ -139,12 +157,14 @@ function MessageListBase({
     }
   }
 
-  // 滚动监听：用原生 scrollTop 判断贴底/离开底部。
-  const handleScroll = useCallback(() => {
+  // 滚动监听：用 virtua 的 scroll geometry 判断贴底/离开底部。
+  const handleScroll = useCallback((nextOffset: number) => {
     const el = scrollRef.current
-    if (!el) return
-    const offset = el.scrollTop
-    const bottom = el.scrollHeight - offset - el.clientHeight <= 32
+    const handle = virtualizerRef.current
+    const offset = handle?.scrollOffset ?? nextOffset
+    const scrollSize = handle?.scrollSize ?? el?.scrollHeight ?? 0
+    const viewportSize = handle?.viewportSize ?? el?.clientHeight ?? 0
+    const bottom = scrollSize - offset - viewportSize <= 32
     if (offset < lastScrollOffsetRef.current - 1) {
       stickToBottomRef.current = false
     } else if (bottom) {
@@ -193,6 +213,8 @@ function MessageListBase({
   const renderItem = useCallback(
     (item: RenderItem) => {
       switch (item.kind) {
+        case 'spacer':
+          return <div aria-hidden="true" style={{ height: item.size }} />
         case 'plan':
           return <AgentPlanPanel planState={item.planState} />
         case 'message': {
@@ -255,16 +277,21 @@ function MessageListBase({
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
-        onScroll={handleScroll}
         onWheel={handleWheel}
         className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto"
       >
-        <div className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
-          {/* 全量渲染：不虚拟化。滚动时绝不卸载/重挂消息——避免重挂 KaTeX 子树触发的
-              matchAllRules 全量样式重算风暴（实测公式滚动卡顿的真正根因）。 */}
-          {items.map((item) => (
-            <div key={item.key}>{renderItem(item)}</div>
-          ))}
+        <div className="chat-message-list-inner mx-auto w-full max-w-3xl px-6">
+          <Virtualizer ref={virtualizerRef} scrollRef={scrollRef} onScroll={handleScroll}>
+            {items.map((item) => (
+              <div
+                key={item.key}
+                className={item.kind === 'spacer' ? undefined : 'pb-0.5'}
+                data-chat-message-list-item={item.kind}
+              >
+                {renderItem(item)}
+              </div>
+            ))}
+          </Virtualizer>
         </div>
       </div>
       {!atBottom && (

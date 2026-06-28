@@ -11,6 +11,7 @@ import {
 } from './streamingStore'
 import { createEmptyStreamSnapshot } from './conversationRuns'
 import type { ConversationStreamSnapshot } from './conversationRuns'
+import type { ChatMessage } from './types'
 
 // 真实集成：挂载真 MessageList（订阅真 streamingStore），按 Chat 各 helper 的调用方式驱动 store，
 // 验证「流式更新只重渲订阅者、不波及兄弟节点」这一核心收益，以及各 helper→store 映射的渲染结果。
@@ -50,6 +51,15 @@ function mountList() {
       <Sibling />
     </>,
   )
+}
+
+function message(id: number): ChatMessage {
+  return {
+    id: `m-${id}`,
+    role: id % 2 === 0 ? 'user' : 'assistant',
+    content: `message ${id}`,
+    timestamp: id,
+  }
 }
 
 describe('MessageList ← streamingStore 集成', () => {
@@ -116,5 +126,15 @@ describe('MessageList ← streamingStore 集成', () => {
     expect(screen.queryByText(/to be cleared/)).not.toBeInTheDocument()
     // streamError 不被 reset 清除（与原 clearStreamingPreview 语义一致），错误文案仍展示。
     expect(screen.getByText('boom')).toBeInTheDocument()
+  })
+
+  it('长列表只挂载可见窗口，而不是把所有历史消息留在 DOM', async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => message(index))
+    render(<MessageList messages={messages} conversationId="long-c1" />)
+    await flush()
+
+    const mountedMessages = document.querySelectorAll('[data-chat-message-list-item="message"]')
+    expect(mountedMessages.length).toBeGreaterThan(0)
+    expect(mountedMessages.length).toBeLessThan(messages.length)
   })
 })
