@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { MessageBubble } from './MessageBubble'
 import type { ChatMessage } from './types'
@@ -68,10 +69,103 @@ describe('MessageBubble timeline grouping', () => {
 
     render(<MessageBubble message={message} />)
     expect(screen.getByText(/读取 1 个文件/)).toBeInTheDocument()
-    // collapsed group hides the reasoning body region
+    // collapsed historical groups keep only the summary mounted
     expect(screen.getByLabelText('过程分组')).toHaveAttribute('aria-label', '过程分组')
+    expect(screen.queryByText('planning')).not.toBeInTheDocument()
+    expect(screen.queryByText('read_file')).not.toBeInTheDocument()
     // final answer text still renders
     expect(screen.getByText('answer')).toBeInTheDocument()
+  })
+
+  it('mounts completed group details only after the user expands it', async () => {
+    const user = userEvent.setup()
+    const message: ChatMessage = {
+      id: 'msg-expand',
+      role: 'assistant',
+      content: 'answer',
+      segments: [
+        { id: 'seg-r', kind: 'reasoning', phase: 'plain', order: 1, text: 'planning details' },
+        { id: 'seg-t', kind: 'tool', phase: 'tool_loop', order: 2, tool_call_id: 'tool-1' },
+        { id: 'seg-text', kind: 'text', phase: 'plain', order: 3, text: 'answer' },
+      ],
+      tool_calls: [
+        {
+          id: 'tool-1',
+          name: 'read_file',
+          source: 'native',
+          status: 'completed',
+          arguments: '{"path":"a.ts"}',
+        },
+      ],
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} />)
+    const toggle = screen.getByRole('button', { name: /读取 1 个文件/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('planning details')).not.toBeInTheDocument()
+    expect(screen.queryByText('read_file')).not.toBeInTheDocument()
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('planning details')).toBeInTheDocument()
+    expect(screen.getByText('read_file')).toBeInTheDocument()
+  })
+
+  it('keeps many collapsed history tools out of the DOM until expanded', async () => {
+    const user = userEvent.setup()
+    const toolCount = 20
+    const message: ChatMessage = {
+      id: 'msg-heavy',
+      role: 'assistant',
+      content: 'final answer',
+      segments: [
+        ...Array.from({ length: toolCount }, (_, index) => ({
+          id: `seg-tool-${index}`,
+          kind: 'tool' as const,
+          phase: 'tool_loop' as const,
+          order: index,
+          tool_call_id: `tool-${index}`,
+        })),
+        {
+          id: 'seg-answer',
+          kind: 'text',
+          phase: 'plain',
+          order: toolCount,
+          text: 'final answer',
+        },
+      ],
+      tool_calls: Array.from({ length: toolCount }, (_, index) => ({
+        id: `tool-${index}`,
+        name: 'write',
+        source: 'native',
+        status: 'completed',
+        structured_content: {
+          operation: 'write',
+          resolvedPath: `file-${index}.ts`,
+          additions: index + 1,
+          removals: 0,
+          diff: `diff payload ${index}`,
+        },
+      })),
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} />)
+
+    expect(screen.getByRole('button', { name: /编辑 20 个文件/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(screen.queryByText('write')).not.toBeInTheDocument()
+    expect(screen.queryByText('diff payload 0')).not.toBeInTheDocument()
+    expect(screen.getByText('final answer')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /编辑 20 个文件/ }))
+
+    expect(screen.getAllByText('write')).toHaveLength(toolCount)
+    expect(screen.getByText('file-0.ts')).toBeInTheDocument()
   })
 
   it('renders tool → text → tool as two separate groups', () => {

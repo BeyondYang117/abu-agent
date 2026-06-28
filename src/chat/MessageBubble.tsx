@@ -388,7 +388,8 @@ const GROUP_ICON_BY_CATEGORY: Record<
  *   始终保持展开，不受工具间隙/reasoning 是否在流影响，避免抖动。
  * - 后面出现正文/别的块（非末组）或消息流式结束（含历史消息）→ 折叠成一行摘要。
  * - 用户手动点过开关后以用户操作为准（userToggledRef，参考 ReasoningBlock）。
- * - 展开后原样平铺组内 ReasoningBlock / ToolCallBlock，其内部各自折叠开关继续可用。
+ * - 历史折叠态只保留摘要 header，不挂载组内 ReasoningBlock / ToolCallBlock；
+ *   展开后再原样平铺，避免重历史消息默认挂满工具/Markdown/Diff 子树。
  */
 function TimelineGroupBlock({
   segments,
@@ -467,26 +468,28 @@ function TimelineGroupBlock({
           className={`shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
         />
       </button>
-      <div className={`chat-motion-reveal ${open ? 'is-open' : ''}`} aria-hidden={!open}>
-        <div className="space-y-1.5">
-          {segments.map((segment, index) => (
-            <div key={segment.id} className="chat-motion-fade">
-              <TimelineSegmentNode
-                segment={segment}
-                index={index}
-                segmentCount={segments.length}
-                toolCalls={toolCalls}
-                artifacts={artifacts}
-                citations={citations}
-                reasoningStreaming={reasoningStreaming && isLastGroup}
-                reasoningDurationMs={reasoningDurationMs}
-                reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
-                reasoningSegmentCount={reasoningSegmentCount}
-              />
-            </div>
-          ))}
+      {open && (
+        <div className="chat-motion-reveal is-open" aria-hidden={false}>
+          <div className="space-y-1.5">
+            {segments.map((segment, index) => (
+              <div key={segment.id} className="chat-motion-fade">
+                <TimelineSegmentNode
+                  segment={segment}
+                  index={index}
+                  segmentCount={segments.length}
+                  toolCalls={toolCalls}
+                  artifacts={artifacts}
+                  citations={citations}
+                  reasoningStreaming={reasoningStreaming && isLastGroup}
+                  reasoningDurationMs={reasoningDurationMs}
+                  reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+                  reasoningSegmentCount={reasoningSegmentCount}
+                />
+              </div>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </section>
   )
 }
@@ -704,15 +707,15 @@ function MessageBubbleComponent({
     }
   }
 
-  const toolList = toolCalls.map((toolCall, index) => (
+  // 折叠时仅隐藏较早的，始终保留最新 4 个可见
+  const RECENT_TOOL_COUNT = 4
+  const olderToolCalls = toolsCollapsible ? toolCalls.slice(0, toolCalls.length - RECENT_TOOL_COUNT) : []
+  const recentToolCalls = toolsCollapsible ? toolCalls.slice(toolCalls.length - RECENT_TOOL_COUNT) : toolCalls
+  const renderToolCall = (toolCall: ToolCallRecord, index: number) => (
     <ToolCallErrorBoundary key={toolCall.id || toolCall.call_id || toolCall.callId || index}>
       <ToolCallBlock toolCall={toolCall} />
     </ToolCallErrorBoundary>
-  ))
-  // 折叠时仅隐藏较早的，始终保留最新 4 个可见
-  const RECENT_TOOL_COUNT = 4
-  const olderTools = toolsCollapsible ? toolList.slice(0, toolList.length - RECENT_TOOL_COUNT) : []
-  const recentTools = toolsCollapsible ? toolList.slice(toolList.length - RECENT_TOOL_COUNT) : toolList
+  )
 
   return (
     <div className="chat-motion-fade-up flex justify-start py-3">
@@ -745,12 +748,14 @@ function MessageBubbleComponent({
                 工具调用
               </div>
             )}
-            {toolsCollapsible && (
-              <div className={`chat-motion-reveal ${toolsExpanded ? 'is-open' : ''}`}>
-                <div>{olderTools}</div>
+            {toolsCollapsible && toolsExpanded && (
+              <div className="chat-motion-reveal is-open">
+                <div>{olderToolCalls.map((toolCall, index) => renderToolCall(toolCall, index))}</div>
               </div>
             )}
-            {recentTools}
+            {recentToolCalls.map((toolCall, index) =>
+              renderToolCall(toolCall, olderToolCalls.length + index),
+            )}
           </section>
         )}
 
