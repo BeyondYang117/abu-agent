@@ -625,7 +625,8 @@ function renderTex(tex: string, display: boolean): string {
   if (cached != null) return cached
   let out = ''
   try {
-    out = katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' })
+    const rendered = katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' })
+    out = rendered.includes('katex-error') ? '' : rendered
   } catch {
     out = ''
   }
