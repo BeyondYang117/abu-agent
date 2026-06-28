@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, Check } from 'lucide-react'
 import { AgentIcon } from './AgentIcon'
 import { chatApi, type DetectedExternalAgent } from './api'
@@ -29,7 +29,7 @@ function externalRuntime(agentId: string, model?: string | null): AgentRuntimeCo
   }
 }
 
-export function RuntimePicker({ agentRuntime, onRuntimeChange }: RuntimePickerProps) {
+function RuntimePickerBase({ agentRuntime, onRuntimeChange }: RuntimePickerProps) {
   const [open, setOpen] = useState(false)
   const [agents, setAgents] = useState<DetectedExternalAgent[]>([])
 
@@ -193,7 +193,7 @@ function formatModelLabel(model: {
   return `${model.label} · ${window}`
 }
 
-export function ExternalModelSelector({
+function ExternalModelSelectorBase({
   agentRuntime,
   onModelChange,
 }: ExternalModelSelectorProps) {
@@ -295,3 +295,7 @@ export function ExternalModelSelector({
     </div>
   )
 }
+
+// memo：顶栏选择器，仅在 props 变化时重渲。
+export const RuntimePicker = memo(RuntimePickerBase)
+export const ExternalModelSelector = memo(ExternalModelSelectorBase)

@@ -67,12 +67,11 @@ body {
     border-color var(--kv-dur-normal) var(--kv-ease-out);
 }
 
-/* 侧栏单列出来：transition 是简写，会整条覆盖。必须把折叠用的 margin-left/opacity 一起写进来，
-   否则只声明 background/border 会冲掉折叠动画（这正是之前折叠变回硬跳的回归原因）。
-   composer 不纳入主题过渡：它自带 transition-[box-shadow,border-color] 焦点辉光，避免被覆盖。 */
+/* 侧栏折叠：margin-left 不进 transition（瞬时切换）。原来动画 margin-left 会让 flex-1 主区宽度
+   每帧变化 → 含公式表格的消息每帧 reflow + 容器查询/样式重算（profiler 实测的折叠卡顿根因）。
+   改为布局瞬时（主区只 reflow 一次），仅保留 opacity 淡出（合成器属性，不触发 reflow）。 */
 .theme-transitions-ready .chat-sidebar-shell {
   transition:
-    margin-left var(--kv-dur-slow) var(--kv-ease-standard),
     opacity var(--kv-dur-normal) var(--kv-ease-out),
     background-color var(--kv-dur-normal) var(--kv-ease-out),
     border-color var(--kv-dur-normal) var(--kv-ease-out);
@@ -346,18 +345,38 @@ body {
   background-color: rgba(255, 255, 255, 0.32);
 }
 
-/* 关键性能：KaTeX 公式 DOM 的绘制(Paint/GPU 合成)是滚动卡顿主因(实测 JS 渲染仅 ~47ms，
-   真实 Chrome trace 显示成本压倒性在 Painting)。组合三招：
-   1) 每条消息提升为独立合成层 → 滚动靠 GPU 移动图层而非主线程重绘整片公式；
-   2) 每个公式 contain → 隔离 layout/style，公式 mount/卸载不牵动整条消息重排；
-   3) 视口懒渲染(见 ChatMarkdown LazyMath)→ 离屏公式只是纯文本占位，几乎不参与 layout/paint。
-   ponytail: contain 暂不加 paint(会裁剪溢出，恐切到大公式上沿)；验证无裁剪后再视情况加。 */
-.chat-message-list-inner > * {
-  transform: translateZ(0);
-}
-
+/* 关键性能：公式滚动卡顿的真正根因是「滚动时把 KaTeX 子树插入 DOM」——每次插入都触发对几百个
+   KaTeX 元素的 matchAllRules 全量样式重算(实测 profiler 热栈)。根治手段在 JS 层：
+   消息全量渲染(MessageList 不虚拟化、滚动时不卸载/重挂)+ 公式即时渲染(ChatMarkdown LazyMath，
+   不再视口懒插入)，使滚动时 DOM 恒定不变。此处 CSS 只做轻量收尾：
+   每个公式 contain 隔离 layout/style；inline-block 盒给宽公式独立 overflow 边界，缩小重绘面积。 */
 .chat-markdown .katex {
   contain: layout style;
+  /* Cherry Studio 同款：每个公式自成 inline-block 盒，拥有独立 overflow 上下文，
+     给绘制/裁剪一个天然边界，宽公式不再溢出牵动整行/整表 layout，缩小滚动重绘面积。
+     inline-block 默认 baseline 对齐对行内公式正常；display 公式(.katex-display)仍是 block，不受影响。
+     padding+margin 抵消：给 overflow-y:hidden 的盒一点上下余量，避免裁掉高公式(积分/分式栈/矩阵)
+     抗锯齿描边的上下沿(Cherry 同款 1px 2px / -2px)；vertical-align:middle 保持行内对齐不下沉。 */
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+  padding: 1px 2px;
+  margin-top: -2px;
+}
+
+/* display 公式(.katex-display > .katex)是块级居中、本就独占一行，高度由 KaTeX 按内容算足。
+   对它用 overflow:hidden 风险在裁掉高公式(大积分上下限/矩阵/根号)上下沿——这里显式放开为 visible，
+   裁剪只作用于行内公式。块级公式过宽的横向滚动交给 .katex-display 自身处理。 */
+.chat-markdown .katex-display > .katex {
+  display: block;
+  overflow: visible;
+}
+.chat-markdown .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 /* 懒渲染占位：未进视口的公式只渲染原始 LaTeX 文本，极轻。display 预留行高减少进视口时跳动。 */

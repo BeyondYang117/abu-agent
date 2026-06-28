@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { Check, Eye, FilePen, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { APPROVAL_POLICY_OPTIONS } from './approvalPolicies'
 import { chatApi, type DetectedExternalAgent } from './api'
@@ -36,7 +36,7 @@ interface PermissionPickerProps {
  * external CLI → sandbox level (per-agent); built-in chat → tool-approval policy. Hidden when
  * there is nothing to control (e.g. an external CLI with no sandbox flag).
  */
-export function PermissionPicker({
+function PermissionPickerBase({
   agentRuntime,
   onSandboxChange,
   approvalPolicy,
@@ -126,3 +126,6 @@ export function PermissionPicker({
     </div>
   )
 }
+
+// memo：顶栏选择器，仅在 props 变化时重渲。
+export const PermissionPicker = memo(PermissionPickerBase)

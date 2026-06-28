@@ -1,0 +1,62 @@
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { ThinkingLevelSelector } from './ThinkingLevelSelector'
+
+// api 在 jsdom 无 Tauri 环境，mock 成确定值；等级清单走兜底也是同样结果。
+vi.mock('../api/tauri', () => ({
+  api: {
+    getSettings: () => Promise.resolve({ providers: [] }),
+    reasoningEffortsForModel: () => Promise.resolve(['low', 'medium', 'high']),
+  },
+}))
+
+describe('ThinkingLevelSelector', () => {
+  it('value=null 时按默认档显示 High（不再有「跟随全局」）', () => {
+    render(
+      <ThinkingLevelSelector
+        value={null}
+        currentProviderId="p1"
+        currentModel="m1"
+        onChange={() => {}}
+      />,
+    )
+    expect(screen.getByRole('button')).toHaveTextContent('High')
+  })
+
+  it('下拉项为英文标签且不含「跟随全局」', () => {
+    render(
+      <ThinkingLevelSelector
+        value="high"
+        currentProviderId="p1"
+        currentModel="m1"
+        onChange={() => {}}
+      />,
+    )
+    act(() => {
+      fireEvent.click(screen.getByRole('button'))
+    })
+    expect(screen.queryByText('跟随全局')).not.toBeInTheDocument()
+    // 英文标签存在（Off + 兜底 low/medium/high）。
+    expect(screen.getByText('Off')).toBeInTheDocument()
+    expect(screen.getByText('Medium')).toBeInTheDocument()
+  })
+
+  it('选择某一档回调原始等级值', () => {
+    const onChange = vi.fn()
+    render(
+      <ThinkingLevelSelector
+        value="high"
+        currentProviderId="p1"
+        currentModel="m1"
+        onChange={onChange}
+      />,
+    )
+    act(() => {
+      fireEvent.click(screen.getByRole('button'))
+    })
+    act(() => {
+      fireEvent.click(screen.getByText('Off'))
+    })
+    expect(onChange).toHaveBeenCalledWith('off')
+  })
+})

@@ -1,49 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
-import type { AgentPlanState, ChatMessage, ChatMessageSegment, ToolCallRecord } from './types'
+import type { AgentPlanState, ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
+import { useStreamCoarse, useStreamSnapshot } from './streamingStore'
 import { prefersReducedMotion } from './utils'
-
-// agent 模式下"一条消息 = 一整轮"(几十个工具调用 + 多段 reasoning + 大块 markdown),
-// 按条数定窗口会失效。改为按"渲染权重"决定首屏与每次加载更早的步长。
-const VISIBLE_WEIGHT_BUDGET = 40
-const MIN_VISIBLE_MESSAGES = 6
-const MAX_VISIBLE_MESSAGES = 60
-// 每次"加载更早"也按权重切一小块,避免一次性铺一大段造成卡顿。
-const LOAD_MORE_WEIGHT_BUDGET = 30
-const MIN_LOAD_MORE = 6
-const MAX_LOAD_MORE = 40
-
-function messageWeight(msg: ChatMessage): number {
-  const toolCalls = msg.tool_calls ?? msg.toolCalls ?? []
-  const segments = msg.segments ?? []
-  const contentLen = msg.content?.length ?? 0
-  return 1 + toolCalls.length + segments.length + Math.ceil(contentLen / 2000)
-}
-
-// 从某个上界往前累加权重,返回应再揭开的消息条数(用于首屏和加载更早)。
-function countByWeight(
-  messages: ChatMessage[],
-  upperExclusive: number,
-  budget: number,
-  minCount: number,
-  maxCount: number,
-): number {
-  if (upperExclusive <= minCount) return upperExclusive
-  let weight = 0
-  let count = 0
-  for (let i = upperExclusive - 1; i >= 0; i--) {
-    weight += messageWeight(messages[i])
-    count++
-    if (count >= maxCount) break
-    if (count >= minCount && weight >= budget) break
-  }
-  return count
-}
-
-function computeInitialVisible(messages: ChatMessage[]): number {
-  return countByWeight(messages, messages.length, VISIBLE_WEIGHT_BUDGET, MIN_VISIBLE_MESSAGES, MAX_VISIBLE_MESSAGES)
-}
 
 export interface AssistantStreamStats {
   messageId: string
@@ -55,76 +15,114 @@ export interface AssistantStreamStats {
 interface MessageListProps {
   conversationId?: string | null
   messages: ChatMessage[]
-  streaming?: boolean
-  streamFrozen?: boolean
-  streamingContent?: string
-  streamingReasoning?: string
-  streamingReasoningDurationMs?: number | null
-  streamingReasoningDurationMsBySegmentId?: Record<string, number>
-  reasoningStreaming?: boolean
-  streamingToolCalls?: ToolCallRecord[]
-  streamingSegments?: ChatMessageSegment[]
   agentPlanState?: AgentPlanState | null
-  error?: string
   assistantStreamStatsByMessageId?: Record<string, AssistantStreamStats>
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
 }
 
-export function MessageList({
+// 列表里每一项的统一形态。整条会话全量喂给虚拟列表（消息都在内存，virtua 只渲可见项），
+// 屏外的气泡连同其 KaTeX DOM 真正从 DOM 卸载——这是消除公式滚动卡顿的根治手段。
+// 流式预览 bubble / 「正在思考」/ error 占位也作为列表尾项参与虚拟化与变高测量，
+// 这样钉底逻辑只需把视口对齐到最后一项即可。
+type RenderItem =
+  | { kind: 'plan'; key: 'agent-plan'; planState: AgentPlanState }
+  | { kind: 'message'; key: string; message: ChatMessage }
+  | { kind: 'streaming'; key: 'streaming-assistant'; message: ChatMessage; messageStreaming: boolean; reasoningStreaming: boolean }
+  | { kind: 'thinking'; key: 'thinking' }
+  | { kind: 'error'; key: 'error'; text: string }
+
+function MessageListBase({
   conversationId,
   messages,
-  streaming,
-  streamFrozen = false,
-  streamingContent = '',
-  streamingReasoning = '',
-  streamingReasoningDurationMs = null,
-  streamingReasoningDurationMsBySegmentId = {},
-  reasoningStreaming = false,
-  streamingToolCalls = [],
-  streamingSegments = [],
   agentPlanState = null,
-  error,
   assistantStreamStatsByMessageId = {},
   onUpdateMessage,
   onRegenerateMessage,
   onDeleteMessage,
 }: MessageListProps) {
+  // 流式预览状态直接订阅 streamingStore——只有本组件随每帧内容重渲，Chat/侧栏/输入栏不动。
+  const coarse = useStreamCoarse()
+  const snapshot = useStreamSnapshot()
+  const streaming = coarse.streaming
+  const streamFrozen = coarse.streamFrozen
+  const error = coarse.streamError
+  const streamingContent = snapshot.content
+  const streamingReasoning = snapshot.reasoning
+  const streamingReasoningDurationMs = snapshot.reasoningDurationMs
+  const streamingReasoningDurationMsBySegmentId = snapshot.reasoningDurationMsBySegmentId
+  const reasoningStreaming = snapshot.reasoningStreaming
+  const streamingToolCalls = snapshot.toolCalls
+  const streamingSegments = snapshot.segments
+
   const scrollRef = useRef<HTMLDivElement>(null)
-  const innerRef = useRef<HTMLDivElement>(null)
   // 用户是否“贴在底部”——决定流式生成时是否跟随钉底。默认 true（初次渲染贴底）
   const stickToBottomRef = useRef(true)
-  const prevCountRef = useRef(0)
-  const lastScrollTopRef = useRef(0)
-  const pendingPrependScrollHeightRef = useRef<number | null>(null)
-  // 记录"从顶部隐藏的条数"而非"从底部显示的条数"。后者会在追加新消息时膨胀
-  // hidden,导致刚发出的消息被推到"加载更早"按钮后面(尤其首条消息)。隐藏数应在
-  // 追加新消息时保持不变,新消息总是落在可见尾部。
-  const [hiddenCount, setHiddenCount] = useState(() =>
-    Math.max(0, messages.length - computeInitialVisible(messages)),
-  )
+  const prevMessageCountRef = useRef(0)
   // 是否贴在底部——驱动「回到底部」按钮的显隐（ref 不触发渲染，故另用 state）
   const [atBottom, setAtBottom] = useState(true)
-  // 切换会话的重置 effect 需要最新 messages,但不应把 messages 列进依赖(否则每次流式更新都重置窗口)。
-  const messagesRef = useRef(messages)
-  messagesRef.current = messages
+  const lastScrollOffsetRef = useRef(0)
 
-  const hiddenMessageCount = Math.max(0, Math.min(hiddenCount, messages.length))
-  const visibleMessages = hiddenMessageCount > 0
-    ? messages.slice(hiddenMessageCount)
-    : messages
+  // 把 Agent plan + 消息 + 流式预览 + 占位拼成统一的虚拟列表项数组。
+  const items = useMemo<RenderItem[]>(() => {
+    const list: RenderItem[] = []
 
-  // smooth 仅用于用户主动点「回到底部」；自动跟随保持瞬时（平滑会抖）。
+    if (agentPlanState?.plan?.trim()) {
+      list.push({ kind: 'plan', key: 'agent-plan', planState: agentPlanState })
+    }
+
+    for (const message of messages) {
+      list.push({ kind: 'message', key: message.id, message })
+    }
+    const hasStreamingPreview =
+      (streaming || streamFrozen) &&
+      (streamingContent || streamingReasoning || streamingToolCalls.length > 0 || streamingSegments.length > 0)
+    if (hasStreamingPreview) {
+      list.push({
+        kind: 'streaming',
+        key: 'streaming-assistant',
+        messageStreaming: streaming && !streamFrozen,
+        reasoningStreaming: reasoningStreaming && !streamFrozen,
+        message: {
+          id: 'streaming-assistant',
+          role: 'assistant',
+          content: streamingContent,
+          reasoning: streamingReasoning || undefined,
+          artifacts: [],
+          tool_calls: streamingToolCalls,
+          segments: streamingSegments,
+          timestamp: Math.floor(Date.now() / 1000),
+        },
+      })
+    } else if (streaming) {
+      list.push({ kind: 'thinking', key: 'thinking' })
+    }
+
+    if (error) {
+      list.push({ kind: 'error', key: 'error', text: error })
+    }
+    return list
+  }, [
+    agentPlanState,
+    messages,
+    streaming,
+    streamFrozen,
+    streamingContent,
+    streamingReasoning,
+    reasoningStreaming,
+    streamingToolCalls,
+    streamingSegments,
+    error,
+  ])
+
+  // 瞬时把视口对齐到底部。自动跟随保持瞬时（平滑会抖）；smooth 仅用于用户主动点「回到底部」。
   const scrollToBottom = useCallback((smooth = false) => {
     const el = scrollRef.current
     if (!el) return
-    if (smooth && !prefersReducedMotion()) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-      return // 平滑滚动期间由 onScroll 更新 lastScrollTop / atBottom
-    }
+    if (smooth && !prefersReducedMotion()) { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); return }
     el.scrollTop = el.scrollHeight
-    lastScrollTopRef.current = el.scrollTop
+    lastScrollOffsetRef.current = el.scrollTop
   }, [])
 
   const handleJumpToBottom = useCallback(() => {
@@ -132,20 +130,6 @@ export function MessageList({
     setAtBottom(true)
     scrollToBottom(true)
   }, [scrollToBottom])
-
-  const loadOlderMessages = useCallback(() => {
-    const el = scrollRef.current
-    if (el) {
-      pendingPrependScrollHeightRef.current = el.scrollHeight
-      stickToBottomRef.current = false
-    }
-    setHiddenCount((hidden) => {
-      const currentHidden = Math.min(hidden, messages.length)
-      if (currentHidden === 0) return 0
-      const more = countByWeight(messages, currentHidden, LOAD_MORE_WEIGHT_BUDGET, MIN_LOAD_MORE, MAX_LOAD_MORE)
-      return Math.max(0, currentHidden - more)
-    })
-  }, [messages])
 
   // 滚轮向上 = 明确的离开底部意图，立即解除跟随（不设缓冲，消除“挣扎感”）
   const handleWheel = (e: React.WheelEvent) => {
@@ -155,122 +139,69 @@ export function MessageList({
     }
   }
 
-  // 监听滚动：向上移动立即解除跟随；仅当主动滚回几乎贴底（≤32px）时恢复跟随
-  const handleScroll = () => {
+  // 滚动监听：用原生 scrollTop 判断贴底/离开底部。
+  const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    const { scrollTop, scrollHeight, clientHeight } = el
-    if (scrollTop <= 24 && hiddenMessageCount > 0) {
-      loadOlderMessages()
-    }
-    const bottom = scrollHeight - scrollTop - clientHeight <= 32
-    if (scrollTop < lastScrollTopRef.current - 1) {
+    const offset = el.scrollTop
+    const bottom = el.scrollHeight - offset - el.clientHeight <= 32
+    if (offset < lastScrollOffsetRef.current - 1) {
       stickToBottomRef.current = false
     } else if (bottom) {
       stickToBottomRef.current = true
     }
+    lastScrollOffsetRef.current = offset
     setAtBottom(bottom)
-    lastScrollTopRef.current = scrollTop
-  }
+  }, [])
 
   // 切换会话：重置跟随并瞬间定位到底部
   useLayoutEffect(() => {
-    const latest = messagesRef.current
-    setHiddenCount(Math.max(0, latest.length - computeInitialVisible(latest)))
-    pendingPrependScrollHeightRef.current = null
     stickToBottomRef.current = true
     setAtBottom(true)
-    scrollToBottom()
-  }, [conversationId, scrollToBottom])
-
-  useLayoutEffect(() => {
-    const previousScrollHeight = pendingPrependScrollHeightRef.current
-    if (previousScrollHeight == null) return
-    pendingPrependScrollHeightRef.current = null
-    const el = scrollRef.current
-    if (!el) return
-    const delta = el.scrollHeight - previousScrollHeight
-    if (delta > 0) {
-      el.scrollTop += delta
-      lastScrollTopRef.current = el.scrollTop
-    }
-  }, [hiddenCount])
+    // 等虚拟列表用最新 items 渲染后再对齐底部
+    requestAnimationFrame(() => scrollToBottom())
+    // 仅在 conversationId 变化时重置；scrollToBottom 依赖 items.length，故不列入依赖避免误触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId])
 
   // 自己发出新消息时强制回到底部（即使刚才正往上翻历史）
   useLayoutEffect(() => {
     const count = messages.length
-    if (count > prevCountRef.current && messages[count - 1]?.role === 'user') {
+    if (count > prevMessageCountRef.current && messages[count - 1]?.role === 'user') {
       stickToBottomRef.current = true
       setAtBottom(true)
     }
-    prevCountRef.current = count
+    prevMessageCountRef.current = count
   }, [messages])
 
-  // 仅在“贴底”时随内容增长钉住底部；useLayoutEffect 保证绘制前完成，消除抽动
+  // 仅在“贴底”时随内容增长钉住底部。virtua 内置 ResizeObserver 会在变高（KaTeX/图片
+  // mount 后撑高）时重测，这里在每次内容/项数变化后重新对齐末尾，保证持续钉底。
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return
     scrollToBottom()
   }, [
-    messages,
+    items,
     streaming,
     streamingContent,
     streamingReasoning,
     reasoningStreaming,
     streamingToolCalls,
     streamingSegments,
-    error,
     scrollToBottom,
   ])
 
-  useEffect(() => {
-    const inner = innerRef.current
-    if (!inner || typeof ResizeObserver === 'undefined') return
-
-    let frame: number | null = null
-    const scrollIfPinned = () => {
-      frame = null
-      if (!stickToBottomRef.current) return
-      scrollToBottom()
-    }
-    const observer = new ResizeObserver(() => {
-      if (!stickToBottomRef.current) return
-      if (frame != null) window.cancelAnimationFrame(frame)
-      frame = window.requestAnimationFrame(scrollIfPinned)
-    })
-
-    observer.observe(inner)
-
-    return () => {
-      observer.disconnect()
-      if (frame != null) window.cancelAnimationFrame(frame)
-    }
-  }, [scrollToBottom])
-
-  return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} onScroll={handleScroll} onWheel={handleWheel} className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto">
-        <div ref={innerRef} className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
-        <AgentPlanPanel planState={agentPlanState} />
-
-        {hiddenMessageCount > 0 && (
-          <div className="flex justify-center py-2">
-            <button
-              type="button"
-              onClick={loadOlderMessages}
-              className="rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-[12px] font-medium text-neutral-500 shadow-sm transition-colors hover:border-neutral-300 hover:text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:border-neutral-600 dark:hover:text-neutral-200"
-            >
-              加载更早消息（剩 {hiddenMessageCount} 条）
-            </button>
-          </div>
-        )}
-
-        {visibleMessages.map((msg) => {
+  const renderItem = useCallback(
+    (item: RenderItem) => {
+      switch (item.kind) {
+        case 'plan':
+          return <AgentPlanPanel planState={item.planState} />
+        case 'message': {
+          const msg = item.message
           const assistantStats = msg.role === 'assistant'
             ? assistantStreamStatsByMessageId[msg.id]
             : undefined
           return (
             <MessageBubble
-              key={msg.id}
               message={msg}
               conversationId={conversationId}
               tokensPerSec={assistantStats?.tokensPerSec}
@@ -281,42 +212,60 @@ export function MessageList({
               onDeleteMessage={onDeleteMessage}
             />
           )
-        })}
+        }
+        case 'streaming':
+          return (
+            <MessageBubble
+              message={item.message}
+              conversationId={conversationId}
+              messageStreaming={item.messageStreaming}
+              reasoningStreaming={item.reasoningStreaming}
+              reasoningDurationMs={streamingReasoningDurationMs}
+              reasoningDurationMsBySegmentId={streamingReasoningDurationMsBySegmentId}
+            />
+          )
+        case 'thinking':
+          return (
+            <div className="chat-motion-fade-up flex justify-start py-3">
+              <span className="reasoning-shimmer-text text-sm font-medium">正在思考…</span>
+            </div>
+          )
+        case 'error':
+          return (
+            <div className="chat-motion-fade-up flex justify-start py-3">
+              <p className="max-w-[85%] text-sm leading-relaxed text-red-600 dark:text-red-400">
+                {item.text}
+              </p>
+            </div>
+          )
+      }
+    },
+    [
+      conversationId,
+      assistantStreamStatsByMessageId,
+      onUpdateMessage,
+      onRegenerateMessage,
+      onDeleteMessage,
+      streamingReasoningDurationMs,
+      streamingReasoningDurationMsBySegmentId,
+    ],
+  )
 
-        {(streaming || streamFrozen) && (streamingContent || streamingReasoning || streamingToolCalls.length > 0 || streamingSegments.length > 0) && (
-          <MessageBubble
-            message={{
-              id: 'streaming-assistant',
-              role: 'assistant',
-              content: streamingContent,
-              reasoning: streamingReasoning || undefined,
-              artifacts: [],
-              tool_calls: streamingToolCalls,
-              segments: streamingSegments,
-              timestamp: Math.floor(Date.now() / 1000),
-            }}
-            conversationId={conversationId}
-            messageStreaming={streaming && !streamFrozen}
-            reasoningStreaming={reasoningStreaming && !streamFrozen}
-            reasoningDurationMs={streamingReasoningDurationMs}
-            reasoningDurationMsBySegmentId={streamingReasoningDurationMsBySegmentId}
-          />
-        )}
-
-        {streaming && !streamingContent && !streamingReasoning && streamingToolCalls.length === 0 && streamingSegments.length === 0 && (
-          <div className="chat-motion-fade-up flex justify-start py-3">
-            <span className="reasoning-shimmer-text text-sm font-medium">正在思考…</span>
-          </div>
-        )}
-
-        {error && (
-          <div className="chat-motion-fade-up flex justify-start py-3">
-            <p className="max-w-[85%] text-sm leading-relaxed text-red-600 dark:text-red-400">
-              {error}
-            </p>
-          </div>
-        )}
-      </div>
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onWheel={handleWheel}
+        className="chat-motion-fade custom-scrollbar flex-1 overflow-y-auto"
+      >
+        <div className="chat-message-list-inner mx-auto w-full max-w-3xl space-y-0.5 px-6 py-4">
+          {/* 全量渲染：不虚拟化。滚动时绝不卸载/重挂消息——避免重挂 KaTeX 子树触发的
+              matchAllRules 全量样式重算风暴（实测公式滚动卡顿的真正根因）。 */}
+          {items.map((item) => (
+            <div key={item.key}>{renderItem(item)}</div>
+          ))}
+        </div>
       </div>
       {!atBottom && (
         <button
@@ -357,3 +306,6 @@ function AgentPlanPanel({ planState }: { planState?: AgentPlanState | null }) {
     </div>
   )
 }
+
+// memo：列表本身订阅 streamingStore，父级 Chat 重渲（非流式 state 变化）时不跟着白渲。
+export const MessageList = memo(MessageListBase)

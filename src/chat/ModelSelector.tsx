@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
@@ -11,7 +11,7 @@ interface ModelSelectorProps {
   onModelChange: (providerId: string, model: string) => void
 }
 
-export function ModelSelector({
+function ModelSelectorBase({
   currentProviderId,
   currentModel,
   onModelChange,
@@ -108,3 +108,6 @@ export function ModelSelector({
     </div>
   )
 }
+
+// memo：顶栏选择器，仅在 props 变化时重渲，避免 Chat 重渲时跟着白渲。
+export const ModelSelector = memo(ModelSelectorBase)

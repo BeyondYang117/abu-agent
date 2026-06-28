@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { Brain, Check, ChevronDown } from 'lucide-react'
 import { api } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
@@ -6,31 +6,32 @@ import { chatTitlebarPillButtonClass } from './platform'
 import type { ThinkingLevel } from './types'
 
 interface ThinkingLevelSelectorProps {
-  /** 当前等级；null = 跟随全局思考开关。 */
+  /** 当前等级；null = 未显式设置，按默认档 DEFAULT_LEVEL 处理。 */
   value: ThinkingLevel | null
   currentProviderId: string
   currentModel: string
-  onChange: (level: ThinkingLevel | null) => void
+  onChange: (level: ThinkingLevel) => void
 }
 
-// 固定项 + 各等级的中文标签。具体显示哪些等级由后端按模型库决定。
+// 固定项 + 各等级标签（英文，跨语言更通用）。具体显示哪些等级由后端按模型库决定。
 const LABELS: Record<string, string> = {
-  off: '关闭',
-  low: '低',
-  medium: '中',
-  high: '高',
-  xhigh: '超高',
-  max: '最高',
+  off: 'Off',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
 }
-const FOLLOW = '跟随全局'
+// 未显式选等级时的默认档（与后端 resolve_thinking 保持一致）。
+const DEFAULT_LEVEL: ThinkingLevel = 'high'
 // 未取到模型能力时的安全兜底（全模型通用子集）。
 const FALLBACK_LEVELS = ['low', 'medium', 'high']
 
-function labelFor(value: ThinkingLevel | null): string {
-  return value == null ? FOLLOW : LABELS[value] ?? value
+function labelFor(value: ThinkingLevel): string {
+  return LABELS[value] ?? value
 }
 
-export function ThinkingLevelSelector({
+function ThinkingLevelSelectorBase({
   value,
   currentProviderId,
   currentModel,
@@ -63,17 +64,16 @@ export function ThinkingLevelSelector({
     }
   }, [currentProviderId, currentModel])
 
-  const options = useMemo<Array<{ value: ThinkingLevel | null; label: string }>>(
+  // null（未显式设置）按默认档处理，UI 永远高亮一个具体等级。
+  const effective: ThinkingLevel = value ?? DEFAULT_LEVEL
+
+  const options = useMemo<Array<{ value: ThinkingLevel; label: string }>>(
     () => [
-      { value: null, label: FOLLOW },
       { value: 'off', label: LABELS.off },
       ...levels.map((l) => ({ value: l as ThinkingLevel, label: LABELS[l] ?? l })),
     ],
     [levels],
   )
-
-  // 跟随全局时只显示图标；选了具体等级才显示文字。
-  const showLabel = value != null
 
   return (
     <div className="relative max-w-full min-w-0" data-tauri-drag-region="false">
@@ -81,15 +81,13 @@ export function ThinkingLevelSelector({
         type="button"
         onClick={() => setOpen(!open)}
         className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
-        title={`思考等级：${labelFor(value)}`}
-        aria-label={`思考等级：${labelFor(value)}`}
+        title={`思考等级：${labelFor(effective)}`}
+        aria-label={`思考等级：${labelFor(effective)}`}
       >
         <Brain size={15} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
-        {showLabel && (
-          <span className="max-w-[64px] truncate font-medium text-neutral-800 dark:text-neutral-200">
-            {labelFor(value)}
-          </span>
-        )}
+        <span className="max-w-[64px] truncate font-medium text-neutral-800 dark:text-neutral-200">
+          {labelFor(effective)}
+        </span>
         <ChevronDown
           size={15}
           className={`shrink-0 text-neutral-400 transition-transform ${open ? 'rotate-180' : ''}`}
@@ -101,10 +99,10 @@ export function ThinkingLevelSelector({
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[160px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
             {options.map((opt) => {
-              const active = opt.value === value
+              const active = opt.value === effective
               return (
                 <button
-                  key={opt.value ?? ''}
+                  key={opt.value}
                   type="button"
                   onClick={() => {
                     onChange(opt.value)
@@ -127,3 +125,6 @@ export function ThinkingLevelSelector({
     </div>
   )
 }
+
+// memo：顶栏选择器，仅在 props 变化时重渲。
+export const ThinkingLevelSelector = memo(ThinkingLevelSelectorBase)

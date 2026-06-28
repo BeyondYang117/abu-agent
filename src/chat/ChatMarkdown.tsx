@@ -635,36 +635,24 @@ function renderTex(tex: string, display: boolean): string {
 }
 
 function LazyMath({ tex, display }: { tex: string; display: boolean }) {
-  const ref = useRef<HTMLSpanElement>(null)
-  const [html, setHtml] = useState<string | null>(null)
-  // tex 变化(如流式)时丢弃旧渲染，重新走懒渲染
-  useEffect(() => setHtml(null), [tex, display])
-  useEffect(() => {
-    if (html != null) return
-    const el = ref.current
-    if (!el) return
-    if (typeof IntersectionObserver === 'undefined') {
-      setHtml(renderTex(tex, display) || tex)
-      return
-    }
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          io.disconnect()
-          setHtml(renderTex(tex, display) || tex)
-        }
-      },
-      { rootMargin: '800px 0px' },
-    )
-    io.observe(el)
-    return () => io.disconnect()
-  }, [tex, display, html])
-
+  // 即时渲染（不再用 IntersectionObserver 延迟到滚动进视口才渲染）。视口懒渲染会在「滚动时」
+  // 把 KaTeX 子树插入 DOM，每次插入触发对几百个元素的 matchAllRules 全量样式重算——实测这正是
+  // 公式滚动卡顿的根因。改为随消息一次性渲染（renderTex 有 texCache，重复公式近零成本），
+  // 渲染成本前移到消息挂载时（一次性），滚动时 DOM 不再变动 → 丝滑。
+  const html = useMemo(() => renderTex(tex, display), [tex, display])
   const cls = display ? 'katex-lazy katex-lazy--display' : 'katex-lazy'
-  if (html != null) {
-    return <span ref={ref} className={cls} dangerouslySetInnerHTML={{ __html: html }} />
+  if (html) {
+    return <span className={cls} dangerouslySetInnerHTML={{ __html: html }} />
   }
-  return <span ref={ref} className={`${cls} katex-lazy--pending`}>{tex}</span>
+  return <span className={`${cls} katex-lazy--pending`}>{tex}</span>
+}
+
+// 模块级稳定组件：remark-math 产出的 <kvmath> → <LazyMath>。无闭包依赖，必须放模块级——
+// 若写成 components useMemo 里的内联函数，每次重建 components（artifacts/citations 变化、或流式每帧）
+// 都是新函数类型，ReactMarkdown 会把 LazyMath 整个卸载重挂（公式 remount 闪烁）。
+function KvMath({ node }: { node?: { properties?: { tex?: string; display?: string } } }) {
+  const props = node?.properties ?? {}
+  return <LazyMath tex={String(props.tex ?? '')} display={props.display === 'true'} />
 }
 
 // remark-math 产出的 math/inlineMath 节点 → 自定义 <kvmath> 元素(携带 tex + display)，
@@ -705,10 +693,7 @@ function ChatMarkdownComponent({
     const artifactLookup = buildArtifactLookup(artifacts)
     return {
       ...markdownComponents,
-      kvmath: ({ node }: { node?: { properties?: { tex?: string; display?: string } } }) => {
-        const props = node?.properties ?? {}
-        return <LazyMath tex={String(props.tex ?? '')} display={props.display === 'true'} />
-      },
+      kvmath: KvMath,
       a: ({ href, children }) => {
         const url = typeof href === 'string' ? href : ''
         const cite = /^#kb-cite-(\d{1,3})$/.exec(url)

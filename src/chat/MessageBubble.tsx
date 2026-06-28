@@ -41,6 +41,10 @@ import type { TimelineGroupItem, ToolGroupIcon } from './segments'
 
 const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
 
+// 模块级稳定引用：内联箭头每次渲染新建会打穿 ChatMarkdown 的 memo（导致公式重渲）。
+const handleChatImageClick = (src: string, alt: string, name?: string) =>
+  openChatImageViewer({ src, alt, name })
+
 interface MessageBubbleProps {
   message: ChatMessage
   conversationId?: string | null
@@ -248,7 +252,7 @@ function TimelineTextSegment({
         content={text}
         artifacts={artifacts}
         citations={citations}
-        onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
+        onImageClick={handleChatImageClick}
       />
     </div>
   )
@@ -822,7 +826,7 @@ function MessageBubbleComponent({
                 <ChatMarkdown
                   content={message.content}
                   artifacts={renderArtifacts}
-                  onImageClick={(src, alt, name) => openChatImageViewer({ src, alt, name })}
+                  onImageClick={handleChatImageClick}
                 />
               )}
               {hasGeneratedImages && (

@@ -1,5 +1,6 @@
 import { RefreshCw, X, Archive } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import { formatTokens } from '../utils/tokens'
 import type { ConversationContextState, ContextUsageSegment } from './types'
 
@@ -12,6 +13,10 @@ interface ContextIndicatorProps {
   usesExternalRuntime?: boolean
   onRefresh?: () => void
   onCompress?: () => void
+  /** 弹层方向：down 在触发器下方(欢迎页)，up 在上方(对话页输入栏贴底) */
+  placement?: 'up' | 'down'
+  /** 弹层 portal 挂载到输入框容器，与项目/知识库/MCP 弹窗共用锚点/方向/样式 */
+  anchorRef?: RefObject<HTMLDivElement | null>
 }
 
 function valueFrom<T>(snake: T | undefined, camel: T | undefined, fallback: T): T {
@@ -76,8 +81,24 @@ export function ContextIndicator({
   usesExternalRuntime = false,
   onRefresh,
   onCompress,
+  placement = 'down',
+  anchorRef,
 }: ContextIndicatorProps) {
   const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+
+  // 弹层经 portal 渲染到容器外，需同时排除触发器与弹层本身，否则点弹层会被判为外部点击而关闭。
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (triggerRef.current?.contains(t) || popoverRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
   const estimatedInputTokens = valueFrom(
     contextState?.estimated_input_tokens,
     contextState?.estimatedInputTokens,
@@ -112,7 +133,6 @@ export function ContextIndicator({
   const contextWarning = valueFrom(contextState?.warning, contextState?.warningMessage, null)
   const summary = contextState?.summary ?? null
   const color = statusColor(status, usageRatio)
-  const percentLabel = loading ? '...' : compactPercent(usageRatio)
   const segments = useMemo(
     () => (contextState?.segments ?? []).filter((segment) => segmentTokens(segment) > 0),
     [contextState?.segments],
@@ -134,11 +154,12 @@ export function ContextIndicator({
     : (compressing ? 'Compressing' : 'Compress')
 
   return (
-    <div className="relative" data-tauri-drag-region="false">
+    <div className="relative" ref={triggerRef} data-tauri-drag-region="false">
       <button
         type="button"
-        className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-neutral-600 transition duration-[var(--kv-dur-instant)] hover:bg-black/[0.05] hover:text-neutral-900 active:scale-[0.97] dark:text-neutral-300 dark:hover:bg-white/[0.07] dark:hover:text-neutral-50"
+        className="grid size-8 shrink-0 place-items-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 active:scale-[0.97] dark:text-neutral-300 dark:hover:bg-neutral-800"
         aria-label="Context"
+        title={loading ? 'Context …' : `${fullness} · ${tokenLine}`}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
@@ -150,11 +171,15 @@ export function ContextIndicator({
         >
           <span className="size-3 rounded-full bg-white dark:bg-[#212121]" />
         </span>
-        <span className="chat-titlebar-context-label min-w-[2.2rem] text-left tabular-nums">{percentLabel}</span>
       </button>
 
-      {open && (
-        <div className="chat-motion-popover absolute right-0 top-9 z-40 w-[18rem] max-w-[calc(100vw-2rem)] rounded-xl border border-neutral-200/90 bg-white p-3 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+      {open && anchorRef?.current && createPortal(
+        <div
+          ref={popoverRef}
+          className={`chat-motion-popover absolute inset-x-0 z-40 max-h-[60vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-3 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${placement === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'}`}
+          style={{ ['--chat-popover-origin' as string]: placement === 'up' ? 'bottom right' : 'top right' }}
+          data-tauri-drag-region="false"
+        >
           <div className="mb-3 flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2">
               <span className="text-[13px] font-semibold leading-none text-neutral-900 dark:text-neutral-50">
@@ -287,7 +312,8 @@ export function ContextIndicator({
               {compressLabel}
             </button>
           </div>
-        </div>
+        </div>,
+        anchorRef.current,
       )}
     </div>
   )

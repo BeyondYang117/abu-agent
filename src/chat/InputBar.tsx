@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { cloneElement, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -21,8 +21,6 @@ import {
   Plus,
   Search,
   Settings,
-
-  SlidersHorizontal,
   Sparkles,
   Square,
   Terminal,
@@ -32,7 +30,7 @@ import {
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
 import { KnowledgeBaseChip } from './KnowledgeBaseChip'
-import { api, type ChatToolDefinition } from '../api/tauri'
+import { api, type ChatToolDefinition, type ChatMcpServer } from '../api/tauri'
 import { chatApi } from './api'
 import { builtinAssistantGlyph } from './assistantIcons'
 import type { AgentPlanMode, AgentPlanState, ChatProject, PendingAttachment } from './types'
@@ -90,6 +88,29 @@ function shouldComposerAutoFocus(activeElement: Element | null): boolean {
 
 function isExternalMcpTool(tool: ChatToolDefinition): boolean {
   return tool.source !== 'skill' && tool.source !== 'native'
+}
+
+// MCP 官方标志（Model Context Protocol，路径取自官方 logo，viewBox 180）。
+// 描边用 currentColor 跟随主题，粗细换算到与 lucide 18px 图标视重一致。
+function McpIcon({ size = 18, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="-14 -26 210 210"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={15}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M18 84.8528L85.8822 16.9706C95.2548 7.59798 110.451 7.59798 119.823 16.9706V16.9706C129.196 26.3431 129.196 41.5391 119.823 50.9117L68.5581 102.177" />
+      <path d="M69.2652 101.47L119.823 50.9117C129.196 41.5391 144.392 41.5391 153.765 50.9117L154.118 51.2652C163.491 60.6378 163.491 75.8338 154.118 85.2063L92.7248 146.6C89.6006 149.724 89.6006 154.789 92.7248 157.913L105.331 170.52" />
+      <path d="M102.853 33.9411L52.6482 84.1457C43.2756 93.5183 43.2756 108.714 52.6482 118.087V118.087C62.0208 127.459 77.2167 127.459 86.5893 118.087L136.794 67.8822" />
+    </svg>
+  )
 }
 
 function projectPathLabel(project: ChatProject): string {
@@ -385,6 +406,11 @@ interface InputBarProps {
   /** 本会话挂载的知识库 id；缺省时 knowledge_search 检索全部库 */
   knowledgeBaseIds?: string[]
   onChangeKnowledgeBaseIds?: (ids: string[]) => void | Promise<void>
+  /** 已配置的 MCP 服务器；底栏 MCP 按钮切换各服务器 enabled(是否加载) */
+  mcpServers?: ChatMcpServer[]
+  onToggleMcpServer?: (serverId: string) => void | Promise<void>
+  /** 上下文用量指示器：由 Chat 注入 <ContextIndicator>，渲染在底栏右侧 Act 左边 */
+  contextSlot?: ReactNode
 }
 
 export function InputBar({
@@ -420,6 +446,9 @@ export function InputBar({
   conversationId = null,
   knowledgeBaseIds = [],
   onChangeKnowledgeBaseIds,
+  mcpServers = [],
+  onToggleMcpServer,
+  contextSlot,
 }: InputBarProps) {
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
@@ -428,6 +457,7 @@ export function InputBar({
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+  const [mcpMenuOpen, setMcpMenuOpen] = useState(false)
   const [projectOptions, setProjectOptions] = useState<ChatProject[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [projectOptionsError, setProjectOptionsError] = useState('')
@@ -448,10 +478,8 @@ export function InputBar({
   const agentPlanActive = agentPlanMode === 'plan'
   const agentOrchestrateActive = agentPlanMode === 'orchestrate'
   const projectEntryEnabled = Boolean(showProjectEntry && onSelectProject)
-  // 专家入口:空对话页(inline)显示「选择专家」;进行中的对话(footer)只在已选专家时显示药丸,
-  // 没选就别占地方。
-  const showAssistantEntry =
-    Boolean(onOpenAssistantCenter) && (layout === 'inline' || Boolean(currentAssistant))
+  // 专家入口:欢迎页与对话中都显示,未选时为「选择专家」图标,已选时高亮 + 清除按钮。
+  const showAssistantEntry = Boolean(onOpenAssistantCenter)
   const modeEntryEnabled = Boolean(onAgentPlanModeChange)
   const activeModeOption = AGENT_MODE_OPTIONS.find((option) => option.mode === agentPlanMode)
     ?? AGENT_MODE_OPTIONS[0]
@@ -461,6 +489,18 @@ export function InputBar({
     setProjectMenuOpen(false)
     setProjectCreateMenuOpen(false)
   }, [])
+
+  const mcpEntryEnabled = Boolean(onToggleMcpServer) && mcpServers.length > 0
+  const closeMcpMenu = useCallback(() => setMcpMenuOpen(false), [])
+  const toggleMcpMenu = useCallback(() => {
+    if (!mcpEntryEnabled || disabled) return
+    setSlashPanelOpen(false)
+    setToolPanelOpen(false)
+    setModeMenuOpen(false)
+    setProjectMenuOpen(false)
+    setProjectCreateMenuOpen(false)
+    setMcpMenuOpen((open) => !open)
+  }, [disabled, mcpEntryEnabled])
 
   const closeModeMenu = useCallback(() => {
     setModeMenuOpen(false)
@@ -502,6 +542,7 @@ export function InputBar({
     setSlashPanelOpen(false)
     setToolPanelOpen(false)
     setModeMenuOpen(false)
+    setMcpMenuOpen(false)
     setProjectMenuOpen((open) => {
       const nextOpen = !open
       setProjectCreateMenuOpen(false)
@@ -768,6 +809,7 @@ export function InputBar({
     if (disabled || !onAgentPlanModeChange) return
     setSlashPanelOpen(false)
     setToolPanelOpen(false)
+    setMcpMenuOpen(false)
     closeProjectMenu()
     setModeMenuOpen((open) => !open)
   }, [closeProjectMenu, disabled, onAgentPlanModeChange])
@@ -1276,7 +1318,6 @@ export function InputBar({
   // 模式菜单移到发送键旁、右对齐：原点跟随展开方向用右侧
   const modePanelOrigin = layout === 'inline' ? 'top right' : 'bottom right'
   const externalMcpTools = enabledTools.filter(isExternalMcpTool)
-  const hasToolProblem = Boolean(toolsDisabledReason || toolStatusHint || sendDisabledReason)
   const showMcpSection = externalMcpTools.length > 0 || Boolean(toolsDisabledReason)
   const mcpStatusLine = toolsDisabledReason
     || (externalMcpTools.length > 0 ? `MCP ${externalMcpTools.length}` : '')
@@ -1289,8 +1330,8 @@ export function InputBar({
           <>
             <div className="fixed inset-0 z-30" onClick={() => setToolPanelOpen(false)} aria-hidden />
             <div
-              className="chat-motion-popover absolute bottom-full left-10 z-40 mb-2 w-[min(320px,calc(100vw-32px))] overflow-hidden rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900"
-              style={{ ['--chat-popover-origin' as string]: 'bottom left' }}
+              className={`chat-motion-popover absolute inset-x-0 z-40 overflow-hidden rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] shadow-[0_10px_28px_rgba(0,0,0,0.14)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+              style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
               data-tauri-drag-region="false"
             >
               <div className="space-y-1.5 px-3 py-2">
@@ -1400,6 +1441,58 @@ export function InputBar({
             </div>
           </div>
         )}
+        {mcpMenuOpen && mcpEntryEnabled && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={closeMcpMenu} aria-hidden />
+            <div
+              className={`chat-motion-popover absolute inset-x-0 z-40 max-h-[40vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+              style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
+              data-tauri-drag-region="false"
+              role="menu"
+            >
+              <div className="flex items-center justify-between gap-2 px-2 py-1">
+                <span className="text-[10.5px] text-neutral-400">勾选要加载的 MCP 服务器</span>
+                {onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeMcpMenu()
+                      onOpenSettings()
+                    }}
+                    className="rounded-md px-1.5 py-0.5 text-[11px] text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                  >
+                    管理
+                  </button>
+                )}
+              </div>
+              {mcpServers.map((server) => {
+                const checked = server.enabled
+                return (
+                  <button
+                    key={server.id}
+                    type="button"
+                    onClick={() => void onToggleMcpServer?.(server.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  >
+                    <span
+                      className={`grid size-4 shrink-0 place-items-center rounded border ${
+                        checked
+                          ? 'border-indigo-500 bg-indigo-500 text-white'
+                          : 'border-neutral-300 dark:border-neutral-600'
+                      }`}
+                    >
+                      {checked && <Check size={11} strokeWidth={3} />}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{server.name}</span>
+                    <span className="shrink-0 text-[10.5px] text-neutral-400">
+                      {server.transport === 'stdio' ? 'stdio' : 'http'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        )}
         {projectMenuOpen && projectEntryEnabled && (
           <>
             <div
@@ -1408,7 +1501,7 @@ export function InputBar({
               aria-hidden
             />
             <div
-              className={`chat-motion-popover absolute left-0 z-40 w-[min(220px,calc(100vw-32px))] overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+              className={`chat-motion-popover absolute inset-x-0 z-40 overflow-visible rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
               style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
               data-tauri-drag-region="false"
             >
@@ -1564,64 +1657,130 @@ export function InputBar({
               {sendDisabledReason || toolStatusHint}
             </div>
           )}
-          <div className="flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={handleInput}
+            onPaste={(e) => void handlePaste(e)}
+            onKeyDown={handleKeyDown}
+            onSelect={handleSelect}
+            placeholder={
+              usesExternalRuntime
+                ? `${cliAgentLabel} 命令，输入 / 补全`
+                : 'Ask me anything...'
+            }
+            rows={1}
+            className="block max-h-40 min-h-[28px] w-full select-text resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
+          />
+          <div className="mt-1.5 flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => void openAttachmentPicker()}
               disabled={disabled}
               tabIndex={-1}
-              className="mb-0.5 shrink-0 rounded-full p-2 text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
+              className="grid size-8 shrink-0 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
               title="添加附件"
               aria-label="添加附件"
             >
-              <Plus size={20} strokeWidth={1.75} />
+              <Plus size={18} strokeWidth={1.75} />
             </button>
 
-            {onOpenSettings && (
+            {onChangeKnowledgeBaseIds && (
+              <KnowledgeBaseChip
+                value={knowledgeBaseIds}
+                onChange={(ids) => void onChangeKnowledgeBaseIds(ids)}
+                disabled={disabled}
+                layout={layout}
+                anchorRef={innerRef}
+              />
+            )}
+            {mcpEntryEnabled && (
               <button
                 type="button"
-                onClick={() => {
-                  setSlashPanelOpen(false)
-                  closeProjectMenu()
-                  setToolPanelOpen((open) => !open)
-                }}
+                onClick={toggleMcpMenu}
                 disabled={disabled}
-                tabIndex={-1}
-                className={`mb-0.5 shrink-0 rounded-full p-2 transition-colors disabled:opacity-40 ${
-                  toolPanelOpen || hasToolProblem
-                    ? 'bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100'
-                    : 'text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
+                  mcpMenuOpen
+                    ? 'bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100'
+                    : 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
                 }`}
-                title="MCP / Skill"
-                aria-label="MCP / Skill"
+                aria-expanded={mcpMenuOpen}
+                aria-haspopup="menu"
+                title="选择加载的 MCP"
               >
-                <SlidersHorizontal size={18} strokeWidth={1.75} />
+                <McpIcon size={18} />
               </button>
             )}
+            {projectEntryEnabled && (
+              <button
+                type="button"
+                onClick={toggleProjectMenu}
+                disabled={disabled}
+                className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
+                  projectMenuOpen
+                    ? 'bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100'
+                    : selectedProject
+                      ? 'text-indigo-500 hover:bg-neutral-100 dark:text-indigo-300 dark:hover:bg-neutral-800'
+                      : 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
+                }`}
+                aria-expanded={projectMenuOpen}
+                aria-haspopup="menu"
+                title={selectedProject ? `项目 · ${selectedProject.name}` : '进入项目工作'}
+              >
+                {selectedProject ? (
+                  <Folder size={18} strokeWidth={1.75} />
+                ) : (
+                  <FolderPlus size={18} strokeWidth={1.75} />
+                )}
+              </button>
+            )}
+            {showAssistantEntry && (
+              <>
+                <button
+                  type="button"
+                  onClick={onOpenAssistantCenter}
+                  disabled={disabled}
+                  className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
+                    currentAssistant
+                      ? 'text-indigo-500 hover:bg-neutral-100 dark:text-indigo-300 dark:hover:bg-neutral-800'
+                      : 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
+                  }`}
+                  title={currentAssistant ? `专家 · ${currentAssistant.name}` : '选择或创建专家'}
+                  aria-label={currentAssistant ? currentAssistant.name : '选择或创建专家'}
+                >
+                  {currentAssistant
+                    ? builtinAssistantGlyph(currentAssistant.id, 18) ?? <Bot size={18} strokeWidth={1.75} />
+                    : <Bot size={18} strokeWidth={1.75} />}
+                </button>
+                {currentAssistant && onClearAssistant && (
+                  <button
+                    type="button"
+                    onClick={onClearAssistant}
+                    className="grid size-8 shrink-0 place-items-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                    title="清除专家"
+                    aria-label="清除专家"
+                  >
+                    <X size={15} strokeWidth={2} />
+                  </button>
+                )}
+              </>
+            )}
 
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={handleInput}
-              onPaste={(e) => void handlePaste(e)}
-              onKeyDown={handleKeyDown}
-              onSelect={handleSelect}
-              placeholder={
-                usesExternalRuntime
-                  ? `${cliAgentLabel} 命令，输入 / 补全`
-                  : 'Ask me anything...'
-              }
-              rows={1}
-              className="mb-0.5 max-h-40 min-h-[28px] flex-1 select-text resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
-            />
-
+            <div className="ml-auto flex items-center gap-1.5">
+            {/* 注入 anchorRef/placement：上下文弹层与项目/知识库/MCP 共用容器锚点与翻转方向 */}
+            {isValidElement<{ anchorRef?: RefObject<HTMLDivElement | null>; placement?: 'up' | 'down' }>(contextSlot)
+              ? cloneElement(contextSlot, {
+                  anchorRef: innerRef,
+                  placement: layout === 'inline' ? 'down' : 'up',
+                })
+              : contextSlot}
             {onExecuteAgentPlan && agentPlanText && (
               <button
                 type="button"
                 onClick={() => void onExecuteAgentPlan()}
                 disabled={disabled}
                 tabIndex={-1}
-                className="mb-0.5 flex h-8 shrink-0 items-center gap-1 rounded-full bg-neutral-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
+                className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-neutral-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
                 title="执行当前计划"
                 aria-label="执行当前计划"
               >
@@ -1709,7 +1868,7 @@ export function InputBar({
             )}
 
             {/* 发送 / 停止：两按钮共存于同一槽位，按 cancelVisible 做 opacity+scale crossfade */}
-            <div className="relative mb-0.5 h-9 w-9 shrink-0">
+            <div className="relative h-9 w-9 shrink-0">
               <button
                 type="button"
                 onClick={handleSend}
@@ -1749,92 +1908,9 @@ export function InputBar({
                 </button>
               ) : null}
             </div>
+            </div>
           </div>
         </div>
-        {(projectEntryEnabled || showAssistantEntry || (layout === 'inline' && Boolean(onChangeKnowledgeBaseIds))) && (
-          <div className="relative z-10 mt-2 flex items-center justify-start gap-1.5 px-3">
-            {layout === 'inline' && onChangeKnowledgeBaseIds && (
-              <KnowledgeBaseChip
-                value={knowledgeBaseIds}
-                onChange={(ids) => void onChangeKnowledgeBaseIds(ids)}
-                disabled={disabled}
-              />
-            )}
-            {projectEntryEnabled && (
-              <button
-                type="button"
-                onClick={toggleProjectMenu}
-                disabled={disabled}
-                className={`inline-flex h-[26px] max-w-full items-center gap-1 rounded-full px-2 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 dark:focus-visible:ring-neutral-600 ${
-                  projectMenuOpen
-                    ? 'bg-neutral-200 text-neutral-800 dark:bg-neutral-700 dark:text-neutral-100'
-                    : selectedProject
-                      ? 'text-neutral-700 hover:bg-neutral-200/60 dark:text-neutral-200 dark:hover:bg-neutral-700/55'
-                      : 'text-neutral-500 hover:bg-neutral-200/50 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700/55 dark:hover:text-neutral-100'
-                } disabled:cursor-default disabled:opacity-50`}
-                aria-expanded={projectMenuOpen}
-                aria-haspopup="menu"
-              >
-                {selectedProject ? (
-                  <Folder size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
-                ) : (
-                  <FolderPlus size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
-                )}
-                <span className="min-w-0 truncate">
-                  {selectedProject ? selectedProject.name : '进入项目工作'}
-                </span>
-                <ChevronDown
-                  size={12}
-                  strokeWidth={2}
-                  className={`shrink-0 text-neutral-400 transition-transform ${
-                    projectMenuOpen ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-            )}
-            {showAssistantEntry && (
-              currentAssistant ? (
-                <span className="inline-flex h-[26px] max-w-full items-center gap-0.5 rounded-full bg-neutral-100 pl-2 pr-1 text-[12px] font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                  <button
-                    type="button"
-                    onClick={onOpenAssistantCenter}
-                    className="inline-flex min-w-0 items-center gap-1"
-                    title={currentAssistant.name}
-                  >
-                    <span className="grid size-[15px] shrink-0 place-items-center text-neutral-500 dark:text-neutral-300">
-                      {builtinAssistantGlyph(currentAssistant.id, 14) ?? (
-                        <Bot size={13} strokeWidth={1.75} />
-                      )}
-                    </span>
-                    <span className="min-w-0 max-w-[150px] truncate">{currentAssistant.name}</span>
-                  </button>
-                  {onClearAssistant && (
-                    <button
-                      type="button"
-                      onClick={onClearAssistant}
-                      className="ml-0.5 grid size-4 shrink-0 place-items-center rounded-full text-neutral-400 hover:bg-neutral-200 hover:text-neutral-700 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
-                      title="清除专家"
-                      aria-label="清除专家"
-                    >
-                      <X size={11} strokeWidth={2} />
-                    </button>
-                  )}
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={onOpenAssistantCenter}
-                  disabled={disabled}
-                  className="inline-flex h-[26px] max-w-full items-center gap-1 rounded-full px-2 text-left text-[12px] font-semibold text-neutral-500 transition-colors hover:bg-neutral-200/50 hover:text-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:text-neutral-400 dark:hover:bg-neutral-700/55 dark:hover:text-neutral-100 dark:focus-visible:ring-neutral-600"
-                  title="选择或创建专家"
-                >
-                  <Bot size={13} strokeWidth={1.75} className="shrink-0 text-neutral-500 dark:text-neutral-300" />
-                  <span className="min-w-0 truncate">选择专家</span>
-                </button>
-              )
-            )}
-          </div>
-        )}
       </div>
     </div>
   )
