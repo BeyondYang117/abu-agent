@@ -2307,12 +2307,19 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
     } catch (err) {
       console.error('Failed to send message:', err)
+      // 后端生成失败时保留了用户消息并随错误带回对话——套用它，让问题留在线程里可重试，
+      // 而不是连问题一起消失（旧行为）。
+      const keptConversation = (err as { conversation?: Conversation })?.conversation
       if (currentConversationIdRef.current === conversationId) {
         setPendingUserMessage(null)
         setPendingUserMessageConversationId(null)
+        if (keptConversation) {
+          applyConversation(keptConversation)
+        }
       }
       setOptimisticSidebarConversations((items) => items.filter((item) => item.id !== conversationId))
       clearStreamSnapshot(conversationId)
+      if (keptConversation) refreshSidebar()
       const message = typeof err === 'string' ? err : (err as Error).message || '发送失败'
       setStreamErrorForConversation(conversationId, message)
     } finally {
@@ -2597,12 +2604,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       )
       if (messageIndex < 0) return
 
+      // 助手消息：截到它之前重生成。用户消息（失败发送遗留的孤儿）：保留它、只丢其后内容再重试。
+      const keepTarget = conv.messages[messageIndex].role === 'user'
+      const cutFrom = keepTarget ? messageIndex + 1 : messageIndex
       applyConversation({
         ...conv,
-        messages: conv.messages.slice(0, messageIndex),
+        messages: conv.messages.slice(0, cutFrom),
       })
       const removedMessageIds = new Set(
-        conv.messages.slice(messageIndex).map((message) => message.id),
+        conv.messages.slice(cutFrom).map((message) => message.id),
       )
       setAssistantStreamStatsByMessageId((prev) => Object.fromEntries(
         Object.entries(prev).filter(([id]) => !removedMessageIds.has(id)),
@@ -3132,6 +3142,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onUpdateMessage={handleUpdateMessage}
                       onRegenerateMessage={handleRegenerateMessage}
                       onDeleteMessage={handleDeleteMessage}
+                      onRetryLastUser={handleRegenerateMessage}
                       onExecuteAgentPlan={handleExecuteAgentPlan}
                     />
                   </Suspense>

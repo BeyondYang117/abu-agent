@@ -1,5 +1,5 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, RotateCw } from 'lucide-react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 import type { AgentPlanState, ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
@@ -23,6 +23,8 @@ interface MessageListProps {
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
   onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
+  // 失败发送后线程末尾留下的孤儿用户消息：点「重试」用它的 id 重新生成。
+  onRetryLastUser?: (messageId: string) => void
 }
 
 const LIST_EDGE_PADDING_PX = 16
@@ -34,7 +36,7 @@ type RenderItem =
   | { kind: 'message'; key: string; message: ChatMessage }
   | { kind: 'streaming'; key: 'streaming-assistant'; message: ChatMessage; messageStreaming: boolean; reasoningStreaming: boolean }
   | { kind: 'thinking'; key: 'thinking' }
-  | { kind: 'error'; key: 'error'; text: string }
+  | { kind: 'error'; key: 'error'; text: string; retryMessageId: string | null }
 
 function MessageListBase({
   conversationId,
@@ -45,6 +47,7 @@ function MessageListBase({
   onRegenerateMessage,
   onDeleteMessage,
   onExecuteAgentPlan,
+  onRetryLastUser,
 }: MessageListProps) {
   // 流式预览状态直接订阅 streamingStore——只有本组件随每帧内容重渲，Chat/侧栏/输入栏不动。
   const coarse = useStreamCoarse()
@@ -116,7 +119,10 @@ function MessageListBase({
     }
 
     if (error) {
-      list.push({ kind: 'error', key: 'error', text: error })
+      // 末尾是用户消息 = 失败发送遗留的孤儿，给它一个重试入口；其它错误不显示重试。
+      const last = messages[messages.length - 1]
+      const retryMessageId = last && last.role === 'user' ? last.id : null
+      list.push({ kind: 'error', key: 'error', text: error, retryMessageId })
     }
     list.push({ kind: 'spacer', key: 'padding-bottom', size: LIST_EDGE_PADDING_PX })
     return list
@@ -264,10 +270,20 @@ function MessageListBase({
           )
         case 'error':
           return (
-            <div className="chat-motion-fade-up flex justify-start py-3">
+            <div className="chat-motion-fade-up flex flex-col items-start gap-2 py-3">
               <p className="max-w-[85%] text-sm leading-relaxed text-red-600 dark:text-red-400">
                 {item.text}
               </p>
+              {item.retryMessageId && onRetryLastUser && (
+                <button
+                  type="button"
+                  onClick={() => onRetryLastUser(item.retryMessageId!)}
+                  className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-3 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-50 active:scale-95 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                >
+                  <RotateCw size={13} strokeWidth={2} />
+                  重试
+                </button>
+              )}
             </div>
           )
       }
@@ -281,6 +297,7 @@ function MessageListBase({
       onRegenerateMessage,
       onDeleteMessage,
       onExecuteAgentPlan,
+      onRetryLastUser,
       streamingReasoningDurationMs,
       streamingReasoningDurationMsBySegmentId,
     ],

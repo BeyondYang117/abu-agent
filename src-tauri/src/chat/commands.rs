@@ -1230,8 +1230,8 @@ pub(crate) async fn chat_send_message(
         crate::chat::agent::AgentRunEntry::Send,
     )
     .await;
-    // 注意：剥离必须在每个分支「最后一次写盘之后」——错误臂的 rollback 会再次 save_conversation，
-    // 若在 match 前剥，rollback 就会把剥光的对话写回磁盘、永久丢掉盘上转录。故按臂剥。
+    // 剥离按臂做、且在各臂最后一次写盘之后。发送前超上下文那条提前返回的分支会先 rollback
+    // 再 save_conversation，若在 match 前统一剥，就会把剥光的对话写回磁盘、永久丢掉盘上转录。
     match reply_outcome {
         Ok(()) => {
             strip_transcripts_for_frontend(&mut conversation);
@@ -1248,13 +1248,10 @@ pub(crate) async fn chat_send_message(
             }))
         }
         Err(err) => {
-            rollback_user_message_after_failed_send(
-                &app,
-                &state,
-                &mut conversation,
-                &user_message.id,
-            )
-            .await?;
+            // 生成中途硬失败（403 / 空响应 等）发生在用户消息已落盘之后。**不要回滚**——
+            // 把问题留在线程里，用户可一键重试而无需重打（与 chat_regenerate_message 的
+            // 错误路径一致：那条路径报错时也保留用户消息）。盘上已是「用户消息、无 assistant」
+            // 的干净状态（run_agent_loop 的 Err 在 push_assistant_message 之前冒泡），直接返回即可。
             strip_transcripts_for_frontend(&mut conversation);
             Ok(serde_json::json!({
                 "success": false,
@@ -5167,12 +5164,18 @@ pub(crate) async fn chat_regenerate_message(
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let idx = find_message_index(&conversation, &message_id)?;
-    if conversation.messages[idx].role != "assistant" {
-        return Err("仅支持重新生成助手回复".to_string());
+    match conversation.messages[idx].role.as_str() {
+        "assistant" => {
+            mark_summary_stale_if_needed(&mut conversation, idx);
+            conversation.messages.truncate(idx);
+        }
+        // 重试失败发送遗留的「孤儿用户消息」：保留它、丢掉其后的任何内容，再重新生成。
+        "user" => {
+            mark_summary_stale_if_needed(&mut conversation, idx + 1);
+            conversation.messages.truncate(idx + 1);
+        }
+        _ => return Err("仅支持重新生成助手回复或重试用户消息".to_string()),
     }
-
-    mark_summary_stale_if_needed(&mut conversation, idx);
-    conversation.messages.truncate(idx);
     if conversation.messages.last().map(|m| m.role.as_str()) != Some("user") {
         return Err("缺少对应的用户消息，无法重新生成".to_string());
     }

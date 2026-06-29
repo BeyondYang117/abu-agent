@@ -1145,7 +1145,14 @@ export const chatApi = {
       }
     )
     if (!result.success || !result.conversation) {
-      throw new Error(result.error || 'Failed to send message')
+      const error: Error & { conversation?: Conversation } = new Error(
+        result.error || 'Failed to send message',
+      )
+      // 生成失败但后端保留了用户消息（不再回滚）：把对话挂到错误上，调用方据此让问题留在线程里、可重试。
+      if (result.conversation) {
+        error.conversation = result.conversation
+      }
+      throw error
     }
     return result.conversation
   },
