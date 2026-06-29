@@ -931,8 +931,10 @@ pub fn handle_agent_spawn<'a>(
         // Compose the sub-agent system prompt: persona prefix + base chat
         // system prompt. No todo context is injected — the worker is not aware
         // of and cannot touch the parent's todo list.
-        let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary()
-            .map(|path| path.display().to_string());
+        let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary_when_active(
+            &settings.email_accounts,
+        )
+        .map(|path| path.display().to_string());
         let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
             &settings.email_accounts,
             &language,

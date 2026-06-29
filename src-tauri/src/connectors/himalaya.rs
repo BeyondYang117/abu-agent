@@ -6,6 +6,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use crate::proc::NoConsoleWindow;
 use crate::settings::EmailAccountConfig;
 
 const HIMALAYA_RELEASE_TAG: &str = "v1.2.0";
@@ -50,6 +51,7 @@ fn which_himalaya_on_path() -> Option<PathBuf> {
         let output = Command::new("sh")
             .arg("-c")
             .arg("command -v himalaya")
+            .no_console_window()
             .output()
             .ok()?;
         if !output.status.success() {
@@ -60,7 +62,11 @@ fn which_himalaya_on_path() -> Option<PathBuf> {
     }
     #[cfg(windows)]
     {
-        let output = Command::new("where").arg("himalaya").output().ok()?;
+        let output = Command::new("where")
+            .arg("himalaya")
+            .no_console_window()
+            .output()
+            .ok()?;
         if !output.status.success() {
             return None;
         }
@@ -75,6 +81,26 @@ fn which_himalaya_on_path() -> Option<PathBuf> {
 
 pub fn resolve_himalaya_binary() -> Option<PathBuf> {
     kivio_himalaya_binary_path().or_else(which_himalaya_on_path)
+}
+
+/// Only probe/install-path Himalaya when the email connector has saved accounts.
+pub fn resolve_himalaya_binary_when_active(accounts: &[EmailAccountConfig]) -> Option<PathBuf> {
+    if accounts.is_empty() {
+        None
+    } else {
+        resolve_himalaya_binary()
+    }
+}
+
+/// Returns `(PATH env key, merged value)` only when email accounts are configured.
+pub fn kivio_himalaya_path_env_when_active(
+    accounts: &[EmailAccountConfig],
+) -> Option<(String, std::ffi::OsString)> {
+    if accounts.is_empty() {
+        None
+    } else {
+        kivio_himalaya_path_env()
+    }
 }
 
 /// If Kivio manages a himalaya install, return its directory (for PATH prepend).
@@ -128,7 +154,10 @@ pub fn himalaya_status() -> HimalayaStatus {
             path: None,
         };
     };
-    let output = Command::new(&binary).arg("--version").output();
+    let output = Command::new(&binary)
+        .arg("--version")
+        .no_console_window()
+        .output();
     match output {
         Ok(out) if out.status.success() => {
             let version = String::from_utf8_lossy(&out.stdout)
@@ -422,6 +451,7 @@ fn run_himalaya(args: &[&str]) -> Result<String, String> {
     })?;
     let output = Command::new(&binary)
         .args(args)
+        .no_console_window()
         .output()
         .map_err(|err| format!("failed to run himalaya: {err}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

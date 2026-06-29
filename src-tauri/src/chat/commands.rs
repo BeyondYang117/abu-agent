@@ -1826,8 +1826,10 @@ async fn complete_assistant_reply(
         .filter(|prompt| !prompt.trim().is_empty());
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
         .then_some(settings.obsidian_vault_path.as_str());
-    let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary()
-        .map(|path| path.display().to_string());
+    let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary_when_active(
+        &settings.email_accounts,
+    )
+    .map(|path| path.display().to_string());
     let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
         &settings.email_accounts,
         &language,
@@ -3480,8 +3482,10 @@ async fn compute_context_state(
     );
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
         .then_some(settings.obsidian_vault_path.as_str());
-    let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary()
-        .map(|path| path.display().to_string());
+    let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary_when_active(
+        &settings.email_accounts,
+    )
+    .map(|path| path.display().to_string());
     let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
         &settings.email_accounts,
         &language,

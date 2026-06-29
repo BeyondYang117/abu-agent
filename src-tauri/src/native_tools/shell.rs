@@ -48,8 +48,14 @@ const LONG_RUNNING_DEV_PATTERNS: &[&str] = &[
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn apply_shell_tool_env(cmd: &mut Command) {
-    if let Some((key, value)) = himalaya::kivio_himalaya_path_env() {
+fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
+    let Some(state) = state else {
+        return;
+    };
+    let settings = state.settings_read();
+    if let Some((key, value)) =
+        himalaya::kivio_himalaya_path_env_when_active(&settings.email_accounts)
+    {
         cmd.env(key, value);
     }
 }
@@ -138,7 +144,7 @@ pub async fn run_command(
         .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS)
         .max(default_timeout_ms);
 
-    let output = run_shell_command(&command, cwd, timeout_ms).await?;
+    let output = run_shell_command(&command, cwd, timeout_ms, state).await?;
     let formatted = offload_large_output(format_command_output(&output));
     if let Some(code) = output.status_code {
         if code != 0 {
@@ -433,7 +439,7 @@ async fn run_shell_command_background(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(stdout_file))
         .stderr(std::process::Stdio::from(stderr_file));
-    apply_shell_tool_env(&mut cmd);
+    apply_shell_tool_env(&mut cmd, state);
     #[cfg(target_os = "windows")]
     {
         const DETACHED_PROCESS: u32 = 0x00000008;
@@ -656,6 +662,7 @@ async fn run_shell_command(
     command: &str,
     cwd: PathBuf,
     timeout_ms: u64,
+    state: Option<&AppState>,
 ) -> Result<CommandOutput, String> {
     let mut cmd = {
         #[cfg(target_os = "windows")]
@@ -681,7 +688,7 @@ async fn run_shell_command(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    apply_shell_tool_env(&mut cmd);
+    apply_shell_tool_env(&mut cmd, state);
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1137,6 +1144,7 @@ mod tests {
                 "python -c \"print(40 + 2)\"",
                 std::env::temp_dir(),
                 30_000,
+                None,
             ))
             .expect("spawn should succeed");
         // python 不在 PATH 时跳过,不让本机环境决定测试成败。
