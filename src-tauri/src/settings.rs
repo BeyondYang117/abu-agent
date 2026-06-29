@@ -932,7 +932,11 @@ pub fn email_account_id_from_address(email: &str) -> String {
 }
 
 /// 注入系统提示：已配置的 Himalaya 邮箱列表。
-pub fn email_accounts_system_prompt(accounts: &[EmailAccountConfig], language: &str) -> Option<String> {
+pub fn email_accounts_system_prompt(
+    accounts: &[EmailAccountConfig],
+    language: &str,
+    himalaya_binary: Option<&str>,
+) -> Option<String> {
     if accounts.is_empty() {
         return None;
     }
@@ -947,15 +951,35 @@ pub fn email_accounts_system_prompt(accounts: &[EmailAccountConfig], language: &
             format!("- {} (account id: {id})", account.email.trim())
         })
         .collect();
+    let binary_line = himalaya_binary
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            if language.starts_with("zh") {
+                format!("Himalaya 可执行文件：{path}")
+            } else {
+                format!("Himalaya binary: {path}")
+            }
+        });
     if language.starts_with("zh") {
         Some(format!(
-            "已配置邮箱（Himalaya CLI，激活 himalaya skill 后用 run_command）：\n{}\n需本机已安装 himalaya（如 brew install himalaya）。发信、删信、批量移动前须向用户确认。",
-            lines.join("\n")
+            "已配置邮箱（Himalaya CLI，激活 himalaya skill 后用 run_command）：\n{}\n使用 Kivio Email 连接器手动安装的 Himalaya，或系统 PATH 中的 himalaya。{}{}",
+            lines.join("\n"),
+            binary_line
+                .as_ref()
+                .map(|line| format!("\n{line}"))
+                .unwrap_or_default(),
+            "\n发信、删信、批量移动前须向用户确认。"
         ))
     } else {
         Some(format!(
-            "Configured mailboxes (Himalaya CLI — activate the himalaya skill and use run_command):\n{}\nRequires the himalaya binary on PATH (e.g. brew install himalaya). Confirm with the user before sending, deleting, or bulk-moving mail.",
-            lines.join("\n")
+            "Configured mailboxes (Himalaya CLI — activate the himalaya skill and use run_command):\n{}\nUse Himalaya installed via the Kivio Email connector, or a system PATH himalaya binary.{}{}",
+            lines.join("\n"),
+            binary_line
+                .as_ref()
+                .map(|line| format!("\n{line}"))
+                .unwrap_or_default(),
+            "\nConfirm with the user before sending, deleting, or bulk-moving mail."
         ))
     }
 }
@@ -3252,5 +3276,33 @@ mod tests {
         let en = chat_current_datetime_context("en");
         assert!(en.contains("system clock"));
         assert!(en.contains(&format!("{}-", now.year())));
+    }
+
+    #[test]
+    fn email_accounts_system_prompt_mentions_manual_install_and_binary() {
+        let account = EmailAccountConfig {
+            id: "work".into(),
+            email: "user@example.com".into(),
+            ..Default::default()
+        };
+        let prompt = email_accounts_system_prompt(&[account], "zh-CN", Some("/opt/kivio/himalaya"))
+            .expect("prompt");
+        assert!(prompt.contains("user@example.com"));
+        assert!(prompt.contains("手动安装"));
+        assert!(prompt.contains("Himalaya 可执行文件：/opt/kivio/himalaya"));
+        assert!(!prompt.contains("brew install"));
+        assert!(!prompt.contains("自动安装"));
+
+        let en = email_accounts_system_prompt(
+            &[EmailAccountConfig {
+                email: "user@example.com".into(),
+                ..Default::default()
+            }],
+            "en",
+            None,
+        )
+        .expect("prompt");
+        assert!(en.contains("Kivio Email connector"));
+        assert!(!en.contains("automatically"));
     }
 }

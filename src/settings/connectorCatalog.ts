@@ -70,12 +70,12 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
     overview: {
       zh: [
         '填写邮箱、密码与 IMAP/SMTP 服务器（支持 Gmail / Outlook 等预设）。',
-        '保存后写入设置并同步 ~/.config/himalaya/config.toml；首次连接会自动安装 Himalaya。',
+        '需先在连接器中手动安装 Himalaya，再添加邮箱；保存后写入设置并同步 ~/.config/himalaya/config.toml。',
         'Agent 激活 himalaya skill 后通过 bash 读写邮件。',
       ],
       en: [
         'Enter email, password, and IMAP/SMTP servers (Gmail / Outlook presets supported).',
-        'Saved to settings and synced to ~/.config/himalaya/config.toml; Himalaya is installed automatically on first connect.',
+        'Install Himalaya manually in the connector first, then add mailboxes; saved to settings and synced to ~/.config/himalaya/config.toml.',
         'The agent uses the himalaya skill + bash to read and send mail.',
       ],
     },

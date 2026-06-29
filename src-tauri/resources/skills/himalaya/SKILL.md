@@ -12,7 +12,7 @@ Use the `himalaya` binary for IMAP/SMTP mail from the shell via `bash` (run_comm
 
 ## Prerequisites
 
-1. `himalaya` installed on PATH (`himalaya --version`)
+1. `himalaya` available — install manually via the Kivio Email connector, or install to system PATH yourself (`himalaya --version`)
 2. Kivio email connector saved accounts → `~/.config/himalaya/config.toml`
 3. Use `--account <id>` when multiple accounts exist (account id is shown in runtime context)
 

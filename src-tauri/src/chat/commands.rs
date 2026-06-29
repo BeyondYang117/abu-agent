@@ -1826,8 +1826,13 @@ async fn complete_assistant_reply(
         .filter(|prompt| !prompt.trim().is_empty());
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
         .then_some(settings.obsidian_vault_path.as_str());
-    let email_accounts_prompt =
-        crate::settings::email_accounts_system_prompt(&settings.email_accounts, &language);
+    let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary()
+        .map(|path| path.display().to_string());
+    let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
+        &settings.email_accounts,
+        &language,
+        himalaya_binary.as_deref(),
+    );
     let system_prompt = agent_prepare::build_chat_system_prompt(
         &language,
         !main_image_paths.is_empty(),
@@ -3475,8 +3480,13 @@ async fn compute_context_state(
     );
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
         .then_some(settings.obsidian_vault_path.as_str());
-    let email_accounts_prompt =
-        crate::settings::email_accounts_system_prompt(&settings.email_accounts, &language);
+    let himalaya_binary = crate::connectors::himalaya::resolve_himalaya_binary()
+        .map(|path| path.display().to_string());
+    let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
+        &settings.email_accounts,
+        &language,
+        himalaya_binary.as_deref(),
+    );
     let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
         &language,
         !main_image_paths.is_empty(),

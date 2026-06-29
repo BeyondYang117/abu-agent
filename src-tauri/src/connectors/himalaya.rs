@@ -77,6 +77,49 @@ pub fn resolve_himalaya_binary() -> Option<PathBuf> {
     kivio_himalaya_binary_path().or_else(which_himalaya_on_path)
 }
 
+/// If Kivio manages a himalaya install, return its directory (for PATH prepend).
+pub fn kivio_himalaya_bin_dir() -> Option<PathBuf> {
+    kivio_himalaya_binary_path()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+/// Returns `(PATH env key, merged value)` when Kivio manages a himalaya install.
+pub fn kivio_himalaya_path_env() -> Option<(String, std::ffi::OsString)> {
+    let dir = kivio_himalaya_bin_dir()?;
+    Some((shell_path_env_key(), merged_shell_path_with_dir(&dir)))
+}
+
+fn shell_path_env_key() -> String {
+    #[cfg(windows)]
+    {
+        "Path".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        "PATH".to_string()
+    }
+}
+
+fn merged_shell_path_with_dir(dir: &Path) -> std::ffi::OsString {
+    let dir = dir.to_string_lossy();
+    #[cfg(windows)]
+    {
+        let existing = std::env::var_os("Path").unwrap_or_default();
+        let mut next = std::ffi::OsString::from(dir.as_ref());
+        next.push(";");
+        next.push(existing);
+        next
+    }
+    #[cfg(not(windows))]
+    {
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let mut next = std::ffi::OsString::from(dir.as_ref());
+        next.push(":");
+        next.push(existing);
+        next
+    }
+}
+
 pub fn himalaya_status() -> HimalayaStatus {
     let Some(binary) = resolve_himalaya_binary() else {
         return HimalayaStatus {
@@ -535,5 +578,12 @@ mod tests {
     fn escape_toml_quotes_password() {
         let escaped = escape_toml_basic("pa\"ss");
         assert_eq!(escaped, "\"pa\\\"ss\"");
+    }
+
+    #[test]
+    fn merged_shell_path_prepends_directory() {
+        let merged = merged_shell_path_with_dir(Path::new("/kivio/himalaya-cli"));
+        let merged = merged.to_string_lossy();
+        assert!(merged.starts_with("/kivio/himalaya-cli"));
     }
 }
