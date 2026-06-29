@@ -7,20 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish to (e.g. v2.0.5)'
+        description: 'Release tag to publish to (e.g. v2.7.4)'
         required: true
-        default: 'v2.5.5'
+        default: 'v2.7.4'
       ref:
         description: 'Git ref to build from (branch/tag/commit)'
         required: true
         default: 'main'
-      platform:
-        description: 'Platform to build'
-        required: true
-        default: 'windows'
-        type: choice
-        options:
-          - windows
 
 permissions:
   contents: write
@@ -30,45 +23,31 @@ env:
   BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
 
 jobs:
-  tauri-release:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: windows
-            platform: windows-latest
-            args: "--bundles nsis"
-
-    runs-on: ${{ matrix.platform }}
+  tauri-release-windows:
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.id }}
         uses: actions/checkout@v4
         with:
           ref: ${{ env.BUILD_REF }}
 
       - name: Setup Node.js
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.id }}
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
 
       - name: Setup Rust
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.id }}
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install frontend dependencies
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.id }}
         run: npm ci
 
-      - name: Build Swift sidecars (or stubs on non-macOS)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.id }}
+      - name: Build Swift sidecar stubs (Windows)
         run: npm run build:swift
 
-      - name: Build and publish release assets
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.id }}
+      - name: Build and publish Windows NSIS installer
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -76,12 +55,13 @@ jobs:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: Kivio ${{ env.RELEASE_TAG }}
           releaseBody: |
-            Automated build artifacts for ${{ env.RELEASE_TAG }}.
+            Automated Windows build for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
             - Windows: NSIS (.exe)
-            (macOS DMG for Apple Silicon is built locally and uploaded separately.)
+
+            macOS Apple Silicon DMG is built locally and uploaded separately.
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
           tauriScript: npx tauri
-          args: ${{ matrix.args }}
+          args: --bundles nsis

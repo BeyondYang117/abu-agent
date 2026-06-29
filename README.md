@@ -107,6 +107,7 @@ All hotkeys are remappable in Settings. Kivio Agent can also be opened from the 
 
 ## Changelog
 
+- **v2.7.4** — Adds **Obsidian** and **Email (Himalaya)** connectors in Settings: vault path injection for note reading, IMAP/SMTP mailboxes with manual Himalaya install, bundled `himalaya` skill, and agent PATH wiring so `run_command` finds the Kivio-managed binary. Chat performance: virtualized long message lists, lazy-rendered collapsed tool timelines, Shadow DOM–isolated KaTeX (no red flash on incomplete formulas), compact context panel, unified markdown rendering, and refined plan execution flow. Apple Silicon DMG built locally; Windows NSIS `.exe` via GitHub Actions only.
 - **v2.7.3** — Adds **Sets**, a way to group conversations (sidebar tab, dialogs, right-click move-into-set), with sidebar search now backed by a full backend index so it finds older conversations outside the recent list. The Chat timeline collapses thinking + tool calls into Codex-style groups split by prose, with per-tool-type icons, natural-action summaries, and a breathing-dot generating indicator. Memory & performance: Pyodide runs in a Web Worker that unloads when idle, the macOS Lens overlay is destroyed on close, and conversation command outputs strip model/transcript data so the frontend no longer keeps full history resident. Also adds a per-provider **gzip request-body compression** toggle (to slip past WAF gateways), an adjustable quick-translate card width, and assorted Lens/icon/run_python fixes. Apple Silicon DMG built locally; Windows NSIS via GitHub Actions.
 - **v2.7.2** — Memory & performance: a system font stack instead of the embedded one (~40 MB less renderer memory per window), plus renderer-memory reclaim and slimmer message storage across Lens/Chat. Adds **Connectors** (OAuth: GitHub/Composio/Notion/Linear/Sentry/Atlassian); Settings export/import backup with an API-key show/hide toggle and model brand icons; Chat tool-call type icons and native tools on by default; translation prompts split into independently editable pieces with a target-language lock; plus Lens and Windows/macOS platform fixes, the GPL-3.0 license, and dead-code cleanup.
 - **v2.7.1** — Adds **Kivio Code**, a new terminal coding agent (Rust CLI/TUI, build/plan modes, context compaction, Pi-style tools, MCP/Skills); integrates external CLI agents (Claude Code, codex, pi, hermes) into Chat; rebuilds the assistants system with a dedicated Skill page; redesigns the chat title bar and polishes chat motion; and adds a Lens "Continue in AI client" handoff that syncs the full conversation. Apple Silicon DMG built locally; Windows NSIS via GitHub Actions.
@@ -128,7 +129,7 @@ npm run typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Releases follow [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md): the macOS Apple Silicon DMG is built locally and GitHub Actions publishes the Windows NSIS installer.
+Releases follow [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md): the macOS Apple Silicon DMG is built locally; GitHub Actions publishes **Windows NSIS `.exe` only** (no macOS job in CI).
 
 ## License
 
@@ -241,6 +242,7 @@ Kivio 是一个小体积桌面 AI 客户端，内置 Agent 运行时。常驻托
 
 ## 更新日志
 
+- **v2.7.4** —— 设置新增 **Obsidian** 与 **Email（Himalaya）** 连接器：笔记库路径注入、IMAP/SMTP 邮箱（Himalaya 需手动 Install）、内置 `himalaya` skill，并为 Agent 注入 PATH 使 `run_command` 可调用 Kivio 安装的 binary。Chat 性能：长对话消息列表虚拟化、折叠工具时间线懒渲染、KaTeX Shadow DOM 隔离（流式不完整公式不再红字报错）、紧凑上下文面板、统一 Markdown 渲染，以及计划执行流优化。macOS Apple Silicon DMG 本地构建；Windows 仅由 GitHub Actions 发布 NSIS `.exe`。
 - **v2.7.3** —— 新增**集（Set）**，可将对话分组（侧栏标签页、弹窗、右键移入集），侧栏搜索改走后端全量索引，能搜到最近列表之外的老对话。Chat 时间线把思考 + 工具调用按正文分隔折叠为 Codex 风格的可折叠组，带按工具类别区分的图标、自然动作短语摘要与呼吸光点生成指示。内存与性能：Pyodide 移入 Web Worker 并在空闲时卸载、macOS Lens 浮层关闭即销毁、对话命令出口剥离 model/转录数据，前端不再常驻完整历史。另新增按供应商的 **gzip 压缩请求体**开关（绕过个别网关 WAF）、可调的快速翻译卡宽度，以及 Lens/图标/run_python 等修复。macOS DMG 本地构建，Windows NSIS 走 GitHub Actions。
 - **v2.7.2** —— 内存与性能：系统字体栈替代内嵌字体（每窗口省 ~40MB 渲染器内存），并在 Lens/Chat 多处回收渲染器内存、精简消息存储。新增**连接器（Connectors）**（OAuth：GitHub/Composio/Notion/Linear/Sentry/Atlassian）；设置支持导出/导入备份与 API Key 显隐、模型品牌图标；Chat 工具调用按类型显示图标、原生工具默认启用；翻译提示词拆分为可独立编辑并加语种锁定；另含 Lens 与 Windows/macOS 平台修复、采用 GPL-3.0、死代码清理。
 - **v2.7.1** —— 新增全新终端编码 agent **Kivio Code**（Rust CLI/TUI、build/plan 模式、上下文压缩、Pi 风格工具、MCP/Skills）；Chat 接入外部 CLI agent（Claude Code、codex、pi、hermes）；重建助手系统并新增独立技能页；重做聊天顶栏并打磨动效；Lens 新增"在 AI 客户端继续"交接、同步完整对话。macOS DMG 本地构建，Windows NSIS 走 GitHub Actions。
@@ -262,7 +264,7 @@ npm run typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-发布流程见 [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md)：macOS Apple Silicon DMG 本机构建，GitHub Actions 发布 Windows NSIS 安装包。
+发布流程见 [docs/RELEASE_PACKAGING.md](docs/RELEASE_PACKAGING.md)：macOS Apple Silicon DMG 本机构建；GitHub Actions **仅**发布 Windows NSIS `.exe`（CI 不含 macOS 构建任务）。
 
 ## 许可证
 
