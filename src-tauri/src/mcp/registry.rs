@@ -542,8 +542,13 @@ async fn call_skill_tool(
             .cloned()
             .ok_or_else(|| format!("Skill not found: {skill_name}"))?
     };
-    if !crate::settings::is_skill_enabled(&settings.chat_tools, &record.meta.id) {
-        return Err(format!("Skill is disabled in Settings: {skill_name}"));
+    if let Some(err) = crate::settings::skill_global_unavailable_error(
+        &settings.chat_tools,
+        &record.meta.id,
+        &settings.email_accounts,
+        &skill_name,
+    ) {
+        return Err(err);
     }
     // 助手技能白名单硬 gate(防绕过):模型报个不在目录里的技能名也会被这里拦下。
     if let Some(cache) = skill_cache.as_deref() {

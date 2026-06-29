@@ -39,16 +39,29 @@ pub fn chat_skills_list(
     let paths = skill_scan_paths
         .unwrap_or_else(|| state.settings_read().chat_tools.skill_scan_paths.clone());
     match build_registry_metadata(&app, &paths) {
-        Ok(registry) => SkillListResult {
-            success: true,
-            skills: registry.metas(),
-            error: if registry.warnings.is_empty() {
-                None
-            } else {
-                Some(registry.warnings.join("\n"))
-            },
-            warnings: registry.warnings,
-        },
+        Ok(registry) => {
+            let settings = state.settings_read();
+            let skills = registry
+                .metas()
+                .into_iter()
+                .filter(|meta| {
+                    crate::settings::skill_connector_satisfied(
+                        &meta.id,
+                        &settings.email_accounts,
+                    )
+                })
+                .collect();
+            SkillListResult {
+                success: true,
+                skills,
+                error: if registry.warnings.is_empty() {
+                    None
+                } else {
+                    Some(registry.warnings.join("\n"))
+                },
+                warnings: registry.warnings,
+            }
+        }
         Err(err) => SkillListResult {
             success: false,
             skills: Vec::new(),
@@ -64,9 +77,22 @@ pub fn chat_skills_read(
     state: State<'_, AppState>,
     skill_id: String,
 ) -> SkillReadResult {
+    let settings = state.settings_read();
+    if let Some(err) = crate::settings::skill_global_unavailable_error(
+        &settings.chat_tools,
+        &skill_id,
+        &settings.email_accounts,
+        &skill_id,
+    ) {
+        return SkillReadResult {
+            success: false,
+            skill: None,
+            error: Some(err),
+        };
+    }
     match read_skill_detail(
         &app,
-        &state.settings_read().chat_tools.skill_scan_paths,
+        &settings.chat_tools.skill_scan_paths,
         &skill_id,
     ) {
         Ok(skill) => SkillReadResult {

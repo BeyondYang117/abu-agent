@@ -1102,6 +1102,7 @@ pub(crate) async fn chat_send_message(
             &settings.chat_tools,
             conversation.assistant_snapshot.as_ref(),
             &content,
+            &settings.email_accounts,
         ) {
             Some((skill_id, rewritten)) => (rewritten, Some(skill_id)),
             None => (content, active_skill_id),
@@ -1742,7 +1743,11 @@ async fn complete_assistant_reply(
         conversation.assistant_snapshot.as_ref(),
         &skill_registry,
         requested_skill_id,
+        &settings.email_accounts,
     );
+    if skill_id.is_none() && conversation.active_skill_id.is_some() {
+        conversation.active_skill_id = None;
+    }
     let active_skill_record = skill_id
         .as_deref()
         .and_then(|id| skill_registry.find(id))
@@ -1855,6 +1860,7 @@ async fn complete_assistant_reply(
         project_prompt_context.as_ref(),
         delivery_dir.as_deref(),
         obsidian_vault_path,
+        &settings.email_accounts,
         email_accounts_prompt.as_deref(),
     );
 
@@ -1893,6 +1899,7 @@ async fn complete_assistant_reply(
         project_prompt_context.as_ref(),
         delivery_dir.as_deref(),
         obsidian_vault_path,
+        &settings.email_accounts,
         email_accounts_prompt.as_deref(),
     );
 
@@ -2880,12 +2887,14 @@ fn sanitize_generated_title(raw: &str) -> Option<String> {
 ///
 /// `disable_model_invocation` only gates *model* auto-invocation, so it is
 /// intentionally ignored here — an explicit user slash command may still trigger
-/// such a skill. The single gate is `is_skill_enabled`.
+/// such a skill. Availability is gated by `skill_allowed_for_conversation`
+/// (Settings enable list, connector prerequisites, assistant allow-list).
 fn try_apply_skill_slash_trigger(
     registry: &skills::SkillRegistry,
     chat_tools: &crate::settings::ChatToolsConfig,
     assistant_snapshot: Option<&crate::chat::types::ChatAssistantSnapshot>,
     content: &str,
+    email_accounts: &[crate::settings::EmailAccountConfig],
 ) -> Option<(String, String)> {
     let trimmed = content.trim_start();
     let mut parts = trimmed.splitn(2, char::is_whitespace);
@@ -2896,7 +2905,12 @@ fn try_apply_skill_slash_trigger(
     let args_raw = parts.next().unwrap_or_default();
 
     let record = registry.find_by_trigger(first_word)?;
-    if !agent_prepare::skill_allowed_for_conversation(chat_tools, assistant_snapshot, &record.meta.id)
+    if !agent_prepare::skill_allowed_for_conversation(
+        chat_tools,
+        assistant_snapshot,
+        &record.meta.id,
+        email_accounts,
+    )
     {
         // A disabled or out-of-allow-list skill's slash command is left as ordinary text.
         return None;
@@ -2921,6 +2935,7 @@ fn resolve_forced_skill_id(
     assistant_snapshot: Option<&crate::chat::types::ChatAssistantSnapshot>,
     registry: &skills::SkillRegistry,
     requested: Option<&str>,
+    email_accounts: &[crate::settings::EmailAccountConfig],
 ) -> Option<String> {
     let requested = requested.map(str::trim).filter(|id| !id.is_empty())?;
     let enabled = registry
@@ -2931,6 +2946,7 @@ fn resolve_forced_skill_id(
                 chat_tools,
                 assistant_snapshot,
                 &record.meta.id,
+                email_accounts,
             )
         })
         .any(|record| {
@@ -3404,6 +3420,7 @@ async fn compute_context_state(
         conversation.assistant_snapshot.as_ref(),
         &skill_registry,
         requested_skill_id,
+        &settings.email_accounts,
     );
     let active_skill_detail = active_skill_id.as_deref().and_then(|id| {
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
@@ -3525,6 +3542,7 @@ async fn compute_context_state(
             .as_deref(),
         knowledge_base_prompt.as_deref(),
         obsidian_vault_path,
+        &settings.email_accounts,
         email_accounts_prompt.as_deref(),
     );
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
@@ -5504,7 +5522,7 @@ mod tests {
         let chat_tools = crate::settings::ChatToolsConfig::default();
 
         let (skill_id, rewritten) =
-            try_apply_skill_slash_trigger(&registry, &chat_tools, None, "/commit fix login")
+            try_apply_skill_slash_trigger(&registry, &chat_tools, None, "/commit fix login", &[])
                 .expect("slash trigger should match");
 
         assert_eq!(skill_id, "commit");
@@ -5519,8 +5537,8 @@ mod tests {
         let registry = slash_skill_registry(slash_skill_record("commit", "Commit", vec!["/commit"]));
         let chat_tools = crate::settings::ChatToolsConfig::default();
 
-        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, None, "commit fix").is_none());
-        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, None, "/unknown x").is_none());
+        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, None, "commit fix", &[]).is_none());
+        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, None, "/unknown x", &[]).is_none());
     }
 
     #[test]
@@ -5529,7 +5547,7 @@ mod tests {
         let mut chat_tools = crate::settings::ChatToolsConfig::default();
         chat_tools.disabled_skill_ids = vec!["commit".to_string()];
 
-        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, None, "/commit fix").is_none());
+        assert!(try_apply_skill_slash_trigger(&registry, &chat_tools, None, "/commit fix", &[]).is_none());
     }
 
     fn test_provider(id: &str, name: &str, enabled_models: Vec<&str>) -> ModelProvider {

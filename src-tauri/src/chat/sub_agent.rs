@@ -967,6 +967,7 @@ pub fn handle_agent_spawn<'a>(
                 .as_deref(),
             (!settings.obsidian_vault_path.trim().is_empty())
                 .then_some(settings.obsidian_vault_path.as_str()),
+            &settings.email_accounts,
             email_accounts_prompt.as_deref(),
         );
 

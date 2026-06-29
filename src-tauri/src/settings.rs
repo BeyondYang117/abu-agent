@@ -1217,6 +1217,49 @@ pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
         .any(|disabled| disabled == skill_id)
 }
 
+/// Bundled skill id for the email (Himalaya) connector — hidden until configured.
+pub const EMAIL_CONNECTOR_SKILL_ID: &str = "himalaya";
+
+pub fn email_connector_configured(accounts: &[EmailAccountConfig]) -> bool {
+    !accounts.is_empty()
+}
+
+/// Connector-backed skills stay unavailable until their connector is configured.
+pub fn skill_connector_satisfied(skill_id: &str, email_accounts: &[EmailAccountConfig]) -> bool {
+    if skill_id == EMAIL_CONNECTOR_SKILL_ID {
+        email_connector_configured(email_accounts)
+    } else {
+        true
+    }
+}
+
+/// Global skill gate: Settings enable list + connector prerequisites.
+pub fn skill_globally_available(
+    chat_tools: &ChatToolsConfig,
+    skill_id: &str,
+    email_accounts: &[EmailAccountConfig],
+) -> bool {
+    is_skill_enabled(chat_tools, skill_id) && skill_connector_satisfied(skill_id, email_accounts)
+}
+
+/// When [`skill_globally_available`] is false, returns a loop/UI-friendly error.
+pub fn skill_global_unavailable_error(
+    chat_tools: &ChatToolsConfig,
+    skill_id: &str,
+    email_accounts: &[EmailAccountConfig],
+    skill_name: &str,
+) -> Option<String> {
+    if !is_skill_enabled(chat_tools, skill_id) {
+        return Some(format!("Skill is disabled in Settings: {skill_name}"));
+    }
+    if !skill_connector_satisfied(skill_id, email_accounts) {
+        return Some(format!(
+            "Skill requires a configured email connector: {skill_name}"
+        ));
+    }
+    None
+}
+
 fn sanitize_default_model_selection(
     selection: &mut DefaultModelSelection,
     providers: &[ModelProvider],
@@ -3304,5 +3347,44 @@ mod tests {
         .expect("prompt");
         assert!(en.contains("Kivio Email connector"));
         assert!(!en.contains("automatically"));
+    }
+
+    #[test]
+    fn skill_globally_available_hides_himalaya_without_email() {
+        let chat_tools = ChatToolsConfig::default();
+        assert!(!skill_globally_available(
+            &chat_tools,
+            EMAIL_CONNECTOR_SKILL_ID,
+            &[],
+        ));
+        assert!(!skill_connector_satisfied(EMAIL_CONNECTOR_SKILL_ID, &[]));
+        // pdf is not connector-gated
+        assert!(skill_globally_available(&chat_tools, "pdf", &[]));
+    }
+
+    #[test]
+    fn skill_global_unavailable_error_distinguishes_disabled_and_connector() {
+        let mut chat_tools = ChatToolsConfig::default();
+        chat_tools.disabled_skill_ids = vec![EMAIL_CONNECTOR_SKILL_ID.to_string()];
+        assert_eq!(
+            skill_global_unavailable_error(
+                &chat_tools,
+                EMAIL_CONNECTOR_SKILL_ID,
+                &[EmailAccountConfig {
+                    email: "a@example.com".into(),
+                    ..Default::default()
+                }],
+                "himalaya",
+            )
+            .as_deref(),
+            Some("Skill is disabled in Settings: himalaya")
+        );
+
+        chat_tools.disabled_skill_ids.clear();
+        assert_eq!(
+            skill_global_unavailable_error(&chat_tools, EMAIL_CONNECTOR_SKILL_ID, &[], "himalaya")
+                .as_deref(),
+            Some("Skill requires a configured email connector: himalaya")
+        );
     }
 }

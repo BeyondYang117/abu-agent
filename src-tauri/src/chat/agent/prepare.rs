@@ -2,7 +2,9 @@ use serde_json::Value;
 
 use crate::chat::types::{ChatAssistantSnapshot, ContextUsageSegment};
 use crate::mcp::ChatToolDefinition;
-use crate::settings::{chat_no_think_instruction, default_chat_system_prompt, ChatToolsConfig};
+use crate::settings::{
+    chat_no_think_instruction, default_chat_system_prompt, ChatToolsConfig, EmailAccountConfig,
+};
 use crate::skills;
 
 use super::types::{AgentPhase, AgentStepResult, AgentStreamPolicy};
@@ -110,8 +112,9 @@ pub fn skill_allowed_for_conversation(
     chat_tools: &crate::settings::ChatToolsConfig,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
     skill_id: &str,
+    email_accounts: &[EmailAccountConfig],
 ) -> bool {
-    if !crate::settings::is_skill_enabled(chat_tools, skill_id) {
+    if !crate::settings::skill_globally_available(chat_tools, skill_id, email_accounts) {
         return false;
     }
     match assistant_snapshot {
@@ -211,6 +214,7 @@ pub fn build_chat_system_prompt(
     project_context: Option<&ProjectPromptContext>,
     delivery_dir: Option<&str>,
     obsidian_vault_path: Option<&str>,
+    email_accounts: &[EmailAccountConfig],
     email_accounts_prompt: Option<&str>,
 ) -> String {
     build_chat_system_prompt_with_segments(
@@ -234,6 +238,7 @@ pub fn build_chat_system_prompt(
         delivery_dir,
         None,
         obsidian_vault_path,
+        email_accounts,
         email_accounts_prompt,
     )
     .0
@@ -289,6 +294,7 @@ pub fn build_chat_system_prompt_with_segments(
     delivery_dir: Option<&str>,
     knowledge_base_prompt: Option<&str>,
     obsidian_vault_path: Option<&str>,
+    email_accounts: &[EmailAccountConfig],
     email_accounts_prompt: Option<&str>,
 ) -> (String, Vec<ContextUsageSegment>) {
     let mut prompt = String::new();
@@ -529,10 +535,14 @@ pub fn build_chat_system_prompt_with_segments(
         || active_skill_id.is_some()
         || chat_tools.skill_fallback_mode != "legacy_full_body";
     if include_catalog {
-        let catalog =
-            skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
-                skill_allowed_for_conversation(chat_tools, assistant_snapshot, skill_id)
-            });
+        let catalog = skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
+            skill_allowed_for_conversation(
+                chat_tools,
+                assistant_snapshot,
+                skill_id,
+                email_accounts,
+            )
+        });
         if !catalog.is_empty() {
             append_context_segment(&mut prompt, &mut segments, "skills", "Skills", &catalog);
         }
@@ -936,6 +946,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             None,
         );
 
@@ -970,6 +981,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             None,
         );
 
@@ -1014,6 +1026,7 @@ mod tests {
             None,
             Some("/Users/me/Kivio/outputs/conv_abc"),
             None,
+            &[],
             None,
         );
 
@@ -1054,6 +1067,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             None,
         );
 
@@ -1087,6 +1101,7 @@ mod tests {
             None,
             None,
             Some("/Users/me/Obsidian/MyVault"),
+            &[],
             None,
         );
 
@@ -1145,16 +1160,48 @@ mod tests {
         assert!(skill_allowed_for_conversation(
             &chat_tools,
             Some(&assistant),
-            "doc"
+            "doc",
+            &[],
         ));
         // 不在白名单内的技能被拒。
         assert!(!skill_allowed_for_conversation(
             &chat_tools,
             Some(&assistant),
-            "pdf"
+            "pdf",
+            &[],
         ));
         // 无助手 = 不限(只看全局 enable)。
-        assert!(skill_allowed_for_conversation(&chat_tools, None, "pdf"));
+        assert!(skill_allowed_for_conversation(&chat_tools, None, "pdf", &[]));
+    }
+
+    #[test]
+    fn skill_allowed_hides_email_connector_skill_without_accounts() {
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+        assert!(!skill_allowed_for_conversation(
+            &chat_tools,
+            None,
+            crate::settings::EMAIL_CONNECTOR_SKILL_ID,
+            &[],
+        ));
+        let account = crate::settings::EmailAccountConfig {
+            id: "a".to_string(),
+            display_name: "Test".to_string(),
+            email: "a@example.com".to_string(),
+            password: "secret".to_string(),
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            imap_encryption: "tls".to_string(),
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: 465,
+            smtp_encryption: "tls".to_string(),
+            is_default: true,
+        };
+        assert!(skill_allowed_for_conversation(
+            &chat_tools,
+            None,
+            crate::settings::EMAIL_CONNECTOR_SKILL_ID,
+            std::slice::from_ref(&account),
+        ));
     }
 
     #[test]

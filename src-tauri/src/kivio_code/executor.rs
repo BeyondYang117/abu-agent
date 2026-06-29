@@ -266,8 +266,13 @@ impl CliToolExecutor {
             .cloned()
             .ok_or_else(|| format!("Skill not found: {skill_name}"))?;
 
-        if !crate::settings::is_skill_enabled(&self.chat_tools, &record.meta.id) {
-            return Err(format!("Skill is disabled in Settings: {skill_name}"));
+        if let Some(err) = crate::settings::skill_global_unavailable_error(
+            &self.chat_tools,
+            &record.meta.id,
+            &self.state.settings_read().email_accounts,
+            &skill_name,
+        ) {
+            return Err(err);
         }
 
         let mut skill_cache = skill_cache;
