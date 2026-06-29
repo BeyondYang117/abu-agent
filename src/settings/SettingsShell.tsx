@@ -4,7 +4,7 @@ import {
   ExternalLink, Download, Upload, ChevronRight, Wrench, Sparkles, FolderOpen, Eye, EyeOff, Info,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
-import ReactMarkdown from 'react-markdown'
+import { ChatMarkdown } from '../chat/ChatMarkdown'
 import {
   api,
   type Settings as SettingsType,
@@ -4375,8 +4375,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         <span className="kv-tag accent ml-auto">v{updateInfo.version}</span>
                       </div>
                       {updateInfo.body && (
-                        <div className="prose prose-sm dark:prose-invert max-w-none text-[12px] leading-relaxed max-h-40 overflow-y-auto mb-3">
-                          <ReactMarkdown>{updateInfo.body}</ReactMarkdown>
+                        <div className="mb-3 max-h-40 overflow-y-auto text-[12px] leading-relaxed">
+                          <ChatMarkdown content={updateInfo.body} />
                         </div>
                       )}
 
@@ -4662,8 +4662,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 ))}
               </div>
             )}
-            <div className="custom-scrollbar max-h-[52vh] overflow-y-auto rounded-md border border-black/[0.08] bg-black/[0.025] p-3 text-[12px] leading-relaxed dark:border-white/[0.08] dark:bg-white/[0.035]">
-              <ReactMarkdown>{selectedSkillPreview.body}</ReactMarkdown>
+            <div className="custom-scrollbar max-h-[52vh] overflow-y-auto rounded-md border border-black/[0.08] bg-black/[0.025] p-3 dark:border-white/[0.08] dark:bg-white/[0.035]">
+              <ChatMarkdown content={selectedSkillPreview.body} />
             </div>
           </div>
         </div>

@@ -19,16 +19,38 @@ interface ChatMarkdownProps {
   content: string
   artifacts?: ChatToolArtifact[]
   onImageClick?: (src: string, alt: string, name?: string) => void
-  variant?: 'default' | 'reasoning'
+  variant?: 'default' | 'reasoning' | 'lens' | 'lens-muted'
   /** 知识库引用：把答案里的 `[n]` 渲染成可点来源片段（n → 命中片段）。 */
   citations?: Map<number, KbHitView>
 }
 
+const CODE_PROSE =
+  'prose-pre:bg-neutral-100 prose-pre:text-neutral-800 dark:prose-pre:bg-neutral-800 dark:prose-pre:text-neutral-100'
+
 const proseClass =
-  'chat-markdown prose prose-sm dark:prose-invert max-w-none break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100 prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-li:my-0.5 prose-table:my-3 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-800 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-100'
+  `chat-markdown prose prose-sm dark:prose-invert max-w-none break-words text-[15px] leading-[1.7] text-neutral-900 dark:text-neutral-100 prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-li:my-0.5 prose-table:my-3 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-800 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-100 ${CODE_PROSE}`
 
 const reasoningProseClass =
-  'chat-markdown chat-reasoning-markdown prose prose-sm dark:prose-invert max-w-none break-words text-sm leading-relaxed text-neutral-400 dark:text-neutral-500 prose-p:my-1 prose-p:first:mt-0 prose-p:last:mb-0 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-2 prose-li:my-0.5 prose-table:my-2 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-500 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-400'
+  `chat-markdown chat-reasoning-markdown prose prose-sm dark:prose-invert max-w-none break-words text-sm leading-relaxed text-neutral-400 dark:text-neutral-500 prose-p:my-1 prose-p:first:mt-0 prose-p:last:mb-0 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-2 prose-li:my-0.5 prose-table:my-2 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-500 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-400 ${CODE_PROSE}`
+
+const lensProseClass =
+  `chat-markdown prose prose-sm dark:prose-invert max-w-none break-words text-[13.5px] leading-7 text-neutral-800 dark:text-neutral-200 prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-li:my-0.5 prose-table:my-3 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-800 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-100 ${CODE_PROSE}`
+
+const lensMutedProseClass =
+  `chat-markdown prose prose-sm dark:prose-invert max-w-none break-words text-[12.5px] leading-6 text-neutral-500 dark:text-neutral-400 prose-p:my-1.5 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-2 prose-li:my-0.5 prose-table:my-2 prose-table:shadow-none prose-code:rounded prose-code:bg-neutral-100 prose-code:px-1 prose-code:py-0.5 prose-code:font-medium prose-code:text-neutral-600 prose-code:before:content-none prose-code:after:content-none dark:prose-code:bg-neutral-800 dark:prose-code:text-neutral-400 ${CODE_PROSE}`
+
+function markdownProseClass(variant: ChatMarkdownProps['variant']): string {
+  switch (variant) {
+    case 'reasoning':
+      return reasoningProseClass
+    case 'lens':
+      return lensProseClass
+    case 'lens-muted':
+      return lensMutedProseClass
+    default:
+      return proseClass
+  }
+}
 
 function codeChildrenToString(children: unknown): string {
   if (Array.isArray(children)) return children.map((child) => String(child ?? '')).join('')
@@ -43,6 +65,24 @@ type HighlightToken = {
 type TokenRule = {
   className: string
   pattern: RegExp
+}
+
+/** 语法高亮 token 色：浅色/暗色各一套，避免暗色主题下对比度不足。 */
+const syntax = {
+  comment: 'text-neutral-400 dark:text-neutral-500',
+  string: 'text-emerald-700 dark:text-emerald-400',
+  keyword: 'text-blue-700 dark:text-blue-400',
+  literal: 'text-amber-700 dark:text-amber-400',
+  fn: 'text-cyan-700 dark:text-cyan-400',
+  type: 'text-violet-700 dark:text-violet-400',
+  number: 'text-orange-700 dark:text-orange-400',
+  punct: 'text-neutral-500 dark:text-neutral-400',
+  tag: 'text-blue-700 dark:text-blue-400',
+  attr: 'text-amber-700 dark:text-amber-400',
+  selector: 'text-rose-700 dark:text-rose-400',
+  atRule: 'text-cyan-700 dark:text-cyan-400',
+  unit: 'text-orange-700 dark:text-orange-400',
+  cssKw: 'text-violet-700 dark:text-violet-400',
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -124,29 +164,29 @@ function scanTokens(code: string, rules: TokenRule[]): HighlightToken[] {
 
 function cLikeRules(keywordSource: string): TokenRule[] {
   return [
-    { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`) },
-    { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-    { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:${keywordSource})\b`) },
-    { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b(?:true|false|null|undefined|Some|None|Ok|Err)\b`) },
-    { className: 'text-cyan-700', pattern: tokenPattern(String.raw`\b[A-Za-z_$][\w$]*(?=\s*\()`) },
-    { className: 'text-violet-700', pattern: tokenPattern(String.raw`\b[A-Z][A-Za-z0-9_$]*\b`) },
-    { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`) },
-    { className: 'text-neutral-500', pattern: tokenPattern(String.raw`=>|->|::|[{}()[\].,;:+\-*/%=&|!<>?]+`) },
+    { className: syntax.comment, pattern: tokenPattern(String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`) },
+    { className: syntax.string, pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+    { className: syntax.keyword, pattern: tokenPattern(String.raw`\b(?:${keywordSource})\b`) },
+    { className: syntax.literal, pattern: tokenPattern(String.raw`\b(?:true|false|null|undefined|Some|None|Ok|Err)\b`) },
+    { className: syntax.fn, pattern: tokenPattern(String.raw`\b[A-Za-z_$][\w$]*(?=\s*\()`) },
+    { className: syntax.type, pattern: tokenPattern(String.raw`\b[A-Z][A-Za-z0-9_$]*\b`) },
+    { className: syntax.number, pattern: tokenPattern(String.raw`\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`) },
+    { className: syntax.punct, pattern: tokenPattern(String.raw`=>|->|::|[{}()[\].,;:+\-*/%=&|!<>?]+`) },
   ]
 }
 
 function jsxRules(keywordSource: string): TokenRule[] {
   return [
-    { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`) },
-    { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-    { className: 'text-blue-700', pattern: tokenPattern(String.raw`<\/?[A-Za-z][\w:.-]*`) },
-    { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b[A-Za-z_:][\w:.-]*(?=\s*=)`) },
-    { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:${keywordSource})\b`) },
-    { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b(?:true|false|null|undefined)\b`) },
-    { className: 'text-cyan-700', pattern: tokenPattern(String.raw`\b[A-Za-z_$][\w$]*(?=\s*\()`) },
-    { className: 'text-violet-700', pattern: tokenPattern(String.raw`\b[A-Z][A-Za-z0-9_$]*\b`) },
-    { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`) },
-    { className: 'text-neutral-500', pattern: tokenPattern(String.raw`\/?>|=>|[{}()[\].,;:+\-*/%=&|!<>?]+`) },
+    { className: syntax.comment, pattern: tokenPattern(String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`) },
+    { className: syntax.string, pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+    { className: syntax.tag, pattern: tokenPattern(String.raw`<\/?[A-Za-z][\w:.-]*`) },
+    { className: syntax.attr, pattern: tokenPattern(String.raw`\b[A-Za-z_:][\w:.-]*(?=\s*=)`) },
+    { className: syntax.keyword, pattern: tokenPattern(String.raw`\b(?:${keywordSource})\b`) },
+    { className: syntax.literal, pattern: tokenPattern(String.raw`\b(?:true|false|null|undefined)\b`) },
+    { className: syntax.fn, pattern: tokenPattern(String.raw`\b[A-Za-z_$][\w$]*(?=\s*\()`) },
+    { className: syntax.type, pattern: tokenPattern(String.raw`\b[A-Z][A-Za-z0-9_$]*\b`) },
+    { className: syntax.number, pattern: tokenPattern(String.raw`\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b`) },
+    { className: syntax.punct, pattern: tokenPattern(String.raw`\/?>|=>|[{}()[\].,;:+\-*/%=&|!<>?]+`) },
   ]
 }
 
@@ -157,56 +197,56 @@ function looksLikeJsx(code: string): boolean {
 function rulesForLanguage(language: string, code = ''): TokenRule[] {
   if (language === 'css') {
     return [
-      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\*[\s\S]*?\*\/`) },
-      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-      { className: 'text-rose-700', pattern: tokenPattern(String.raw`[#.][A-Za-z_][\w-]*`) },
-      { className: 'text-cyan-700', pattern: tokenPattern(String.raw`@[A-Za-z-]+`) },
-      { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b[A-Za-z-]+(?=\s*:)`) },
-      { className: 'text-orange-700', pattern: tokenPattern(String.raw`#[\da-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms)?\b`) },
-      { className: 'text-violet-700', pattern: tokenPattern(String.raw`\b(?:border-box|flex|grid|block|inline|none|relative|absolute|fixed|sticky|solid|transparent)\b`) },
-      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[{}():;,>+~*-]+`) },
+      { className: syntax.comment, pattern: tokenPattern(String.raw`\/\*[\s\S]*?\*\/`) },
+      { className: syntax.string, pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: syntax.selector, pattern: tokenPattern(String.raw`[#.][A-Za-z_][\w-]*`) },
+      { className: syntax.atRule, pattern: tokenPattern(String.raw`@[A-Za-z-]+`) },
+      { className: syntax.keyword, pattern: tokenPattern(String.raw`\b[A-Za-z-]+(?=\s*:)`) },
+      { className: syntax.unit, pattern: tokenPattern(String.raw`#[\da-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms)?\b`) },
+      { className: syntax.cssKw, pattern: tokenPattern(String.raw`\b(?:border-box|flex|grid|block|inline|none|relative|absolute|fixed|sticky|solid|transparent)\b`) },
+      { className: syntax.punct, pattern: tokenPattern(String.raw`[{}():;,>+~*-]+`) },
     ]
   }
 
   if (language === 'html' || language === 'xml') {
     return [
-      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`<!--[\s\S]*?-->`) },
-      { className: 'text-blue-700', pattern: tokenPattern(String.raw`<\/?[A-Za-z][\w:-]*`) },
-      { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b[A-Za-z_:][\w:.-]*(?=\=)`) },
-      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`\/?>|=`) },
+      { className: syntax.comment, pattern: tokenPattern(String.raw`<!--[\s\S]*?-->`) },
+      { className: syntax.tag, pattern: tokenPattern(String.raw`<\/?[A-Za-z][\w:-]*`) },
+      { className: syntax.attr, pattern: tokenPattern(String.raw`\b[A-Za-z_:][\w:.-]*(?=\=)`) },
+      { className: syntax.string, pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: syntax.punct, pattern: tokenPattern(String.raw`\/?>|=`) },
     ]
   }
 
   if (language === 'json') {
     return [
-      { className: 'text-blue-700', pattern: tokenPattern(String.raw`"(?:\\.|[^"\\])*"(?=\s*:)`) },
-      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`"(?:\\.|[^"\\])*"`) },
-      { className: 'text-amber-700', pattern: tokenPattern(String.raw`\b(?:true|false|null)\b`) },
-      { className: 'text-orange-700', pattern: tokenPattern(String.raw`-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b`) },
-      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[{}[\]:,]+`) },
+      { className: syntax.keyword, pattern: tokenPattern(String.raw`"(?:\\.|[^"\\])*"(?=\s*:)`) },
+      { className: syntax.string, pattern: tokenPattern(String.raw`"(?:\\.|[^"\\])*"`) },
+      { className: syntax.literal, pattern: tokenPattern(String.raw`\b(?:true|false|null)\b`) },
+      { className: syntax.number, pattern: tokenPattern(String.raw`-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b`) },
+      { className: syntax.punct, pattern: tokenPattern(String.raw`[{}[\]:,]+`) },
     ]
   }
 
   if (language === 'py' || language === 'python') {
     return [
-      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`#[^\n]*`) },
-      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'''[\s\S]*?'''|"""[\s\S]*?"""|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-      { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:${pythonKeywords})\b`) },
-      { className: 'text-cyan-700', pattern: tokenPattern(String.raw`\b[A-Za-z_]\w*(?=\s*\()`) },
-      { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b\d+(?:\.\d+)?\b`) },
-      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[{}()[\].,;:+\-*/%=&|!<>?]+`) },
+      { className: syntax.comment, pattern: tokenPattern(String.raw`#[^\n]*`) },
+      { className: syntax.string, pattern: tokenPattern(String.raw`'''[\s\S]*?'''|"""[\s\S]*?"""|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: syntax.keyword, pattern: tokenPattern(String.raw`\b(?:${pythonKeywords})\b`) },
+      { className: syntax.fn, pattern: tokenPattern(String.raw`\b[A-Za-z_]\w*(?=\s*\()`) },
+      { className: syntax.number, pattern: tokenPattern(String.raw`\b\d+(?:\.\d+)?\b`) },
+      { className: syntax.punct, pattern: tokenPattern(String.raw`[{}()[\].,;:+\-*/%=&|!<>?]+`) },
     ]
   }
 
   if (language === 'sh' || language === 'shell' || language === 'bash') {
     return [
-      { className: 'text-neutral-400', pattern: tokenPattern(String.raw`#[^\n]*`) },
-      { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-      { className: 'text-blue-700', pattern: tokenPattern(String.raw`\b(?:case|cat|cd|cp|do|done|echo|elif|else|esac|export|fi|for|function|git|grep|if|mkdir|mv|npm|rg|rm|sed|then|while)\b`) },
-      { className: 'text-violet-700', pattern: tokenPattern(String.raw`\$[A-Za-z_]\w*|\$\{[^}]+\}`) },
-      { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b\d+\b`) },
-      { className: 'text-neutral-500', pattern: tokenPattern(String.raw`[|&;<>(){}[\]!*?=]+`) },
+      { className: syntax.comment, pattern: tokenPattern(String.raw`#[^\n]*`) },
+      { className: syntax.string, pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+      { className: syntax.keyword, pattern: tokenPattern(String.raw`\b(?:case|cat|cd|cp|do|done|echo|elif|else|esac|export|fi|for|function|git|grep|if|mkdir|mv|npm|rg|rm|sed|then|while)\b`) },
+      { className: syntax.type, pattern: tokenPattern(String.raw`\$[A-Za-z_]\w*|\$\{[^}]+\}`) },
+      { className: syntax.number, pattern: tokenPattern(String.raw`\b\d+\b`) },
+      { className: syntax.punct, pattern: tokenPattern(String.raw`[|&;<>(){}[\]!*?=]+`) },
     ]
   }
 
@@ -224,9 +264,9 @@ function rulesForLanguage(language: string, code = ''): TokenRule[] {
   }
 
   return [
-    { className: 'text-neutral-400', pattern: tokenPattern(String.raw`\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/`) },
-    { className: 'text-emerald-700', pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
-    { className: 'text-orange-700', pattern: tokenPattern(String.raw`\b\d+(?:\.\d+)?\b`) },
+    { className: syntax.comment, pattern: tokenPattern(String.raw`\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/`) },
+    { className: syntax.string, pattern: tokenPattern(String.raw`'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"`) },
+    { className: syntax.number, pattern: tokenPattern(String.raw`\b\d+(?:\.\d+)?\b`) },
   ]
 }
 
@@ -240,6 +280,49 @@ function highlightCode(code: string, language: string) {
 
 function normalizeCodeBlockText(code: string): string {
   return code.replace(/\n$/, '')
+}
+
+function readDocumentDark(): boolean {
+  return typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+}
+
+function useDocumentDark(): boolean {
+  const [dark, setDark] = useState(readDocumentDark)
+
+  useEffect(() => {
+    const root = document.documentElement
+    const sync = () => setDark(root.classList.contains('dark'))
+    const observer = new MutationObserver(sync)
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
+
+  return dark
+}
+
+function mermaidThemeVariables(dark: boolean) {
+  if (dark) {
+    return {
+      background: 'transparent',
+      primaryColor: '#334155',
+      primaryBorderColor: '#64748b',
+      primaryTextColor: '#f1f5f9',
+      lineColor: '#94a3b8',
+      secondaryColor: '#1e293b',
+      tertiaryColor: '#0f172a',
+      fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+    }
+  }
+  return {
+    background: 'transparent',
+    primaryColor: '#f8fafc',
+    primaryBorderColor: '#94a3b8',
+    primaryTextColor: '#111827',
+    lineColor: '#64748b',
+    secondaryColor: '#f1f5f9',
+    tertiaryColor: '#ffffff',
+    fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+  }
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
@@ -258,23 +341,23 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   }
 
   return (
-    <figure className="not-prose my-3 overflow-hidden rounded-lg border border-neutral-200/80 bg-neutral-50 text-neutral-950 shadow-sm dark:border-neutral-300/80 dark:bg-neutral-100 dark:text-neutral-950">
-      <div className="flex items-center gap-2 px-4 pb-1 pt-3">
-        <Code2 size={15} strokeWidth={2.4} className="shrink-0 text-neutral-800" />
-        <figcaption className="text-[13px] font-semibold leading-5 text-neutral-950">
+    <figure className="not-prose my-3 overflow-hidden rounded-lg border border-neutral-200/80 bg-neutral-50 text-neutral-950 shadow-sm dark:border-neutral-700/80 dark:bg-neutral-900 dark:text-neutral-100">
+      <div className="flex items-center gap-2 border-b border-neutral-200/70 px-4 py-2.5 dark:border-neutral-800">
+        <Code2 size={15} strokeWidth={2.4} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
+        <figcaption className="text-[13px] font-semibold leading-5 text-neutral-800 dark:text-neutral-100">
           {codeLanguageLabel(language)}
         </figcaption>
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className="-mr-1 ml-auto rounded-md p-1.5 text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-900"
+          className="-mr-1 ml-auto rounded-md p-1.5 text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
           title={copied ? '已复制' : '复制代码'}
           aria-label={copied ? '已复制' : '复制代码'}
         >
           {copied ? <Check size={17} strokeWidth={2.2} className="chat-motion-pop" /> : <Copy size={17} strokeWidth={2.2} />}
         </button>
       </div>
-      <pre className="m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900">
+      <pre className="m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900 dark:text-neutral-100">
         <code className="font-mono">{highlighted}</code>
       </pre>
     </figure>
@@ -285,6 +368,7 @@ let mermaidRenderCounter = 0
 
 function MermaidBlock({ code }: { code: string }) {
   const normalizedCode = useMemo(() => normalizeCodeBlockText(code), [code])
+  const isDark = useDocumentDark()
   const renderBaseId = useRef('')
   const renderSeq = useRef(0)
   const [view, setView] = useState<'diagram' | 'source'>('diagram')
@@ -313,16 +397,7 @@ function MermaidBlock({ code }: { code: string }) {
           startOnLoad: false,
           securityLevel: 'strict',
           theme: 'base',
-          themeVariables: {
-            background: 'transparent',
-            primaryColor: '#f8fafc',
-            primaryBorderColor: '#94a3b8',
-            primaryTextColor: '#111827',
-            lineColor: '#64748b',
-            secondaryColor: '#f1f5f9',
-            tertiaryColor: '#ffffff',
-            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-          },
+          themeVariables: mermaidThemeVariables(isDark),
         })
         const result = await mermaid.render(renderId, normalizedCode)
         if (cancelled) return
@@ -339,7 +414,7 @@ function MermaidBlock({ code }: { code: string }) {
     return () => {
       cancelled = true
     }
-  }, [normalizedCode])
+  }, [isDark, normalizedCode])
 
   return (
     <figure className="not-prose my-3 overflow-hidden rounded-lg border border-neutral-200/80 bg-white text-neutral-950 shadow-sm dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100">
@@ -428,7 +503,7 @@ function HtmlCodePreview({ html }: { html: string }) {
           <iframe
             title="HTML 预览"
             srcDoc={previewHtml}
-            className="h-[520px] w-full border-0 bg-white"
+            className="h-[520px] w-full border-0 bg-white dark:bg-neutral-950"
           />
         </div>
       ) : null}
@@ -822,7 +897,7 @@ function ChatMarkdownComponent({
   }, [artifacts, onImageClick, citations])
 
   return (
-    <div className={variant === 'reasoning' ? reasoningProseClass : proseClass}>
+    <div className={markdownProseClass(variant)}>
       <MarkdownErrorBoundary fallbackText={content}>
         <ReactMarkdown
           remarkPlugins={remarkPlugins}

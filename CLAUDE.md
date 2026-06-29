@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kivio (formerly KeyLingo through v2.4.4; currently v2.6.x) is a desktop **AI assistant** built with **Tauri v2** (Rust backend) and **React 18 + Vite + TailwindCSS v4** (frontend). It runs on macOS and Windows. It began as a screen-level utility — global hotkey-triggered text translation, screenshot OCR/translation, and a Lens capture-then-ask vision overlay — and has grown a full **agentic chat application** (`src/chat/` + `src-tauri/src/chat/`) with a tool-calling agent loop, MCP servers, Skills, sub-agents, a Pyodide code sandbox, and a provider-agnostic model layer (OpenAI-compatible **and** Anthropic Messages). All AI calls go through user-configured providers.
+Kivio (formerly KeyLingo through v2.4.4; currently v2.7.x) is a desktop **AI assistant** built with **Tauri v2** (Rust backend) and **React 18 + Vite + TailwindCSS v4** (frontend). It runs on macOS and Windows. It began as a screen-level utility — global hotkey-triggered text translation, screenshot OCR/translation, and a Lens capture-then-ask vision overlay — and has grown a full **agentic chat application** (`src/chat/` + `src-tauri/src/chat/`) with a tool-calling agent loop, MCP servers, Skills, sub-agents, a Pyodide code sandbox, and a provider-agnostic model layer (OpenAI-compatible **and** Anthropic Messages). All AI calls go through user-configured providers.
 
 ## Common Commands
 

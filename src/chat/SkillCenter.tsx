@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
-import ReactMarkdown from 'react-markdown'
+import { ChatMarkdown } from './ChatMarkdown'
 import {
   api,
   defaultNativeTools,
@@ -674,8 +674,8 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                 ))}
               </div>
             )}
-            <div className="custom-scrollbar max-h-[52vh] overflow-y-auto rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-[12.5px] leading-relaxed text-neutral-700 dark:border-neutral-800 dark:bg-neutral-950/50 dark:text-neutral-300">
-              <ReactMarkdown>{selectedSkillPreview.body}</ReactMarkdown>
+            <div className="custom-scrollbar max-h-[52vh] overflow-y-auto rounded-lg border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-950/50">
+              <ChatMarkdown content={selectedSkillPreview.body} />
             </div>
           </div>
         </div>
