@@ -17,7 +17,6 @@ import {
   MessageSquarePlus,
   Network,
   Paperclip,
-  Play,
   Plus,
   Search,
   Settings,
@@ -386,7 +385,6 @@ interface InputBarProps {
   sendDisabledReason?: string
   agentPlanState?: AgentPlanState | null
   onAgentPlanModeChange?: (mode: AgentPlanMode) => void | Promise<void>
-  onExecuteAgentPlan?: () => void | Promise<void>
   enabledSkills?: SlashSkill[]
   onOpenSkillSettings?: () => void
   selectedProject?: ChatProject | null
@@ -430,7 +428,6 @@ export function InputBar({
   sendDisabledReason,
   agentPlanState = null,
   onAgentPlanModeChange,
-  onExecuteAgentPlan,
   enabledSkills = [],
   onOpenSkillSettings,
   selectedProject = null,
@@ -474,7 +471,6 @@ export function InputBar({
   const innerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const agentPlanMode = agentPlanState?.mode ?? 'act'
-  const agentPlanText = agentPlanState?.plan?.trim() ?? ''
   const agentPlanActive = agentPlanMode === 'plan'
   const agentOrchestrateActive = agentPlanMode === 'orchestrate'
   const projectEntryEnabled = Boolean(showProjectEntry && onSelectProject)
@@ -1774,21 +1770,6 @@ export function InputBar({
                   placement: layout === 'inline' ? 'down' : 'up',
                 })
               : contextSlot}
-            {onExecuteAgentPlan && agentPlanText && (
-              <button
-                type="button"
-                onClick={() => void onExecuteAgentPlan()}
-                disabled={disabled}
-                tabIndex={-1}
-                className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-neutral-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
-                title="执行当前计划"
-                aria-label="执行当前计划"
-              >
-                <Play size={13} strokeWidth={2.1} fill="currentColor" />
-                执行
-              </button>
-            )}
-
             {modeEntryEnabled && (
               <div className="relative shrink-0 self-center">
                 <button

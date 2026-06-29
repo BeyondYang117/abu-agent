@@ -1,6 +1,7 @@
 // Chat API 调用封装
 import { invoke } from '@tauri-apps/api/core'
 import { estimateTokens } from '../utils/tokens'
+import { isExecutableAgentPlanText } from './agentPlan'
 import { isTauriRuntime } from './utils'
 import type {
   AgentRuntimeConfig,
@@ -519,14 +520,22 @@ const mockChatApi = {
     ]
     const currentPlanMode = conversation.agent_plan_state?.mode ?? conversation.agentPlanState?.mode ?? 'act'
     if (currentPlanMode === 'plan') {
-      const reply = conversation.messages[conversation.messages.length - 1]?.content ?? ''
-      conversation.agent_plan_state = {
-        mode: 'plan',
-        status: 'draft',
-        plan: reply,
-        updated_at: now,
+      const assistantIndex = conversation.messages.length - 1
+      const reply = conversation.messages[assistantIndex]?.content ?? ''
+      if (isExecutableAgentPlanText(reply)) {
+        conversation.agent_plan_state = {
+          mode: 'plan',
+          status: 'draft',
+          plan: reply,
+          updated_at: now,
+        }
+        conversation.agentPlanState = conversation.agent_plan_state
+        conversation.messages[assistantIndex] = {
+          ...conversation.messages[assistantIndex],
+          agent_plan: conversation.agent_plan_state,
+          agentPlan: conversation.agent_plan_state,
+        }
       }
-      conversation.agentPlanState = conversation.agent_plan_state
     }
     if (conversation.title === '新对话') {
       conversation.title = content.length > 30 ? `${content.slice(0, 30)}...` : content
@@ -565,18 +574,26 @@ const mockChatApi = {
     return conversation
   },
 
-  async executeAgentPlan(conversationId: string): Promise<Conversation> {
+  async executeAgentPlan(conversationId: string, messageId?: string): Promise<Conversation> {
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
     if (index < 0) throw new Error('Conversation not found')
     const now = nowSeconds()
-    const current = conversations[index].agent_plan_state ?? conversations[index].agentPlanState ?? {
+    const messageIndex = messageId
+      ? conversations[index].messages.findIndex((message) => message.id === messageId && message.role === 'assistant')
+      : -1
+    if (messageId && messageIndex < 0) throw new Error('计划消息不存在')
+    const messagePlan = messageIndex >= 0
+      ? conversations[index].messages[messageIndex].agent_plan ?? conversations[index].messages[messageIndex].agentPlan ?? null
+      : null
+    if (messageId && !isExecutableAgentPlanText(messagePlan?.plan)) throw new Error('该消息不是可执行计划')
+    const current = messagePlan ?? conversations[index].agent_plan_state ?? conversations[index].agentPlanState ?? {
       mode: 'act',
       status: 'empty',
       plan: null,
       updated_at: 0,
     }
-    const hasPlan = Boolean(current.plan?.trim())
+    const hasPlan = isExecutableAgentPlanText(current.plan)
     const conversation = {
       ...conversations[index],
       agent_plan_state: {
@@ -588,6 +605,13 @@ const mockChatApi = {
       updated_at: now,
     }
     conversation.agentPlanState = conversation.agent_plan_state
+    if (messageIndex >= 0) {
+      conversation.messages = conversation.messages.map((message, i) =>
+        i === messageIndex
+          ? { ...message, agent_plan: conversation.agent_plan_state, agentPlan: conversation.agent_plan_state }
+          : message,
+      )
+    }
     const contextState = estimateMockContext(conversation)
     conversation.context_state = contextState
     conversation.contextState = contextState
@@ -1272,11 +1296,11 @@ export const chatApi = {
     return result.conversation
   },
 
-  async executeAgentPlan(conversationId: string): Promise<Conversation> {
-    if (!isTauriRuntime()) return mockChatApi.executeAgentPlan(conversationId)
+  async executeAgentPlan(conversationId: string, messageId?: string): Promise<Conversation> {
+    if (!isTauriRuntime()) return mockChatApi.executeAgentPlan(conversationId, messageId)
     const result = await invoke<{ success: boolean; conversation?: Conversation; error?: string }>(
       'chat_execute_agent_plan',
-      { conversationId },
+      { conversationId, messageId },
     )
     if (!result.success || !result.conversation) {
       throw new Error(result.error || 'Failed to execute plan')

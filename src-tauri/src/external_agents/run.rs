@@ -409,6 +409,7 @@ pub async fn run_external_cli_reply(
         }),
         Some(&stream_outcome),
         usage,
+        None,
     )
     .await?;
 

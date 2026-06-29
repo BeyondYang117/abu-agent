@@ -29,7 +29,7 @@ pub fn with_mode(current: &AgentPlanState, mode: AgentPlanMode) -> AgentPlanStat
 pub fn approve(current: &AgentPlanState) -> AgentPlanState {
     let mut next = current.clone();
     next.mode = AgentPlanMode::Act;
-    next.status = if current_plan_text(current).is_some() {
+    next.status = if executable_plan_text(current).is_some() {
         AgentPlanStatus::Approved
     } else {
         AgentPlanStatus::Empty
@@ -40,7 +40,7 @@ pub fn approve(current: &AgentPlanState) -> AgentPlanState {
 
 pub fn capture_draft_from_reply(current: &AgentPlanState, content: &str) -> AgentPlanState {
     let plan = content.trim();
-    if plan.is_empty() {
+    if !is_executable_plan_text(plan) {
         return current.clone();
     }
     AgentPlanState {
@@ -66,7 +66,7 @@ pub fn format_prompt(state: &AgentPlanState, language: &str) -> String {
     if language.starts_with("zh") {
         if state.mode == AgentPlanMode::Plan {
             format!(
-                "Agent plan mode（内部运行模式）：当前模式是 plan，状态是 {status}。Plan mode 用于先调研、阅读、搜索、分析和提出计划；不要执行会产生副作用的动作，不要声称已经修改文件、运行命令、写入记忆或完成实现，除非 Kivio 返回了实际工具结果。可以提出必要的澄清问题。最终回复应给出可执行、简洁的计划，并说明需要用户切到 Act / 执行计划后才会实施。\n\n当前已保存计划：\n{current_plan}"
+                "Agent plan mode（内部运行模式）：当前模式是 plan，状态是 {status}。Plan mode 用于先调研、阅读、搜索、分析和提出计划；不要执行会产生副作用的动作，不要声称已经修改文件、运行命令、写入记忆或完成实现，除非 Kivio 返回了实际工具结果。可以提出必要的澄清问题。最终回复必须以计划正文开头，少寒暄；用清晰标题（如「## 计划」/「## 执行计划」）和可执行步骤/todo，让用户第一眼能看出这是一份 Plan。背景、理由和风险可以放在计划后面；说明需要用户切到 Act / 执行计划后才会实施。\n\n当前已保存计划：\n{current_plan}"
             )
         } else if state.mode == AgentPlanMode::Orchestrate {
             format!(
@@ -79,7 +79,7 @@ pub fn format_prompt(state: &AgentPlanState, language: &str) -> String {
         }
     } else if state.mode == AgentPlanMode::Plan {
         format!(
-            "Agent plan mode (internal runtime mode): current mode is plan and status is {status}. Plan mode is for researching, reading, searching, analyzing, asking clarifying questions, and producing a plan before action. Do not perform or claim side-effecting work such as editing files, running commands, mutating memory, or implementing changes unless Kivio returned an actual tool result. The final reply should be a concise executable plan and should make clear that implementation waits for Act / execute plan.\n\nCurrent saved plan:\n{current_plan}"
+            "Agent plan mode (internal runtime mode): current mode is plan and status is {status}. Plan mode is for researching, reading, searching, analyzing, asking clarifying questions, and producing a plan before action. Do not perform or claim side-effecting work such as editing files, running commands, mutating memory, or implementing changes unless Kivio returned an actual tool result. The final reply must start with the plan itself, with minimal preamble; use a clear heading such as \"## Plan\" / \"## Execution Plan\" and actionable steps/todos so the user can immediately tell this is a Plan. Put background, rationale, and risks after the plan when needed, and make clear that implementation waits for Act / execute plan.\n\nCurrent saved plan:\n{current_plan}"
         )
     } else if state.mode == AgentPlanMode::Orchestrate {
         format!(
@@ -98,6 +98,104 @@ pub fn current_plan_text(state: &AgentPlanState) -> Option<&str> {
         .as_deref()
         .map(str::trim)
         .filter(|plan| !plan.is_empty())
+}
+
+pub fn executable_plan_text(state: &AgentPlanState) -> Option<&str> {
+    current_plan_text(state).filter(|plan| is_executable_plan_text(plan))
+}
+
+pub fn is_executable_plan_text(content: &str) -> bool {
+    let text = content.trim();
+    if text.is_empty() {
+        return false;
+    }
+
+    let meaningful_lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if meaningful_lines.len() < 2 {
+        return false;
+    }
+
+    let step_lines = meaningful_lines
+        .iter()
+        .filter(|line| is_step_like_line(line))
+        .count();
+    if step_lines >= 2 {
+        return true;
+    }
+
+    has_plan_keyword(text) && step_lines >= 1
+}
+
+fn is_step_like_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    starts_with_markdown_step(trimmed)
+        || starts_with_chinese_step(trimmed)
+        || starts_with_todo_keyword(trimmed)
+}
+
+fn starts_with_markdown_step(line: &str) -> bool {
+    if line.starts_with("- [ ]")
+        || line.starts_with("- [x]")
+        || line.starts_with("- [X]")
+        || line.starts_with("* [ ]")
+        || line.starts_with("* [x]")
+        || line.starts_with("* [X]")
+        || line.starts_with("- ")
+        || line.starts_with("* ")
+        || line.starts_with("+ ")
+        || line.starts_with("• ")
+    {
+        return true;
+    }
+
+    let bytes = line.as_bytes();
+    let mut digit_count = 0;
+    while digit_count < bytes.len() && bytes[digit_count].is_ascii_digit() {
+        digit_count += 1;
+    }
+    if digit_count == 0 || digit_count > 3 {
+        return false;
+    }
+    line[digit_count..]
+        .chars()
+        .next()
+        .is_some_and(|ch| matches!(ch, '.' | ')' | '、'))
+}
+
+fn starts_with_chinese_step(line: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "第1步", "第2步", "第3步", "第4步", "第5步", "第6步", "第7步", "第8步", "第9步",
+        "第一步", "第二步", "第三步", "第四步", "第五步", "第六步", "第七步", "第八步", "第九步",
+        "步骤1", "步骤2", "步骤3", "步骤4", "步骤5", "步骤6", "步骤7", "步骤8", "步骤9",
+        "一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、",
+    ];
+    PREFIXES.iter().any(|prefix| line.starts_with(prefix))
+}
+
+fn starts_with_todo_keyword(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.starts_with("todo:")
+        || lower.starts_with("todo ")
+        || lower.starts_with("step ")
+        || lower.starts_with("步骤：")
+        || lower.starts_with("步骤:")
+        || lower.starts_with("任务：")
+        || lower.starts_with("任务:")
+}
+
+fn has_plan_keyword(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("plan")
+        || lower.contains("todo")
+        || lower.contains("step")
+        || text.contains("计划")
+        || text.contains("步骤")
+        || text.contains("待办")
+        || text.contains("任务")
 }
 
 fn status_name(status: &AgentPlanStatus) -> &'static str {
@@ -131,6 +229,22 @@ mod tests {
     }
 
     #[test]
+    fn capture_draft_ignores_non_plan_fragment() {
+        let current = AgentPlanState::default();
+        let state = capture_draft_from_reply(&current, "没问题！积萌,");
+
+        assert_eq!(state, current);
+    }
+
+    #[test]
+    fn executable_plan_requires_real_steps() {
+        assert!(is_executable_plan_text("计划：\n1. Read code\n2. Implement fix"));
+        assert!(is_executable_plan_text("- [ ] 调研\n- [ ] 修改"));
+        assert!(!is_executable_plan_text("没问题！积萌,"));
+        assert!(!is_executable_plan_text("计划：我会处理这个问题。"));
+    }
+
+    #[test]
     fn approve_without_plan_stays_empty_act() {
         let mut state = AgentPlanState::default();
         state.mode = AgentPlanMode::Plan;
@@ -142,7 +256,7 @@ mod tests {
     #[test]
     fn approve_with_plan_marks_approved() {
         let mut state = AgentPlanState::default();
-        state.plan = Some("Plan".to_string());
+        state.plan = Some("1. Read code\n2. Edit".to_string());
         state.status = AgentPlanStatus::Draft;
         let approved = approve(&state);
         assert_eq!(approved.mode, AgentPlanMode::Act);

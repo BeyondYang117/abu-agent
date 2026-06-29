@@ -15,6 +15,7 @@ import {
   Globe,
   ImagePlus,
   ListChecks,
+  Play,
   Plug,
   ScrollText,
   Search,
@@ -28,13 +29,14 @@ import { ChatAttachments } from './ChatAttachments'
 import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { ChatMarkdown } from './ChatMarkdown'
 import { GeneratedFileArtifacts } from './GeneratedFileArtifacts'
+import { isExecutableAgentPlanText } from './agentPlan'
 import { isImageArtifact } from './artifacts'
 import { loadArtifactDataUrl } from './attachmentPreview'
 import { openChatImageViewer } from './imageViewer'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
-import type { ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
+import type { AgentPlanState, ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
 import { knowledgeSearchHits, type KbHitView } from './knowledgeBaseHits'
 import { compareTimelineSegments, groupTimelineSegments, segmentToolCallId, summarizeToolGroup, toolRecordId } from './segments'
 import type { TimelineGroupItem, ToolGroupIcon } from './segments'
@@ -58,6 +60,8 @@ interface MessageBubbleProps {
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
+  agentPlanOverride?: AgentPlanState | null
+  onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
 }
 
 function artifactDataUrl(artifact: ChatToolArtifact): string {
@@ -195,6 +199,42 @@ function ImageGenerationPending() {
         <ChatDotGridBackground />
       </div>
     </section>
+  )
+}
+
+function AgentPlanAction({
+  messageId,
+  planState,
+  disabled,
+  onExecute,
+}: {
+  messageId: string
+  planState?: AgentPlanState | null
+  disabled?: boolean
+  onExecute?: (messageId: string) => Promise<void> | void
+}) {
+  const plan = planState?.plan?.trim() ?? ''
+  if (!isExecutableAgentPlanText(plan)) return null
+
+  const approved = (planState?.status ?? 'draft') === 'approved'
+  return (
+    <div className="not-prose mt-3 flex max-w-full items-center gap-2 border-l-2 border-emerald-400/70 pl-3 text-[12px] leading-5 text-neutral-500 dark:border-emerald-500/60 dark:text-neutral-400">
+      <ListChecks size={14} strokeWidth={2} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+      <span className="min-w-0 flex-1 truncate">{approved ? '已按这条计划执行' : '计划草案'}</span>
+      {!approved && onExecute && (
+        <button
+          type="button"
+          onClick={() => void onExecute(messageId)}
+          disabled={disabled}
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
+          title="执行这条计划"
+          aria-label="执行这条计划"
+        >
+          <Play size={12} strokeWidth={2.2} fill="currentColor" />
+          执行这条计划
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -601,6 +641,8 @@ function MessageBubbleComponent({
   onUpdateMessage,
   onRegenerateMessage,
   onDeleteMessage,
+  agentPlanOverride = null,
+  onExecuteAgentPlan,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
@@ -631,6 +673,8 @@ function MessageBubbleComponent({
   const [toolsExpanded, setToolsExpanded] = useState(false)
   // 工具调用超过 4 个时默认折叠（与思考过程一致）
   const toolsCollapsible = toolCalls.length > 4
+  const agentPlan = message.agent_plan ?? message.agentPlan ?? agentPlanOverride
+  const isAgentPlanMessage = isExecutableAgentPlanText(agentPlan?.plan)
 
   useEffect(() => {
     setDraft(message.content)
@@ -843,6 +887,15 @@ function MessageBubbleComponent({
               {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
             </section>
           )
+        )}
+
+        {!isEditing && isAgentPlanMessage && !isDirectImageGenerationPending && (
+          <AgentPlanAction
+            messageId={message.id}
+            planState={agentPlan}
+            disabled={messageStreaming}
+            onExecute={onExecuteAgentPlan}
+          />
         )}
 
         {!isEditing && message.content.trim().length > 0 && !isDirectImageGenerationPending && (

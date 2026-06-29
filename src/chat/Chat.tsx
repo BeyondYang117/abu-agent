@@ -13,6 +13,7 @@ import { BackgroundJobsIndicator } from './BackgroundJobsIndicator'
 import { WindowControls } from './WindowControls'
 import { ContextIndicator } from './ContextIndicator'
 import { AgentTodoIndicator } from './AgentTodoIndicator'
+import { isExecutableAgentPlanText } from './agentPlan'
 import {
   agentRuntimesEqual,
   BUILTIN_AGENT_RUNTIME,
@@ -2384,22 +2385,39 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const importExternalConversationRef = useRef(importExternalConversation)
   importExternalConversationRef.current = importExternalConversation
 
-  const handleExecuteAgentPlan = useCallback(async () => {
+  const handleExecuteAgentPlan = useCallback(async (messageId: string) => {
     const conversation = currentConversation
     if (!conversation) return
-    const planText = (conversation.agent_plan_state?.plan ?? conversation.agentPlanState?.plan ?? '').trim()
-    if (!planText) return
+    const planMessage = conversation.messages.find((message) => message.id === messageId)
+    const messagePlan = planMessage?.agent_plan ?? planMessage?.agentPlan ?? null
+    const messagePlanText = messagePlan?.plan?.trim() ?? ''
+    const legacyPlan = conversation.agent_plan_state ?? conversation.agentPlanState ?? null
+    const legacyPlanText = legacyPlan?.plan?.trim() ?? ''
+    const isLegacyPlanMessage = Boolean(
+      planMessage
+      && !isExecutableAgentPlanText(messagePlanText)
+      && isExecutableAgentPlanText(legacyPlanText)
+      && planMessage.role === 'assistant'
+      && planMessage.content.trim() === legacyPlanText,
+    )
+    const planText = isExecutableAgentPlanText(messagePlanText)
+      ? messagePlanText
+      : (isLegacyPlanMessage ? legacyPlanText : '')
+    if (!isExecutableAgentPlanText(planText)) return
     if (isConversationInFlight(inFlightConversationsRef.current, conversation.id)) {
       setStreamErrorForConversation(conversation.id, '该对话正在生成中，请稍后再试')
       return
     }
 
     try {
-      const updated = await chatApi.executeAgentPlan(conversation.id)
+      const updated = await chatApi.executeAgentPlan(
+        conversation.id,
+        isExecutableAgentPlanText(messagePlanText) ? messageId : undefined,
+      )
       applyConversation(updated)
       refreshSidebar()
       void refreshContextStats(updated.id)
-      void handleSendMessage('按刚才的计划开始执行。', [], { conversationOverride: updated })
+      void handleSendMessage('按这条计划开始执行。', [], { conversationOverride: updated })
     } catch (err) {
       console.error('Failed to execute agent plan:', err)
       setStreamErrorForConversation(
@@ -3067,7 +3085,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       sendDisabledReason={sendDisabledReason}
                       agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
                       onAgentPlanModeChange={handleAgentPlanModeChange}
-                      onExecuteAgentPlan={handleExecuteAgentPlan}
                       enabledSkills={slashSkills}
                       onOpenSkillSettings={openSkillCenter}
                       selectedProject={selectedProject}
@@ -3111,6 +3128,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onUpdateMessage={handleUpdateMessage}
                       onRegenerateMessage={handleRegenerateMessage}
                       onDeleteMessage={handleDeleteMessage}
+                      onExecuteAgentPlan={handleExecuteAgentPlan}
                     />
                   </Suspense>
                   <InputBar
@@ -3130,7 +3148,6 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     sendDisabledReason={sendDisabledReason}
                     agentPlanState={currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null}
                     onAgentPlanModeChange={handleAgentPlanModeChange}
-                    onExecuteAgentPlan={handleExecuteAgentPlan}
                     enabledSkills={slashSkills}
                     onOpenSkillSettings={openSkillCenter}
                     selectedProject={selectedProject}

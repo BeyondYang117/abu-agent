@@ -419,6 +419,7 @@ pub(crate) fn chat_import_external_conversation(
             artifacts: Vec::new(),
             tool_calls: Vec::new(),
             segments: Vec::new(),
+            agent_plan: None,
             api_messages: Vec::new(),
             model_messages: Vec::new(),
             active_skill_id: None,
@@ -988,9 +989,10 @@ pub(crate) fn chat_set_agent_plan_mode(
 pub(crate) fn chat_execute_agent_plan(
     app: AppHandle,
     conversation_id: String,
+    message_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
-    conversation.agent_plan_state = crate::chat::plan::approve(&conversation.agent_plan_state);
+    approve_agent_plan_for_execution(&mut conversation, message_id.as_deref())?;
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(&app, &conversation)?;
     emit_chat_plan_state(&app, &conversation.id, &conversation.agent_plan_state);
@@ -1001,6 +1003,39 @@ pub(crate) fn chat_execute_agent_plan(
         "conversation": conversation,
         "planState": conversation.agent_plan_state,
     }))
+}
+
+fn approve_agent_plan_for_execution(
+    conversation: &mut Conversation,
+    message_id: Option<&str>,
+) -> Result<(), String> {
+    let selected_plan = if let Some(message_id) = message_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty()) {
+        Some({
+            let message = conversation
+                .messages
+                .iter_mut()
+                .find(|message| message.id == message_id && message.role == "assistant")
+                .ok_or_else(|| "计划消息不存在".to_string())?;
+            let plan_state = message
+                .agent_plan
+                .as_ref()
+                .ok_or_else(|| "该消息不是可执行计划".to_string())?;
+            if crate::chat::plan::executable_plan_text(plan_state).is_none() {
+                return Err("该消息不是可执行计划".to_string());
+            }
+            let approved = crate::chat::plan::approve(plan_state);
+            message.agent_plan = Some(approved.clone());
+            approved
+        })
+    } else {
+        None
+    };
+    conversation.agent_plan_state = selected_plan.unwrap_or_else(|| {
+        crate::chat::plan::approve(&conversation.agent_plan_state)
+    });
+    Ok(())
 }
 
 /// 由「每对话思考等级」解析出实际下发给模型的 `(thinking_enabled, thinking_level)`。
@@ -1095,6 +1130,7 @@ pub(crate) async fn chat_send_message(
         artifacts: Vec::new(),
         tool_calls: Vec::new(),
         segments: Vec::new(),
+        agent_plan: None,
         api_messages: Vec::new(),
         model_messages: Vec::new(),
         active_skill_id: None,
@@ -1897,7 +1933,13 @@ async fn complete_assistant_reply(
 
     merge_latest_agent_todo_state(app, conversation);
     merge_latest_agent_plan_state(app, conversation);
-    capture_agent_plan_draft_if_needed(app, conversation, plan_mode, &result.content);
+    let message_plan = capture_agent_plan_draft_if_needed(
+        app,
+        conversation,
+        plan_mode,
+        &result.content,
+        result.stream_outcome.as_str(),
+    );
     let mut segments = auxiliary_tool_segments(&auxiliary_tool_records);
     segments.extend(result.segments);
     let mut tool_records = auxiliary_tool_records;
@@ -1920,6 +1962,7 @@ async fn complete_assistant_reply(
         Some(run_entry),
         Some(result.stream_outcome.as_str()),
         result.usage,
+        message_plan,
     )
     .await?;
     Ok(())
@@ -2020,6 +2063,7 @@ async fn complete_direct_image_generation_reply(
                 Some(agent_run_entry_label(entry)),
                 Some("completed"),
                 None,
+                None,
             )
             .await?;
             Ok(())
@@ -2094,6 +2138,7 @@ pub(crate) async fn push_assistant_message(
     run_entry: Option<&str>,
     stream_outcome: Option<&str>,
     usage: Option<crate::chat::model::ModelUsage>,
+    agent_plan: Option<AgentPlanState>,
 ) -> Result<(), String> {
     let segments =
         normalize_assistant_segments(&content, reasoning.as_deref(), &tool_calls, segments);
@@ -2154,6 +2199,7 @@ pub(crate) async fn push_assistant_message(
             model_messages,
             tool_calls,
             segments,
+            agent_plan,
             api_messages,
             active_skill_id: active_skill_id.map(|id| id.to_string()),
             run_entry: run_entry.map(str::to_string),
@@ -2239,6 +2285,7 @@ fn persist_partial_assistant_snapshot(
         artifacts: Vec::new(),
         tool_calls: tool_records.to_vec(),
         segments,
+        agent_plan: None,
         api_messages: api_messages.to_vec(),
         model_messages,
         active_skill_id: None,
@@ -2588,17 +2635,28 @@ fn capture_agent_plan_draft_if_needed(
     conversation: &mut Conversation,
     original_plan_mode: bool,
     content: &str,
-) {
-    if !original_plan_mode || !crate::chat::plan::is_plan_mode(&conversation.agent_plan_state) {
-        return;
+    stream_outcome: &str,
+) -> Option<AgentPlanState> {
+    if stream_outcome != "completed"
+        || !original_plan_mode
+        || !crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
+    {
+        return None;
     }
     let next_state =
         crate::chat::plan::capture_draft_from_reply(&conversation.agent_plan_state, content);
     if next_state == conversation.agent_plan_state {
-        return;
+        return if crate::chat::plan::executable_plan_text(&next_state)
+            .is_some_and(|plan| plan == content.trim())
+        {
+            Some(next_state)
+        } else {
+            None
+        };
     }
     conversation.agent_plan_state = next_state.clone();
     emit_chat_plan_state(app, &conversation.id, &next_state);
+    Some(next_state)
 }
 
 fn assistant_model_messages_for_storage(
@@ -6142,6 +6200,7 @@ mod tests {
                     tool_call_id: None,
                 },
             ],
+            agent_plan: None,
             api_messages: Vec::new(),
             model_messages: Vec::new(),
             active_skill_id: None,
@@ -6216,6 +6275,7 @@ mod tests {
                     tool_call_id: None,
                 },
             ],
+            agent_plan: None,
             api_messages: vec![
                 serde_json::json!({
                     "role": "assistant",
@@ -6270,6 +6330,7 @@ mod tests {
             artifacts: Vec::new(),
             tool_calls: Vec::new(),
             segments: Vec::new(),
+            agent_plan: None,
             api_messages: Vec::new(),
             model_messages: Vec::new(),
             active_skill_id: None,
@@ -6327,9 +6388,111 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
-        thinking_level: None,
+            thinking_level: None,
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         }
+    }
+
+    #[test]
+    fn approve_agent_plan_targets_selected_message_plan() {
+        let mut conversation = test_conversation_with_summary(false);
+        let old_plan = "1. Inspect current code\n2. Draft older fix";
+        let new_plan = "1. Inspect plan mode\n2. Implement inline execution";
+        let mut older = test_chat_message("msg_plan_old", "assistant", old_plan, 10);
+        older.agent_plan = Some(AgentPlanState {
+            mode: crate::chat::AgentPlanMode::Plan,
+            status: crate::chat::AgentPlanStatus::Draft,
+            plan: Some(old_plan.to_string()),
+            updated_at: 10,
+        });
+        let mut newer = test_chat_message("msg_plan_new", "assistant", new_plan, 11);
+        newer.agent_plan = Some(AgentPlanState {
+            mode: crate::chat::AgentPlanMode::Plan,
+            status: crate::chat::AgentPlanStatus::Draft,
+            plan: Some(new_plan.to_string()),
+            updated_at: 11,
+        });
+        conversation.agent_plan_state = older.agent_plan.clone().unwrap();
+        conversation.messages.push(older);
+        conversation.messages.push(newer);
+
+        approve_agent_plan_for_execution(&mut conversation, Some("msg_plan_new")).unwrap();
+
+        assert_eq!(
+            conversation.agent_plan_state.plan.as_deref(),
+            Some(new_plan)
+        );
+        assert_eq!(
+            conversation.agent_plan_state.status,
+            crate::chat::AgentPlanStatus::Approved
+        );
+        let older = conversation
+            .messages
+            .iter()
+            .find(|message| message.id == "msg_plan_old")
+            .unwrap();
+        assert_eq!(
+            older.agent_plan.as_ref().unwrap().status,
+            crate::chat::AgentPlanStatus::Draft
+        );
+        let newer = conversation
+            .messages
+            .iter()
+            .find(|message| message.id == "msg_plan_new")
+            .unwrap();
+        assert_eq!(
+            newer.agent_plan.as_ref().unwrap().status,
+            crate::chat::AgentPlanStatus::Approved
+        );
+    }
+
+    #[test]
+    fn approve_agent_plan_rejects_non_plan_message_target() {
+        let mut conversation = test_conversation_with_summary(false);
+        conversation
+            .messages
+            .push(test_chat_message("msg_plain", "assistant", "plain answer", 10));
+
+        let error = approve_agent_plan_for_execution(&mut conversation, Some("msg_plain"))
+            .unwrap_err();
+
+        assert_eq!(error, "该消息不是可执行计划");
+    }
+
+    #[test]
+    fn approve_agent_plan_rejects_empty_message_plan_target() {
+        let mut conversation = test_conversation_with_summary(false);
+        let mut message = test_chat_message("msg_empty_plan", "assistant", "plain answer", 10);
+        message.agent_plan = Some(AgentPlanState {
+            mode: crate::chat::AgentPlanMode::Plan,
+            status: crate::chat::AgentPlanStatus::Draft,
+            plan: Some("   ".to_string()),
+            updated_at: 10,
+        });
+        conversation.messages.push(message);
+
+        let error = approve_agent_plan_for_execution(&mut conversation, Some("msg_empty_plan"))
+            .unwrap_err();
+
+        assert_eq!(error, "该消息不是可执行计划");
+    }
+
+    #[test]
+    fn approve_agent_plan_rejects_non_executable_fragment_target() {
+        let mut conversation = test_conversation_with_summary(false);
+        let mut message = test_chat_message("msg_fragment_plan", "assistant", "没问题！积萌,", 10);
+        message.agent_plan = Some(AgentPlanState {
+            mode: crate::chat::AgentPlanMode::Plan,
+            status: crate::chat::AgentPlanStatus::Draft,
+            plan: Some("没问题！积萌,".to_string()),
+            updated_at: 10,
+        });
+        conversation.messages.push(message);
+
+        let error = approve_agent_plan_for_execution(&mut conversation, Some("msg_fragment_plan"))
+            .unwrap_err();
+
+        assert_eq!(error, "该消息不是可执行计划");
     }
 
     #[test]
@@ -6500,6 +6663,7 @@ mod tests {
                     artifacts: Vec::new(),
                     tool_calls: Vec::new(),
                     segments: Vec::new(),
+                    agent_plan: None,
                     api_messages: Vec::new(),
                     model_messages: Vec::new(),
                     active_skill_id: None,
@@ -6517,6 +6681,7 @@ mod tests {
                     artifacts: Vec::new(),
                     tool_calls: Vec::new(),
                     segments: Vec::new(),
+                    agent_plan: None,
                     api_messages: vec![
                         serde_json::json!({
                             "role": "assistant",
@@ -6563,7 +6728,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
-        thinking_level: None,
+            thinking_level: None,
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 
@@ -6647,6 +6812,7 @@ mod tests {
                     artifacts: Vec::new(),
                     tool_calls: Vec::new(),
                     segments: Vec::new(),
+                    agent_plan: None,
                     api_messages: vec![
                         serde_json::json!({
                             "role": "assistant",

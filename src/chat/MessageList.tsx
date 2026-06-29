@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 import type { AgentPlanState, ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
+import { isExecutableAgentPlanText } from './agentPlan'
 import { useStreamCoarse, useStreamSnapshot } from './streamingStore'
 import { prefersReducedMotion } from './utils'
 
@@ -21,6 +22,7 @@ interface MessageListProps {
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
+  onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
 }
 
 const LIST_EDGE_PADDING_PX = 16
@@ -29,7 +31,6 @@ const LIST_EDGE_PADDING_PX = 16
 // 屏外的气泡连同其 KaTeX host / Markdown / 图片 DOM 真正从 DOM 卸载。
 type RenderItem =
   | { kind: 'spacer'; key: 'padding-top' | 'padding-bottom'; size: number }
-  | { kind: 'plan'; key: 'agent-plan'; planState: AgentPlanState }
   | { kind: 'message'; key: string; message: ChatMessage }
   | { kind: 'streaming'; key: 'streaming-assistant'; message: ChatMessage; messageStreaming: boolean; reasoningStreaming: boolean }
   | { kind: 'thinking'; key: 'thinking' }
@@ -43,6 +44,7 @@ function MessageListBase({
   onUpdateMessage,
   onRegenerateMessage,
   onDeleteMessage,
+  onExecuteAgentPlan,
 }: MessageListProps) {
   // 流式预览状态直接订阅 streamingStore——只有本组件随每帧内容重渲，Chat/侧栏/输入栏不动。
   const coarse = useStreamCoarse()
@@ -67,15 +69,24 @@ function MessageListBase({
   const [atBottom, setAtBottom] = useState(true)
   const lastScrollOffsetRef = useRef(0)
 
-  // 把 Agent plan + 消息 + 流式预览 + 占位拼成统一的虚拟列表项数组。
+  const legacyPlanMessageId = useMemo(() => {
+    const legacyPlan = agentPlanState?.plan?.trim()
+    if (!isExecutableAgentPlanText(legacyPlan)) return null
+    const hasMessagePlan = messages.some((message) => Boolean(
+      isExecutableAgentPlanText((message.agent_plan ?? message.agentPlan)?.plan),
+    ))
+    if (hasMessagePlan) return null
+    return [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.content.trim() === legacyPlan)
+      ?.id ?? null
+  }, [agentPlanState, messages])
+
+  // 把消息 + 流式预览 + 占位拼成统一的虚拟列表项数组。
   const items = useMemo<RenderItem[]>(() => {
     const list: RenderItem[] = [
       { kind: 'spacer', key: 'padding-top', size: LIST_EDGE_PADDING_PX },
     ]
-
-    if (agentPlanState?.plan?.trim()) {
-      list.push({ kind: 'plan', key: 'agent-plan', planState: agentPlanState })
-    }
 
     for (const message of messages) {
       list.push({ kind: 'message', key: message.id, message })
@@ -110,7 +121,6 @@ function MessageListBase({
     list.push({ kind: 'spacer', key: 'padding-bottom', size: LIST_EDGE_PADDING_PX })
     return list
   }, [
-    agentPlanState,
     messages,
     streaming,
     streamFrozen,
@@ -215,8 +225,6 @@ function MessageListBase({
       switch (item.kind) {
         case 'spacer':
           return <div aria-hidden="true" style={{ height: item.size }} />
-        case 'plan':
-          return <AgentPlanPanel planState={item.planState} />
         case 'message': {
           const msg = item.message
           const assistantStats = msg.role === 'assistant'
@@ -232,6 +240,8 @@ function MessageListBase({
               onUpdateMessage={msg.role === 'assistant' ? onUpdateMessage : undefined}
               onRegenerateMessage={msg.role === 'assistant' ? onRegenerateMessage : undefined}
               onDeleteMessage={onDeleteMessage}
+              agentPlanOverride={msg.id === legacyPlanMessageId ? agentPlanState : null}
+              onExecuteAgentPlan={msg.role === 'assistant' ? onExecuteAgentPlan : undefined}
             />
           )
         }
@@ -265,9 +275,12 @@ function MessageListBase({
     [
       conversationId,
       assistantStreamStatsByMessageId,
+      agentPlanState,
+      legacyPlanMessageId,
       onUpdateMessage,
       onRegenerateMessage,
       onDeleteMessage,
+      onExecuteAgentPlan,
       streamingReasoningDurationMs,
       streamingReasoningDurationMsBySegmentId,
     ],
@@ -305,31 +318,6 @@ function MessageListBase({
           <ChevronDown size={18} strokeWidth={2} />
         </button>
       )}
-    </div>
-  )
-}
-
-function AgentPlanPanel({ planState }: { planState?: AgentPlanState | null }) {
-  const plan = planState?.plan?.trim() ?? ''
-  if (!plan) return null
-
-  const mode = planState?.mode ?? 'act'
-  const status = planState?.status ?? 'draft'
-  return (
-    <div className="chat-motion-fade-up pb-3 pt-1">
-      <section className="border-b border-[var(--theme-surface-border)] bg-[color-mix(in_srgb,var(--theme-surface)_95%,transparent)] pb-3 backdrop-blur dark:border-neutral-800/80 dark:bg-[#212121]/95">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="text-[11px] font-medium uppercase tracking-normal text-neutral-500 dark:text-neutral-400">
-            Agent plan
-          </div>
-          <div className="text-[11px] text-neutral-400 dark:text-neutral-500">
-            {status} · {mode}
-          </div>
-        </div>
-        <p className="line-clamp-6 whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-700 dark:text-neutral-300">
-          {plan}
-        </p>
-      </section>
     </div>
   )
 }

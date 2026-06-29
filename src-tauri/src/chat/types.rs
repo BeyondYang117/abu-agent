@@ -256,6 +256,8 @@ pub struct ChatMessage {
     pub tool_calls: Vec<ToolCallRecord>,
     #[serde(default)]
     pub segments: Vec<ChatMessageSegment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_plan: Option<AgentPlanState>,
     /// Hidden OpenAI-compatible transcript messages produced while answering this UI message.
     ///
     /// Tool calls stay rendered as metadata in `tool_calls`, but strict tool-calling

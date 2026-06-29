@@ -169,6 +169,8 @@ export interface ChatMessage {
   tool_calls?: ToolCallRecord[]
   toolCalls?: ToolCallRecord[]
   segments?: ChatMessageSegment[]
+  agent_plan?: AgentPlanState | null
+  agentPlan?: AgentPlanState | null
   api_messages?: unknown[]
   apiMessages?: unknown[]
   model_messages?: unknown[]

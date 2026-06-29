@@ -4,6 +4,135 @@ import { describe, expect, it } from 'vitest'
 import { MessageBubble } from './MessageBubble'
 import type { ChatMessage } from './types'
 
+describe('MessageBubble agent plan action', () => {
+  it('renders execute action for a message-scoped draft plan', async () => {
+    const user = userEvent.setup()
+    const calls: string[] = []
+    const message: ChatMessage = {
+      id: 'msg-plan',
+      role: 'assistant',
+      content: '1. Read code\n2. Implement',
+      agent_plan: {
+        mode: 'plan',
+        status: 'draft',
+        plan: '1. Read code\n2. Implement',
+        updated_at: 1,
+      },
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} onExecuteAgentPlan={(messageId) => { calls.push(messageId) }} />)
+
+    expect(screen.getByText('计划草案')).toBeInTheDocument()
+    expect(screen.queryByLabelText('计划内容')).not.toBeInTheDocument()
+    const button = screen.getByRole('button', { name: '执行这条计划' })
+    expect(
+      button.compareDocumentPosition(screen.getByText('Read code')),
+    ).toBe(Node.DOCUMENT_POSITION_PRECEDING)
+    await user.click(button)
+    expect(calls).toEqual(['msg-plan'])
+  })
+
+  it('keeps process timeline outside the plan label and renders the action at the bottom', () => {
+    const message: ChatMessage = {
+      id: 'msg-plan-with-process',
+      role: 'assistant',
+      content: '## 执行计划\n\n1. 调研\n2. 实现',
+      agent_plan: {
+        mode: 'plan',
+        status: 'draft',
+        plan: '## 执行计划\n\n1. 调研\n2. 实现',
+        updated_at: 1,
+      },
+      segments: [
+        { id: 'seg-reasoning', kind: 'reasoning', phase: 'plain', order: 1, text: '先调研一下' },
+        { id: 'seg-tool', kind: 'tool', phase: 'tool_loop', order: 2, tool_call_id: 'tool-search' },
+        { id: 'seg-text', kind: 'text', phase: 'synthesis', order: 3, text: '## 执行计划\n\n1. 调研\n2. 实现' },
+      ],
+      tool_calls: [
+        {
+          id: 'tool-search',
+          name: 'web_search',
+          source: 'native',
+          status: 'completed',
+          arguments: '{"query":"AI chat frameworks"}',
+        },
+      ],
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
+
+    expect(screen.queryByLabelText('计划内容')).not.toBeInTheDocument()
+    const button = screen.getByRole('button', { name: '执行这条计划' })
+    expect(
+      button.compareDocumentPosition(screen.getByText('执行计划')),
+    ).toBe(Node.DOCUMENT_POSITION_PRECEDING)
+    expect(screen.getByText('计划草案')).toBeInTheDocument()
+  })
+
+  it('shows approved state without an execute button', () => {
+    const message: ChatMessage = {
+      id: 'msg-plan-approved',
+      role: 'assistant',
+      content: '1. Read code\n2. Edit',
+      agent_plan: {
+        mode: 'act',
+        status: 'approved',
+        plan: '1. Read code\n2. Edit',
+        updated_at: 1,
+      },
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
+
+    expect(screen.getByText('已按这条计划执行')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
+  })
+
+  it('does not render execute action for an incomplete non-plan fragment', () => {
+    const message: ChatMessage = {
+      id: 'msg-plan-fragment',
+      role: 'assistant',
+      content: '没问题！积萌,',
+      agent_plan: {
+        mode: 'plan',
+        status: 'draft',
+        plan: '没问题！积萌,',
+        updated_at: 1,
+      },
+      stream_outcome: 'interrupted',
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
+
+    expect(screen.queryByText('计划草案')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
+  })
+
+  it('does not render execute action for a non-plan sentence even if persisted as draft', () => {
+    const message: ChatMessage = {
+      id: 'msg-plan-sentence',
+      role: 'assistant',
+      content: '计划：我会处理这个问题。',
+      agent_plan: {
+        mode: 'plan',
+        status: 'draft',
+        plan: '计划：我会处理这个问题。',
+        updated_at: 1,
+      },
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
+
+    expect(screen.queryByText('计划草案')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
+  })
+})
+
 describe('MessageBubble timeline orphan tools', () => {
   it('renders tool calls that are missing tool segments', () => {
     const message: ChatMessage = {

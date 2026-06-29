@@ -1,6 +1,6 @@
 import { memo, useRef } from 'react'
 import { act, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MessageList } from './MessageList'
 import {
   getCoarse,
@@ -63,6 +63,52 @@ function message(id: number): ChatMessage {
 }
 
 describe('MessageList ← streamingStore 集成', () => {
+  it('does not render a detached global agent plan row', async () => {
+    const onExecute = vi.fn()
+    render(
+      <MessageList
+        conversationId="c-plan"
+        messages={[{
+          id: 'msg-plan',
+          role: 'assistant',
+          content: '1. Read code\n2. Implement',
+          timestamp: 1,
+        }]}
+        agentPlanState={{ mode: 'plan', status: 'draft', plan: '1. Read code\n2. Implement', updated_at: 1 }}
+        onExecuteAgentPlan={onExecute}
+      />,
+    )
+    await flush()
+
+    expect(document.querySelector('[data-chat-message-list-item="plan"]')).not.toBeInTheDocument()
+    const button = screen.getByRole('button', { name: '执行这条计划' })
+    expect(button).toBeInTheDocument()
+    await act(async () => {
+      button.click()
+    })
+    expect(onExecute).toHaveBeenCalledWith('msg-plan')
+  })
+
+  it('does not attach a legacy agent plan row to non-plan text', async () => {
+    render(
+      <MessageList
+        conversationId="c-plan-fragment"
+        messages={[{
+          id: 'msg-plan-fragment',
+          role: 'assistant',
+          content: '没问题！积萌,',
+          timestamp: 1,
+        }]}
+        agentPlanState={{ mode: 'plan', status: 'draft', plan: '没问题！积萌,', updated_at: 1 }}
+        onExecuteAgentPlan={() => {}}
+      />,
+    )
+    await flush()
+
+    expect(screen.queryByText('计划草案')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
+  })
+
   it('applyStreamSnapshotToState 等价：内容快照 + coarse streaming → 渲染流式预览文本', async () => {
     siblingRenders = 0
     mountList()
