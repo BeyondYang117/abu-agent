@@ -6,6 +6,10 @@
 //! 任意支持 DCR 的远程 MCP 一键授权连接。
 
 pub mod oauth;
+pub mod obsidian;
+pub mod himalaya;
+
+pub use obsidian::list_obsidian_vaults_cmd;
 
 use tauri::{AppHandle, State};
 

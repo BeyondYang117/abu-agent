@@ -853,6 +853,113 @@ impl Default for KnowledgeBaseConfig {
     }
 }
 
+fn default_imap_port() -> u16 {
+    993
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
+fn default_imap_encryption() -> String {
+    "tls".to_string()
+}
+
+fn default_smtp_encryption() -> String {
+    "start-tls".to_string()
+}
+
+/// Himalaya 邮箱账户（IMAP 读 + SMTP 发）；凭据明文存 settings，同步到 ~/.config/himalaya/config.toml。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EmailAccountConfig {
+    /// TOML `[accounts.<id>]` 段名；空时由 email 推导。
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+    pub password: String,
+    pub imap_host: String,
+    #[serde(default = "default_imap_port")]
+    pub imap_port: u16,
+    #[serde(default = "default_imap_encryption")]
+    pub imap_encryption: String,
+    pub smtp_host: String,
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
+    #[serde(default = "default_smtp_encryption")]
+    pub smtp_encryption: String,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+impl Default for EmailAccountConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            email: String::new(),
+            display_name: String::new(),
+            password: String::new(),
+            imap_host: String::new(),
+            imap_port: default_imap_port(),
+            imap_encryption: default_imap_encryption(),
+            smtp_host: String::new(),
+            smtp_port: default_smtp_port(),
+            smtp_encryption: default_smtp_encryption(),
+            is_default: false,
+        }
+    }
+}
+
+pub fn email_account_id_from_address(email: &str) -> String {
+    let slug: String = email
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        "default".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 注入系统提示：已配置的 Himalaya 邮箱列表。
+pub fn email_accounts_system_prompt(accounts: &[EmailAccountConfig], language: &str) -> Option<String> {
+    if accounts.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = accounts
+        .iter()
+        .map(|account| {
+            let id = if account.id.trim().is_empty() {
+                email_account_id_from_address(&account.email)
+            } else {
+                account.id.trim().to_string()
+            };
+            format!("- {} (account id: {id})", account.email.trim())
+        })
+        .collect();
+    if language.starts_with("zh") {
+        Some(format!(
+            "已配置邮箱（Himalaya CLI，激活 himalaya skill 后用 run_command）：\n{}\n需本机已安装 himalaya（如 brew install himalaya）。发信、删信、批量移动前须向用户确认。",
+            lines.join("\n")
+        ))
+    } else {
+        Some(format!(
+            "Configured mailboxes (Himalaya CLI — activate the himalaya skill and use run_command):\n{}\nRequires the himalaya binary on PATH (e.g. brew install himalaya). Confirm with the user before sending, deleting, or bulk-moving mail.",
+            lines.join("\n")
+        ))
+    }
+}
+
 /**
  * 应用完整设置
  */
@@ -930,6 +1037,12 @@ pub struct Settings {
     /// 自动归档目标目录路径（空字符串表示未设置）
     #[serde(default)]
     pub image_archive_path: String,
+    /// 用户 Obsidian 笔记库本地路径（空表示未配置）；注入系统提示供 agent 读取笔记。
+    #[serde(default)]
+    pub obsidian_vault_path: String,
+    /// IMAP/SMTP 邮箱（Himalaya）；保存时同步到 ~/.config/himalaya/config.toml。
+    #[serde(default)]
+    pub email_accounts: Vec<EmailAccountConfig>,
     // 旧版字段，用于迁移
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openai: Option<OpenAIConfig>,
@@ -1040,6 +1153,8 @@ impl Default for Settings {
             auto_check_update: true,
             image_archive_enabled: false,
             image_archive_path: String::new(),
+            obsidian_vault_path: String::new(),
+            email_accounts: Vec::new(),
             openai: None,
         }
     }
@@ -1116,6 +1231,62 @@ fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
     } else {
         settings.chat_provider_id.clear();
         settings.chat_model.clear();
+    }
+}
+
+fn sanitize_email_accounts(accounts: &mut Vec<EmailAccountConfig>) {
+    accounts.retain(|account| !account.email.trim().is_empty());
+    for account in accounts.iter_mut() {
+        account.email = account.email.trim().to_string();
+        account.display_name = account.display_name.trim().to_string();
+        account.password = account.password.trim().to_string();
+        account.imap_host = account.imap_host.trim().to_string();
+        account.smtp_host = account.smtp_host.trim().to_string();
+        account.imap_encryption = account.imap_encryption.trim().to_lowercase();
+        account.smtp_encryption = account.smtp_encryption.trim().to_lowercase();
+        if account.id.trim().is_empty() {
+            account.id = email_account_id_from_address(&account.email);
+        } else {
+            account.id = account
+                .id
+                .trim()
+                .to_lowercase()
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+                .trim_matches('-')
+                .to_string();
+        }
+        if account.id.is_empty() {
+            account.id = "default".to_string();
+        }
+        if account.display_name.is_empty() {
+            account.display_name = account.email.clone();
+        }
+        if account.imap_port == 0 {
+            account.imap_port = default_imap_port();
+        }
+        if account.smtp_port == 0 {
+            account.smtp_port = default_smtp_port();
+        }
+        if account.imap_encryption.is_empty() {
+            account.imap_encryption = default_imap_encryption();
+        }
+        if account.smtp_encryption.is_empty() {
+            account.smtp_encryption = default_smtp_encryption();
+        }
+    }
+    if accounts.len() == 1 {
+        accounts[0].is_default = true;
+    }
+    if !accounts.is_empty() && !accounts.iter().any(|account| account.is_default) {
+        accounts[0].is_default = true;
     }
 }
 
@@ -1590,6 +1761,8 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     // 清理归档目录路径（去除首尾空白）
     settings.image_archive_path = settings.image_archive_path.trim().to_string();
+    settings.obsidian_vault_path = settings.obsidian_vault_path.trim().to_string();
+    sanitize_email_accounts(&mut settings.email_accounts);
 
     settings.retry_attempts = clamp_retry_attempts(settings.retry_attempts);
 

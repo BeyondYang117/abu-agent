@@ -1,6 +1,6 @@
 // 文档处理设置区（知识库页）：仅 Kivio 内置本地解析 + 图片 OCR。
 // 第三方处理器（MinerU/Doc2X/自定义）已挂起。
-import { Download, Info, RefreshCw } from 'lucide-react'
+import { Download, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   api,
@@ -10,7 +10,7 @@ import {
   type RapidOcrStatus,
 } from '../api/tauri'
 import { type Lang } from './i18n'
-import { SettingsGroup, Select } from './components'
+import { SettingsGroup, Select, SettingRow } from './components'
 
 const EMPTY: DocumentProcessingConfig = {
   ocrEngine: 'off',
@@ -34,84 +34,72 @@ export function DocumentProcessingPanel({
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
 
   return (
-    <SettingsGroup title={t('文档处理', 'Document processing')}>
-      <p className="flex items-start gap-1.5 px-1 py-1 text-xs text-zinc-500">
-        <Info size={13} className="mt-0.5 shrink-0" />
-        <span>
-          {t(
-            '用 Kivio 本地解析（txt/md/html、PDF 文字层、docx/xlsx），免费、离线、批量友好。图片可选用 OCR 引擎识别文字后入库。',
-            'Uses Kivio local parsing (txt/md/html, PDF text layer, docx/xlsx) — free, offline, batch-friendly. Images can be OCR’d into text via the selected engine.',
+    <div className="space-y-4">
+      <SettingsGroup title={t('解析选项', 'Parsing options')}>
+        <SettingRow
+          label={t('OCR 引擎', 'OCR engine')}
+          description={t(
+            '图片入库前识别文字；关闭则跳过图片文件。',
+            'Recognize text in images before indexing; off skips image files.',
           )}
-        </span>
-      </p>
+        >
+          <Select
+            className="w-52"
+            value={cfg.ocrEngine}
+            onChange={(v) => patch({ ocrEngine: v as OcrEngine })}
+            options={[
+              { value: 'off', label: t('关闭', 'Off') },
+              { value: 'system', label: t('系统 OCR', 'System OCR') },
+              { value: 'rapid_ocr', label: t('RapidOCR 离线', 'RapidOCR (offline)') },
+            ]}
+          />
+        </SettingRow>
 
-      {/* OCR 引擎 */}
-      <div className="flex flex-wrap items-center gap-2 py-2">
-        <span className="text-sm text-zinc-500">{t('OCR 引擎', 'OCR engine')}</span>
-        <Select
-          className="w-56"
-          value={cfg.ocrEngine}
-          onChange={(v) => patch({ ocrEngine: v as OcrEngine })}
-          options={[
-            { value: 'off', label: t('关闭', 'Off') },
-            { value: 'system', label: t('系统 OCR', 'System OCR') },
-            { value: 'rapid_ocr', label: t('RapidOCR 离线', 'RapidOCR (offline)') },
-          ]}
-        />
-      </div>
-
-      {cfg.ocrEngine === 'system' && (
-        <div className="kv-panel mt-1">
-          <div className="kv-panel-body">
+        {cfg.ocrEngine === 'system' && (
+          <p className="kv-row-desc -mt-1 px-1 pb-1">
             {isMac
-              ? t('macOS：Apple Vision。', 'macOS: Apple Vision.')
-              : t(
-                  'Windows：Windows.Media.Ocr；其他平台不可用。',
-                  'Windows: Windows.Media.Ocr; unavailable on other platforms.',
-                )}
-          </div>
-        </div>
-      )}
+              ? t('macOS：Apple Vision', 'macOS: Apple Vision')
+              : t('Windows：Windows.Media.Ocr', 'Windows: Windows.Media.Ocr')}
+          </p>
+        )}
 
-      {cfg.ocrEngine === 'rapid_ocr' && <RapidOcrWidget t={t} />}
+        {cfg.ocrEngine === 'rapid_ocr' && <RapidOcrWidget t={t} />}
 
-      {/* PDF 处理策略 */}
-      <div className="flex flex-wrap items-center gap-2 py-2">
-        <span className="text-sm text-zinc-500">{t('PDF 处理策略', 'PDF strategy')}</span>
-        <Select
-          className="w-56"
-          value={cfg.pdfStrategy}
-          onChange={(v) => patch({ pdfStrategy: v as PdfStrategy })}
-          options={[
-            { value: 'text', label: t('文字层优先', 'Text layer') },
-            { value: 'force_ocr', label: t('强制 OCR', 'Force OCR') },
-          ]}
-        />
-      </div>
+        <SettingRow
+          label={t('PDF 处理策略', 'PDF strategy')}
+          description={t(
+            '默认读取 PDF 文字层；扫描版强制 OCR 暂未启用。',
+            'Reads the PDF text layer by default; force OCR for scans is not enabled yet.',
+          )}
+        >
+          <Select
+            className="w-52"
+            value={cfg.pdfStrategy}
+            onChange={(v) => patch({ pdfStrategy: v as PdfStrategy })}
+            options={[
+              { value: 'text', label: t('文字层优先', 'Text layer') },
+              { value: 'force_ocr', label: t('强制 OCR', 'Force OCR') },
+            ]}
+          />
+        </SettingRow>
 
-      {cfg.pdfStrategy === 'force_ocr' && (
-        <p className="flex items-start gap-1.5 px-1 text-[11px] text-amber-700 dark:text-amber-200">
-          <Info size={12} className="mt-0.5 shrink-0" />
-          <span>
+        {cfg.pdfStrategy === 'force_ocr' && (
+          <p className="px-1 pb-1 text-[11px] text-amber-700 dark:text-amber-200">
             {t(
               '内置仅支持 PDF 文字层，强制 OCR（扫描版）暂未启用。',
               'Built-in only supports the PDF text layer; force OCR (scanned PDFs) is not yet enabled.',
             )}
-          </span>
-        </p>
-      )}
+          </p>
+        )}
+      </SettingsGroup>
 
-      {/* 支持格式一览 */}
-      <div className="kv-panel mt-2">
-        <div className="kv-panel-title !mb-0">{t('支持格式', 'Supported formats')}</div>
-        <div className="kv-panel-body">
-          {t(
-            'txt / md / html / PDF（文字层）/ docx / xlsx；图片（png/jpg/webp 等，需开启 OCR）。',
-            'txt / md / html / PDF (text layer) / docx / xlsx; images (png/jpg/webp, requires OCR).',
-          )}
-        </div>
-      </div>
-    </SettingsGroup>
+      <p className="text-xs leading-relaxed text-zinc-400 dark:text-zinc-500">
+        {t(
+          '支持格式：txt / md / html / PDF（文字层）/ docx / xlsx；图片 png/jpg/webp 等需开启 OCR。',
+          'Supported: txt, md, html, PDF (text layer), docx, xlsx; images (png/jpg/webp) require OCR.',
+        )}
+      </p>
+    </div>
   )
 }
 
@@ -151,14 +139,16 @@ function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
   }
 
   return (
-    <div className="kv-panel mt-1">
+    <div className="mx-1 mb-2 rounded-lg border border-zinc-200 bg-zinc-50/80 px-3 py-2.5 dark:border-zinc-700 dark:bg-zinc-900/40">
       {status?.modelsAvailable ? (
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          <div className="flex-1">
-            <div className="kv-panel-title !mb-0">{t('RapidOCR 已就绪', 'RapidOCR ready')}</div>
+          <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              {t('RapidOCR 已就绪', 'RapidOCR ready')}
+            </div>
             {status.modelDir && (
-              <div className="kv-panel-body break-all font-mono">{status.modelDir}</div>
+              <div className="mt-0.5 break-all font-mono text-[11px] text-zinc-500">{status.modelDir}</div>
             )}
           </div>
           <button onClick={refresh} className="kv-icon-btn" title={t('刷新', 'Refresh')}>
@@ -166,10 +156,10 @@ function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
           </button>
         </div>
       ) : (
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           <div className="flex items-start gap-2">
-            <span className="mt-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
-            <div className="kv-panel-title !mb-0 flex-1">
+            <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+            <div className="flex-1 text-sm font-medium text-zinc-700 dark:text-zinc-200">
               {t('RapidOCR 模型未下载', 'RapidOCR models not downloaded')}
             </div>
             <button
@@ -183,13 +173,13 @@ function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
           </div>
 
           {downloadState === 'downloading' ? (
-            <div className="kv-panel-body flex items-center gap-2 pl-3.5">
+            <div className="flex items-center gap-2 pl-3.5 text-sm text-zinc-500">
               <RefreshCw size={12} strokeWidth={2.25} className="animate-spin" />
               <span>{t('正在下载…', 'Downloading…')}</span>
             </div>
           ) : (
             <div className="pl-3.5">
-              <button onClick={download} className="kv-btn primary">
+              <button onClick={download} className="kv-btn primary sm">
                 <Download size={12} strokeWidth={2.5} />
                 {t('下载离线模型', 'Download models')}
               </button>

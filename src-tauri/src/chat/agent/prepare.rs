@@ -210,6 +210,8 @@ pub fn build_chat_system_prompt(
     agent_todo_prompt: Option<&str>,
     project_context: Option<&ProjectPromptContext>,
     delivery_dir: Option<&str>,
+    obsidian_vault_path: Option<&str>,
+    email_accounts_prompt: Option<&str>,
 ) -> String {
     build_chat_system_prompt_with_segments(
         language,
@@ -231,6 +233,8 @@ pub fn build_chat_system_prompt(
         project_context,
         delivery_dir,
         None,
+        obsidian_vault_path,
+        email_accounts_prompt,
     )
     .0
 }
@@ -284,6 +288,8 @@ pub fn build_chat_system_prompt_with_segments(
     project_context: Option<&ProjectPromptContext>,
     delivery_dir: Option<&str>,
     knowledge_base_prompt: Option<&str>,
+    obsidian_vault_path: Option<&str>,
+    email_accounts_prompt: Option<&str>,
 ) -> (String, Vec<ContextUsageSegment>) {
     let mut prompt = String::new();
     let mut segments = Vec::new();
@@ -366,6 +372,37 @@ pub fn build_chat_system_prompt_with_segments(
             "knowledge_base",
             "Knowledge base",
             kb,
+        );
+    }
+
+    if let Some(path) = obsidian_vault_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let text = if language.starts_with("zh") {
+            format!("Obsidian 笔记库路径：{path}")
+        } else {
+            format!("Obsidian vault path: {path}")
+        };
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "runtime_context",
+            "Runtime context",
+            &text,
+        );
+    }
+
+    if let Some(text) = email_accounts_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "runtime_context",
+            "Runtime context",
+            text,
         );
     }
 
@@ -898,6 +935,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
 
         assert!(prompt.contains("run_python"));
@@ -924,6 +963,8 @@ mod tests {
             None,
             None,
             "",
+            None,
+            None,
             None,
             None,
             None,
@@ -972,6 +1013,8 @@ mod tests {
             None,
             None,
             Some("/Users/me/Kivio/outputs/conv_abc"),
+            None,
+            None,
         );
 
         // Delivery dir + run_python + write → three-way split: the delivery dir
@@ -1010,11 +1053,44 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         );
 
         assert!(prompt.contains("生成代码块"));
         assert!(prompt.contains("不调用 write"));
         assert!(prompt.contains("不要复述文件内容"));
+    }
+
+    #[test]
+    fn chat_prompt_includes_obsidian_vault_path() {
+        let registry = skills::SkillRegistry::default();
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+
+        let prompt = build_chat_system_prompt(
+            "zh-CN",
+            false,
+            false,
+            &registry,
+            &chat_tools,
+            false,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("/Users/me/Obsidian/MyVault"),
+            None,
+        );
+
+        assert!(prompt.contains("Obsidian 笔记库路径：/Users/me/Obsidian/MyVault"));
     }
 
     #[test]

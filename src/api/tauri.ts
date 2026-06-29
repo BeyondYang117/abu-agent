@@ -722,6 +722,47 @@ export type Settings = {
   imageArchiveEnabled?: boolean
   /** 自动归档目标目录路径 */
   imageArchivePath?: string
+  /** Obsidian 笔记库本地路径（空表示未配置） */
+  obsidianVaultPath?: string
+  /** Himalaya IMAP/SMTP 邮箱账户 */
+  emailAccounts?: EmailAccountConfig[]
+}
+
+export type EmailAccountConfig = {
+  id: string
+  email: string
+  displayName: string
+  password: string
+  imapHost: string
+  imapPort: number
+  imapEncryption: string
+  smtpHost: string
+  smtpPort: number
+  smtpEncryption: string
+  isDefault: boolean
+}
+
+export type EmailProviderPreset = {
+  id: string
+  label: string
+  imapHost: string
+  imapPort: number
+  imapEncryption: string
+  smtpHost: string
+  smtpPort: number
+  smtpEncryption: string
+}
+
+export type HimalayaStatus = {
+  installed: boolean
+  version: string | null
+  path: string | null
+}
+
+export type HimalayaInstallResult = {
+  ok: boolean
+  alreadyInstalled: boolean
+  message: string
 }
 
 /** kivio-code CLI 的独立配置(存于 <app_data>/kivio-code/config.json,与共享 Settings 分开)。 */
@@ -1060,6 +1101,8 @@ function normalizeSettings(settings: Settings): Settings {
     autoCheckUpdate: current.autoCheckUpdate ?? true,
     imageArchiveEnabled: current.imageArchiveEnabled ?? false,
     imageArchivePath: current.imageArchivePath ?? '',
+    obsidianVaultPath: current.obsidianVaultPath ?? '',
+    emailAccounts: current.emailAccounts ?? [],
   }
 }
 
@@ -1161,6 +1204,19 @@ export const api = {
   // 返回物化好的 ChatMcpServer（不写 settings，由前端合并进 chatTools.servers 并保存）。
   connectorOauthConnect: (args: { catalogId?: string; url?: string; name?: string }) =>
     invoke<ChatMcpServer>('connector_oauth_connect', args),
+
+  listObsidianVaults: () =>
+    invoke<{ name: string; path: string }[]>('list_obsidian_vaults_cmd'),
+
+  listEmailProviderPresets: () =>
+    invoke<EmailProviderPreset[]>('list_email_provider_presets'),
+
+  himalayaStatus: () => invoke<HimalayaStatus>('himalaya_status_cmd'),
+
+  himalayaInstall: () => invoke<HimalayaInstallResult>('himalaya_install_cmd'),
+
+  testHimalayaEmail: (account: EmailAccountConfig, existingAccounts?: EmailAccountConfig[]) =>
+    invoke<string>('test_himalaya_email_cmd', { account, existingAccounts }),
 
   // 窗口控制
   resizeWindow: async (width: number, height: number) => {

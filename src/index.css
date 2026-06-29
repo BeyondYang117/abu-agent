@@ -1468,6 +1468,32 @@ body {
   padding: 8px 28px 20px;
 }
 
+.kv-scroll > .kb-panel-root,
+.kv-scroll > .kv-providers-root {
+  flex: 1 1 auto;
+  min-height: 100%;
+  align-self: stretch;
+}
+
+.kv-scroll:has(> .kb-panel-root),
+.kv-scroll:has(> .kv-providers-root) {
+  display: flex;
+  flex-direction: column;
+}
+
+.kv-providers-root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.kv-providers-root > .kv-providers {
+  flex: 1 1 auto;
+  min-height: 100%;
+  align-items: stretch;
+}
+
 .dark .chat-window-shell .settings-embedded-scroll {
   background: #1a1a1a;
 }
@@ -1541,7 +1567,8 @@ body {
 
 .settings-embedded .kv-provider-list {
   width: 220px;
-  min-height: 360px;
+  min-height: 100%;
+  align-self: stretch;
   padding: 8px;
   border-radius: 10px;
   background: var(--bg);
@@ -1567,8 +1594,7 @@ body {
 
 .settings-embedded .kv-provider-list-items {
   flex: 1 1 auto;
-  min-height: 72px;
-  max-height: 200px;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1579,6 +1605,7 @@ body {
 
 .settings-embedded .kv-provider-list-presets {
   flex-shrink: 0;
+  margin-top: auto;
   padding: 10px 0 8px;
   border-top: 1px solid var(--divider);
 }
@@ -1744,6 +1771,11 @@ body {
     max-width: none;
     min-height: 0;
     flex-direction: column;
+  }
+
+  .settings-embedded .kv-provider-list-presets,
+  .kv-provider-list-presets {
+    margin-top: 0;
   }
 
   .settings-embedded .kv-provider-list-items,
@@ -2782,7 +2814,8 @@ body {
 }
 .kv-provider-list {
   width: 200px;
-  min-height: 320px;
+  min-height: 100%;
+  align-self: stretch;
   background: var(--bg-sidebar);
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -2794,8 +2827,7 @@ body {
 }
 .kv-provider-list-items {
   flex: 1 1 auto;
-  min-height: 64px;
-  max-height: 180px;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -2805,6 +2837,7 @@ body {
 }
 .kv-provider-list-presets {
   flex-shrink: 0;
+  margin-top: auto;
   padding: 8px 0 6px;
   border-top: 1px solid var(--divider);
 }

@@ -4,9 +4,10 @@
 // token 类（GitHub PAT / Composio key / 自定义 token）直接前端物化；
 // OAuth 类（Notion / 自定义 OAuth）走后端 connector_oauth_connect（PKCE + DCR + loopback）。
 
-import { useCallback, useState } from 'react'
-import { Check, Loader2, Trash2, X, Plus } from 'lucide-react'
-import { api, type ChatMcpServer, type ChatToolsConfig } from '../api/tauri'
+import { useCallback, useEffect, useState } from 'react'
+import { open } from '@tauri-apps/plugin-dialog'
+import { Check, FolderOpen, Loader2, Trash2, X, Plus } from 'lucide-react'
+import { api, type ChatMcpServer, type ChatToolsConfig, type EmailAccountConfig } from '../api/tauri'
 import { i18n, type Lang } from './i18n'
 import { SettingsGroup, Input, Select } from './components'
 import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from './connectorCatalog'
@@ -18,8 +19,11 @@ import {
   LinearBrandIcon,
   SentryBrandIcon,
   AtlassianBrandIcon,
+  ObsidianBrandIcon,
+  EmailBrandIcon,
 } from './ConnectorBrandIcons'
 import { ConnectorDetailModal } from './ConnectorDetailModal'
+import { EmailConnectorModal } from './EmailConnectorModal'
 
 // catalog 项 iconKey → 品牌图标组件查找表；未命中（含自定义连接器）回退到通用 link 图标。
 const CONNECTOR_ICON_BY_KEY: Record<
@@ -32,6 +36,8 @@ const CONNECTOR_ICON_BY_KEY: Record<
   linear: LinearBrandIcon,
   sentry: SentryBrandIcon,
   atlassian: AtlassianBrandIcon,
+  obsidian: ObsidianBrandIcon,
+  email: EmailBrandIcon,
 }
 
 function connectorIconFor(iconKey: string | undefined) {
@@ -42,9 +48,16 @@ function connectorIconFor(iconKey: string | undefined) {
 type Props = {
   servers: ChatMcpServer[]
   updateChatTools: (updates: Partial<ChatToolsConfig>) => void
+  obsidianVaultPath: string
+  onObsidianVaultPathChange: (path: string) => void
+  emailAccounts: EmailAccountConfig[]
+  onEmailAccountsChange: (accounts: EmailAccountConfig[]) => void
   lang: Lang
   testServer: (server: ChatMcpServer) => Promise<{ ok: boolean; message: string; tools: { name: string }[] } | null>
 }
+
+const OBSIDIAN_CATALOG_ID = 'obsidian'
+const EMAIL_CATALOG_ID = 'email'
 
 // 目录项 → 已物化 server 的 id 约定。
 function connectorServerId(catalogId: string): string {
@@ -60,8 +73,30 @@ function slugify(name: string): string {
     || 'custom'
 }
 
-export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: Props) {
+export function ConnectorsPanel({
+  servers,
+  updateChatTools,
+  obsidianVaultPath,
+  onObsidianVaultPathChange,
+  emailAccounts,
+  onEmailAccountsChange,
+  lang,
+  testServer,
+}: Props) {
   const t = i18n[lang]
+
+  const obsidianEntry = CONNECTOR_CATALOG.find((e) => e.id === OBSIDIAN_CATALOG_ID)
+  const emailEntry = CONNECTOR_CATALOG.find((e) => e.id === EMAIL_CATALOG_ID)
+  const obsidianConnected = obsidianVaultPath.trim().length > 0
+  const emailConnected = emailAccounts.length > 0
+
+  // Obsidian vault 选择器状态。
+  const [vaultInputFor, setVaultInputFor] = useState(false)
+  const [vaultDraft, setVaultDraft] = useState('')
+  const [vaultOptions, setVaultOptions] = useState<{ name: string; path: string }[]>([])
+  const [vaultLoading, setVaultLoading] = useState(false)
+
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
 
   // 哪个目录项正展开 token 输入框。
   const [tokenInputFor, setTokenInputFor] = useState<string | null>(null)
@@ -107,6 +142,48 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
     [servers, updateChatTools],
   )
 
+  const loadVaultOptions = useCallback(async () => {
+    setVaultLoading(true)
+    try {
+      const vaults = await api.listObsidianVaults()
+      setVaultOptions(vaults)
+      if (!vaultDraft && vaults.length > 0) {
+        setVaultDraft(vaults[0].path)
+      }
+    } catch {
+      setVaultOptions([])
+    } finally {
+      setVaultLoading(false)
+    }
+  }, [vaultDraft])
+
+  useEffect(() => {
+    if (!vaultInputFor) return
+    void loadVaultOptions()
+  }, [vaultInputFor, loadVaultOptions])
+
+  const connectVault = useCallback(
+    (path: string) => {
+      const trimmed = path.trim()
+      if (!trimmed) return
+      onObsidianVaultPathChange(trimmed)
+      setVaultInputFor(false)
+      setVaultDraft('')
+    },
+    [onObsidianVaultPathChange],
+  )
+
+  const browseVaultFolder = useCallback(async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false })
+      if (typeof selected === 'string') {
+        setVaultDraft(selected)
+      }
+    } catch (err) {
+      console.error('Failed to pick vault directory:', err)
+    }
+  }, [])
+
   // token 类目录项 → 物化 + 可选测试连接。
   const connectTokenConnector = useCallback(
     async (entry: ConnectorCatalogEntry, token: string) => {
@@ -119,7 +196,7 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
         connectorId: entry.id,
         enabled: true,
         transport: 'streamable_http',
-        url: entry.url,
+        url: entry.url ?? '',
         command: '',
         args: [],
         env: {},
@@ -246,10 +323,14 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
     }
   }, [customAuth, customName, customToken, customUrl, testServer, writeServer])
 
-  // 已连接卡（包含目录已知 + 自定义）。
+  // 已连接卡（MCP server；Obsidian 单独渲染）。
   const connectedServers = servers.filter((s) => s.connectorId)
-  // 目录中尚未连接的项。
-  const availableEntries = CONNECTOR_CATALOG.filter((e) => !connectedById.has(e.id))
+  // 目录中尚未连接的项（Obsidian 已配置路径时从可用列表移除）。
+  const availableEntries = CONNECTOR_CATALOG.filter((e) => {
+    if (e.id === OBSIDIAN_CATALOG_ID) return !obsidianConnected
+    if (e.id === EMAIL_CATALOG_ID) return !emailConnected
+    return !connectedById.has(e.id)
+  })
 
   const renderConnectedCard = (server: ChatMcpServer) => {
     const entry = CONNECTOR_CATALOG.find((e) => e.id === server.connectorId)
@@ -314,8 +395,110 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
     )
   }
 
+  const renderObsidianConnectedCard = () => {
+    if (!obsidianEntry || !obsidianConnected) return null
+    const Icon = ObsidianBrandIcon
+    return (
+      <div
+        key="obsidian-vault"
+        className="kv-panel cursor-pointer transition hover:border-[var(--accent)]"
+        role="button"
+        tabIndex={0}
+        onClick={() => setDetail({ kind: 'entry', entryId: OBSIDIAN_CATALOG_ID })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setDetail({ kind: 'entry', entryId: OBSIDIAN_CATALOG_ID })
+          }
+        }}
+      >
+        <div className="flex items-start gap-3">
+          <Icon size={22} className="mt-0.5 shrink-0 opacity-90" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{obsidianEntry.name}</div>
+            <div className="kv-row-desc line-clamp-2 text-[12px]">{obsidianEntry.description[lang]}</div>
+            <div className="kv-row-desc mt-1 truncate font-mono text-[11px] opacity-80">
+              {obsidianVaultPath}
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="flex items-center gap-1 text-[12px] text-emerald-600 dark:text-emerald-400">
+              <Check size={12} />
+              <span>{t.connectorsConnected}</span>
+            </div>
+            <button
+              type="button"
+              className="kv-btn sm danger"
+              onClick={(e) => {
+                e.stopPropagation()
+                onObsidianVaultPathChange('')
+              }}
+              data-tauri-drag-region="false"
+            >
+              <Trash2 size={10} />
+              {t.connectorsDisconnect}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const renderEmailConnectedCard = () => {
+    if (!emailEntry || !emailConnected) return null
+    const Icon = EmailBrandIcon
+    return (
+      <div
+        key="email-connector"
+        className="kv-panel cursor-pointer transition hover:border-[var(--accent)]"
+        role="button"
+        tabIndex={0}
+        onClick={() => setEmailModalOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setEmailModalOpen(true)
+          }
+        }}
+      >
+        <div className="flex items-start gap-3">
+          <Icon size={22} className="mt-0.5 shrink-0 opacity-90" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{emailEntry.name}</div>
+            <div className="kv-row-desc line-clamp-2 text-[12px]">{emailEntry.description[lang]}</div>
+            <div className="kv-row-desc mt-1 text-[12px] opacity-80">
+              {emailAccounts.map((account) => account.email).join(' · ')}
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="flex items-center gap-1 text-[12px] text-emerald-600 dark:text-emerald-400">
+              <Check size={12} />
+              <span>
+                {emailAccounts.length} {t.connectorsEmailAccountsTitle}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="kv-btn sm"
+              onClick={(e) => {
+                e.stopPropagation()
+                setEmailModalOpen(true)
+              }}
+              data-tauri-drag-region="false"
+            >
+              {t.connectorsEmailEdit}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const renderAvailableCard = (entry: ConnectorCatalogEntry) => {
+    const isVault = entry.authKind === 'vault'
+    const isEmail = entry.authKind === 'email'
     const isTokenInput = tokenInputFor === entry.id
+    const isVaultInput = isVault && vaultInputFor
     const isOauth = entry.authKind === 'oauth'
     const oauthBusy = oauthBusyFor === entry.id
     const errorMessage = oauthError?.id === entry.id ? oauthError.message : null
@@ -326,10 +509,20 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
         className="kv-panel cursor-pointer transition hover:border-[var(--accent)]"
         role="button"
         tabIndex={0}
-        onClick={() => setDetail({ kind: 'entry', entryId: entry.id })}
+        onClick={() => {
+          if (entry.id === EMAIL_CATALOG_ID) {
+            setEmailModalOpen(true)
+            return
+          }
+          setDetail({ kind: 'entry', entryId: entry.id })
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
+            if (entry.id === EMAIL_CATALOG_ID) {
+              setEmailModalOpen(true)
+              return
+            }
             setDetail({ kind: 'entry', entryId: entry.id })
           }
         }}
@@ -368,6 +561,33 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
                 t.connectorsOauthAuthorize
               )}
             </button>
+          ) : isVault ? (
+            !isVaultInput && (
+              <button
+                type="button"
+                className="kv-btn sm primary shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setVaultDraft(obsidianVaultPath)
+                  setVaultInputFor(true)
+                }}
+                data-tauri-drag-region="false"
+              >
+                {t.connectorsConnect}
+              </button>
+            )
+          ) : isEmail ? (
+            <button
+              type="button"
+              className="kv-btn sm primary shrink-0"
+              onClick={(e) => {
+                e.stopPropagation()
+                setEmailModalOpen(true)
+              }}
+              data-tauri-drag-region="false"
+            >
+              {emailConnected ? t.connectorsEmailEdit : t.connectorsConnect}
+            </button>
           ) : (
             !isTokenInput && (
               <button
@@ -385,6 +605,68 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
             )
           )}
         </div>
+        {isVaultInput && (
+          <div
+            className="mt-2 space-y-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="kv-row-desc text-[12px] opacity-80">{t.connectorsVaultPathHint}</div>
+            {vaultLoading ? (
+              <div className="flex items-center gap-2 text-[12px] opacity-70">
+                <Loader2 size={12} className="animate-spin" />
+                {t.connectorsConnecting}
+              </div>
+            ) : vaultOptions.length > 0 ? (
+              <Select
+                value={vaultDraft}
+                onChange={setVaultDraft}
+                options={vaultOptions.map((v) => ({
+                  value: v.path,
+                  label: `${v.name} — ${v.path}`,
+                }))}
+              />
+            ) : (
+              <div className="kv-row-desc text-[12px] opacity-70">{t.connectorsVaultEmpty}</div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={vaultDraft}
+                onChange={setVaultDraft}
+                mono
+                placeholder={t.connectorsVaultSelect}
+              />
+              <button
+                type="button"
+                className="kv-btn sm"
+                onClick={() => void browseVaultFolder()}
+                data-tauri-drag-region="false"
+              >
+                <FolderOpen size={10} />
+                {t.connectorsVaultBrowse}
+              </button>
+              <button
+                type="button"
+                className="kv-btn sm primary"
+                disabled={!vaultDraft.trim()}
+                onClick={() => connectVault(vaultDraft)}
+                data-tauri-drag-region="false"
+              >
+                {t.connectorsVaultSave}
+              </button>
+              <button
+                type="button"
+                className="kv-btn sm"
+                onClick={() => {
+                  setVaultInputFor(false)
+                  setVaultDraft('')
+                }}
+                data-tauri-drag-region="false"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          </div>
+        )}
         {isTokenInput && (
           <div
             className="mt-2 flex items-center gap-2"
@@ -430,10 +712,12 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
   return (
     <>
       <SettingsGroup title={t.connectorsSectionConnected}>
-        {connectedServers.length === 0 ? (
+        {connectedServers.length === 0 && !obsidianConnected && !emailConnected ? (
           <div className="kv-row-desc py-2">{t.connectorsEmptyConnected}</div>
         ) : (
           <div className="grid grid-cols-1 gap-3 py-2 md:grid-cols-2">
+            {renderObsidianConnectedCard()}
+            {renderEmailConnectedCard()}
             {connectedServers.map(renderConnectedCard)}
           </div>
         )}
@@ -524,11 +808,22 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
           }
           const connectBusy =
             (entry && oauthBusyFor === entry.id) || (server ? busyId === server.id : false)
+          const vaultPath =
+            entry?.authKind === 'vault' && obsidianConnected ? obsidianVaultPath : undefined
+          if (entry?.id === EMAIL_CATALOG_ID) {
+            setDetail(null)
+            return null
+          }
           return (
             <ConnectorDetailModal
               lang={lang}
               entry={entry}
               server={server}
+              vaultPath={vaultPath}
+              onDisconnectVault={() => {
+                onObsidianVaultPathChange('')
+                setDetail(null)
+              }}
               fallbackName={server?.name ?? entry?.name ?? ''}
               fallbackUrl={server?.url ?? entry?.url}
               connectBusy={!!connectBusy}
@@ -540,7 +835,14 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
               }}
               onConnect={() => {
                 if (!entry) return
-                if (entry.authKind === 'oauth') {
+                if (entry.authKind === 'vault') {
+                  setDetail(null)
+                  setVaultDraft(obsidianVaultPath)
+                  setVaultInputFor(true)
+                } else if (entry.authKind === 'email') {
+                  setDetail(null)
+                  setEmailModalOpen(true)
+                } else if (entry.authKind === 'oauth') {
                   void connectOauthConnector(entry)
                 } else {
                   // token 类：关闭弹层、在可用卡片上展开 token 输入框。
@@ -552,6 +854,14 @@ export function ConnectorsPanel({ servers, updateChatTools, lang, testServer }: 
             />
           )
         })()}
+
+      <EmailConnectorModal
+        lang={lang}
+        open={emailModalOpen}
+        accounts={emailAccounts}
+        onAccountsChange={onEmailAccountsChange}
+        onClose={() => setEmailModalOpen(false)}
+      />
     </>
   )
 }

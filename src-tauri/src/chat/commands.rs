@@ -1824,6 +1824,10 @@ async fn complete_assistant_reply(
         .and_then(|id| find_set_by_id(app, id).ok())
         .map(|set| set.system_prompt)
         .filter(|prompt| !prompt.trim().is_empty());
+    let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
+        .then_some(settings.obsidian_vault_path.as_str());
+    let email_accounts_prompt =
+        crate::settings::email_accounts_system_prompt(&settings.email_accounts, &language);
     let system_prompt = agent_prepare::build_chat_system_prompt(
         &language,
         !main_image_paths.is_empty(),
@@ -1843,6 +1847,8 @@ async fn complete_assistant_reply(
         Some(&agent_todo_prompt),
         project_prompt_context.as_ref(),
         delivery_dir.as_deref(),
+        obsidian_vault_path,
+        email_accounts_prompt.as_deref(),
     );
 
     let runtime_messages = build_chat_api_messages(
@@ -1879,6 +1885,8 @@ async fn complete_assistant_reply(
         )),
         project_prompt_context.as_ref(),
         delivery_dir.as_deref(),
+        obsidian_vault_path,
+        email_accounts_prompt.as_deref(),
     );
 
     let host = ChatAgentHost {
@@ -3465,6 +3473,10 @@ async fn compute_context_state(
         &conversation.knowledge_base_ids,
         &language,
     );
+    let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
+        .then_some(settings.obsidian_vault_path.as_str());
+    let email_accounts_prompt =
+        crate::settings::email_accounts_system_prompt(&settings.email_accounts, &language);
     let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
         &language,
         !main_image_paths.is_empty(),
@@ -3498,6 +3510,8 @@ async fn compute_context_state(
             .map(|path| path.display().to_string())
             .as_deref(),
         knowledge_base_prompt.as_deref(),
+        obsidian_vault_path,
+        email_accounts_prompt.as_deref(),
     );
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let request_messages = build_chat_api_messages(

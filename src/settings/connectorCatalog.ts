@@ -3,8 +3,10 @@
 // authKind:
 //   - 'token'：用户粘贴 PAT/API key → headers.Authorization = 'Bearer <token>'（Phase A 已支持）。
 //   - 'oauth'：OAuth 2.1 + PKCE 授权（Phase B 实现；Phase A 卡片连接按钮禁用）。
+//   - 'vault'：本地笔记库路径（Obsidian）；写入 settings，注入系统提示，不走 MCP。
+//   - 'email'：IMAP/SMTP 邮箱（Himalaya CLI）；写入 settings + config.toml，配合 himalaya skill。
 
-export type ConnectorAuthKind = 'oauth' | 'token'
+export type ConnectorAuthKind = 'oauth' | 'token' | 'vault' | 'email'
 
 export type ConnectorCatalogEntry = {
   id: string
@@ -13,8 +15,8 @@ export type ConnectorCatalogEntry = {
   description: { zh: string; en: string }
   /** NavIcons 之外的图标键，用于卡片渲染（见 ConnectorsPanel 的图标映射）。 */
   iconKey: string
-  /** MCP（streamable_http）端点 URL。 */
-  url: string
+  /** MCP（streamable_http）端点 URL；vault 类连接器可省略。 */
+  url?: string
   authKind: ConnectorAuthKind
   /** 数据是否经第三方中转（Composio/Rube 等聚合服务）。 */
   composio?: boolean
@@ -31,6 +33,56 @@ export type ConnectorCatalogEntry = {
 }
 
 export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
+  {
+    id: 'obsidian',
+    name: 'Obsidian',
+    description: {
+      zh: '告诉 AI 你的 Obsidian 笔记库本地路径，由 agent 用 read_file 等工具直接读取笔记。',
+      en: 'Tell the agent where your Obsidian vault lives on disk; it reads notes via read_file and other native tools.',
+    },
+    iconKey: 'obsidian',
+    authKind: 'vault',
+    overview: {
+      zh: [
+        '选择本机 Obsidian 笔记库（vault）路径。',
+        '路径写入设置并注入对话系统提示，无需 MCP。',
+        'Agent 可用 read_file、glob_files、search_files 等工具检索与阅读 .md 笔记。',
+      ],
+      en: [
+        'Pick your local Obsidian vault directory.',
+        'The path is saved in settings and injected into the chat system prompt — no MCP.',
+        'The agent can search and read .md notes with read_file, glob_files, search_files, etc.',
+      ],
+    },
+    website: 'https://obsidian.md',
+    support: 'https://help.obsidian.md',
+    developer: 'Obsidian',
+  },
+  {
+    id: 'email',
+    name: 'Email',
+    description: {
+      zh: '通过 Himalaya CLI 连接 IMAP/SMTP 邮箱，agent 激活 himalaya skill 后用 bash 读写邮件。',
+      en: 'Connect IMAP/SMTP mail via the Himalaya CLI; the agent uses the himalaya skill and bash to read and send mail.',
+    },
+    iconKey: 'email',
+    authKind: 'email',
+    overview: {
+      zh: [
+        '填写邮箱、密码与 IMAP/SMTP 服务器（支持 Gmail / Outlook 等预设）。',
+        '保存后写入设置并同步 ~/.config/himalaya/config.toml；首次连接会自动安装 Himalaya。',
+        'Agent 激活 himalaya skill 后通过 bash 读写邮件。',
+      ],
+      en: [
+        'Enter email, password, and IMAP/SMTP servers (Gmail / Outlook presets supported).',
+        'Saved to settings and synced to ~/.config/himalaya/config.toml; Himalaya is installed automatically on first connect.',
+        'The agent uses the himalaya skill + bash to read and send mail.',
+      ],
+    },
+    website: 'https://github.com/pimalaya/himalaya',
+    support: 'https://pimalaya.org/himalaya/',
+    developer: 'Pimalaya',
+  },
   {
     id: 'notion',
     name: 'Notion',

@@ -3750,6 +3750,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               <ConnectorsPanel
                 servers={chatTools.servers}
                 updateChatTools={updateChatTools}
+                obsidianVaultPath={settings?.obsidianVaultPath ?? ''}
+                onObsidianVaultPathChange={(path) => updateSettings({ obsidianVaultPath: path })}
+                emailAccounts={settings?.emailAccounts ?? []}
+                onEmailAccountsChange={(accounts) => updateSettings({ emailAccounts: accounts })}
                 lang={lang}
                 testServer={async (server) => {
                   try {
@@ -4030,7 +4034,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
             {/* ===== 模型管理标签页 ===== */}
             {activeTab === 'providers' && (
-              <div className="kv-providers">
+              <div className="kv-providers-root">
+                <div className="kv-providers">
                 <div className="kv-provider-list">
                   <button
                     type="button"
@@ -4318,6 +4323,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         </SettingsGroup>
                     )
                   })() : null}
+                </div>
                 </div>
               </div>
             )}

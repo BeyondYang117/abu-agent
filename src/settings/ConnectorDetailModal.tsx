@@ -31,6 +31,10 @@ type Props = {
   onConnect: () => void
   /** 连接按钮是否处于忙碌态。 */
   connectBusy: boolean
+  /** vault 类连接器：已保存的本地路径。 */
+  vaultPath?: string
+  /** vault 类连接器：断开（清空路径）。 */
+  onDisconnectVault?: () => void
 }
 
 export function ConnectorDetailModal({
@@ -44,9 +48,11 @@ export function ConnectorDetailModal({
   onDisconnect,
   onConnect,
   connectBusy,
+  vaultPath,
+  onDisconnectVault,
 }: Props) {
   const t = i18n[lang]
-  const connected = !!server
+  const connected = !!server || !!vaultPath?.trim()
   const Name = server?.name ?? entry?.name ?? fallbackName
   const description = entry?.description[lang] ?? server?.url ?? fallbackUrl ?? ''
 
@@ -173,6 +179,15 @@ export function ConnectorDetailModal({
               </section>
             )}
 
+            {vaultPath?.trim() && (
+              <section>
+                <h4 className="kv-connector-detail-section-title">
+                  {t.connectorsVaultSelect}
+                </h4>
+                <div className="kv-row-desc truncate font-mono text-[11px]">{vaultPath}</div>
+              </section>
+            )}
+
             {server?.auth?.account && (
               <section>
                 <h4 className="kv-connector-detail-section-title">
@@ -228,7 +243,10 @@ export function ConnectorDetailModal({
                 <button
                   type="button"
                   className="kv-btn sm danger"
-                  onClick={() => server && onDisconnect(server.id)}
+                  onClick={() => {
+                    if (server) onDisconnect(server.id)
+                    else onDisconnectVault?.()
+                  }}
                   data-tauri-drag-region="false"
                 >
                   <Trash2 size={10} />
@@ -257,8 +275,8 @@ export function ConnectorDetailModal({
             </div>
           </div>
 
-          {/* 右栏：工具（仅已连接） */}
-          {connected && (
+          {/* 右栏：工具（仅 MCP 已连接） */}
+          {connected && server && (
             <div className="kv-connector-detail-right">
               <div className="kv-connector-detail-right-header">
                 <h4 className="kv-connector-detail-section-title">{t.connectorsDetailTools}</h4>
