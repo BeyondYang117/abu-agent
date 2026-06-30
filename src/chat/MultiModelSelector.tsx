@@ -96,7 +96,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
       ? createPortal(
           <div
             ref={popoverRef}
-            className={`chat-motion-popover absolute inset-x-0 z-40 max-h-[min(420px,60vh)] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${placementClass}`}
+            className={`chat-motion-popover chat-popover-scroll absolute inset-x-0 z-40 max-h-[min(420px,60vh)] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${placementClass}`}
             style={{ ['--chat-popover-origin' as string]: popoverOrigin }}
             data-tauri-drag-region="false"
             role="menu"
@@ -169,7 +169,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
       </button>
 
       {value.length > 0 && (
-        <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+        <div className="custom-scrollbar flex min-w-0 items-center gap-1 overflow-x-auto">
           {value.map((ref) => (
             <span
               key={`${ref.provider_id}:${ref.model}`}

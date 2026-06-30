@@ -717,7 +717,7 @@ function FileMutationDetails({ mutation }: { mutation: FileMutationStructuredCon
           <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
             Diff
           </div>
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/[0.035] px-2 py-1.5 font-mono text-[10.5px] leading-4 text-neutral-600 dark:bg-white/[0.055] dark:text-neutral-300">
+          <pre className="custom-scrollbar max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/[0.035] px-2 py-1.5 font-mono text-[10.5px] leading-4 text-neutral-600 dark:bg-white/[0.055] dark:text-neutral-300">
             {diff}
           </pre>
         </div>

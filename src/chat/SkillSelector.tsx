@@ -102,7 +102,7 @@ export function SkillSelector({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div
-            className={`chat-motion-popover absolute top-full z-20 mt-2 max-h-[min(420px,60vh)] w-[min(360px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900 ${
+            className={`chat-motion-popover chat-popover-scroll absolute top-full z-20 mt-2 max-h-[min(420px,60vh)] w-[min(360px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900 ${
               align === 'right' ? 'right-0' : 'left-0'
             }`}
             style={{ ['--chat-popover-origin' as string]: align === 'right' ? 'top right' : 'top left' }}

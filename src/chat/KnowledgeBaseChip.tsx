@@ -91,7 +91,7 @@ export function KnowledgeBaseChip({
       ? createPortal(
           <div
             ref={popoverRef}
-            className={`chat-motion-popover absolute inset-x-0 z-40 max-h-[40vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${placement}`}
+            className={`chat-motion-popover chat-popover-scroll absolute inset-x-0 z-40 max-h-[40vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${placement}`}
             style={{ ['--chat-popover-origin' as string]: origin }}
             data-tauri-drag-region="false"
             role="menu"

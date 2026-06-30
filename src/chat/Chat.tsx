@@ -3440,7 +3440,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
               </button>
             </div>
             {pendingToolConfirm.argumentsPreview && (
-              <pre className="mb-3 max-h-40 overflow-auto rounded-md bg-neutral-100 p-3 text-[11px] leading-relaxed text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+              <pre className="custom-scrollbar mb-3 max-h-40 overflow-auto rounded-md bg-neutral-100 p-3 text-[11px] leading-relaxed text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
                 {pendingToolConfirm.argumentsPreview}
               </pre>
             )}

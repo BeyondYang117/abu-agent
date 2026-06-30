@@ -262,7 +262,7 @@ export function ContextIndicator({
           </div>
 
           {legendSlices.length > 0 && (
-            <div className="min-h-0 max-h-36 space-y-0 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
+            <div className="chat-popover-scroll min-h-0 max-h-36 space-y-0 overflow-y-auto pr-2 [scrollbar-gutter:stable]">
               {legendSlices.map((slice) => (
                 <div
                   key={`row-${slice.id}`}

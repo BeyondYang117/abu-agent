@@ -357,7 +357,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
           {copied ? <Check size={17} strokeWidth={2.2} className="chat-motion-pop" /> : <Copy size={17} strokeWidth={2.2} />}
         </button>
       </div>
-      <pre className="m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900 dark:text-neutral-100">
+      <pre className="custom-scrollbar m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900 dark:text-neutral-100">
         <code className="font-mono">{highlighted}</code>
       </pre>
     </figure>
@@ -498,7 +498,7 @@ function MermaidBlock({ code }: { code: string }) {
         </>
       ) : (
         <div
-          className="max-w-full overflow-x-auto overflow-y-hidden [contain:content] bg-white px-4 py-4 dark:bg-neutral-950 [&>svg]:mx-auto [&>svg]:max-w-none"
+          className="custom-scrollbar max-w-full overflow-x-auto overflow-y-hidden [contain:content] bg-white px-4 py-4 dark:bg-neutral-950 [&>svg]:mx-auto [&>svg]:max-w-none"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       )}
@@ -597,7 +597,7 @@ const markdownComponents: Components = {
     return <CodeBlock code={codeChildrenToString(children)} language="" />
   },
   table: ({ children }) => (
-    <div className="my-3 max-w-full overflow-x-auto">
+    <div className="custom-scrollbar my-3 max-w-full overflow-x-auto">
       <table className="w-full min-w-[240px] border-collapse text-[13px] leading-snug">
         {children}
       </table>
@@ -672,7 +672,7 @@ function CitationChip({ n, hit }: { n: number; hit?: KbHitView }) {
                   {hit.headingPath ? ` · ${hit.headingPath}` : ''}
                 </span>
               </span>
-              <span className="block max-h-48 overflow-auto whitespace-pre-wrap break-words leading-relaxed text-neutral-600 dark:text-neutral-300">
+              <span className="custom-scrollbar block max-h-48 overflow-auto whitespace-pre-wrap break-words leading-relaxed text-neutral-600 dark:text-neutral-300">
                 {hit.text}
               </span>
             </>

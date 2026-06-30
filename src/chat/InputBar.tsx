@@ -1393,7 +1393,7 @@ export function InputBar({
             data-chat-slash-panel="true"
             data-tauri-drag-region="false"
           >
-            <div className="max-h-[min(184px,34vh)] overflow-y-auto">
+            <div className="chat-popover-scroll max-h-[min(184px,34vh)] overflow-y-auto">
               {filteredSlashCommands.length > 0 ? (
                 filteredSlashCommands.map((command, index) => {
                   const Icon = slashCommandIcon(command)
@@ -1447,7 +1447,7 @@ export function InputBar({
           <>
             <div className="fixed inset-0 z-30" onClick={closeMcpMenu} aria-hidden />
             <div
-              className={`chat-motion-popover absolute inset-x-0 z-40 max-h-[40vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
+              className={`chat-motion-popover chat-popover-scroll absolute inset-x-0 z-40 max-h-[40vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
               style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
               data-tauri-drag-region="false"
               role="menu"
@@ -1517,7 +1517,7 @@ export function InputBar({
                 />
               </div>
 
-              <div className="mt-0.5 max-h-48 overflow-y-auto">
+              <div className="chat-popover-scroll mt-0.5 max-h-48 overflow-y-auto">
                 {projectOptionsLoading ? (
                   <div className="px-2 py-2.5 text-[12px] text-neutral-400 dark:text-neutral-500">
                     正在加载项目…

@@ -3712,7 +3712,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                             </p>
                           )}
                           {stderrExpanded && stderrTail.trim() && (
-                            <pre className="mt-1 max-h-40 overflow-auto rounded bg-black/5 dark:bg-white/5 p-2 text-[11px] leading-snug whitespace-pre-wrap break-words">
+                            <pre className="custom-scrollbar mt-1 max-h-40 overflow-auto rounded bg-black/5 dark:bg-white/5 p-2 text-[11px] leading-snug whitespace-pre-wrap break-words">
                               {stderrTail}
                             </pre>
                           )}
@@ -4391,7 +4391,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         <span className="kv-tag accent ml-auto">v{updateInfo.version}</span>
                       </div>
                       {updateInfo.body && (
-                        <div className="mb-3 max-h-40 overflow-y-auto text-[12px] leading-relaxed">
+                        <div className="custom-scrollbar mb-3 max-h-40 overflow-y-auto text-[12px] leading-relaxed">
                           <ChatMarkdown content={updateInfo.body} />
                         </div>
                       )}

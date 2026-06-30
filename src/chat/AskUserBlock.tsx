@@ -425,7 +425,7 @@ export function AskUserBlock({ toolCall }: AskUserBlockProps) {
               </span>
             </div>
 
-            <div ref={optionsScrollRef} className="max-h-[8.5rem] overflow-y-auto pr-1">
+            <div ref={optionsScrollRef} className="chat-popover-scroll max-h-[8.5rem] overflow-y-auto pr-1">
               <div className={currentQuestion.options.some((option) => Boolean(option.description))
                 ? 'grid grid-cols-1 gap-1.5 sm:grid-cols-2'
                 : 'flex flex-wrap gap-1.5'}
@@ -483,7 +483,7 @@ export function AskUserBlock({ toolCall }: AskUserBlockProps) {
           </div>
         </>
       ) : (
-        <div className="mt-2 max-h-28 overflow-y-auto">
+        <div className="chat-popover-scroll mt-2 max-h-28 overflow-y-auto">
           <div className="space-y-1.5">
             {parsed.questions.map((question) => (
               <div key={question.id} className="flex items-start gap-2">

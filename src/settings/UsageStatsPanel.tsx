@@ -225,7 +225,7 @@ function GroupTable({ rows, lang, type }: { rows: UsageGroupStats[]; lang: strin
     )
   }
   return (
-    <div className="overflow-x-auto rounded-md border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950/35">
+    <div className="custom-scrollbar overflow-x-auto rounded-md border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950/35">
       <table className="min-w-[720px] w-full text-left text-[12px]">
         <thead className="border-b border-neutral-200 text-[10.5px] uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-500">
           <tr>
@@ -275,7 +275,7 @@ function LogsTable({ logs, lang }: { logs: UsageRecord[]; lang: string }) {
     )
   }
   return (
-    <div className="overflow-x-auto rounded-md border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950/35">
+    <div className="custom-scrollbar overflow-x-auto rounded-md border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950/35">
       <table className="min-w-[920px] w-full text-left text-[12px]">
         <thead className="border-b border-neutral-200 text-[10.5px] uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-500">
           <tr>

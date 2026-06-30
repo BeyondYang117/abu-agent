@@ -112,7 +112,7 @@ export function BackgroundJobsIndicator() {
           <>
             <div className="fixed inset-0 z-[2000]" onClick={() => setOpen(false)} aria-hidden />
             <div
-              className="chat-motion-popover fixed z-[2001] max-h-[min(360px,55vh)] w-[320px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white p-1.5 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+              className="chat-motion-popover chat-popover-scroll fixed z-[2001] max-h-[min(360px,55vh)] w-[320px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white p-1.5 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
               style={{ top: pos.top, left: pos.left }}
             >
               <div className="px-2 py-1.5 text-[12px] font-medium text-neutral-500 dark:text-neutral-400">
