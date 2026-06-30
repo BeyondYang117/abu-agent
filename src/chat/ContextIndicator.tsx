@@ -158,7 +158,11 @@ export function ContextIndicator({
     [contextWindowTokens, estimatedInputTokens, rawSegments, t],
   )
   const legendSlices = useMemo(
-    () => barSlices.filter((slice) => slice.id !== CONTEXT_FREE_SEGMENT_ID),
+    () =>
+      barSlices
+        .filter((slice) => slice.id !== CONTEXT_FREE_SEGMENT_ID)
+        // 对话消息固定排在图例首位
+        .sort((a, b) => Number(b.id === 'conversation') - Number(a.id === 'conversation')),
     [barSlices],
   )
   const fullness = fullnessLabel(usageRatio, isExternalContext, t)
@@ -177,7 +181,7 @@ export function ContextIndicator({
     <div className="relative" ref={triggerRef} data-tauri-drag-region="false">
       <button
         type="button"
-        className="grid size-8 shrink-0 place-items-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 active:scale-[0.97] dark:text-neutral-300 dark:hover:bg-neutral-800"
+        className="grid size-7 shrink-0 place-items-center rounded-full text-neutral-600 transition-colors hover:bg-neutral-100 active:scale-[0.97] dark:text-neutral-300 dark:hover:bg-neutral-800"
         aria-label={t.contextTriggerAria}
         title={loading
           ? t.contextTriggerLoading
@@ -207,18 +211,23 @@ export function ContextIndicator({
           style={{ ['--chat-popover-origin' as string]: placement === 'up' ? 'bottom right' : 'top right' }}
           data-tauri-drag-region="false"
         >
-          <div className="mb-2 flex items-start justify-between gap-2">
-            <h3 className="min-w-0 text-[12px] font-medium leading-snug text-neutral-700 dark:text-neutral-300">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <h3 className="shrink-0 text-[12px] font-medium leading-snug text-neutral-700 dark:text-neutral-300">
               {panelHeading(t, isExternalContext)}
             </h3>
-            <button
-              type="button"
-              className="-mr-0.5 shrink-0 rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-              aria-label={t.contextCloseAria}
-              onClick={() => setOpen(false)}
-            >
-              <X size={14} strokeWidth={2} />
-            </button>
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span className="min-w-0 truncate text-[11px] leading-none tabular-nums text-neutral-500 dark:text-neutral-400">
+                {tokenLine} · {fullness}
+              </span>
+              <button
+                type="button"
+                className="-mr-0.5 shrink-0 rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+                aria-label={t.contextCloseAria}
+                onClick={() => setOpen(false)}
+              >
+                <X size={14} strokeWidth={2} />
+              </button>
+            </div>
           </div>
 
           <div className="relative mb-2">

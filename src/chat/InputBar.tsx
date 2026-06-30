@@ -1674,13 +1674,13 @@ export function InputBar({
             rows={1}
             className="block max-h-40 min-h-[28px] w-full select-text resize-none overflow-y-hidden border-0 bg-transparent px-1 py-1.5 text-[15px] leading-relaxed text-neutral-900 outline-none placeholder:text-neutral-400 disabled:opacity-50 dark:text-neutral-100"
           />
-          <div className="mt-1.5 flex items-center gap-1.5">
+          <div className="mt-1.5 flex items-center gap-1">
             <button
               type="button"
               onClick={() => void openAttachmentPicker()}
               disabled={disabled}
               tabIndex={-1}
-              className="grid size-8 shrink-0 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
+              className="grid size-7 shrink-0 place-items-center rounded-full text-neutral-500 transition-colors hover:bg-neutral-100 disabled:opacity-40 dark:hover:bg-neutral-800"
               title="添加附件"
               aria-label="添加附件"
             >
@@ -1701,7 +1701,7 @@ export function InputBar({
                 type="button"
                 onClick={toggleMcpMenu}
                 disabled={disabled}
-                className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
+                className={`grid size-7 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
                   mcpMenuOpen
                     ? 'bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100'
                     : 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
@@ -1718,7 +1718,7 @@ export function InputBar({
                 type="button"
                 onClick={toggleProjectMenu}
                 disabled={disabled}
-                className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
+                className={`grid size-7 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
                   projectMenuOpen
                     ? 'bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100'
                     : selectedProject
@@ -1742,7 +1742,7 @@ export function InputBar({
                   type="button"
                   onClick={onOpenAssistantCenter}
                   disabled={disabled}
-                  className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
+                  className={`grid size-7 shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:cursor-default disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
                     currentAssistant
                       ? 'text-indigo-500 hover:bg-neutral-100 dark:text-indigo-300 dark:hover:bg-neutral-800'
                       : 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
@@ -1758,7 +1758,7 @@ export function InputBar({
                   <button
                     type="button"
                     onClick={onClearAssistant}
-                    className="grid size-8 shrink-0 place-items-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                    className="grid size-7 shrink-0 place-items-center rounded-full text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
                     title="清除专家"
                     aria-label="清除专家"
                   >

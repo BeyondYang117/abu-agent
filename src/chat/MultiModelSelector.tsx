@@ -158,7 +158,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`grid size-8 shrink-0 place-items-center rounded-full transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
+        className={`grid size-7 shrink-0 place-items-center rounded-full transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
           enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-500 dark:text-neutral-400'
         }`}
         aria-expanded={open}
