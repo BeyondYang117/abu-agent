@@ -20,6 +20,7 @@ type OnboardingShellProps = {
 
 export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: OnboardingShellProps) {
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [stepIndex, setStepIndex] = useState(0)
@@ -30,20 +31,23 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const lang = (settings?.settingsLanguage || 'zh') as Lang
   const t = i18n[lang]
 
-  useEffect(() => {
-    let cancelled = false
-    void api.getSettings().then((loaded) => {
-      if (cancelled) return
+  const loadSettings = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const loaded = await api.getSettings()
       setSettings(loaded)
-      setLoading(false)
-    }).catch((err) => {
+    } catch (err) {
       console.error('Failed to load settings for onboarding:', err)
-      if (!cancelled) setLoading(false)
-    })
-    return () => {
-      cancelled = true
+      setLoadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    void loadSettings()
+  }, [loadSettings])
 
   const updateSettings = useCallback((next: Settings) => {
     setSettings(next)
@@ -93,6 +97,20 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     if (ok) onSkip()
   }, [onSkip, persistSettings])
 
+  const handleSkipAfterLoadFailure = useCallback(async () => {
+    setSaving(true)
+    try {
+      const loaded = await api.getSettings()
+      await api.saveSettings({ ...loaded, onboardingStatus: 'skipped' })
+      onSettingsChange?.()
+    } catch (err) {
+      console.error('Failed to skip onboarding after load error:', err)
+    } finally {
+      setSaving(false)
+    }
+    onSkip()
+  }, [onSettingsChange, onSkip])
+
   const handleFinish = useCallback(async () => {
     if (!settings || !canCompleteOnboarding(settings)) return
     const ok = await persistSettings('completed')
@@ -108,10 +126,43 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setStepIndex((index) => Math.max(index - 1, 0))
   }
 
-  if (loading || !settings) {
+  if (loading) {
     return (
       <div className="onboarding-shell onboarding-shell--loading settings-embedded kv">
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
+      </div>
+    )
+  }
+
+  if (!settings) {
+    const errorT = i18n.zh
+    return (
+      <div className="onboarding-shell onboarding-shell--loading settings-embedded kv">
+        <div className="onboarding-error-panel">
+          <h2 className="onboarding-title">{errorT.onboardingLoadErrorTitle}</h2>
+          <p className="onboarding-subtitle">{errorT.onboardingLoadErrorDesc}</p>
+          {loadError ? <p className="onboarding-panel-note">{loadError}</p> : null}
+          <div className="onboarding-error-actions">
+            <button
+              type="button"
+              className="kv-btn primary"
+              onClick={() => void loadSettings()}
+              disabled={saving}
+              data-tauri-drag-region="false"
+            >
+              {errorT.onboardingRetry}
+            </button>
+            <button
+              type="button"
+              className="kv-btn ghost"
+              onClick={() => void handleSkipAfterLoadFailure()}
+              disabled={saving}
+              data-tauri-drag-region="false"
+            >
+              {errorT.onboardingSkip}
+            </button>
+          </div>
+        </div>
       </div>
     )
   }

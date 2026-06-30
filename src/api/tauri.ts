@@ -1030,11 +1030,8 @@ function settingsHasUsableProviderConfig(settings: Partial<Settings>): boolean {
 }
 
 function normalizeOnboardingStatus(current: Partial<Settings>): 'pending' | 'completed' | 'skipped' {
-  const raw = current.onboardingStatus
-  if (raw === 'completed' || raw === 'skipped') return raw
-  if (raw === 'pending') {
-    return settingsHasUsableProviderConfig(current) ? 'completed' : 'pending'
-  }
+  const raw = current.onboardingStatus?.trim()
+  if (raw === 'completed' || raw === 'skipped' || raw === 'pending') return raw
   return settingsHasUsableProviderConfig(current) ? 'completed' : 'pending'
 }
 

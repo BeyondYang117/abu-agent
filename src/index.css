@@ -3734,6 +3734,24 @@ body {
   justify-content: center;
 }
 
+.onboarding-error-panel {
+  width: min(420px, calc(100% - 32px));
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card, 12px);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.onboarding-error-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
 .onboarding-drag-bar {
   display: flex;
   align-items: stretch;

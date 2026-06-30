@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Settings } from '../api/tauri'
 import {
   canCompleteOnboarding,
+  isProviderModelBindingUsable,
   providerHasUsableConfig,
   validateProviderStep,
   webSearchConfigured,
@@ -65,6 +66,30 @@ const testProvider = {
   apiFormat: 'openai_chat' as const,
 }
 
+const configuredBindings = {
+  providers: [testProvider],
+  screenshotTranslation: {
+    enabled: true,
+    hotkey: 'CommandOrControl+Shift+A',
+    textHotkey: 'CommandOrControl+Shift+T',
+    providerId: 'p1',
+    model: 'gpt-4o',
+  },
+  lens: {
+    enabled: true,
+    hotkey: 'CommandOrControl+Shift+G',
+    providerId: 'p1',
+    model: 'gpt-4o',
+  },
+  defaultModels: {
+    chat: { providerId: 'p1', model: 'gpt-4o' },
+    vision: { providerId: '', model: '' },
+    titleSummary: { providerId: '', model: '' },
+    compression: { providerId: '', model: '' },
+    imageGeneration: { providerId: '', model: '' },
+  },
+}
+
 describe('onboarding validation', () => {
   it('detects usable provider config', () => {
     const settings = baseSettings({
@@ -75,30 +100,20 @@ describe('onboarding validation', () => {
   })
 
   it('requires quick translate, lens, and chat model bindings', () => {
-    const settings = baseSettings({
-      providers: [testProvider],
-      screenshotTranslation: {
-        enabled: true,
-        hotkey: 'CommandOrControl+Shift+A',
-        textHotkey: 'CommandOrControl+Shift+T',
-        providerId: 'p1',
-        model: 'gpt-4o',
-      },
-      lens: {
-        enabled: true,
-        hotkey: 'CommandOrControl+Shift+G',
-        providerId: 'p1',
-        model: 'gpt-4o',
-      },
-      defaultModels: {
-        chat: { providerId: 'p1', model: 'gpt-4o' },
-        vision: { providerId: '', model: '' },
-        titleSummary: { providerId: '', model: '' },
-        compression: { providerId: '', model: '' },
-        imageGeneration: { providerId: '', model: '' },
-      },
-    })
+    const settings = baseSettings(configuredBindings)
     expect(canCompleteOnboarding(settings)).toBe(true)
+  })
+
+  it('rejects bindings that point to providers without keys', () => {
+    const settings = baseSettings({
+      ...configuredBindings,
+      providers: [{
+        ...testProvider,
+        apiKeys: [],
+      }],
+    })
+    expect(isProviderModelBindingUsable(settings, 'p1', 'gpt-4o')).toBe(false)
+    expect(canCompleteOnboarding(settings)).toBe(false)
   })
 
   it('detects configured web search keys', () => {
