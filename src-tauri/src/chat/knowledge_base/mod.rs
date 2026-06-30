@@ -591,6 +591,18 @@ pub fn heal_stale_indexing(app: &AppHandle) {
     }
 }
 
+/// 懒触发版：不在 app 启动时跑（开 SQLite 会拖慢首窗），改为用户第一次真正访问知识库
+/// （打开知识库面板 → `kb_list_libraries`）时跑，且一个进程内最多跑一次。不用知识库则永不跑。
+///
+/// 前提（调用点必须保证）：触发时本会话不能有正在进行的 ingest。`heal_stale_indexing_at`
+/// 不持 `kb_lock_for`，会把任意 `Indexing` 文档直接刷成 `Error`；当前唯一调用点是「上传前
+/// 首次列库」+ `Once`，此刻不可能有 in-flight ingest，故安全。若以后要把它挪到上传后的刷新
+/// 路径，必须改为持 kb 锁、或排除当前正在索引的文档，否则会误判运行中的任务为中断。
+pub fn heal_stale_indexing_once(app: &AppHandle) {
+    static HEAL_ONCE: std::sync::Once = std::sync::Once::new();
+    HEAL_ONCE.call_once(|| heal_stale_indexing(app));
+}
+
 /// System-prompt segment injected when the conversation has knowledge bases
 /// attached. Tells the model the user's docs are already indexed (don't ask for
 /// re-upload), to prefer `knowledge_search`, and to cite passages inline as

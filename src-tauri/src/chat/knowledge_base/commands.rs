@@ -7,6 +7,8 @@ use super::{KnowledgeDocument, KnowledgeLibrary};
 
 #[tauri::command]
 pub(crate) fn kb_list_libraries(app: AppHandle) -> Result<Vec<KnowledgeLibrary>, String> {
+    // 懒触发：首次打开知识库面板时才复位上次中断的 indexing 状态（避免在启动时同步开 SQLite）。
+    super::heal_stale_indexing_once(&app);
     super::load_libraries(&app)
 }
 
