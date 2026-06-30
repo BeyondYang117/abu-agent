@@ -98,7 +98,7 @@ export function ProviderModelsPicker({
       }}
     >
       <div
-        className="kv-modal kv-model-picker"
+        className="kv kv-modal kv-model-picker"
         role="dialog"
         aria-modal="true"
         aria-labelledby="kv-model-picker-title"
