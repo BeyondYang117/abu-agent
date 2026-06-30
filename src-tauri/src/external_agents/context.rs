@@ -264,6 +264,8 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             knowledge_base_ids: Vec::new(),
             thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
         }
     }
 
@@ -293,6 +295,9 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            group_id: None,
+            provider_id: None,
+            model: None,
             timestamp: 1,
         });
         conversation.messages.push(ChatMessage {
@@ -315,6 +320,9 @@ mod tests {
                 output_tokens: Some(28),
                 ..Default::default()
             }),
+            group_id: None,
+            provider_id: None,
+            model: None,
             timestamp: 2,
         });
 

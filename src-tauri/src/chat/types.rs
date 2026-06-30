@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::chat::model::ModelMessage;
 use crate::mcp::types::ChatToolArtifact;
@@ -283,6 +284,18 @@ pub struct ChatMessage {
     /// (planning/synthesis/compaction). None when the provider reports no usage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<crate::chat::model::ModelUsage>,
+    /// 多模型一问多答（任务 06-30）：同一条 user 消息 fan-out 出的 N 条 assistant 共享同一个
+    /// group_id；单模型回答为 None（旧会话缺字段反序列化为 None，向后兼容）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    /// 该 assistant 实际所用 provider id（多模型时每条各记自己的；单模型为 None，回退会话级
+    /// `Conversation.provider_id`）。供前端列头「model | provider」展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// 该 assistant 实际所用 model（多模型时每条各记自己的；单模型为 None，回退会话级
+    /// `Conversation.model`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub timestamp: i64,
 }
 
@@ -383,6 +396,21 @@ pub struct Conversation {
     /// 每对话「思考等级」：`"off"|"low"|"medium"|"high"`，`None` = 跟随全局思考开关。
     #[serde(default)]
     pub thinking_level: Option<String>,
+    /// 多模型一问多答（任务 06-30，决策 D2）：会话级持久化的多答模型集合（上限 4）。
+    /// 空或单元素 = 单模型现状。一条 user 消息会 fan-out 给这些模型并发回答。
+    #[serde(default)]
+    pub reply_models: Vec<ModelRef>,
+    /// 多答组的「选中条」（决策 D5）：group_id → 被采纳进下一轮历史的 assistant message_id。
+    /// 无记录时取该组顺序第一条。serde default 为空（旧会话兼容）。
+    #[serde(default)]
+    pub group_selections: HashMap<String, String>,
+}
+
+/// 一次回答所用的 (provider, model) 引用。多模型一问多答的会话级模型集元素。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelRef {
+    pub provider_id: String,
+    pub model: String,
 }
 
 /// 对话列表项（index.json 中的元数据）
@@ -592,4 +620,93 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 多模型一问多答（任务 06-30 步骤 2）：旧会话 JSON 缺新字段时反序列化不崩（R9/AC6）。
+
+    #[test]
+    fn chat_message_deserializes_without_multi_model_fields() {
+        // 旧版 assistant 消息，没有 group_id / provider_id / model。
+        let json = r#"{
+            "id": "msg_old",
+            "role": "assistant",
+            "content": "hello",
+            "timestamp": 123
+        }"#;
+        let msg: ChatMessage = serde_json::from_str(json).expect("legacy ChatMessage parses");
+        assert_eq!(msg.id, "msg_old");
+        assert!(msg.group_id.is_none());
+        assert!(msg.provider_id.is_none());
+        assert!(msg.model.is_none());
+    }
+
+    #[test]
+    fn chat_message_roundtrips_multi_model_fields() {
+        let json = r#"{
+            "id": "msg_new",
+            "role": "assistant",
+            "content": "hi",
+            "group_id": "grp_1",
+            "provider_id": "openai",
+            "model": "gpt-4o",
+            "timestamp": 9
+        }"#;
+        let msg: ChatMessage = serde_json::from_str(json).expect("new ChatMessage parses");
+        assert_eq!(msg.group_id.as_deref(), Some("grp_1"));
+        assert_eq!(msg.provider_id.as_deref(), Some("openai"));
+        assert_eq!(msg.model.as_deref(), Some("gpt-4o"));
+        // 重新序列化再反序列化保持一致。
+        let again: ChatMessage =
+            serde_json::from_str(&serde_json::to_string(&msg).unwrap()).unwrap();
+        assert_eq!(again.group_id, msg.group_id);
+        assert_eq!(again.model, msg.model);
+    }
+
+    #[test]
+    fn conversation_deserializes_without_multi_model_fields() {
+        // 旧版会话，没有 reply_models / group_selections。
+        let json = r#"{
+            "id": "conv_old",
+            "title": "t",
+            "provider_id": "p",
+            "model": "m",
+            "messages": [],
+            "created_at": 1,
+            "updated_at": 2
+        }"#;
+        let conv: Conversation = serde_json::from_str(json).expect("legacy Conversation parses");
+        assert_eq!(conv.id, "conv_old");
+        assert!(conv.reply_models.is_empty());
+        assert!(conv.group_selections.is_empty());
+    }
+
+    #[test]
+    fn conversation_roundtrips_multi_model_fields() {
+        let json = r#"{
+            "id": "conv_new",
+            "title": "t",
+            "provider_id": "p",
+            "model": "m",
+            "messages": [],
+            "reply_models": [
+                {"provider_id": "openai", "model": "gpt-4o"},
+                {"provider_id": "anthropic", "model": "claude-3"}
+            ],
+            "group_selections": {"grp_1": "msg_a"},
+            "created_at": 1,
+            "updated_at": 2
+        }"#;
+        let conv: Conversation = serde_json::from_str(json).expect("new Conversation parses");
+        assert_eq!(conv.reply_models.len(), 2);
+        assert_eq!(conv.reply_models[0].provider_id, "openai");
+        assert_eq!(conv.reply_models[0].model, "gpt-4o");
+        assert_eq!(
+            conv.group_selections.get("grp_1").map(String::as_str),
+            Some("msg_a")
+        );
+    }
 }

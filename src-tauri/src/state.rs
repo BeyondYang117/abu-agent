@@ -72,10 +72,18 @@ pub struct AppState {
     pub prev_frontmost_pid_main: AtomicI32,
     /// 流式取消代号：每开新的流就 +1，跑流的循环检测到代号变了就立即结束。
     pub explain_stream_generation: AtomicU64,
-    /// Chat 流式取消代号，按 conversation_id 隔离，避免 Lens 与 Chat 互相取消。
+    /// Chat 流式取消代号分配器，按 conversation_id 隔离，避免 Lens 与 Chat 互相取消。
+    /// 仅作**单调递增的 generation 号分配器**（never 重用），不再表达「活跃」语义。
+    /// 「哪些 generation 当前有效」由 `chat_active_generations` 表达——这样同一会话可同时
+    /// 有多条并发 run（多模型一问多答），开新 run 不再作废兄弟 run。
     pub chat_stream_generations: Mutex<HashMap<String, u64>>,
-    /// 正在进行 assistant 回复生成的 conversation_id 集合，防止同对话并发写盘。
-    pub chat_active_replies: Mutex<HashSet<String>>,
+    /// 每个 conversation_id 当前**活跃**的 generation 集合。`next_chat_generation` 往里加，
+    /// run 结束 `end_chat_generation` 移除，`cancel_chat_generation` 整会话清空（取消全部在跑 run）。
+    /// 单 run 时集合恒为单元素，语义与旧「单 u64」等价。
+    pub chat_active_generations: Mutex<HashMap<String, HashSet<u64>>>,
+    /// 正在进行 assistant 回复生成的 (conversation_id → run_id 集合)，防止同对话同一 run 重复，
+    /// 但允许同一会话多条 run 并存（多模型一问多答）。
+    pub chat_active_replies: Mutex<HashMap<String, HashSet<String>>>,
     /// 等待用户确认的敏感 Chat tool 调用。
     pub pending_chat_tool_approvals: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     /// 本会话(conversation_id)已授予「文件/命令」工具的会话级授权集合。
@@ -197,7 +205,8 @@ impl AppState {
             prev_frontmost_pid_main: AtomicI32::new(0),
             explain_stream_generation: AtomicU64::new(0),
             chat_stream_generations: Mutex::new(HashMap::new()),
-            chat_active_replies: Mutex::new(HashSet::new()),
+            chat_active_generations: Mutex::new(HashMap::new()),
+            chat_active_replies: Mutex::new(HashMap::new()),
             pending_chat_tool_approvals: Mutex::new(HashMap::new()),
             chat_session_consent: Mutex::new(HashSet::new()),
             pending_chat_session_consents: Mutex::new(HashMap::new()),
@@ -299,6 +308,8 @@ impl AppState {
     }
 
     /// 为某个 Chat conversation 开启一轮新的可取消运行，返回本轮 generation。
+    /// 分配一个该会话内从未用过的 generation 号（单调递增），并登记到活跃集合。
+    /// **不**作废同会话其它在跑 run —— 多模型一问多答时 N 条 run 各持自己的 generation 并存。
     pub fn next_chat_generation(&self, conversation_id: &str) -> u64 {
         let mut generations = self
             .chat_stream_generations
@@ -310,21 +321,40 @@ impl AppState {
             .unwrap_or(0)
             .saturating_add(1);
         generations.insert(conversation_id.to_string(), next);
+        drop(generations);
+        self.chat_active_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(conversation_id.to_string())
+            .or_default()
+            .insert(next);
         next
     }
 
-    /// 取消指定 conversation 的当前 Chat 运行。
+    /// 取消指定 conversation 的**所有**当前 Chat 运行：清空其活跃 generation 集合，
+    /// 使任何持旧 generation 的 run（含同会话并发的多模型 run）在下一个检查点判失效。
     pub fn cancel_chat_generation(&self, conversation_id: &str) {
-        let mut generations = self
-            .chat_stream_generations
+        if let Some(active) = self
+            .chat_active_generations
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let next = generations
-            .get(conversation_id)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(1);
-        generations.insert(conversation_id.to_string(), next);
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(conversation_id)
+        {
+            active.clear();
+        }
+    }
+
+    /// 单条 run 自然结束时退役其 generation（不影响同会话其它在跑 run）。
+    /// 单模型路径下集合恒只含本 run 的一个号，移除后即变空，与旧「cancel 推代号」等价。
+    pub fn end_chat_generation(&self, conversation_id: &str, generation: u64) {
+        if let Some(active) = self
+            .chat_active_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(conversation_id)
+        {
+            active.remove(&generation);
+        }
     }
 
     /// 该会话是否已授予文件/命令工具的会话级授权。
@@ -343,22 +373,25 @@ impl AppState {
             .insert(conversation_id.to_string());
     }
 
-    /// 判断指定 conversation 的 Chat 运行是否仍然有效。
+    /// 判断指定 conversation 的某条 Chat 运行是否仍然有效（其 generation 仍在活跃集合内）。
     pub fn is_chat_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
-        self.chat_stream_generations
+        self.chat_active_generations
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(conversation_id)
-            .copied()
-            .unwrap_or(0)
-            == generation
+            .map(|active| active.contains(&generation))
+            .unwrap_or(false)
     }
 
-    /// 对话被删除时清理其按 conversation_id 累积的运行态痕迹：stream 代际计数与
-    /// 会话级工具同意标记。两者都严格按 conversation_id 取键，对话删除后再不会被
+    /// 对话被删除时清理其按 conversation_id 累积的运行态痕迹：stream 代际计数、活跃 generation
+    /// 集合与会话级工具同意标记。三者都严格按 conversation_id 取键，对话删除后再不会被
     /// 引用，是最无歧义的有界清理点（不影响其它活跃对话）。
     pub fn forget_chat_conversation_runtime(&self, conversation_id: &str) {
         self.chat_stream_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(conversation_id);
+        self.chat_active_generations
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(conversation_id);
@@ -368,25 +401,61 @@ impl AppState {
             .remove(conversation_id);
     }
 
-    /// 尝试占用某个对话的回复生成槽位；同对话已有进行中的回复时返回 false。
-    pub fn try_begin_chat_reply(&self, conversation_id: &str) -> bool {
+    /// 尝试占用某个对话的某条 run 回复槽位。同会话允许多条 run 并存（多模型一问多答）；
+    /// 仅当同一 (conversation_id, run_id) 已在进行中时返回 false（防同一 run 重复进入）。
+    pub fn try_begin_chat_reply(&self, conversation_id: &str, run_id: &str) -> bool {
         let mut active = self
             .chat_active_replies
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if active.contains(conversation_id) {
+        let runs = active.entry(conversation_id.to_string()).or_default();
+        if runs.contains(run_id) {
             return false;
         }
-        active.insert(conversation_id.to_string());
+        runs.insert(run_id.to_string());
         true
     }
 
-    /// 释放某个对话的回复生成槽位。
-    pub fn end_chat_reply(&self, conversation_id: &str) {
+    /// 原子地「检查 busy + 占用一个哨兵槽位」：在同一把锁内，若该会话已有任意 run 在跑则返回
+    /// false，否则注册 `run_id` 哨兵槽位并返回 true。命令入口用它替代「先 check 后 register」
+    /// 的两步，关闭 busy 判定与槽位注册之间的 TOCTOU 窗口（防止同会话并发发送同时通过 busy
+    /// 检查）。哨兵只占 `chat_active_replies`，不碰 `chat_active_generations`（不参与取消），
+    /// 由命令退出时 `end_chat_reply` 释放。
+    pub fn try_reserve_chat_send(&self, conversation_id: &str, run_id: &str) -> bool {
+        let mut active = self
+            .chat_active_replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let runs = active.entry(conversation_id.to_string()).or_default();
+        if !runs.is_empty() {
+            return false;
+        }
+        runs.insert(run_id.to_string());
+        true
+    }
+
+    /// 该会话当前是否有任意一条 run 正在回复（用于「生成中拒绝新发送」的 busy 判定）。
+    pub fn conversation_has_active_reply(&self, conversation_id: &str) -> bool {
         self.chat_active_replies
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(conversation_id);
+            .get(conversation_id)
+            .map(|runs| !runs.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// 释放某个对话某条 run 的回复槽位（run 集合空了则移除该会话条目）。
+    pub fn end_chat_reply(&self, conversation_id: &str, run_id: &str) {
+        let mut active = self
+            .chat_active_replies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(runs) = active.get_mut(conversation_id) {
+            runs.remove(run_id);
+            if runs.is_empty() {
+                active.remove(conversation_id);
+            }
+        }
     }
 
     pub fn get_cached_chat_tools(
@@ -658,7 +727,8 @@ pub(crate) fn test_app_state() -> AppState {
         prev_frontmost_pid_main: AtomicI32::new(0),
         explain_stream_generation: AtomicU64::new(0),
         chat_stream_generations: Mutex::new(HashMap::new()),
-        chat_active_replies: Mutex::new(HashSet::new()),
+        chat_active_generations: Mutex::new(HashMap::new()),
+        chat_active_replies: Mutex::new(HashMap::new()),
         pending_chat_tool_approvals: Mutex::new(HashMap::new()),
         chat_session_consent: Mutex::new(HashSet::new()),
         pending_chat_session_consents: Mutex::new(HashMap::new()),
@@ -791,5 +861,128 @@ mod tests {
         assert!(st.has_chat_consent("conv-1"));
         // Consent is scoped to a single conversation, not global.
         assert!(!st.has_chat_consent("conv-2"));
+    }
+
+    // --- 多模型一问多答：并发护栏 per-run 化（任务 06-30 步骤 1） ---
+
+    #[test]
+    fn single_run_generation_equivalence() {
+        // 单 run（单模型）行为必须与改前等价：分配 → 活跃 → 取消 → 失活。
+        let st = test_state();
+        let gen = st.next_chat_generation("conv");
+        assert!(st.is_chat_generation_active("conv", gen));
+        st.cancel_chat_generation("conv");
+        assert!(!st.is_chat_generation_active("conv", gen));
+    }
+
+    #[test]
+    fn single_run_end_generation_retires_only_self() {
+        let st = test_state();
+        let gen = st.next_chat_generation("conv");
+        assert!(st.is_chat_generation_active("conv", gen));
+        st.end_chat_generation("conv", gen);
+        assert!(!st.is_chat_generation_active("conv", gen));
+    }
+
+    #[test]
+    fn new_run_does_not_invalidate_sibling_run() {
+        // 同会话开第二条 run（多模型并发）不得作废第一条。
+        let st = test_state();
+        let gen_a = st.next_chat_generation("conv");
+        let gen_b = st.next_chat_generation("conv");
+        assert_ne!(gen_a, gen_b);
+        assert!(st.is_chat_generation_active("conv", gen_a));
+        assert!(st.is_chat_generation_active("conv", gen_b));
+    }
+
+    #[test]
+    fn cancel_kills_all_runs_in_conversation() {
+        // R4：cancel 一刀切该会话所有在跑 run。
+        let st = test_state();
+        let gen_a = st.next_chat_generation("conv");
+        let gen_b = st.next_chat_generation("conv");
+        let gen_c = st.next_chat_generation("conv");
+        st.cancel_chat_generation("conv");
+        assert!(!st.is_chat_generation_active("conv", gen_a));
+        assert!(!st.is_chat_generation_active("conv", gen_b));
+        assert!(!st.is_chat_generation_active("conv", gen_c));
+    }
+
+    #[test]
+    fn cancel_is_per_conversation() {
+        // 取消 conv-1 不影响 conv-2（含 sub-agent 用独立合成 conversation_id 的级联语义）。
+        let st = test_state();
+        let gen1 = st.next_chat_generation("conv-1");
+        let gen2 = st.next_chat_generation("conv-2");
+        st.cancel_chat_generation("conv-1");
+        assert!(!st.is_chat_generation_active("conv-1", gen1));
+        assert!(st.is_chat_generation_active("conv-2", gen2));
+    }
+
+    #[test]
+    fn end_one_run_keeps_sibling_active() {
+        let st = test_state();
+        let gen_a = st.next_chat_generation("conv");
+        let gen_b = st.next_chat_generation("conv");
+        st.end_chat_generation("conv", gen_a);
+        assert!(!st.is_chat_generation_active("conv", gen_a));
+        assert!(st.is_chat_generation_active("conv", gen_b));
+    }
+
+    #[test]
+    fn reply_slot_allows_multiple_runs_same_conversation() {
+        // 同会话允许多条 run 并存；同一 (conv, run) 重复进入才拒绝。
+        let st = test_state();
+        assert!(!st.conversation_has_active_reply("conv"));
+        assert!(st.try_begin_chat_reply("conv", "run-1"));
+        assert!(st.try_begin_chat_reply("conv", "run-2"));
+        // 同一 run 重复注册被拒。
+        assert!(!st.try_begin_chat_reply("conv", "run-1"));
+        assert!(st.conversation_has_active_reply("conv"));
+    }
+
+    #[test]
+    fn reply_slot_release_is_per_run() {
+        let st = test_state();
+        st.try_begin_chat_reply("conv", "run-1");
+        st.try_begin_chat_reply("conv", "run-2");
+        st.end_chat_reply("conv", "run-1");
+        // 仍有 run-2 在跑 → 会话仍 busy。
+        assert!(st.conversation_has_active_reply("conv"));
+        st.end_chat_reply("conv", "run-2");
+        // 全部释放 → 会话不再 busy，且可重新注册同名 run。
+        assert!(!st.conversation_has_active_reply("conv"));
+        assert!(st.try_begin_chat_reply("conv", "run-1"));
+    }
+
+    #[test]
+    fn forget_conversation_clears_active_generations() {
+        let st = test_state();
+        let gen = st.next_chat_generation("conv");
+        assert!(st.is_chat_generation_active("conv", gen));
+        st.forget_chat_conversation_runtime("conv");
+        assert!(!st.is_chat_generation_active("conv", gen));
+    }
+
+    #[test]
+    fn reserve_send_is_atomic_busy_check_and_reserve() {
+        // 命令入口哨兵：首个预留成功并占槽；同会话第二个预留（哨兵或真实 run 在跑）被拒。
+        let st = test_state();
+        assert!(st.try_reserve_chat_send("conv", "send-1"));
+        assert!(st.conversation_has_active_reply("conv"));
+        // 任意第二个预留在哨兵存活期间被拒（关闭并发发送的 TOCTOU）。
+        assert!(!st.try_reserve_chat_send("conv", "send-2"));
+        // 哨兵存活期间，真实 per-run 槽位仍可与之共存（fan-out 各臂注册自己的 run）。
+        assert!(st.try_begin_chat_reply("conv", "run-arm-1"));
+        assert!(st.try_begin_chat_reply("conv", "run-arm-2"));
+        // 释放哨兵后仍有 run 在跑 → 仍 busy；新预留仍被拒。
+        st.end_chat_reply("conv", "send-1");
+        assert!(st.conversation_has_active_reply("conv"));
+        assert!(!st.try_reserve_chat_send("conv", "send-3"));
+        // 全部 run 释放后才能再次预留。
+        st.end_chat_reply("conv", "run-arm-1");
+        st.end_chat_reply("conv", "run-arm-2");
+        assert!(!st.conversation_has_active_reply("conv"));
+        assert!(st.try_reserve_chat_send("conv", "send-4"));
     }
 }

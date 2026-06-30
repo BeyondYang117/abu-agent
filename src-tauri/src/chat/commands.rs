@@ -51,6 +51,43 @@ use super::{
 
 const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
 const CHAT_REPLY_BUSY_ERROR: &str = "该对话正在生成中，请稍后再试";
+/// 多模型一问多答的并排上限（决策 D4）。超过此数不允许发送。
+const MAX_REPLY_MODELS: usize = 4;
+
+/// 由会话级 `reply_models` 解析出本次发送要 fan-out 的「臂」列表。
+/// 返回去重后（按 provider_id+model）、保序的 `(provider_id, model)`。
+/// - 0 或 1 个有效臂 → 返回长度 ≤1（调用方走单模型现状路径，行为不变）。
+/// - ≥2 个 → 多模型 fan-out。
+/// 校验：上限 `MAX_REPLY_MODELS`（超出 `Err`）；provider 必须存在（不存在的臂跳过）；
+/// 空 model 跳过。
+fn resolve_reply_arms(
+    settings: &Settings,
+    reply_models: &[crate::chat::ModelRef],
+) -> Result<Vec<(String, String)>, String> {
+    if reply_models.len() > MAX_REPLY_MODELS {
+        return Err(format!(
+            "多模型并行回答最多同时选择 {MAX_REPLY_MODELS} 个模型（当前 {}）。",
+            reply_models.len()
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut arms = Vec::new();
+    for model_ref in reply_models {
+        let provider_id = model_ref.provider_id.trim();
+        let model = model_ref.model.trim();
+        if provider_id.is_empty() || model.is_empty() {
+            continue;
+        }
+        if settings.get_provider(provider_id).is_none() {
+            continue;
+        }
+        let key = format!("{provider_id}\u{0}{model}");
+        if seen.insert(key) {
+            arms.push((provider_id.to_string(), model.to_string()));
+        }
+    }
+    Ok(arms)
+}
 
 /// 外部入口（如 Lens 交接）预置会话历史时的一条消息。
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -59,24 +96,91 @@ pub(crate) struct ExternalConversationMessage {
     pub content: String,
 }
 
+/// 命令入口的哨兵预留守卫：原子地「busy 检查 + 占一个哨兵槽位」，关闭 busy 判定与真实
+/// per-run 槽位注册之间的 TOCTOU 窗口（防同会话并发发送同时通过 busy 检查）。哨兵槽位只占
+/// `chat_active_replies`、不参与 generation/取消，命令任意退出路径 drop 时释放。
+/// 真实 per-run 槽位（`ChatReplyGuard`）在哨兵存活期间额外注册，二者按不同 run_id 共存。
+struct ChatSendReservation<'a> {
+    state: &'a AppState,
+    conversation_id: String,
+    run_id: String,
+}
+
+impl<'a> ChatSendReservation<'a> {
+    /// 尝试预留某会话的发送哨兵。返回 None 表示该会话已有 run 在跑（busy）。
+    fn try_acquire(state: &'a AppState, conversation_id: &str) -> Option<Self> {
+        let run_id = format!("chat-send-reservation-{}", Uuid::new_v4());
+        if !state.try_reserve_chat_send(conversation_id, &run_id) {
+            return None;
+        }
+        Some(Self {
+            state,
+            conversation_id: conversation_id.to_string(),
+            run_id,
+        })
+    }
+}
+
+impl Drop for ChatSendReservation<'_> {
+    fn drop(&mut self) {
+        self.state.end_chat_reply(&self.conversation_id, &self.run_id);
+    }
+}
+
+/// RAII 守卫：占住某条 run 的回复槽位与活跃 generation，函数任意退出路径都释放。
+/// 同一会话允许多条 run 并存（多模型一问多答），每条 run 各持一个守卫。
 struct ChatReplyGuard<'a> {
     state: &'a AppState,
     conversation_id: String,
+    run_id: String,
+    generation: u64,
 }
 
 impl<'a> ChatReplyGuard<'a> {
-    fn new(state: &'a AppState, conversation_id: &str) -> Self {
-        Self {
+    /// 注册一条 run 的回复槽位。返回 None 表示同一 (conversation_id, run_id) 已在进行中。
+    /// `generation` 一并登记，drop 时随槽位一起退役（不影响同会话其它在跑 run）。
+    fn try_new(
+        state: &'a AppState,
+        conversation_id: &str,
+        run_id: &str,
+        generation: u64,
+    ) -> Option<Self> {
+        if !state.try_begin_chat_reply(conversation_id, run_id) {
+            return None;
+        }
+        Some(Self {
             state,
             conversation_id: conversation_id.to_string(),
-        }
+            run_id: run_id.to_string(),
+            generation,
+        })
     }
 }
 
 impl Drop for ChatReplyGuard<'_> {
     fn drop(&mut self) {
-        self.state.end_chat_reply(&self.conversation_id);
+        self.state.end_chat_reply(&self.conversation_id, &self.run_id);
+        self.state
+            .end_chat_generation(&self.conversation_id, self.generation);
     }
+}
+
+/// 多模型一问多答（任务 06-30）单条「臂」的覆盖配置。`complete_assistant_reply`
+/// 收到 `Some(arm)` 时：用该臂自己的 provider/model（而非会话级），把 `group_id`/
+/// provider/model 写进 assistant 消息，**自动批准工具**（避免 N 个并发 run 各弹一次审批），
+/// 并且 **不直接落盘**——产出的 assistant `ChatMessage` 由协调者（`chat_send_message`）回收后
+/// 统一 upsert + 一次性 save，避开 N 条并发 run 同写一个 `conversations/{id}.json` 的竞态。
+/// 单模型路径传 `None`，行为与改造前完全一致。
+struct ReplyArm {
+    group_id: String,
+    provider_id: String,
+    model: String,
+}
+
+/// 多模型臂运行后回收的结果。协调者据此把 assistant 消息合并进真正的会话并落盘。
+/// 单模型路径（`arm = None`）`message` 为 None（已在函数内自行落盘）。
+struct ArmReplyOutcome {
+    message: Option<ChatMessage>,
 }
 
 fn chat_memory_prompt_for_request(
@@ -339,6 +443,8 @@ pub(crate) fn create_chat_conversation_internal(
                 agent_plan_state: AgentPlanState::default(),
                 knowledge_base_ids: Vec::new(),
                 thinking_level: None,
+                reply_models: Vec::new(),
+                group_selections: std::collections::HashMap::new(),
                 agent_runtime: settings.chat.default_agent_runtime.clone(),
             };
 
@@ -426,6 +532,9 @@ pub(crate) fn chat_import_external_conversation(
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            group_id: None,
+            provider_id: None,
+            model: None,
             timestamp: now,
         });
     }
@@ -670,6 +779,8 @@ pub(crate) fn chat_create_builder_conversation(
         agent_plan_state: AgentPlanState::default(),
         knowledge_base_ids: Vec::new(),
         thinking_level: None,
+        reply_models: Vec::new(),
+        group_selections: std::collections::HashMap::new(),
         agent_runtime: crate::chat::AgentRuntimeConfig::default(),
     };
     save_conversation(&app, &conversation)?;
@@ -1077,13 +1188,17 @@ pub(crate) async fn chat_send_message(
     attachments: Vec<String>,
     active_skill_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !state.try_begin_chat_reply(&conversation_id) {
+    // Busy 拒绝：该会话仍有任意一条 run 在跑（含多模型并发组）时不允许再发新消息。
+    // 用原子的哨兵预留替代「先 check 后 register」，关闭并发发送同时通过 busy 检查的 TOCTOU 窗口。
+    // 哨兵在本命令返回前一直存活；实际的 per-run 槽位 / generation 在 `complete_assistant_reply`
+    // 内 run_id 生成处额外注册，与哨兵按不同 run_id 共存。
+    let Some(_send_reservation) = ChatSendReservation::try_acquire(state.inner(), &conversation_id)
+    else {
         return Ok(serde_json::json!({
             "success": false,
             "error": CHAT_REPLY_BUSY_ERROR,
         }));
-    }
-    let _reply_guard = ChatReplyGuard::new(state.inner(), &conversation_id);
+    };
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
 
@@ -1121,6 +1236,23 @@ pub(crate) async fn chat_send_message(
     let last_user_image_paths =
         stored_image_paths_for_attachments(&app, &conversation_id, &message_attachments)?;
 
+    // 多模型一问多答（任务 06-30）：从会话级 reply_models 解析本次要并行的「臂」。
+    // 0/1 个有效臂 → 单模型现状路径（行为完全不变，防回归 AC5）。≥2 → fan-out。
+    // 仅普通（Act）模式生效（R11）：plan / orchestrate 模式下不 fan-out。
+    let reply_arms = {
+        let settings = state.settings_read();
+        resolve_reply_arms(&settings, &conversation.reply_models)?
+    };
+    let plan_or_orchestrate = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
+        || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);
+    let fan_out = reply_arms.len() >= 2 && !plan_or_orchestrate;
+    // fan-out 时所有臂共享一个 group_id；用户消息也打上它，便于前端把这一问的 N 答聚成一组。
+    let group_id = if fan_out {
+        Some(format!("grp_{}", Uuid::new_v4()))
+    } else {
+        None
+    };
+
     // 创建用户消息
     let user_message = ChatMessage {
         id: format!("msg_{}", Uuid::new_v4()),
@@ -1138,6 +1270,9 @@ pub(crate) async fn chat_send_message(
         run_entry: None,
         stream_outcome: None,
         usage: None,
+        group_id: group_id.clone(),
+        provider_id: None,
+        model: None,
         timestamp: chrono::Local::now().timestamp(),
     };
 
@@ -1218,6 +1353,38 @@ pub(crate) async fn chat_send_message(
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(str::to_string);
+
+    if fan_out {
+        let group_id = group_id.expect("fan_out implies group_id set");
+        let fan_out_outcome = run_reply_fan_out(
+            &app,
+            &state,
+            &mut conversation,
+            &reply_arms,
+            &group_id,
+            Some(api_content.as_str()),
+            &last_user_image_paths,
+            forced_skill_id.as_deref(),
+        )
+        .await;
+        strip_transcripts_for_frontend(&mut conversation);
+        return match fan_out_outcome {
+            Ok(()) => Ok(serde_json::json!({
+                "success": true,
+                "conversation": conversation,
+            })),
+            // 全部臂都失败（非取消）才算硬失败；部分成功在 run_reply_fan_out 内已合并落盘并返回 Ok。
+            Err(err) if err == "cancelled" => Ok(serde_json::json!({
+                "success": true,
+                "conversation": conversation,
+            })),
+            Err(err) => Ok(serde_json::json!({
+                "success": false,
+                "conversation": conversation,
+                "error": err,
+            })),
+        };
+    }
 
     let reply_outcome = complete_assistant_reply(
         &app,
@@ -1549,7 +1716,42 @@ async fn complete_assistant_reply(
     active_skill_id: Option<&str>,
     entry: crate::chat::agent::AgentRunEntry,
 ) -> Result<(), String> {
+    complete_assistant_reply_inner(
+        app,
+        state,
+        conversation,
+        title_from_first_user,
+        last_user_api_content,
+        last_user_image_paths,
+        active_skill_id,
+        entry,
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// 共享实现：`arm = None` 为单模型现状（直接落盘，返回 `Ok(())` 语义不变）；
+/// `arm = Some(..)` 为多模型臂（用臂的 provider/model、自动批准工具、**不落盘**，
+/// 把产出的 assistant 消息通过 `ArmReplyOutcome.message` 返回给协调者）。
+async fn complete_assistant_reply_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    title_from_first_user: Option<&str>,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+    active_skill_id: Option<&str>,
+    entry: crate::chat::agent::AgentRunEntry,
+    arm: Option<&ReplyArm>,
+) -> Result<ArmReplyOutcome, String> {
     if conversation.agent_runtime.is_external() {
+        // 外部 CLI 路径在 run.rs 内自带 generation；这里登记一条 per-run 回复槽位，
+        // 让 `conversation_has_active_reply` 在外部回复期间也能拒绝并发新发送（防回归）。
+        let ext_generation = state.next_chat_generation(&conversation.id);
+        let ext_run_id = format!("chat-run-ext-{}-{}", ext_generation, Uuid::new_v4());
+        let _ext_reply_guard =
+            ChatReplyGuard::try_new(state.inner(), &conversation.id, &ext_run_id, ext_generation);
         let latest_user = conversation
             .messages
             .iter()
@@ -1566,18 +1768,27 @@ async fn complete_assistant_reply(
             active_skill_id,
             entry,
         )
-        .await;
+        .await
+        .map(|_| ArmReplyOutcome { message: None });
     }
 
     let settings = state.settings_read().clone();
+    // 多模型臂用自己的 provider/model；单模型用会话级（行为不变）。
+    // 提前转成 owned，避免对 `conversation` 的长期不可变借用挡住后续的 `&mut conversation`。
+    let resolved_provider_id = arm
+        .map(|a| a.provider_id.clone())
+        .unwrap_or_else(|| conversation.provider_id.clone());
+    let resolved_model = arm
+        .map(|a| a.model.clone())
+        .unwrap_or_else(|| conversation.model.clone());
     let provider = settings
-        .get_provider(&conversation.provider_id)
+        .get_provider(&resolved_provider_id)
         .ok_or_else(|| "Chat provider not found".to_string())?
         .clone();
     if provider.api_keys.is_empty() {
         return Err(format_chat_missing_api_key_error(&provider.name));
     }
-    if conversation.model.trim().is_empty() {
+    if resolved_model.trim().is_empty() {
         return Err(chat_missing_model_error());
     }
 
@@ -1595,9 +1806,22 @@ async fn complete_assistant_reply(
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
+    // per-run 回复槽位 + 活跃 generation 守卫：本函数任意退出路径（含早返回的直接生图 /
+    // 辅助视觉分支）都会 drop 它，释放该 run 的槽位并退役其 generation。同会话多模型并发时
+    // 每条 run 各持一个守卫，互不影响。`next_chat_generation` 已登记 generation，这里仅补登
+    // run_id 槽位；run_id 由 generation + uuid 拼成，必不重复，try_new 不会返回 None。
+    let _reply_guard =
+        ChatReplyGuard::try_new(state.inner(), &conversation.id, &run_id, run_generation);
     let plan_mode = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
     let orchestrate_mode = crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);
-    if !plan_mode && model_can_generate_images_directly(&provider, &conversation.model) {
+    if !plan_mode && model_can_generate_images_directly(&provider, &resolved_model) {
+        if arm.is_some() {
+            // 多答 fan-out MVP 不支持「直接生图模型」作为并行臂（生图路径自行落盘，
+            // 与多臂统一合并落盘冲突）。该臂直接报错，其它臂不受影响。
+            return Err(
+                "多模型并行回答暂不支持直接生图模型，请在多答选择中移除该模型。".to_string(),
+            );
+        }
         return complete_direct_image_generation_reply(
             app,
             state,
@@ -1614,12 +1838,13 @@ async fn complete_assistant_reply(
             retry_attempts,
             entry,
         )
-        .await;
+        .await
+        .map(|_| ArmReplyOutcome { message: None });
     }
     let auxiliary_vision_model = auxiliary_vision_model_for_images(
         &settings,
         Some(&provider),
-        &conversation.model,
+        &resolved_model,
         last_user_image_paths,
     );
     let mut auxiliary_tool_records = Vec::new();
@@ -1753,6 +1978,11 @@ async fn complete_assistant_reply(
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
+    if arm.is_some() {
+        // 多答 fan-out（决策 D1 注）：N 条并行 run 若各自弹工具审批会产生 N 倍弹窗、
+        // 且无法对应到具体列。多模型臂内一律自动批准（静默执行）。单模型保持原审批策略。
+        effective_chat_tools.approval_policy = "auto".to_string();
+    }
     let (memory_prompt, memory_warning) = chat_memory_prompt_for_request(app, &settings);
     if let Some(warning) = memory_warning.as_ref() {
         conversation.context_state.warning = Some(warning.clone());
@@ -1903,6 +2133,9 @@ async fn complete_assistant_reply(
     let host = ChatAgentHost {
         app: app.clone(),
         state: state.inner(),
+        // 多模型臂不直接落盘（最终由协调者统一 upsert + save），因此抑制 loop 的
+        // mid-run 部分快照写盘，避免 N 条并发 run 同写 conversations/{id}.json 的竞态。
+        suppress_partial_persist: arm.is_some(),
     };
     let executor = RegistryToolExecutor {
         app: app.clone(),
@@ -1910,7 +2143,7 @@ async fn complete_assistant_reply(
     };
     let max_output_tokens = chat_max_output_tokens_for_model(
         Some(&provider),
-        &conversation.model,
+        &resolved_model,
         settings.chat.max_output_tokens,
     );
     let result = crate::chat::agent::run_agent_loop(
@@ -1924,7 +2157,7 @@ async fn complete_assistant_reply(
             message_id: assistant_message_id.clone(),
             generation: run_generation,
             provider,
-            model: conversation.model.clone(),
+            model: resolved_model.clone(),
             runtime_messages,
             tools,
             blocked_tool_calls,
@@ -1964,6 +2197,31 @@ async fn complete_assistant_reply(
     let mut tool_records = auxiliary_tool_records;
     tool_records.extend(result.tool_records);
     let run_entry = agent_run_entry_label(entry);
+    if let Some(arm) = arm {
+        // 多模型臂：构造 assistant 消息但**不落盘**，交协调者统一合并 + 一次性 save。
+        let message = build_assistant_message(
+            assistant_message_id,
+            result.content,
+            result.reasoning,
+            Vec::new(),
+            tool_records,
+            result.api_messages,
+            segments,
+            skill_id.as_deref(),
+            Some(run_entry),
+            Some(result.stream_outcome.as_str()),
+            result.usage,
+            message_plan,
+            Some((
+                arm.group_id.clone(),
+                resolved_provider_id.clone(),
+                resolved_model.clone(),
+            )),
+        );
+        return Ok(ArmReplyOutcome {
+            message: Some(message),
+        });
+    }
     push_assistant_message(
         app,
         state,
@@ -1984,7 +2242,106 @@ async fn complete_assistant_reply(
         message_plan,
     )
     .await?;
-    Ok(())
+    Ok(ArmReplyOutcome { message: None })
+}
+
+/// 多模型一问多答（任务 06-30 步骤 3）的协调者。
+///
+/// 对每个臂 `(provider_id, model)`：在会话的**独立克隆**上并发跑一次 agent loop
+/// （`complete_assistant_reply_inner` 的 arm 模式），各臂自带 message_id/run_id/generation +
+/// 共享 `group_id`，工具自动批准、**不直接落盘**。全部臂结束后，把各臂产出的 assistant
+/// 消息按 id `upsert` 进真正的 `conversation`、统一计算一次上下文、一次性 `save_conversation`，
+/// 从根本上避开 N 条并发 run 同写 `conversations/{id}.json` 的竞态。
+///
+/// 返回：
+/// - 至少一条臂成功 → `Ok(())`（部分失败的臂忽略，不阻断成功的列）。
+/// - 全部臂被取消 → `Err("cancelled")`。
+/// - 全部臂失败（且非取消）→ `Err(首个错误信息)`。
+#[allow(clippy::too_many_arguments)]
+async fn run_reply_fan_out(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    arms: &[(String, String)],
+    group_id: &str,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+    active_skill_id: Option<&str>,
+) -> Result<(), String> {
+    // 各臂独立克隆，互不写盘。arm 模式不走 push_assistant_message 的标题生成路径，
+    // 故各臂统一传 title=None：多答首条回复的标题留给后续单模型轮或手动重命名
+    // （避免 N 个克隆各自异步生成标题再丢弃）。
+    let arm_futures = arms.iter().map(|(provider_id, model)| {
+        let mut arm_conversation = conversation.clone();
+        let arm = ReplyArm {
+            group_id: group_id.to_string(),
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+        };
+        async move {
+            let outcome = complete_assistant_reply_inner(
+                app,
+                state,
+                &mut arm_conversation,
+                None,
+                last_user_api_content,
+                last_user_image_paths,
+                active_skill_id,
+                crate::chat::agent::AgentRunEntry::Send,
+                Some(&arm),
+            )
+            .await;
+            (outcome, arm_conversation)
+        }
+    });
+
+    let results = futures::future::join_all(arm_futures).await;
+
+    let mut produced = 0usize;
+    let mut cancelled = 0usize;
+    let mut first_error: Option<String> = None;
+    for (outcome, _arm_conversation) in results {
+        match outcome {
+            Ok(ArmReplyOutcome {
+                message: Some(message),
+            }) => {
+                upsert_assistant_message(conversation, message);
+                produced += 1;
+            }
+            Ok(ArmReplyOutcome { message: None }) => {
+                // 不应发生（arm 模式必返回消息），保守计为无产出。
+            }
+            Err(err) if err == "cancelled" => {
+                cancelled += 1;
+            }
+            Err(err) => {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
+    }
+
+    if produced > 0 {
+        // 至少一列成功：合并后统一计算一次上下文并落盘。
+        match compute_context_state(app, state, conversation, None, &[]).await {
+            Ok(context_state) => {
+                conversation.context_state = context_state.clone();
+                emit_chat_context_state(app, &conversation.id, &context_state);
+            }
+            Err(err) => {
+                eprintln!("Context usage estimate failed after multi-model fan-out: {err}");
+            }
+        }
+        conversation.updated_at = chrono::Local::now().timestamp();
+        save_conversation(app, conversation)?;
+        return Ok(());
+    }
+
+    if cancelled > 0 && first_error.is_none() {
+        return Err("cancelled".to_string());
+    }
+    Err(first_error.unwrap_or_else(|| "全部模型回答均失败".to_string()))
 }
 
 async fn complete_direct_image_generation_reply(
@@ -2140,6 +2497,78 @@ fn direct_image_generation_prompt(
     Ok(truncate_chars(prompt, 8000))
 }
 
+/// 多答组的列标识：(group_id, provider_id, model)。单模型为 None（字段写 None）。
+type AssistantGroupMeta = (String, String, String);
+
+/// 构造一条 assistant `ChatMessage`（含 segment 归一、model_messages 计算）。
+/// `push_assistant_message`（落盘路径）与多模型臂（返回消息交协调者落盘）共用此函数，
+/// 保证两条路径生成的消息形态一致。`group_meta = Some(..)` 时写入 group_id/provider_id/model。
+#[allow(clippy::too_many_arguments)]
+fn build_assistant_message(
+    message_id: String,
+    content: String,
+    reasoning: Option<String>,
+    artifacts: Vec<ChatToolArtifact>,
+    tool_calls: Vec<ToolCallRecord>,
+    api_messages: Vec<Value>,
+    segments: Vec<ChatMessageSegment>,
+    active_skill_id: Option<&str>,
+    run_entry: Option<&str>,
+    stream_outcome: Option<&str>,
+    usage: Option<crate::chat::model::ModelUsage>,
+    agent_plan: Option<AgentPlanState>,
+    group_meta: Option<AssistantGroupMeta>,
+) -> ChatMessage {
+    let segments =
+        normalize_assistant_segments(&content, reasoning.as_deref(), &tool_calls, segments);
+    let stored_content = content_from_segments(&segments).unwrap_or_else(|| content.clone());
+    let stored_reasoning = reasoning_from_segments(&segments).or(reasoning);
+
+    // model_messages 是规范回放源（build_chat_api_messages 优先用它）。算好后，若它
+    // 非空就丢弃冗余的 api_messages（OpenAI 线格式）——回放/编辑路径仅在 model_messages
+    // 为空时才回落 api_messages，前端更是从不读它。省 RAM/磁盘/IPC。为空兜底（罕见：
+    // 转换产出空）才保留 api_messages，避免丢工具上下文。中断草稿走另一条路
+    // (persist_partial_assistant_snapshot)，那里仍保留 api_messages 以保「继续」可回放。
+    let model_messages = assistant_model_messages_for_storage(
+        &stored_content,
+        stored_reasoning.as_deref(),
+        &api_messages,
+        &tool_calls,
+    );
+    let api_messages = if model_messages.is_empty() {
+        api_messages
+    } else {
+        Vec::new()
+    };
+
+    let (group_id, provider_id, model) = match group_meta {
+        Some((g, p, m)) => (Some(g), Some(p), Some(m)),
+        None => (None, None, None),
+    };
+
+    ChatMessage {
+        id: message_id,
+        role: "assistant".to_string(),
+        content: stored_content,
+        attachments: vec![],
+        reasoning: stored_reasoning,
+        artifacts,
+        model_messages,
+        tool_calls,
+        segments,
+        agent_plan,
+        api_messages,
+        active_skill_id: active_skill_id.map(|id| id.to_string()),
+        run_entry: run_entry.map(str::to_string),
+        stream_outcome: stream_outcome.map(str::to_string),
+        usage,
+        group_id,
+        provider_id,
+        model,
+        timestamp: chrono::Local::now().timestamp(),
+    }
+}
+
 pub(crate) async fn push_assistant_message(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -2159,10 +2588,23 @@ pub(crate) async fn push_assistant_message(
     usage: Option<crate::chat::model::ModelUsage>,
     agent_plan: Option<AgentPlanState>,
 ) -> Result<(), String> {
-    let segments =
-        normalize_assistant_segments(&content, reasoning.as_deref(), &tool_calls, segments);
-    let stored_content = content_from_segments(&segments).unwrap_or_else(|| content.clone());
-    let stored_reasoning = reasoning_from_segments(&segments).or(reasoning);
+    let message = build_assistant_message(
+        message_id,
+        content.clone(),
+        reasoning,
+        artifacts,
+        tool_calls,
+        api_messages,
+        segments,
+        active_skill_id,
+        run_entry,
+        stream_outcome,
+        usage,
+        agent_plan,
+        // 单模型落盘路径不带 group 信息（行为不变）。
+        None,
+    );
+    let stored_content = message.content.clone();
     let generated_title = if let Some(user_content) = title_from_first_user {
         if conversation.messages.len() == 1 && conversation.title == "新对话" {
             // 被取消的首条回复不值得花一次模型调用生成标题（标题生成是一次
@@ -2189,44 +2631,7 @@ pub(crate) async fn push_assistant_message(
         None
     };
 
-    // model_messages 是规范回放源（build_chat_api_messages 优先用它）。算好后，若它
-    // 非空就丢弃冗余的 api_messages（OpenAI 线格式）——回放/编辑路径仅在 model_messages
-    // 为空时才回落 api_messages，前端更是从不读它。省 RAM/磁盘/IPC。为空兜底（罕见：
-    // 转换产出空）才保留 api_messages，避免丢工具上下文。中断草稿走另一条路
-    // (persist_partial_assistant_snapshot)，那里仍保留 api_messages 以保「继续」可回放。
-    let model_messages = assistant_model_messages_for_storage(
-        &stored_content,
-        stored_reasoning.as_deref(),
-        &api_messages,
-        &tool_calls,
-    );
-    let api_messages = if model_messages.is_empty() {
-        api_messages
-    } else {
-        Vec::new()
-    };
-
-    upsert_assistant_message(
-        conversation,
-        ChatMessage {
-            id: message_id,
-            role: "assistant".to_string(),
-            content: stored_content.clone(),
-            attachments: vec![],
-            reasoning: stored_reasoning.clone(),
-            artifacts,
-            model_messages,
-            tool_calls,
-            segments,
-            agent_plan,
-            api_messages,
-            active_skill_id: active_skill_id.map(|id| id.to_string()),
-            run_entry: run_entry.map(str::to_string),
-            stream_outcome: stream_outcome.map(str::to_string),
-            usage,
-            timestamp: chrono::Local::now().timestamp(),
-        },
-    );
+    upsert_assistant_message(conversation, message);
 
     if let Some(title) = generated_title {
         conversation.title = title;
@@ -2311,6 +2716,9 @@ fn persist_partial_assistant_snapshot(
         run_entry: None,
         stream_outcome: Some("interrupted".to_string()),
         usage: None,
+        group_id: None,
+        provider_id: None,
+        model: None,
         timestamp: chrono::Local::now().timestamp(),
     };
     upsert_assistant_message(&mut conversation, draft);
@@ -4015,6 +4423,40 @@ fn has_inline_code_request_intent(text: &str, normalized: &str) -> bool {
         || EN_MARKERS.iter().any(|marker| normalized.contains(marker))
 }
 
+// 历史拼装的唯一入口：send 与 regenerate 都最终走这里。
+// 任务 06-30 步骤 0 核对结论：token 估算与历史拼装**同源**——`compute_context_state`
+// （commands.rs 内）直接调用本函数得到 `request_messages`，再用 `estimate_messages_segments`
+// 在这份消息上估 token。因此后续步骤（步骤 4）在本函数循环里对「多答组只保留选中条」
+// 做过滤后，token 估算会自动排除未选中条，**无需在 `compute_context_state` 另行过滤**。
+
+/// 多答组（任务 06-30）历史过滤：判断某条带 `group_id` 的 assistant 消息是否应排除出上下文。
+/// 规则（决策 D5）：同一 `group_id` 只保留「选中条」——
+/// - `conversation.group_selections[group_id]` 指定的 message_id；
+/// - 无记录则取该组在 `messages` 中**顺序第一条** assistant。
+/// 其余答案仅保留展示、排除出发给模型的历史（R6）。非多答消息（无 group_id）一律保留。
+fn group_answer_excluded_from_context(conversation: &Conversation, message: &ChatMessage) -> bool {
+    let Some(group_id) = message.group_id.as_deref() else {
+        return false;
+    };
+    if message.role != "assistant" {
+        return false;
+    }
+    let selected = conversation
+        .group_selections
+        .get(group_id)
+        .map(String::as_str)
+        .or_else(|| {
+            conversation
+                .messages
+                .iter()
+                .find(|m| {
+                    m.role == "assistant" && m.group_id.as_deref() == Some(group_id)
+                })
+                .map(|m| m.id.as_str())
+        });
+    selected != Some(message.id.as_str())
+}
+
 fn build_chat_api_messages(
     system_prompt: &str,
     conversation: &Conversation,
@@ -4038,6 +4480,10 @@ fn build_chat_api_messages(
 
     for (idx, message) in conversation.messages.iter().enumerate() {
         if idx < start_idx {
+            continue;
+        }
+        // 多答组：仅保留选中条，其余答案不进发给模型的上下文（R6 / AC4）。
+        if group_answer_excluded_from_context(conversation, message) {
             continue;
         }
         let content = if Some(idx) == last_user_idx {
@@ -4376,6 +4822,8 @@ fn user_content_with_auxiliary_vision_result(
 struct ChatAgentHost<'a> {
     app: AppHandle,
     state: &'a AppState,
+    /// 多模型臂置 true：抑制 mid-run 部分快照落盘（协调者统一落盘）。默认 false（现状）。
+    suppress_partial_persist: bool,
 }
 
 impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
@@ -4428,6 +4876,10 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         segments: &[ChatMessageSegment],
         api_messages: &[Value],
     ) {
+        if self.suppress_partial_persist {
+            // 多模型臂不直接写盘（避免 N 条并发 run 同写 conversations/{id}.json）。
+            return;
+        }
         if let Err(err) = persist_partial_assistant_snapshot(
             &self.app,
             conversation_id,
@@ -5154,13 +5606,15 @@ pub(crate) async fn chat_regenerate_message(
     conversation_id: String,
     message_id: String,
 ) -> Result<serde_json::Value, String> {
-    if !state.try_begin_chat_reply(&conversation_id) {
+    // Busy 拒绝：该会话仍有任意一条 run 在跑时不允许再触发重新生成。
+    // 原子哨兵预留关闭 TOCTOU 窗口；per-run 槽位 / generation 在 `complete_assistant_reply` 内注册。
+    let Some(_send_reservation) = ChatSendReservation::try_acquire(state.inner(), &conversation_id)
+    else {
         return Ok(serde_json::json!({
             "success": false,
             "error": CHAT_REPLY_BUSY_ERROR,
         }));
-    }
-    let _reply_guard = ChatReplyGuard::new(state.inner(), &conversation_id);
+    };
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let idx = find_message_index(&conversation, &message_id)?;
@@ -5178,6 +5632,17 @@ pub(crate) async fn chat_regenerate_message(
     }
     if conversation.messages.last().map(|m| m.role.as_str()) != Some("user") {
         return Err("缺少对应的用户消息，无法重新生成".to_string());
+    }
+
+    // 多答组（任务 06-30 / D5 / AC4）：truncate 可能删掉某组的显式「选中条」（或整组），
+    // 留下指向已删消息的 group_selections，会让 group_answer_excluded_from_context 把残余
+    // 答案全排除出上下文。清掉任何指向已不存在消息的选中记录，回退到「组内第一条」默认。
+    if !conversation.group_selections.is_empty() {
+        let existing_ids: std::collections::HashSet<&str> =
+            conversation.messages.iter().map(|m| m.id.as_str()).collect();
+        conversation
+            .group_selections
+            .retain(|_, msg_id| existing_ids.contains(msg_id.as_str()));
     }
 
     conversation.updated_at = chrono::Local::now().timestamp();
@@ -5267,7 +5732,16 @@ pub(crate) async fn chat_delete_message(
     }
 
     mark_summary_stale_if_needed(&mut conversation, idx);
-    conversation.messages.remove(idx);
+    let removed = conversation.messages.remove(idx);
+    // 多答组（任务 06-30 / D5 / AC4）：删除某条答案时，若它正是某组的显式「选中条」，
+    // 清掉该 group 的 group_selections 记录，让选中条回退到「该组顺序第一条」。否则
+    // group_selections 会指向已删除的 message_id，导致 group_answer_excluded_from_context
+    // 把整组答案都排除出下一轮上下文（无任何答案进历史）。
+    if let Some(group_id) = removed.group_id.as_deref() {
+        if conversation.group_selections.get(group_id).map(String::as_str) == Some(removed.id.as_str()) {
+            conversation.group_selections.remove(group_id);
+        }
+    }
     let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
     conversation.context_state = context_state.clone();
     conversation.updated_at = chrono::Local::now().timestamp();
@@ -5316,6 +5790,7 @@ pub(crate) fn chat_update_conversation(
     assistant_id: Option<String>,
     knowledge_base_ids: Option<Vec<String>>,
     thinking_level: Option<String>,
+    reply_models: Option<Vec<crate::chat::ModelRef>>,
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
 
@@ -5405,7 +5880,71 @@ pub(crate) fn chat_update_conversation(
             _ => None,
         };
     }
+    if let Some(reply_models) = reply_models {
+        // 多模型一问多答（决策 D2/D4）：持久化会话级多答模型集。去重（provider+model）、
+        // 丢空、保序、上限 MAX_REPLY_MODELS（超出报错，前端应已禁选）。
+        if reply_models.len() > MAX_REPLY_MODELS {
+            return Err(format!(
+                "多模型并行回答最多同时选择 {MAX_REPLY_MODELS} 个模型。"
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        conversation.reply_models = reply_models
+            .into_iter()
+            .filter_map(|m| {
+                let provider_id = m.provider_id.trim().to_string();
+                let model = m.model.trim().to_string();
+                if provider_id.is_empty() || model.is_empty() {
+                    return None;
+                }
+                let key = format!("{provider_id}\u{0}{model}");
+                if seen.insert(key) {
+                    Some(crate::chat::ModelRef { provider_id, model })
+                } else {
+                    None
+                }
+            })
+            .collect();
+    }
 
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+
+    strip_transcripts_for_frontend(&mut conversation);
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+    }))
+}
+
+/// 设置某个多答组（task 06-30）的「选中条」（决策 D5）：用户点选某一列后续聊以它为准。
+/// `message_id` 必须是属于 `group_id` 这组的某条 assistant 消息；写入
+/// `conversation.group_selections[group_id] = message_id`，下一轮历史拼装据此只保留该条。
+#[tauri::command]
+pub(crate) fn chat_set_group_selection(
+    app: AppHandle,
+    conversation_id: String,
+    group_id: String,
+    message_id: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    let group_id = group_id.trim();
+    let message_id = message_id.trim();
+    if group_id.is_empty() || message_id.is_empty() {
+        return Err("group_id 与 message_id 不能为空".to_string());
+    }
+    // 校验：该消息必须存在、是 assistant、且属于这个 group。
+    let valid = conversation.messages.iter().any(|m| {
+        m.id == message_id
+            && m.role == "assistant"
+            && m.group_id.as_deref() == Some(group_id)
+    });
+    if !valid {
+        return Err("选中的回答不属于该多答组".to_string());
+    }
+    conversation
+        .group_selections
+        .insert(group_id.to_string(), message_id.to_string());
     conversation.updated_at = chrono::Local::now().timestamp();
     save_conversation(&app, &conversation)?;
 
@@ -5431,6 +5970,7 @@ fn generate_title(content: &str) -> String {
 mod tests {
     use super::*;
     use crate::chat::Attachment;
+    use crate::chat::ModelRef;
     use std::collections::HashMap;
 
     #[test]
@@ -6256,6 +6796,9 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            group_id: None,
+            provider_id: None,
+            model: None,
             timestamp: 1,
         };
 
@@ -6354,6 +6897,9 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            group_id: None,
+            provider_id: None,
+            model: None,
             timestamp: 1,
         };
 
@@ -6386,6 +6932,9 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            group_id: None,
+            provider_id: None,
+            model: None,
             timestamp,
         }
     }
@@ -6438,6 +6987,8 @@ mod tests {
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
             thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         }
     }
@@ -6647,6 +7198,8 @@ mod tests {
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
         thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
         let result = AuxiliaryVisionResult {
@@ -6719,6 +7272,9 @@ mod tests {
                     run_entry: None,
                     stream_outcome: None,
                     usage: None,
+                    group_id: None,
+                    provider_id: None,
+                    model: None,
                     timestamp: 1,
                 },
                 ChatMessage {
@@ -6761,6 +7317,9 @@ mod tests {
                     run_entry: None,
                     stream_outcome: None,
                     usage: None,
+                    group_id: None,
+                    provider_id: None,
+                    model: None,
                     timestamp: 2,
                 },
             ],
@@ -6778,6 +7337,8 @@ mod tests {
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
             thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 
@@ -6880,6 +7441,9 @@ mod tests {
                     run_entry: None,
                     stream_outcome: None,
                     usage: None,
+                    group_id: None,
+                    provider_id: None,
+                    model: None,
                     timestamp: 2,
                 },
             ],
@@ -6897,6 +7461,8 @@ mod tests {
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
         thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
             agent_runtime: crate::chat::AgentRuntimeConfig::default(),
         };
 
@@ -6963,5 +7529,270 @@ mod tests {
             estimate_image_tokens_for_dimensions(None, "gemini-2.0-flash", 1024, 1024),
             1032
         );
+    }
+
+    // ===== 任务 06-30 多模型一问多答（步骤 3 + 步骤 4）=====
+
+    fn test_conversation_with_messages(messages: Vec<ChatMessage>) -> Conversation {
+        Conversation {
+            id: "conv_multi".to_string(),
+            title: "test".to_string(),
+            provider_id: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            messages,
+            active_skill_id: None,
+            assistant_id: None,
+            assistant_snapshot: None,
+            created_at: 1,
+            updated_at: 1,
+            pinned: false,
+            folder: None,
+            project_id: None,
+            set_id: None,
+            context_state: ConversationContextState::default(),
+            agent_todo_state: AgentTodoState::default(),
+            agent_plan_state: AgentPlanState::default(),
+            knowledge_base_ids: Vec::new(),
+            thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
+            agent_runtime: crate::chat::AgentRuntimeConfig::default(),
+        }
+    }
+
+    fn grouped_assistant(id: &str, content: &str, group_id: &str, ts: i64) -> ChatMessage {
+        let mut m = test_chat_message(id, "assistant", content, ts);
+        m.group_id = Some(group_id.to_string());
+        m.provider_id = Some("openai".to_string());
+        m.model = Some("gpt-4o".to_string());
+        m
+    }
+
+    fn test_settings_with_providers(provider_ids: &[&str]) -> Settings {
+        let mut settings = Settings::default();
+        settings.providers = provider_ids
+            .iter()
+            .map(|id| {
+                serde_json::from_value::<ModelProvider>(serde_json::json!({
+                    "id": id,
+                    "name": id,
+                    "baseUrl": "https://example.com/v1",
+                    "apiKeys": ["k"],
+                }))
+                .expect("provider deserialize")
+            })
+            .collect();
+        settings
+    }
+
+    #[test]
+    fn resolve_reply_arms_dedups_filters_and_caps() {
+        let settings = test_settings_with_providers(&["openai", "anthropic"]);
+
+        // 单模型 / 空 → ≤1（调用方走单模型路径）。
+        assert!(resolve_reply_arms(&settings, &[]).unwrap().is_empty());
+        let one = vec![ModelRef {
+            provider_id: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+        }];
+        assert_eq!(resolve_reply_arms(&settings, &one).unwrap().len(), 1);
+
+        // 去重（相同 provider+model）、保序、丢空、丢未知 provider。
+        let many = vec![
+            ModelRef { provider_id: "openai".to_string(), model: "gpt-4o".to_string() },
+            ModelRef { provider_id: "openai".to_string(), model: "gpt-4o".to_string() }, // dup
+            ModelRef { provider_id: "anthropic".to_string(), model: "claude-3".to_string() },
+            ModelRef { provider_id: "ghost".to_string(), model: "y".to_string() }, // unknown provider
+        ];
+        let arms = resolve_reply_arms(&settings, &many).unwrap();
+        assert_eq!(
+            arms,
+            vec![
+                ("openai".to_string(), "gpt-4o".to_string()),
+                ("anthropic".to_string(), "claude-3".to_string()),
+            ]
+        );
+
+        // 空 provider 也被丢弃（单独验证，避免与上面的 4 条上限冲突）。
+        let with_empty = vec![
+            ModelRef { provider_id: "openai".to_string(), model: "gpt-4o".to_string() },
+            ModelRef { provider_id: "".to_string(), model: "x".to_string() },
+        ];
+        assert_eq!(resolve_reply_arms(&settings, &with_empty).unwrap().len(), 1);
+
+        // 超上限 → Err。
+        let over: Vec<ModelRef> = (0..(MAX_REPLY_MODELS + 1))
+            .map(|i| ModelRef {
+                provider_id: "openai".to_string(),
+                model: format!("m{i}"),
+            })
+            .collect();
+        assert!(resolve_reply_arms(&settings, &over).is_err());
+    }
+
+    #[test]
+    fn build_assistant_message_records_group_meta_only_when_provided() {
+        let single = build_assistant_message(
+            "msg_single".to_string(),
+            "hi".to_string(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Some("send"),
+            Some("completed"),
+            None,
+            None,
+            None,
+        );
+        assert!(single.group_id.is_none());
+        assert!(single.provider_id.is_none());
+        assert!(single.model.is_none());
+
+        let arm = build_assistant_message(
+            "msg_arm".to_string(),
+            "hi".to_string(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Some("send"),
+            Some("completed"),
+            None,
+            None,
+            Some((
+                "grp_1".to_string(),
+                "anthropic".to_string(),
+                "claude-3".to_string(),
+            )),
+        );
+        assert_eq!(arm.group_id.as_deref(), Some("grp_1"));
+        assert_eq!(arm.provider_id.as_deref(), Some("anthropic"));
+        assert_eq!(arm.model.as_deref(), Some("claude-3"));
+    }
+
+    #[test]
+    fn build_chat_api_messages_keeps_only_selected_group_answer() {
+        // user + 3 答（grp_1）。默认无 group_selections → 取顺序第一条 a1。
+        let messages = vec![
+            test_chat_message("msg_user", "user", "compare these", 1),
+            grouped_assistant("msg_a1", "answer one", "grp_1", 2),
+            grouped_assistant("msg_a2", "answer two", "grp_1", 3),
+            grouped_assistant("msg_a3", "answer three", "grp_1", 4),
+        ];
+        let mut conversation = test_conversation_with_messages(messages);
+
+        let built = build_chat_api_messages("system", &conversation, Some(0), None, &[])
+            .expect("build");
+        let serialized = serde_json::to_string(&built).unwrap();
+        assert!(serialized.contains("answer one"));
+        assert!(!serialized.contains("answer two"));
+        assert!(!serialized.contains("answer three"));
+
+        // 用户点选第二条 → 历史改为只含 a2。
+        conversation
+            .group_selections
+            .insert("grp_1".to_string(), "msg_a2".to_string());
+        let built = build_chat_api_messages("system", &conversation, Some(0), None, &[])
+            .expect("build");
+        let serialized = serde_json::to_string(&built).unwrap();
+        assert!(!serialized.contains("answer one"));
+        assert!(serialized.contains("answer two"));
+        assert!(!serialized.contains("answer three"));
+    }
+
+    #[test]
+    fn build_chat_api_messages_default_first_follows_deletion() {
+        // 删除第一条后，默认「顺序第一条」自动变成原第二条。
+        let messages = vec![
+            test_chat_message("msg_user", "user", "compare these", 1),
+            grouped_assistant("msg_a2", "answer two", "grp_1", 3),
+            grouped_assistant("msg_a3", "answer three", "grp_1", 4),
+        ];
+        let conversation = test_conversation_with_messages(messages);
+        let built = build_chat_api_messages("system", &conversation, Some(0), None, &[])
+            .expect("build");
+        let serialized = serde_json::to_string(&built).unwrap();
+        assert!(serialized.contains("answer two"));
+        assert!(!serialized.contains("answer three"));
+    }
+
+    #[test]
+    fn build_chat_api_messages_single_answer_unaffected() {
+        // 无 group_id 的常规历史完全不受过滤影响（防回归 AC5/AC6）。
+        let messages = vec![
+            test_chat_message("msg_user", "user", "hello", 1),
+            test_chat_message("msg_a", "assistant", "world", 2),
+        ];
+        let conversation = test_conversation_with_messages(messages);
+        let built = build_chat_api_messages("system", &conversation, Some(0), None, &[])
+            .expect("build");
+        let serialized = serde_json::to_string(&built).unwrap();
+        assert!(serialized.contains("hello"));
+        assert!(serialized.contains("world"));
+    }
+
+    #[test]
+    fn group_excludes_only_non_selected_assistants() {
+        let messages = vec![
+            test_chat_message("msg_user", "user", "q", 1),
+            grouped_assistant("msg_a1", "a1", "grp_1", 2),
+            grouped_assistant("msg_a2", "a2", "grp_1", 3),
+        ];
+        let conversation = test_conversation_with_messages(messages);
+        // 默认选第一条：a1 保留、a2 排除。
+        assert!(!group_answer_excluded_from_context(
+            &conversation,
+            &conversation.messages[1]
+        ));
+        assert!(group_answer_excluded_from_context(
+            &conversation,
+            &conversation.messages[2]
+        ));
+        // user 消息（即便带 group_id）永不被该过滤排除。
+        let mut user_in_group = test_chat_message("msg_u2", "user", "uq", 4);
+        user_in_group.group_id = Some("grp_1".to_string());
+        assert!(!group_answer_excluded_from_context(&conversation, &user_in_group));
+    }
+
+    #[test]
+    fn stale_group_selection_falls_back_to_first_remaining() {
+        // D5/AC4：删除显式选中条后，清掉指向已删消息的 group_selections，选中条回退到组内
+        // 顺序第一条（这里模拟 chat_delete_message / chat_regenerate_message 的清理后状态）。
+        let messages = vec![
+            test_chat_message("msg_user", "user", "q", 1),
+            grouped_assistant("msg_a1", "answer one", "grp_1", 2),
+            grouped_assistant("msg_a2", "answer two", "grp_1", 3),
+        ];
+        let mut conversation = test_conversation_with_messages(messages);
+        // 用户显式选了第二条。
+        conversation
+            .group_selections
+            .insert("grp_1".to_string(), "msg_a2".to_string());
+
+        // 模拟删除被选中的 msg_a2：移除消息 + 删除命令对 group_selections 的清理。
+        conversation.messages.retain(|m| m.id != "msg_a2");
+        if conversation
+            .group_selections
+            .get("grp_1")
+            .map(String::as_str)
+            == Some("msg_a2")
+        {
+            conversation.group_selections.remove("grp_1");
+        }
+
+        // 残余的 msg_a1 必须仍进上下文（回退到组内第一条），而非被整组排除。
+        assert!(!group_answer_excluded_from_context(
+            &conversation,
+            &conversation.messages[1]
+        ));
+        let built = build_chat_api_messages("system", &conversation, Some(0), None, &[])
+            .expect("build");
+        let serialized = serde_json::to_string(&built).unwrap();
+        assert!(serialized.contains("answer one"));
     }
 }

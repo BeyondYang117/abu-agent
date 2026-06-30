@@ -128,6 +128,8 @@ mod tests {
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
             thinking_level: None,
+            reply_models: Vec::new(),
+            group_selections: std::collections::HashMap::new(),
         }
     }
 
