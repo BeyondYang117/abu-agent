@@ -1210,6 +1210,22 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
   }, [lang])
 
+  const handleRestartOnboarding = useCallback(async () => {
+    if (!settings) return
+    try {
+      const saved = await api.saveSettings({
+        ...settings,
+        onboardingStatus: 'pending',
+      })
+      setSettings(saved)
+      setInitialSettingsSnapshot(stableStringify(saved))
+      onSettingsChange()
+      window.location.hash = '#chat/onboarding'
+    } catch (err) {
+      console.error('Failed to restart onboarding:', err)
+    }
+  }, [onSettingsChange, settings])
+
   const updateDefaultModel = useCallback((
     key: keyof SettingsData['defaultModels'],
     providerId: string,
@@ -2355,6 +2371,22 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       />
                     </SettingRow>
                   )}
+                </SettingsGroup>
+
+                <SettingsGroup title={lang === 'zh' ? '首次使用' : 'First-time setup'}>
+                  <SettingRow
+                    label={lang === 'zh' ? '首次使用引导' : 'Setup wizard'}
+                    description={t.onboardingRestartDesc}
+                  >
+                    <button
+                      type="button"
+                      className="kv-btn sm"
+                      onClick={() => void handleRestartOnboarding()}
+                      data-tauri-drag-region="false"
+                    >
+                      {t.onboardingRestart}
+                    </button>
+                  </SettingRow>
                 </SettingsGroup>
 
                 <SettingsGroup title={lang === 'zh' ? '备份与恢复' : 'Backup & Restore'}>

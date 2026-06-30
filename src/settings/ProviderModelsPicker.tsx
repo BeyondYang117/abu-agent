@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Minus, Plus, RefreshCw, Search, X } from 'lucide-react'
 import type { ModelProvider } from '../api/tauri'
 import { ModelIcon } from '../chat/ModelIcon'
@@ -88,9 +89,9 @@ export function ProviderModelsPicker({
     setManualOpen(false)
   }
 
-  return (
+  return createPortal(
     <div
-      className="kv-modal-backdrop"
+      className="kv-modal-backdrop kv-modal-backdrop--portal"
       data-tauri-drag-region="false"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
@@ -252,6 +253,7 @@ export function ProviderModelsPicker({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

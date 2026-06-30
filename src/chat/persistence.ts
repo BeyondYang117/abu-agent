@@ -43,6 +43,10 @@ export function isChatSettingsPath(path: string): boolean {
   return path === 'chat/settings' || path.startsWith('chat/settings/')
 }
 
+export function isChatOnboardingPath(path: string): boolean {
+  return path === 'chat/onboarding' || path.startsWith('chat/onboarding/')
+}
+
 function getLocalStorageItem(key: string): string | null {
   try {
     return window.localStorage?.getItem(key) ?? null
@@ -76,13 +80,13 @@ export function normalizeStoredChatRoute(value: string | null): string | null {
   if (!value) return null
   const route = value.startsWith('#') ? value : `#${value}`
   const path = route.replace('#', '').split('?')[0]
-  if (!isChatPath(path) || isChatSettingsPath(path)) return null
+  if (!isChatPath(path) || isChatSettingsPath(path) || isChatOnboardingPath(path)) return null
   return route
 }
 
 export function rememberCurrentChatRoute() {
   const path = hashPath()
-  if (!path.startsWith('chat/') || isChatSettingsPath(path)) return
+  if (!path.startsWith('chat/') || isChatSettingsPath(path) || isChatOnboardingPath(path)) return
   setLocalStorageItem(CHAT_LAST_ROUTE_KEY, window.location.hash || '#chat')
 }
 

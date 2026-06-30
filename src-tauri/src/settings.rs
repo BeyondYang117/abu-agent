@@ -1058,6 +1058,9 @@ pub struct Settings {
     /// 幂等：置 true 后不再翻转，尊重用户此后手动关闭某工具或改 policy 的选择。
     #[serde(default)]
     pub chat_tools_greenlit_v1: bool,
+    /// 首次使用引导状态：`pending` | `completed` | `skipped`。
+    #[serde(default = "default_onboarding_status")]
+    pub onboarding_status: String,
     /// 启动时静默检查 GitHub Releases 是否有新版（默认 true）
     /// 仅做"提示 + 跳转 GH 下载页"，不集成 auto-installer，避免签名密钥那套
     #[serde(default = "default_true")]
@@ -1181,6 +1184,7 @@ impl Default for Settings {
             retry_attempts: default_retry_attempts(),
             builtin_assistants_seeded_v1: false,
             chat_tools_greenlit_v1: false,
+            onboarding_status: default_onboarding_status(),
             auto_check_update: true,
             image_archive_enabled: false,
             image_archive_path: String::new(),
@@ -1879,7 +1883,44 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         }
     }
 
+    settings.onboarding_status = normalize_onboarding_status(&settings);
+
     settings
+}
+
+fn default_onboarding_status() -> String {
+    "pending".to_string()
+}
+
+fn provider_has_usable_config(provider: &ModelProvider) -> bool {
+    provider.enabled
+        && provider.api_keys.iter().any(|k| !k.trim().is_empty())
+        && !provider.enabled_models.is_empty()
+}
+
+fn settings_has_usable_provider_config(settings: &Settings) -> bool {
+    settings.providers.iter().any(provider_has_usable_config)
+}
+
+fn normalize_onboarding_status(settings: &Settings) -> String {
+    let raw = settings.onboarding_status.trim();
+    match raw {
+        "completed" | "skipped" => raw.to_string(),
+        "pending" => {
+            if settings_has_usable_provider_config(settings) {
+                "completed".to_string()
+            } else {
+                "pending".to_string()
+            }
+        }
+        _ => {
+            if settings_has_usable_provider_config(settings) {
+                "completed".to_string()
+            } else {
+                "pending".to_string()
+            }
+        }
+    }
 }
 
 /**
@@ -3266,9 +3307,36 @@ mod tests {
         s.lens.provider_id = "nonexistent".to_string();
         s.lens.model = "ghost-model".to_string();
         let s = sanitize_settings(s);
-        // 不存在的 provider_id 应被清空 → fallback 到 translator provider/model
         assert_eq!(s.lens.provider_id, "");
         assert_eq!(s.lens.model, "");
+    }
+
+    #[test]
+    fn sanitize_settings_marks_onboarding_completed_for_existing_provider_config() {
+        let mut s = Settings::default();
+        s.onboarding_status = "pending".to_string();
+        s.providers.push(ModelProvider {
+            id: "active".to_string(),
+            name: "Active".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://active.example/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["live-model".to_string()],
+            supports_tools: true,
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
+        });
+        let s = sanitize_settings(s);
+        assert_eq!(s.onboarding_status, "completed");
+    }
+
+    #[test]
+    fn sanitize_settings_keeps_pending_onboarding_for_fresh_install() {
+        let s = sanitize_settings(Settings::default());
+        assert_eq!(s.onboarding_status, "pending");
     }
 
     #[test]

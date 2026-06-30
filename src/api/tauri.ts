@@ -734,6 +734,8 @@ export type Settings = {
     }
   }
   settingsLanguage?: 'zh' | 'en'
+  /** 首次使用引导：`pending` | `completed` | `skipped` */
+  onboardingStatus?: 'pending' | 'completed' | 'skipped'
   /** 启动时静默检查 GH Releases 是否有新版（默认 true） */
   autoCheckUpdate?: boolean
   /** 截图自动归档开关（默认 false） */
@@ -1016,6 +1018,26 @@ function isDefaultModelConfigured(selection: DefaultModelSelection): boolean {
   return selection.providerId.trim() !== ''
 }
 
+function providerHasUsableConfig(provider: ModelProvider): boolean {
+  return provider.enabled !== false
+    && provider.apiKeys.some((key) => key.trim() !== '')
+    && provider.enabledModels.length > 0
+}
+
+function settingsHasUsableProviderConfig(settings: Partial<Settings>): boolean {
+  return Array.isArray(settings.providers)
+    && settings.providers.some(providerHasUsableConfig)
+}
+
+function normalizeOnboardingStatus(current: Partial<Settings>): 'pending' | 'completed' | 'skipped' {
+  const raw = current.onboardingStatus
+  if (raw === 'completed' || raw === 'skipped') return raw
+  if (raw === 'pending') {
+    return settingsHasUsableProviderConfig(current) ? 'completed' : 'pending'
+  }
+  return settingsHasUsableProviderConfig(current) ? 'completed' : 'pending'
+}
+
 function prepareSettingsForSave(settings: Settings): Settings {
   const current = settings as Partial<Settings>
   const defaultModels = normalizeDefaultModels(current.defaultModels, {
@@ -1118,6 +1140,7 @@ function normalizeSettings(settings: Settings): Settings {
       },
     },
     settingsLanguage: current.settingsLanguage ?? 'zh',
+    onboardingStatus: normalizeOnboardingStatus(current),
     autoCheckUpdate: current.autoCheckUpdate ?? true,
     imageArchiveEnabled: current.imageArchiveEnabled ?? false,
     imageArchivePath: current.imageArchivePath ?? '',

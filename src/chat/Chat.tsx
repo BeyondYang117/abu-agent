@@ -55,6 +55,7 @@ import {
   type ChatToolProgressPayload,
   type ChatUserPromptPayload,
 } from '../api/tauri'
+import { OnboardingShell } from '../onboarding/OnboardingShell'
 import type { SettingsShellHandle, SettingsTab } from '../settings/SettingsShell'
 import type { Lang } from '../settings/i18n'
 import { estimateTokens } from '../utils/tokens'
@@ -64,6 +65,7 @@ import {
   forgetRememberedChatRoute,
   getChatPlatformWindowSize,
   getRememberedChatSidebarCollapsed,
+  isChatOnboardingPath,
   rememberChatSidebarCollapsed,
   rememberChatSize,
 } from './persistence'
@@ -131,7 +133,7 @@ function MessageListLoading() {
   )
 }
 
-type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill'
+type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'onboarding'
 
 interface ChatProps {
   onSettingsChange: () => void
@@ -147,6 +149,10 @@ function isChatSettingsPath(path: string): boolean {
 
 function isChatAssistantCenterPath(path: string): boolean {
   return path === 'chat/assistants' || path.startsWith('chat/assistants/')
+}
+
+function isChatOnboardingRoute(path: string): boolean {
+  return isChatOnboardingPath(path)
 }
 
 function isChatSkillCenterPath(path: string): boolean {
@@ -586,6 +592,7 @@ type SendMessageOptions = {
 export default function Chat({ onSettingsChange }: ChatProps) {
   const [chatView, setChatView] = useState<ChatView>(() => {
     const path = hashPath()
+    if (isChatOnboardingRoute(path)) return 'onboarding'
     if (isChatSettingsPath(path)) return 'settings'
     if (isChatAssistantCenterPath(path)) return 'assistants'
     if (isChatSkillCenterPath(path)) return 'skill'
@@ -1127,6 +1134,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     const rest = path.slice('chat/'.length)
     if (rest === 'settings' || rest.startsWith('settings/')) return null
     if (rest === 'assistants' || rest.startsWith('assistants/')) return null
+    if (rest === 'skill' || rest.startsWith('skill/')) return null
+    if (rest === 'onboarding' || rest.startsWith('onboarding/')) return null
     return decodeURIComponent(rest)
   }, [])
 
@@ -1142,6 +1151,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       window.location.hash = '#chat/settings'
     }
   }, [])
+
+  const syncOnboardingRoute = useCallback(() => {
+    if (window.location.hash !== '#chat/onboarding') {
+      window.location.hash = '#chat/onboarding'
+    }
+  }, [])
+
+  const handleOnboardingExit = useCallback(() => {
+    setChatView('conversation')
+    syncConversationRoute(null)
+  }, [syncConversationRoute])
 
   const syncAssistantCenterRoute = useCallback(() => {
     if (window.location.hash !== '#chat/assistants') {
@@ -1949,6 +1969,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   useEffect(() => {
     const loadFromRoute = () => {
       const path = hashPath()
+      if (isChatOnboardingRoute(path)) {
+        setChatView('onboarding')
+        return
+      }
       if (isChatSettingsPath(path)) {
         setChatView('settings')
         return
@@ -1975,6 +1999,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     window.addEventListener('hashchange', loadFromRoute)
     return () => window.removeEventListener('hashchange', loadFromRoute)
   }, [applyConversation, getRouteConversationId, reloadConversation, restoreStreamingPreview])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    void api.getSettings().then((settings) => {
+      if (cancelled) return
+      if (settings.onboardingStatus === 'pending' && !isChatOnboardingRoute(hashPath())) {
+        syncOnboardingRoute()
+      }
+    }).catch((err) => {
+      console.error('Failed to check onboarding status:', err)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [syncOnboardingRoute])
 
   useEffect(() => {
     let cancelled = false
@@ -3121,6 +3161,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     >
       {!usesNativeTitlebar && <WindowControls />}
       <div className="flex h-full min-h-0 w-full">
+        {chatView !== 'onboarding' ? (
         <Sidebar
           currentConversationId={currentConversation?.id}
           generatingConversationIds={generatingConversationIds}
@@ -3144,8 +3185,17 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           searchOpen={searchOpen}
           onSearchOpenChange={handleSidebarSearchOpenChange}
         />
+        ) : null}
 
-        {chatView === 'settings' ? (
+        {chatView === 'onboarding' ? (
+          <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
+            <OnboardingShell
+              onComplete={handleOnboardingExit}
+              onSkip={handleOnboardingExit}
+              onSettingsChange={onSettingsChange}
+            />
+          </div>
+        ) : chatView === 'settings' ? (
           <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
             <Suspense fallback={<ChatPaneLoading />}>
               <SettingsShell
