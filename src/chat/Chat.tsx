@@ -42,6 +42,7 @@ import type {
   SkillMeta,
   ToolCallRecord,
   ThinkingLevel,
+  ModelRef,
 } from './types'
 import {
   api,
@@ -87,6 +88,15 @@ import {
   setSnapshot as setStreamSnapshot,
   useStreamCoarse,
 } from './streamingStore'
+import {
+  beginGroup,
+  endGroup,
+  ensureGroupColumn,
+  flushGroups,
+  hasActiveGroup,
+  resetGroups,
+  touchGroup,
+} from './groupStreamingStore'
 import { compareTimelineSegments, segmentStepNumber, segmentToolCallId } from './segments'
 
 const AssistantCenter = lazy(() => import('./AssistantCenter').then((module) => ({
@@ -350,6 +360,87 @@ function updateReasoningSegmentDuration(
   }
 }
 
+// 把一条 chat-stream delta 累积进给定快照（会话单流 or 多答组某列共用）。
+// 原地 mutate snapshot；segment 已由调用方算好。返回 void。
+function applyStreamDeltaToSnapshot(
+  snapshot: ConversationStreamSnapshot,
+  payload: ChatStreamPayload,
+  segment: ChatMessageSegment | null,
+) {
+  if (segment) {
+    snapshot.segments = upsertStreamSegment(
+      snapshot.segments,
+      segment,
+      segment.kind === 'reasoning' ? payload.reasoningDelta ?? '' : payload.delta ?? '',
+    )
+  }
+  if (payload.reasoningDelta) {
+    const now = Date.now()
+    if (snapshot.reasoningStartedAt == null) {
+      snapshot.reasoningStartedAt = now
+    }
+    if (segment?.kind === 'reasoning') {
+      const segmentStartedAt = snapshot.reasoningStartedAtBySegmentId[segment.id] ?? now
+      snapshot.reasoningStartedAtBySegmentId[segment.id] = segmentStartedAt
+      updateReasoningSegmentDuration(snapshot, segment.id, now)
+    }
+    snapshot.streaming = true
+    snapshot.reasoningStreaming = true
+    snapshot.reasoning += payload.reasoningDelta
+    snapshot.reasoningDurationMs = Math.max(
+      snapshot.reasoningDurationMs ?? 0,
+      now - snapshot.reasoningStartedAt,
+    )
+  }
+  if (payload.delta) {
+    if (snapshot.reasoningStreaming && snapshot.reasoningStartedAt != null) {
+      snapshot.reasoningDurationMs = Math.max(
+        snapshot.reasoningDurationMs ?? 0,
+        Date.now() - snapshot.reasoningStartedAt,
+      )
+    }
+    if (segment?.kind === 'text') {
+      const activeReasoningSegment = findReasoningSegmentForText(snapshot.segments, segment)
+      if (activeReasoningSegment) {
+        updateReasoningSegmentDuration(snapshot, activeReasoningSegment.id)
+      }
+    }
+    snapshot.streaming = true
+    snapshot.reasoningStreaming = false
+    snapshot.content += payload.delta
+  }
+}
+
+// done 帧收尾：补齐最后一段 reasoning 的时长。原地 mutate。
+function finalizeReasoningDurationOnDone(snapshot: ConversationStreamSnapshot) {
+  if (snapshot.reasoningStartedAt != null && snapshot.reasoningStreaming) {
+    snapshot.reasoningDurationMs = Math.max(
+      snapshot.reasoningDurationMs ?? 0,
+      Date.now() - snapshot.reasoningStartedAt,
+    )
+    const activeReasoningSegment = [...snapshot.segments]
+      .reverse()
+      .find((item) => item.kind === 'reasoning')
+    if (activeReasoningSegment) {
+      updateReasoningSegmentDuration(snapshot, activeReasoningSegment.id)
+    }
+  }
+}
+
+// 把一条 chat-tool record 累积进给定快照（会话单流 or 多答组某列共用）。原地 mutate。
+function applyToolRecordToSnapshot(
+  snapshot: ConversationStreamSnapshot,
+  record: ToolCallRecord,
+) {
+  snapshot.streaming = true
+  snapshot.reasoningStreaming = false
+  const index = snapshot.toolCalls.findIndex((item) => item.id === record.id)
+  snapshot.toolCalls = index < 0
+    ? [...snapshot.toolCalls, record]
+    : snapshot.toolCalls.map((item, i) => (i === index ? { ...item, ...record } : item))
+  snapshot.segments = upsertToolStreamSegment(snapshot.segments, record)
+}
+
 function normalizeSkill(skill: import('../api/tauri').SkillMeta): SkillMeta {
   return {
     id: skill.id,
@@ -529,6 +620,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [draftKnowledgeBaseIds, setDraftKnowledgeBaseIds] = useState<string[]>([])
   // 欢迎页思考等级草稿；首次发送建会话时落到会话上。null=跟随全局。
   const [draftThinkingLevel, setDraftThinkingLevel] = useState<ThinkingLevel | null>(null)
+  // 多模型一问多答（任务 06-30）：欢迎页（尚无会话）时的多答模型草稿；首次发送建会话时落到会话上。
+  const [draftReplyModels, setDraftReplyModels] = useState<ModelRef[]>([])
   const [draftAgentRuntime, setDraftAgentRuntime] = useState<AgentRuntimeConfig>(
     BUILTIN_AGENT_RUNTIME,
   )
@@ -792,6 +885,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       cancelAnimationFrame(streamRenderRafRef.current)
       streamRenderRafRef.current = null
     }
+    // 卸载时清掉所有活跃多答组，避免遗留列快照。
+    resetGroups()
   }, [])
 
   const clearStreamSnapshot = useCallback((conversationId: string | null) => {
@@ -842,6 +937,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const activeModel = currentConversation && !currentConversationIsBlank
     ? currentConversation.model
     : draftModel
+  // 多模型一问多答（任务 06-30）：当前生效的多答模型集（会话级持久 reply_models，欢迎页用草稿）。
+  const activeReplyModels = useMemo<ModelRef[]>(
+    () => (currentConversation && !currentConversationIsBlank
+      ? currentConversation.reply_models ?? currentConversation.replyModels ?? []
+      : draftReplyModels),
+    [currentConversation, currentConversationIsBlank, draftReplyModels],
+  )
   const storedActiveSkillId = currentConversation
     ? currentConversation.active_skill_id ?? currentConversation.activeSkillId ?? null
     : null
@@ -1362,6 +1464,28 @@ export default function Chat({ onSettingsChange }: ChatProps) {
             return
           }
         }
+        // 多答组分支（任务 06-30）：该会话处于多模型并发流时，按 messageId 路由到对应列，
+        // 不动会话级单流快照（单模型路径零回归）。
+        if (hasActiveGroup(payload.conversationId) && payload.messageId) {
+          const column = ensureGroupColumn(
+            payload.conversationId,
+            payload.messageId,
+          )
+          if (!column) return
+          const segment = streamPayloadToSegment(payload)
+          applyStreamDeltaToSnapshot(column, payload, segment)
+          if (payload.done) {
+            finalizeReasoningDurationOnDone(column)
+            column.streaming = false
+            // 列结束是终止帧：立即 flush（不等下一帧），让该列完成态尽快可见。
+            flushGroups()
+          } else {
+            // 内容 delta 经 rAF 合帧（N 列高频 delta 不各自打爆 setState）。
+            touchGroup()
+          }
+          // 组的整体「done / 持久化」交给 sendMessage 返回后的统一收尾；这里不触发 finishStreamingRun。
+          return
+        }
         const snapshot = ensureStreamSnapshot(payload.conversationId)
         if (payload.runId) {
           if (snapshot.runId && snapshot.runId !== payload.runId) return
@@ -1539,6 +1663,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         }
         // 忽略 invoke 结束后的迟到 tool 事件，否则会重新 setStreaming(true) 卡死输入栏。
         if (!isConversationInFlight(inFlightConversationsRef.current, payload.conversationId)) return
+        // 多答组分支：按 messageId 路由到对应列。
+        if (hasActiveGroup(payload.conversationId) && payload.messageId) {
+          const column = ensureGroupColumn(payload.conversationId, payload.messageId)
+          if (!column) return
+          const record = toolEventToRecord(payload)
+          applyToolRecordToSnapshot(column, record)
+          touchGroup()
+          return
+        }
         const snapshot = ensureStreamSnapshot(payload.conversationId)
         if (payload.runId) {
           if (snapshot.runId && snapshot.runId !== payload.runId) return
@@ -2224,6 +2357,26 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       }
     }
 
+    // 多模型一问多答（任务 06-30）：把欢迎页选好的多答模型草稿落到新会话上。
+    {
+      const convReplyModels = conversation.reply_models ?? conversation.replyModels ?? []
+      const sameReply =
+        convReplyModels.length === draftReplyModels.length &&
+        convReplyModels.every((ref, i) =>
+          ref.provider_id === draftReplyModels[i]?.provider_id
+          && ref.model === draftReplyModels[i]?.model)
+      if (draftReplyModels.length > 0 && !sameReply) {
+        try {
+          conversation = await chatApi.updateConversation(conversation.id, {
+            replyModels: draftReplyModels,
+          })
+          applyConversation(conversation)
+        } catch (err) {
+          console.error('Failed to apply reply models draft before send:', err)
+        }
+      }
+    }
+
     const conversationId = conversation.id
     if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) {
       setStreamErrorForConversation(conversationId, '该对话正在生成中，请稍后再试')
@@ -2279,6 +2432,26 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
 
     markConversationInFlight(conversationId)
+    // 多模型一问多答（任务 06-30）：reply_models ≥2 且非 plan/orchestrate 模式时，后端会 fan-out
+    // 出 N 条并发流。前端据此建多答组（占位 N 列），流事件按 messageId 路由到对应列。
+    // 与后端 resolve_reply_arms 的判定保持一致（≤1 个臂 = 单模型路径，零回归）。
+    const replyArms = conversation.reply_models ?? conversation.replyModels ?? []
+    const convPlanMode =
+      conversation.agent_plan_state?.mode ?? conversation.agentPlanState?.mode ?? 'act'
+    const willFanOut = replyArms.length >= 2 && convPlanMode === 'act'
+    if (willFanOut) {
+      const groupId = `grp-local-${Date.now()}`
+      beginGroup(
+        conversationId,
+        groupId,
+        replyArms.map((ref) => ({ providerId: ref.provider_id, model: ref.model })),
+      )
+      // 多答组不走单流预览：清掉刚才置的会话级 streaming 占位，避免顶部多出一条空预览气泡。
+      if (currentConversationIdRef.current === conversationId) {
+        resetStreamStore()
+        setStreamCoarse({ streaming: true })
+      }
+    }
     const attachmentSkillId = options.forceNewConversation
       ? inferSingleAttachmentSkillId(attachments, enabledSkills)
       : effectiveSkillId ?? inferSingleAttachmentSkillId(attachments, enabledSkills)
@@ -2324,6 +2497,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       setStreamErrorForConversation(conversationId, message)
     } finally {
       clearConversationInFlight(conversationId)
+      // 多答组收尾：sendMessage 返回时所有臂已结束，持久化后的会话已 applyConversation（含 N 条
+      // 带 group_id 的 assistant 消息），实时流列已可丢弃，由 MessageGroup 渲染落库后的列。
+      endGroup(conversationId)
       if (persistedConversation) {
         // invoke 已返回持久化后的完整对话且上面已 applyConversation。
         // 丢弃被延后的 finishStreamingRun(它会再次全量 reloadConversation),避免每轮随历史线性变慢。
@@ -2345,6 +2521,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     draftAgentRuntime,
     draftKnowledgeBaseIds,
     draftThinkingLevel,
+    draftReplyModels,
     effectiveSkillId,
     enabledSkills,
     ensureStreamSnapshot,
@@ -2591,6 +2768,22 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     [applyConversation, refreshSidebar],
   )
 
+  // 多答组「选中条」（任务 06-30 / D5）：标记某组进下一轮历史的列。默认第一列；用户点选改。
+  const handleSetGroupSelection = useCallback(
+    async (groupId: string, messageId: string) => {
+      const conv = currentConversationRef.current
+      if (!conv) return
+      try {
+        const updated = await chatApi.setGroupSelection(conv.id, groupId, messageId)
+        applyConversationMeta(updated)
+      } catch (err) {
+        console.error('Failed to set group selection:', err)
+        setStreamError(typeof err === 'string' ? err : (err as Error).message || '选中失败')
+      }
+    },
+    [applyConversationMeta],
+  )
+
   const handleRegenerateMessage = useCallback(
     async (messageId: string) => {
       const conv = currentConversationRef.current
@@ -2746,8 +2939,23 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     }
   }, [applyConversationMeta, currentConversation])
 
+  // 多模型一问多答（任务 06-30 / D2）：变更多答模型集，持久化到会话（欢迎页先存草稿）。
+  // 上限 4 由 UI 侧约束；这里直落 chatApi.updateConversation({ replyModels })。
+  const handleChangeReplyModels = useCallback(async (models: ModelRef[]) => {
+    setDraftReplyModels(models)
+    if (!currentConversation) return
+    try {
+      const updatedConv = await chatApi.updateConversation(currentConversation.id, {
+        replyModels: models,
+      })
+      applyConversationMeta(updatedConv)
+    } catch (err) {
+      console.error('Failed to update reply models:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '多答模型更新失败')
+    }
+  }, [applyConversationMeta, currentConversation])
+
   const handleChangeKnowledgeBaseIds = useCallback(async (ids: string[]) => {
-    // Track a draft so mounting works on the welcome page (no conversation yet);
     // the draft is applied when the conversation is created on first send.
     setDraftKnowledgeBaseIds(ids)
     if (!currentConversation) return
@@ -3114,6 +3322,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onChangeKnowledgeBaseIds={handleChangeKnowledgeBaseIds}
                       mcpServers={mcpServers}
                       onToggleMcpServer={handleToggleMcpServer}
+                      replyModels={activeReplyModels}
+                      onChangeReplyModels={handleChangeReplyModels}
                       contextSlot={
                         <ContextIndicator
                           contextState={contextState}
@@ -3144,6 +3354,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onDeleteMessage={handleDeleteMessage}
                       onRetryLastUser={handleRegenerateMessage}
                       onExecuteAgentPlan={handleExecuteAgentPlan}
+                      groupSelections={currentConversation?.group_selections ?? currentConversation?.groupSelections ?? {}}
+                      onSetGroupSelection={handleSetGroupSelection}
                     />
                   </Suspense>
                   <InputBar
@@ -3179,6 +3391,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                     onChangeKnowledgeBaseIds={handleChangeKnowledgeBaseIds}
                     mcpServers={mcpServers}
                     onToggleMcpServer={handleToggleMcpServer}
+                    replyModels={activeReplyModels}
+                    onChangeReplyModels={handleChangeReplyModels}
                     contextSlot={
                       <ContextIndicator
                         contextState={contextState}

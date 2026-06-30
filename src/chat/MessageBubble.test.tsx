@@ -402,3 +402,36 @@ describe('MessageBubble timeline grouping', () => {
     )
   })
 })
+
+describe('MessageBubble 多模型所发模型标签（R8）', () => {
+  const userMessage: ChatMessage = {
+    id: 'msg-user',
+    role: 'user',
+    content: '比较这几个模型',
+    group_id: 'grp-1',
+    timestamp: 1,
+  }
+
+  it('多模型（≥2）时在 user 气泡顶部渲染所发模型标签', () => {
+    render(
+      <MessageBubble
+        message={userMessage}
+        sentModels={[
+          { providerId: 'deepseek', model: 'deepseek-chat' },
+          { providerId: 'qwen', model: 'qwen-max' },
+        ]}
+      />,
+    )
+    expect(screen.getByText('@deepseek-chat')).toBeInTheDocument()
+    expect(screen.getByText('@qwen-max')).toBeInTheDocument()
+  })
+
+  it('单模型 / 缺省时不渲染标签行（无回归）', () => {
+    const { rerender } = render(
+      <MessageBubble message={userMessage} sentModels={[{ providerId: 'deepseek', model: 'deepseek-chat' }]} />,
+    )
+    expect(screen.queryByText('@deepseek-chat')).not.toBeInTheDocument()
+    rerender(<MessageBubble message={userMessage} />)
+    expect(screen.queryByText(/^@/)).not.toBeInTheDocument()
+  })
+})

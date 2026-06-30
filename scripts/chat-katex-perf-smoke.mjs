@@ -86,6 +86,9 @@ const config = {
   baseUrl: process.env.KIVIO_PERF_BASE_URL ?? 'http://localhost:5714/',
   browsers: parseBrowsers(process.env.KIVIO_PERF_BROWSERS),
   formulaCounts: parseFormulaCounts(process.env.KIVIO_PERF_FORMULA_COUNTS),
+  // 多模型一问多答（任务 06-30 / 步骤 8）：并排列数，对照 D4 上限 4。
+  multiModelColumns: parsePositiveInt(process.env.KIVIO_PERF_MULTI_MODEL_COLUMNS, 4),
+  multiModelFormulaCount: parsePositiveInt(process.env.KIVIO_PERF_MULTI_MODEL_FORMULA_COUNT, 2),
   runs: parsePositiveInt(process.env.KIVIO_PERF_RUNS, 3),
   iterations: {
     sidebar: parsePositiveInt(process.env.KIVIO_PERF_SIDEBAR_ITERATIONS, 28),
@@ -132,11 +135,53 @@ const plainAnswer = `下面是一段普通回复，没有公式。
 生成已经结束。`
 
 function conversation(testCase) {
+  // 多模型一问多答（任务 06-30 / 步骤 8）：columns>1 时构造一条 user 消息 + N 条共享
+  // group_id 的 assistant 消息（横向并排多列），每列含公式，验证 N 列 KaTeX 仍走 Shadow DOM
+  // 且无明显劣化（AC7）。columns 缺省/为 1 时退化为既有单答用例（零回归）。
+  const columns = Math.max(1, testCase.columns ?? 1)
+  const groupId = columns > 1 ? `grp_${testCase.id}` : null
+  const sampleModels = [
+    { provider: 'openai', model: 'gpt-4o' },
+    { provider: 'anthropic', model: 'claude-3' },
+    { provider: 'deepseek', model: 'deepseek-chat' },
+    { provider: 'qwen', model: 'qwen-max' },
+  ]
+  const assistantMessages = Array.from({ length: columns }, (_, index) => {
+    const pick = sampleModels[index % sampleModels.length]
+    return {
+      id: `${testCase.id}-a${index + 1}`,
+      role: 'assistant',
+      content: testCase.assistantContent,
+      attachments: [],
+      artifacts: [],
+      tool_calls: [],
+      segments: [],
+      stream_outcome: 'completed',
+      group_id: groupId,
+      groupId,
+      provider_id: columns > 1 ? pick.provider : null,
+      providerId: columns > 1 ? pick.provider : null,
+      model: columns > 1 ? pick.model : null,
+      timestamp: now - 10 + index,
+    }
+  })
   return {
     id: testCase.id,
     title: testCase.formulaCount > 0 ? `公式卡顿测试 x${testCase.formulaCount}` : '普通短对话',
     provider_id: 'dev-provider',
     model: 'dev-model',
+    reply_models: columns > 1
+      ? Array.from({ length: columns }, (_, index) => {
+          const pick = sampleModels[index % sampleModels.length]
+          return { provider_id: pick.provider, model: pick.model }
+        })
+      : [],
+    replyModels: columns > 1
+      ? Array.from({ length: columns }, (_, index) => {
+          const pick = sampleModels[index % sampleModels.length]
+          return { provider_id: pick.provider, model: pick.model }
+        })
+      : [],
     messages: [
       {
         id: `${testCase.id}-u1`,
@@ -146,19 +191,11 @@ function conversation(testCase) {
         artifacts: [],
         tool_calls: [],
         segments: [],
+        group_id: groupId,
+        groupId,
         timestamp: now - 20,
       },
-      {
-        id: `${testCase.id}-a1`,
-        role: 'assistant',
-        content: testCase.assistantContent,
-        attachments: [],
-        artifacts: [],
-        tool_calls: [],
-        segments: [],
-        stream_outcome: 'completed',
-        timestamp: now - 10,
-      },
+      ...assistantMessages,
     ],
     active_skill_id: null,
     activeSkillId: null,
@@ -181,13 +218,24 @@ function conversation(testCase) {
 }
 
 const cases = [
-  { name: 'plain_short_chat', id: 'conv_plain_perf', formulaCount: 0, assistantContent: plainAnswer },
+  { name: 'plain_short_chat', id: 'conv_plain_perf', formulaCount: 0, columns: 1, assistantContent: plainAnswer },
   ...config.formulaCounts.map((count) => ({
     name: `formula_shadow_katex_x${count}`,
     id: `conv_formula_perf_${count}`,
     formulaCount: count,
+    columns: 1,
     assistantContent: formulaAnswer(count),
   })),
+  // 多模型并排：N 列、每列含公式的多答组（任务 06-30 步骤 8 / AC7）。
+  // 显式切 columns 模式测 4 列同渲最坏情况（默认 tabs 只渲染 1 条，更轻）。
+  {
+    name: `multi_model_columns_x${config.multiModelColumns}`,
+    id: `conv_multi_model_perf_${config.multiModelColumns}`,
+    formulaCount: config.multiModelFormulaCount,
+    columns: config.multiModelColumns,
+    viewMode: 'columns',
+    assistantContent: formulaAnswer(config.multiModelFormulaCount),
+  },
 ]
 const conversations = cases.map(conversation)
 
@@ -213,7 +261,10 @@ function blockingMax(row, opName) {
 
 function assertSmoke(rows) {
   const errors = []
-  const rowFor = (browser, formulaCount) => rows.find((row) => row.browser === browser && row.formulaCount === formulaCount)
+  const rowFor = (browser, formulaCount) =>
+    rows.find((row) => row.browser === browser && row.formulaCount === formulaCount && (row.columns ?? 1) === 1)
+  const rowByCase = (browser, caseName) => rows.find((row) => row.browser === browser && row.case === caseName)
+  const multiCaseName = `multi_model_columns_x${config.multiModelColumns}`
 
   for (const browser of config.browsers) {
     const plain = rowFor(browser, 0)
@@ -248,6 +299,25 @@ function assertSmoke(rows) {
         }
       }
     }
+
+    // 多模型并排（任务 06-30 步骤 8 / AC7）：N 列、每列 multiModelFormulaCount 个公式。
+    // 期望 N 列公式全部走 Shadow DOM（normal light-DOM KaTeX = 0；shadow host = 列数 × 公式数），
+    // 即并排列不会把 KaTeX 泄回普通 DOM 重蹈 WebKit 全局失效（component-guidelines 的红线）。
+    const multi = rowByCase(browser, multiCaseName)
+    if (!multi) {
+      errors.push(`${browser}: missing multi-model row ${multiCaseName}`)
+    } else {
+      const expectedHosts = config.multiModelColumns * config.multiModelFormulaCount
+      if (multi.normalKatexNodes !== 0) {
+        errors.push(`${browser} ${multiCaseName}: expected normalKatexNodes=0, got ${multi.normalKatexNodes}`)
+      }
+      if (multi.shadowHostCount !== expectedHosts) {
+        errors.push(`${browser} ${multiCaseName}: expected shadowHostCount=${expectedHosts}, got ${multi.shadowHostCount}`)
+      }
+      if (multi.shadowKatexNodes < expectedHosts) {
+        errors.push(`${browser} ${multiCaseName}: expected ${expectedHosts}+ KaTeX nodes inside shadow DOM`)
+      }
+    }
   }
 
   const webkitPlain = rowFor('webkit', 0)
@@ -264,6 +334,23 @@ function assertSmoke(rows) {
         }
       }
     }
+
+    // WebKit 多模型并排的全局阻塞门槛：N 列同时挂 KaTeX 不应把无关 UI（侧栏/搜索/主题）
+    // 拖到超过单公式上限的 multiModelColumns 倍（线性放大兜底，对照 D4 上限 4）。
+    const webkitMulti = rowByCase('webkit', multiCaseName)
+    if (webkitMulti) {
+      for (const [opName, maxMs] of Object.entries(config.thresholds.webkitMaxBlockingMsByOp)) {
+        const plainMax = blockingMax(webkitPlain, opName)
+        const multiMax = blockingMax(webkitMulti, opName)
+        const limit = Math.max(
+          maxMs * config.multiModelColumns,
+          plainMax * config.thresholds.webkitFormulaToPlainRatio * config.multiModelColumns,
+        )
+        if (multiMax > limit) {
+          errors.push(`webkit ${multiCaseName}: ${opName} max ${multiMax}ms exceeds ${Number(limit.toFixed(2))}ms (plain ${plainMax}ms)`)
+        }
+      }
+    }
   }
 
   if (errors.length > 0) {
@@ -277,18 +364,22 @@ async function waitForChat(page) {
   await page.waitForTimeout(250)
 }
 
-async function installData(page, targetId) {
+async function installData(page, targetId, viewMode) {
   await page.goto(`${baseUrl}#chat/${targetId}`, { waitUntil: 'domcontentloaded' })
-  await page.evaluate(({ storageKey, lastRouteKey, conversations, targetId }) => {
+  await page.evaluate(({ storageKey, lastRouteKey, conversations, targetId, viewMode }) => {
     localStorage.setItem(storageKey, JSON.stringify(conversations))
     localStorage.setItem(lastRouteKey, `#chat/${targetId}`)
-  }, { storageKey, lastRouteKey, conversations, targetId })
-  await page.goto(`${baseUrl}#chat/${targetId}`, { waitUntil: 'networkidle' })
+    // 多答展示模式全局偏好（默认 tabs 只渲染 1 条；测 4 列最坏情况需显式切 columns）。
+    if (viewMode) localStorage.setItem('kivio.chat.multiAnswerView', viewMode)
+  }, { storageKey, lastRouteKey, conversations, targetId, viewMode })
+  // reload（而非再 goto 同 URL）：保证完整重载，模块初始化时确定性读到刚写入的 localStorage
+  // （含多答视图模式），避免 goto 同 hash 的 same-document 竞态导致偶发读不到。
+  await page.reload({ waitUntil: 'networkidle' })
   await waitForChat(page)
 }
 
 async function measureCase(page, testCase) {
-  await installData(page, testCase.id)
+  await installData(page, testCase.id, testCase.viewMode)
   return page.evaluate(async ({ iterations }) => {
     const stats = (xs) => {
       const sorted = [...xs].sort((a, b) => a - b)
@@ -580,6 +671,7 @@ async function run(browserName, browserType) {
       browser: browserName,
       case: testCase.name,
       formulaCount: testCase.formulaCount,
+      columns: testCase.columns ?? 1,
       runs: config.runs,
       iterations: config.iterations,
       normalKatexNodes: runs[0].normalKatexNodes,

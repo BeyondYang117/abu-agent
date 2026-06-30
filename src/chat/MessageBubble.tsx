@@ -34,6 +34,7 @@ import { isImageArtifact } from './artifacts'
 import { loadArtifactDataUrl } from './attachmentPreview'
 import { openChatImageViewer } from './imageViewer'
 import { ReasoningBlock } from './ReasoningBlock'
+import { ModelIcon } from './ModelIcon'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
 import type { AgentPlanState, ChatMessage, ChatMessageSegment, ChatToolArtifact, ToolCallRecord } from './types'
@@ -57,6 +58,8 @@ interface MessageBubbleProps {
   reasoningStreaming?: boolean
   /** 这条消息整体是否在流式生成中（仅 streaming-assistant bubble 为 true） */
   messageStreaming?: boolean
+  /** R8（多模型一问多答）：本条 user 消息这一问发给了哪些模型；多模型时渲染在气泡顶部。 */
+  sentModels?: { providerId: string | null; model: string | null }[]
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
   onRegenerateMessage?: (messageId: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
@@ -638,6 +641,7 @@ function MessageBubbleComponent({
   reasoningDurationMsBySegmentId,
   reasoningStreaming = false,
   messageStreaming = false,
+  sentModels,
   onUpdateMessage,
   onRegenerateMessage,
   onDeleteMessage,
@@ -693,9 +697,27 @@ function MessageBubbleComponent({
 
   if (isUser) {
     const hasText = message.content.trim().length > 0
+    // R8（多模型一问多答）：本问发给 ≥2 个模型时，在 user 气泡顶部渲染模型标签行（如 @deepseek @qwen）。
+    // 单模型不显示这行（sentModels 缺省或 <2）。
+    const replyModelTags = (sentModels ?? []).filter((m) => (m.model ?? '').trim().length > 0)
+    const showModelTags = replyModelTags.length >= 2
     return (
       <div className="group chat-motion-fade-up flex justify-end py-2">
         <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1">
+          {showModelTags && (
+            <div className="flex flex-wrap items-center justify-end gap-1.5 pr-0.5">
+              {replyModelTags.map((tag, index) => (
+                <span
+                  key={`${tag.model}-${index}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+                  title={tag.providerId ? `${tag.model} | ${tag.providerId}` : (tag.model ?? '')}
+                >
+                  {tag.model && <ModelIcon model={tag.model} size={12} />}
+                  <span className="max-w-[140px] truncate">@{tag.model}</span>
+                </span>
+              ))}
+            </div>
+          )}
           {attachments.length > 0 && (
             <ChatAttachments
               attachments={attachments}

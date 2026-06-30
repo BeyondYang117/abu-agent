@@ -183,6 +183,14 @@ export interface ChatMessage {
   streamOutcome?: 'completed' | 'cancelled' | 'error' | 'interrupted' | string | null
   /** Provider 报告的本条回复真实 token 用量（规划/合成/压缩累计）；不报告时缺省。 */
   usage?: MessageUsage | null
+  /** 多模型一问多答：同一条 user 消息 fan-out 出的 N 条 assistant 共享同一个 group id；单模型为空。 */
+  group_id?: string | null
+  groupId?: string | null
+  /** 该 assistant 实际所用 provider id（多模型时每条各记自己的；单模型缺省回退会话级）。 */
+  provider_id?: string | null
+  providerId?: string | null
+  /** 该 assistant 实际所用 model（多模型时每条各记自己的；单模型缺省回退会话级）。 */
+  model?: string | null
   timestamp: number
 }
 
@@ -446,6 +454,18 @@ export interface Conversation {
   knowledgeBaseIds?: string[]
   thinking_level?: ThinkingLevel | null
   thinkingLevel?: ThinkingLevel | null
+  /** 多模型一问多答（D2）：会话级持久化的多答模型集合（上限 4）。空或单元素 = 单模型现状。 */
+  reply_models?: ModelRef[]
+  replyModels?: ModelRef[]
+  /** 多答组「选中条」（D5）：group_id → 被采纳进下一轮历史的 assistant message id。无记录取该组第一条。 */
+  group_selections?: Record<string, string>
+  groupSelections?: Record<string, string>
+}
+
+/** 一次回答所用的 (provider, model) 引用。多模型一问多答的会话级模型集元素。 */
+export interface ModelRef {
+  provider_id: string
+  model: string
 }
 
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'

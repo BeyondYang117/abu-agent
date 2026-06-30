@@ -3,8 +3,11 @@ import { ChevronDown, RotateCw } from 'lucide-react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 import type { AgentPlanState, ChatMessage } from './types'
 import { MessageBubble } from './MessageBubble'
+import { MessageGroup } from './MessageGroup'
 import { isExecutableAgentPlanText } from './agentPlan'
+import { foldMessageGroups } from './messageGroups'
 import { useStreamCoarse, useStreamSnapshot } from './streamingStore'
+import { getActiveGroup, useGroupsVersion } from './groupStreamingStore'
 import { prefersReducedMotion } from './utils'
 
 export interface AssistantStreamStats {
@@ -25,6 +28,9 @@ interface MessageListProps {
   onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
   // 失败发送后线程末尾留下的孤儿用户消息：点「重试」用它的 id 重新生成。
   onRetryLastUser?: (messageId: string) => void
+  // 多模型一问多答（任务 06-30）：多答组「选中条」映射 + 点选回调。
+  groupSelections?: Record<string, string>
+  onSetGroupSelection?: (groupId: string, messageId: string) => void
 }
 
 const LIST_EDGE_PADDING_PX = 16
@@ -33,10 +39,15 @@ const LIST_EDGE_PADDING_PX = 16
 // 屏外的气泡连同其 KaTeX host / Markdown / 图片 DOM 真正从 DOM 卸载。
 type RenderItem =
   | { kind: 'spacer'; key: 'padding-top' | 'padding-bottom'; size: number }
-  | { kind: 'message'; key: string; message: ChatMessage }
+  | { kind: 'message'; key: string; message: ChatMessage; sentModels?: GroupModelLabel[] }
+  | { kind: 'group'; key: string; groupId: string; messages: ChatMessage[] }
+  | { kind: 'live-group'; key: string; groupId: string }
   | { kind: 'streaming'; key: 'streaming-assistant'; message: ChatMessage; messageStreaming: boolean; reasoningStreaming: boolean }
   | { kind: 'thinking'; key: 'thinking' }
   | { kind: 'error'; key: 'error'; text: string; retryMessageId: string | null }
+
+// R8（多模型一问多答）：多答组的「本次所发模型」列表，渲染在该组对应 user 消息顶部。
+type GroupModelLabel = { providerId: string | null; model: string | null }
 
 function MessageListBase({
   conversationId,
@@ -48,10 +59,15 @@ function MessageListBase({
   onDeleteMessage,
   onExecuteAgentPlan,
   onRetryLastUser,
+  groupSelections = {},
+  onSetGroupSelection,
 }: MessageListProps) {
   // 流式预览状态直接订阅 streamingStore——只有本组件随每帧内容重渲，Chat/侧栏/输入栏不动。
   const coarse = useStreamCoarse()
   const snapshot = useStreamSnapshot()
+  // 多答组实时流：订阅 group store 版本号，活跃组列内容更新时驱动重渲。
+  const groupsVersion = useGroupsVersion()
+  const liveGroup = conversationId ? getActiveGroup(conversationId) : undefined
   const streaming = coarse.streaming
   const streamFrozen = coarse.streamFrozen
   const error = coarse.streamError
@@ -91,13 +107,55 @@ function MessageListBase({
       { kind: 'spacer', key: 'padding-top', size: LIST_EDGE_PADDING_PX },
     ]
 
-    for (const message of messages) {
-      list.push({ kind: 'message', key: message.id, message })
+    // 多模型一问多答（任务 06-30）：把同一 group_id 的连续 assistant 消息折成一个 group item，
+    // 横向并排多列；其余消息线性 push（折叠逻辑是纯函数 foldMessageGroups，便于单测）。
+    // R8：先收集 group_id → 本次所发模型列表，给该组对应 user 消息加模型标签行。
+    const folded = foldMessageGroups(messages)
+    const sentModelsByGroup = new Map<string, GroupModelLabel[]>()
+    for (const item of folded) {
+      if (item.type === 'group') {
+        sentModelsByGroup.set(
+          item.groupId,
+          item.messages.map((m) => ({
+            providerId: m.provider_id ?? m.providerId ?? null,
+            model: m.model ?? null,
+          })),
+        )
+      }
     }
+    // 流式态下本组 assistant 尚未落库 → 从实时列补出模型列表，让 user 消息标签即时出现。
+    if (liveGroup && liveGroup.columns.length > 0 && !sentModelsByGroup.has(liveGroup.groupId)) {
+      sentModelsByGroup.set(
+        liveGroup.groupId,
+        liveGroup.columns.map((col) => ({ providerId: col.providerId, model: col.model })),
+      )
+    }
+
+    for (const item of folded) {
+      if (item.type === 'group') {
+        list.push({
+          kind: 'group',
+          key: `group-${item.groupId}`,
+          groupId: item.groupId,
+          messages: item.messages,
+        })
+      } else {
+        const message = item.message
+        const groupId = message.role === 'user' ? (message.group_id ?? message.groupId ?? null) : null
+        const sentModels = groupId ? sentModelsByGroup.get(groupId) : undefined
+        list.push({ kind: 'message', key: message.id, message, sentModels })
+      }
+    }
+
+    // 实时多答组：流式中（active group 存在）追加一个 live-group item，取代单流预览气泡。
+    const hasLiveGroup = Boolean(liveGroup && (coarse.streaming || coarse.streamFrozen))
     const hasStreamingPreview =
+      !hasLiveGroup &&
       (streaming || streamFrozen) &&
       (streamingContent || streamingReasoning || streamingToolCalls.length > 0 || streamingSegments.length > 0)
-    if (hasStreamingPreview) {
+    if (hasLiveGroup && liveGroup) {
+      list.push({ kind: 'live-group', key: `live-group-${liveGroup.groupId}`, groupId: liveGroup.groupId })
+    } else if (hasStreamingPreview) {
       list.push({
         kind: 'streaming',
         key: 'streaming-assistant',
@@ -128,6 +186,9 @@ function MessageListBase({
     return list
   }, [
     messages,
+    liveGroup,
+    coarse.streaming,
+    coarse.streamFrozen,
     streaming,
     streamFrozen,
     streamingContent,
@@ -223,6 +284,7 @@ function MessageListBase({
     reasoningStreaming,
     streamingToolCalls,
     streamingSegments,
+    groupsVersion,
     scrollToBottom,
   ])
 
@@ -243,6 +305,7 @@ function MessageListBase({
               tokensPerSec={assistantStats?.tokensPerSec}
               reasoningDurationMs={assistantStats?.reasoningDurationMs}
               reasoningDurationMsBySegmentId={assistantStats?.reasoningDurationMsBySegmentId}
+              sentModels={item.sentModels}
               onUpdateMessage={msg.role === 'assistant' ? onUpdateMessage : undefined}
               onRegenerateMessage={msg.role === 'assistant' ? onRegenerateMessage : undefined}
               onDeleteMessage={onDeleteMessage}
@@ -251,6 +314,29 @@ function MessageListBase({
             />
           )
         }
+        case 'group': {
+          const selectedMessageId = groupSelections[item.groupId] ?? null
+          return (
+            <MessageGroup
+              conversationId={conversationId}
+              groupId={item.groupId}
+              messages={item.messages}
+              selectedMessageId={selectedMessageId}
+              onSelectColumn={onSetGroupSelection}
+              onUpdateMessage={onUpdateMessage}
+              onRegenerateMessage={onRegenerateMessage}
+              onDeleteMessage={onDeleteMessage}
+            />
+          )
+        }
+        case 'live-group':
+          return (
+            <MessageGroup
+              conversationId={conversationId}
+              groupId={item.groupId}
+              messages={[]}
+            />
+          )
         case 'streaming':
           return (
             <MessageBubble
@@ -298,6 +384,8 @@ function MessageListBase({
       onDeleteMessage,
       onExecuteAgentPlan,
       onRetryLastUser,
+      groupSelections,
+      onSetGroupSelection,
       streamingReasoningDurationMs,
       streamingReasoningDurationMsBySegmentId,
     ],

@@ -29,10 +29,11 @@ import {
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
 import { KnowledgeBaseChip } from './KnowledgeBaseChip'
+import { MultiModelSelector } from './MultiModelSelector'
 import { api, type ChatToolDefinition, type ChatMcpServer } from '../api/tauri'
 import { chatApi } from './api'
 import { builtinAssistantGlyph } from './assistantIcons'
-import type { AgentPlanMode, AgentPlanState, ChatProject, PendingAttachment } from './types'
+import type { AgentPlanMode, AgentPlanState, ChatProject, ModelRef, PendingAttachment } from './types'
 import {
   buildSlashCommands,
   commandMatches,
@@ -407,6 +408,9 @@ interface InputBarProps {
   /** 已配置的 MCP 服务器；底栏 MCP 按钮切换各服务器 enabled(是否加载) */
   mcpServers?: ChatMcpServer[]
   onToggleMcpServer?: (serverId: string) => void | Promise<void>
+  /** 多答模型集（会话级 reply_models / replyModels；0/1 个=单模型，≥2=一问多答） */
+  replyModels?: ModelRef[]
+  onChangeReplyModels?: (models: ModelRef[]) => void | Promise<void>
   /** 上下文用量指示器：由 Chat 注入 <ContextIndicator>，渲染在底栏右侧 Act 左边 */
   contextSlot?: ReactNode
 }
@@ -445,6 +449,8 @@ export function InputBar({
   onChangeKnowledgeBaseIds,
   mcpServers = [],
   onToggleMcpServer,
+  replyModels = [],
+  onChangeReplyModels,
   contextSlot,
 }: InputBarProps) {
   const [input, setInput] = useState('')
@@ -1760,6 +1766,17 @@ export function InputBar({
                   </button>
                 )}
               </>
+            )}
+
+            {!usesExternalRuntime && onChangeReplyModels && (
+              <div className="min-w-0 shrink" data-tauri-drag-region="false">
+                <MultiModelSelector
+                  value={replyModels}
+                  onChange={(models) => void onChangeReplyModels(models)}
+                  placement={layout === 'inline' ? 'down' : 'up'}
+                  anchorRef={innerRef}
+                />
+              </div>
             )}
 
             <div className="ml-auto flex items-center gap-1.5">

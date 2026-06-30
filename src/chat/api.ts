@@ -16,7 +16,7 @@ import type {
   DetectedExternalAgent,
   PendingAttachment,
 } from './types'
-import type { ThinkingLevel } from './types'
+import type { ThinkingLevel, ModelRef } from './types'
 
 export type { DetectedExternalAgent, AgentRuntimeConfig }
 
@@ -1183,6 +1183,7 @@ export const chatApi = {
       assistantId?: string | null
       knowledgeBaseIds?: string[]
       thinkingLevel?: ThinkingLevel | null
+      replyModels?: ModelRef[]
     }
   ): Promise<Conversation> {
     if (!isTauriRuntime()) return mockChatApi.updateConversation(conversationId, updates)
@@ -1206,6 +1207,8 @@ export const chatApi = {
         knowledgeBaseIds: updates.knowledgeBaseIds,
         // null/未知 → 空串，后端解析为 None（回到「跟随全局」）。
         thinkingLevel: hasThinkingUpdate ? updates.thinkingLevel ?? '' : undefined,
+        // 多模型一问多答（任务 06-30）：持久化会话级多答模型集（决策 D2/D4）。
+        replyModels: updates.replyModels,
       }
     )
     if (!result.success) {
@@ -1244,6 +1247,26 @@ export const chatApi = {
     }>('chat_delete_message', { conversationId, messageId })
     if (!result.success || !result.conversation) {
       throw new Error(result.error || 'Failed to delete message')
+    }
+    return result.conversation
+  },
+
+  // 多模型一问多答（任务 06-30）：设置某多答组的「选中条」（续聊以它为准，决策 D5）。
+  async setGroupSelection(
+    conversationId: string,
+    groupId: string,
+    messageId: string,
+  ): Promise<Conversation> {
+    if (!isTauriRuntime()) {
+      return mockChatApi.getConversation(conversationId)
+    }
+    const result = await invoke<{
+      success: boolean
+      conversation?: Conversation
+      error?: string
+    }>('chat_set_group_selection', { conversationId, groupId, messageId })
+    if (!result.success || !result.conversation) {
+      throw new Error(result.error || 'Failed to set group selection')
     }
     return result.conversation
   },
