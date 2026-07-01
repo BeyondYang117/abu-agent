@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
+use tauri::AppHandle;
 
 use crate::api::send_with_failover;
 use crate::mcp::types::{ChatToolArtifact, McpToolCallResult};
@@ -30,13 +31,28 @@ struct GeneratedImage {
 }
 
 pub async fn tool_generate_image(
+    app: &AppHandle,
     state: &AppState,
+    conversation_id: Option<&str>,
     arguments: &Value,
 ) -> Result<McpToolCallResult, String> {
     let settings = state.settings_read().clone();
-    let (provider_id, model) = settings
-        .image_generation_model()
-        .ok_or_else(|| "Mixer image generation model is not configured".to_string())?;
+    let session = conversation_id.and_then(|conversation_id| {
+        crate::chat::storage::load_conversation(app, conversation_id)
+            .ok()
+            .map(|conversation| (conversation.provider_id, conversation.model))
+    });
+    let session_ref = session.as_ref().map(|(provider_id, model)| {
+        crate::settings::SessionModel {
+            provider_id: provider_id.as_str(),
+            model: model.as_str(),
+        }
+    });
+    let (provider_id, model) = crate::chat::model_metadata::image_generation_model_for_session(
+        &settings,
+        session_ref,
+    )
+    .ok_or_else(|| "Mixer image generation model is not configured".to_string())?;
     let provider = settings
         .get_provider(&provider_id)
         .cloned()

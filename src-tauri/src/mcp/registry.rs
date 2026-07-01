@@ -430,7 +430,7 @@ pub async fn call_tool(
     }
 
     if tool.source == "mixer" {
-        return call_mixer_tool(state, tool, arguments).await;
+        return call_mixer_tool(app, state, tool, arguments, native_ctx).await;
     }
 
     let server_id = tool
@@ -504,13 +504,17 @@ fn web_search_configured(settings: &crate::settings::Settings) -> bool {
 }
 
 async fn call_mixer_tool(
+    app: &AppHandle,
     state: &AppState,
     tool: &ChatToolDefinition,
     arguments: Value,
+    native_ctx: Option<NativeToolContext>,
 ) -> Result<McpToolCallResult, String> {
     match tool.name.as_str() {
         "mixer_generate_image" => {
-            crate::chat::image_generation::tool_generate_image(state, &arguments).await
+            let conversation_id = native_ctx.as_ref().map(|ctx| ctx.conversation_id.as_str());
+            crate::chat::image_generation::tool_generate_image(app, state, conversation_id, &arguments)
+                .await
         }
         other => Err(format!("Unknown mixer tool: {other}")),
     }

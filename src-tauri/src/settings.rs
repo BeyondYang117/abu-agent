@@ -505,14 +505,47 @@ impl DefaultModelSelection {
     }
 }
 
+/// 当前 Chat 会话的主模型（顶栏选择），用于混音器 auto 时解析副任务路由。
+#[derive(Debug, Clone, Copy)]
+pub struct SessionModel<'a> {
+    pub provider_id: &'a str,
+    pub model: &'a str,
+}
+
+impl<'a> SessionModel<'a> {
+    pub fn is_set(self) -> bool {
+        !self.provider_id.trim().is_empty() && !self.model.trim().is_empty()
+    }
+}
+
+fn resolve_mixer_side_model(
+    selection: &DefaultModelSelection,
+    session: Option<SessionModel<'_>>,
+    settings: &Settings,
+) -> (String, String) {
+    if selection.is_configured() {
+        return (
+            selection.provider_id.clone(),
+            selection.model.clone(),
+        );
+    }
+    if let Some(session) = session.filter(|session| session.is_set()) {
+        return (
+            session.provider_id.to_string(),
+            session.model.to_string(),
+        );
+    }
+    settings.effective_chat_model()
+}
+
 /**
  * 默认模型配置。
  *
  * chat：新建 Chat 对话的全局默认模型；为空时沿用 Lens → 输入翻译的兜底链路。
- * vision：图片附件分析副任务使用；为空时保持 Chat 主模型直接处理图片。
- * title_summary：标题总结副任务使用；为空时继承有效 Chat 默认模型。
- * compression：上下文/历史对话压缩副任务使用；为空时继承有效 Chat 默认模型。
- * image_generation：生图副任务使用；为空时不暴露混音器生图工具。
+ * vision：图片附件分析副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
+ * title_summary：标题总结副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
+ * compression：上下文/历史对话压缩副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
+ * image_generation：生图副任务使用；为空时若当前会话主模型支持直接生图则继承该模型。
  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1108,13 +1141,14 @@ impl Settings {
     }
 
     pub fn effective_title_summary_model(&self) -> (String, String) {
-        if self.default_models.title_summary.is_configured() {
-            return (
-                self.default_models.title_summary.provider_id.clone(),
-                self.default_models.title_summary.model.clone(),
-            );
-        }
-        self.effective_chat_model()
+        self.effective_title_summary_model_for_session(None)
+    }
+
+    pub fn effective_title_summary_model_for_session(
+        &self,
+        session: Option<SessionModel<'_>>,
+    ) -> (String, String) {
+        resolve_mixer_side_model(&self.default_models.title_summary, session, self)
     }
 
     pub fn has_explicit_vision_model(&self) -> bool {
@@ -1122,23 +1156,25 @@ impl Settings {
     }
 
     pub fn effective_vision_model(&self) -> (String, String) {
-        if self.default_models.vision.is_configured() {
-            return (
-                self.default_models.vision.provider_id.clone(),
-                self.default_models.vision.model.clone(),
-            );
-        }
-        self.effective_chat_model()
+        self.effective_vision_model_for_session(None)
+    }
+
+    pub fn effective_vision_model_for_session(
+        &self,
+        session: Option<SessionModel<'_>>,
+    ) -> (String, String) {
+        resolve_mixer_side_model(&self.default_models.vision, session, self)
     }
 
     pub fn effective_compression_model(&self) -> (String, String) {
-        if self.default_models.compression.is_configured() {
-            return (
-                self.default_models.compression.provider_id.clone(),
-                self.default_models.compression.model.clone(),
-            );
-        }
-        self.effective_chat_model()
+        self.effective_compression_model_for_session(None)
+    }
+
+    pub fn effective_compression_model_for_session(
+        &self,
+        session: Option<SessionModel<'_>>,
+    ) -> (String, String) {
+        resolve_mixer_side_model(&self.default_models.compression, session, self)
     }
 
     pub fn image_generation_model(&self) -> Option<(String, String)> {
@@ -1215,7 +1251,14 @@ pub fn chat_memory_tools_enabled(settings: &Settings) -> bool {
 }
 
 pub fn chat_image_generation_enabled(settings: &Settings) -> bool {
-    settings.image_generation_model().is_some()
+    crate::chat::model_metadata::image_generation_model_for_session(settings, None).is_some()
+}
+
+pub fn chat_image_generation_enabled_for_session(
+    settings: &Settings,
+    session: Option<SessionModel<'_>>,
+) -> bool {
+    crate::chat::model_metadata::image_generation_model_for_session(settings, session).is_some()
 }
 
 pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
@@ -2914,6 +2957,58 @@ mod tests {
         assert!(s.default_models.title_summary.provider_id.is_empty());
         assert!(s.default_models.compression.provider_id.is_empty());
         assert!(s.default_models.image_generation.provider_id.is_empty());
+    }
+
+    fn effective_side_models_auto_prefer_session_over_global_chat_default() {
+        let mut settings = Settings::default();
+        settings.providers.push(ModelProvider {
+            id: "global".to_string(),
+            name: "Global".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://api.example.com/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["gemini-3.1-flash-lite".to_string()],
+            supports_tools: true,
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
+        });
+        settings.providers.push(ModelProvider {
+            id: "session".to_string(),
+            name: "Session".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://api.example.com/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["gpt-4.1".to_string()],
+            supports_tools: true,
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
+        });
+        settings.default_models.chat.provider_id = "global".to_string();
+        settings.default_models.chat.model = "gemini-3.1-flash-lite".to_string();
+
+        let session = SessionModel {
+            provider_id: "session",
+            model: "gpt-4.1",
+        };
+
+        assert_eq!(
+            settings.effective_title_summary_model_for_session(Some(session)),
+            ("session".to_string(), "gpt-4.1".to_string())
+        );
+        assert_eq!(
+            settings.effective_compression_model_for_session(Some(session)),
+            ("session".to_string(), "gpt-4.1".to_string())
+        );
+        assert_eq!(
+            settings.effective_vision_model_for_session(Some(session)),
+            ("session".to_string(), "gpt-4.1".to_string())
+        );
     }
 
     #[test]

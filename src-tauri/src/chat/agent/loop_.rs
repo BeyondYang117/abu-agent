@@ -76,6 +76,7 @@ pub(crate) struct RunState {
     /// 压成功并降到预算内则清零，否则递增。达到 `COMPACTION_THRASH_LIMIT` 时规划循环优雅收尾
     /// （用已收集的工具结果降级），而不是反复触发压缩并连续失败后才报错。
     pub(crate) compaction_unresolved_rounds: u32,
+    pub(crate) pending_compaction_boundary: Option<crate::chat::types::CompactionBoundaryRecord>,
 }
 
 /// 连续「需要压缩但压不下去」多少轮后停止工具循环、优雅收尾（Gap 2，Layer 3 anti-thrashing）。
@@ -148,6 +149,7 @@ pub async fn run_agent_loop(
         usage: None,
         compacted: false,
         compaction_unresolved_rounds: 0,
+        pending_compaction_boundary: None,
     };
     // 把助手的技能白名单冻结进 skill_cache,作为 skill_activate 执行派发的硬 gate。
     // 无助手 = None = 不限(全局行为)。
@@ -253,13 +255,12 @@ fn attach_usage(mut result: AgentRunResult, state: &mut RunState) -> AgentRunRes
     result.usage = state.usage.take();
     if state.compacted {
         let mut history = std::mem::take(&mut state.runtime_messages);
-        // 追加本轮最终 assistant 回答——它进了 api_messages 但未必落进 runtime_messages，
-        // 补上后 compacted_history 才是下一轮可直接续用的完整历史。
         let final_message =
             super::stop::final_assistant_api_message(&result.content, result.reasoning.as_deref());
         history.push(final_message);
         result.compacted_history = Some(history);
     }
+    result.compaction_boundary = state.pending_compaction_boundary.take();
     result
 }
 

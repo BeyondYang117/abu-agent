@@ -816,11 +816,24 @@ const mockChatApi = {
     const priorCount = conversation.context_state?.compression_count
       ?? conversation.contextState?.compressionCount
       ?? 0
+    const boundary = {
+      id: `ctxbd_dev_${crypto.randomUUID()}`,
+      source_until_message_id: summary.source_until_message_id,
+      token_estimate_before: summary.token_estimate_before,
+      token_estimate_after: summary.token_estimate_after,
+      summary_content: summary.content,
+      trigger: 'manual' as const,
+      created_at: summary.created_at,
+    }
+    const priorBoundaries = conversation.context_state?.compaction_boundaries
+      ?? conversation.contextState?.compactionBoundaries
+      ?? []
     const baseState = estimateMockContext(conversation)
     conversation.context_state = {
       ...baseState,
       status: 'compressed',
       summary,
+      compaction_boundaries: [...priorBoundaries, boundary],
       last_compressed_at: summary.created_at,
       compressed_message_count: source.length,
       compression_count: priorCount + 1,

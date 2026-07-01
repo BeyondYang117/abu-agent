@@ -32,7 +32,7 @@ use crate::chat::model_metadata::{
 use crate::external_agents::detection::EXTERNAL_AGENT_MODELS_CACHE_TTL;
 use crate::mcp::types::ChatToolArtifact;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{ModelProvider, ProviderApiFormat, Settings};
+use crate::settings::{ModelProvider, ProviderApiFormat, SessionModel, Settings};
 use crate::skills;
 use crate::state::AppState;
 
@@ -46,7 +46,7 @@ use super::storage::{
 use super::{
     AgentPlanState, AgentTodoState, Attachment, ChatAssistant, ChatMessage, ChatMessageSegment,
     ChatMessageSegmentKind, ChatMessageSegmentPhase, ContextUsageSegment, Conversation,
-    ConversationContextState, ConversationContextSummary, ToolCallRecord, ToolCallStatus,
+    ConversationContextState, ConversationContextSummary, CompactionBoundaryRecord, ToolCallRecord, ToolCallStatus,
 };
 
 const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
@@ -1040,7 +1040,10 @@ pub(crate) async fn chat_compress_context(
             "conversation": conversation,
         }));
     }
-    compress_conversation_context(&app, &state, &mut conversation).await?;
+    compress_conversation_context(&app, &state, &mut conversation, "manual").await.map_err(|err| {
+        emit_chat_compaction_state(&app, &conversation.id, "completed", Some("manual"), None);
+        err
+    })?;
     conversation.context_state.warning = None;
     let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
     conversation.context_state = context_state.clone();
@@ -1292,7 +1295,7 @@ pub(crate) async fn chat_send_message(
         Ok(context_state) => {
             conversation.context_state = context_state;
             if should_auto_compress_context(&conversation.context_state, &conversation) {
-                match compress_conversation_context(&app, &state, &mut conversation).await {
+                match compress_conversation_context(&app, &state, &mut conversation, "auto").await {
                     Ok(()) => {
                         let refreshed = compute_context_state(
                             &app,
@@ -1574,7 +1577,6 @@ pub(crate) fn chat_python_complete(
 
 const AUTO_COMPRESS_RATIO: f32 = 0.85;
 const CONTEXT_BLOCK_RATIO: f32 = 1.0;
-const KEEP_RECENT_RAW_MESSAGES: usize = 8;
 const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: usize = 1_600;
 const AUXILIARY_VISION_RESULT_TOKEN_ESTIMATE: usize = 800;
 
@@ -1841,11 +1843,13 @@ async fn complete_assistant_reply_inner(
         .await
         .map(|_| ArmReplyOutcome { message: None });
     }
+    let session = session_model_for_conversation(conversation);
     let auxiliary_vision_model = auxiliary_vision_model_for_images(
         &settings,
         Some(&provider),
         &resolved_model,
         last_user_image_paths,
+        Some(session),
     );
     let mut auxiliary_tool_records = Vec::new();
     let auxiliary_vision_result = if let Some(auxiliary_vision_model) = auxiliary_vision_model {
@@ -1991,9 +1995,19 @@ async fn complete_assistant_reply_inner(
         &provider,
         &effective_chat_tools,
         settings.chat_memory.enabled,
-        crate::settings::chat_image_generation_enabled(&settings),
+        crate::settings::chat_image_generation_enabled_for_session(
+            &settings,
+            Some(session_model_for_conversation(conversation)),
+        ),
     );
-    let mut tools = list_tools_for_chat(app, state.inner(), &settings, provider.supports_tools).await;
+    let mut tools = list_tools_for_chat(
+        app,
+        state.inner(),
+        &settings,
+        provider.supports_tools,
+        Some(session_model_for_conversation(conversation)),
+    )
+    .await;
     agent_prepare::apply_assistant_mcp_restrictions(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -2176,6 +2190,11 @@ async fn complete_assistant_reply_inner(
             assistant_snapshot: conversation.assistant_snapshot.clone(),
             custom_system_prompt: settings.chat.system_prompt.clone(),
             provider_tools_fallback_system_prompt,
+            ui_message_order: conversation
+                .messages
+                .iter()
+                .map(|message| (message.id.clone(), message.role.clone()))
+                .collect(),
         },
         &host,
         &executor,
@@ -2221,6 +2240,12 @@ async fn complete_assistant_reply_inner(
         return Ok(ArmReplyOutcome {
             message: Some(message),
         });
+    }
+    if let Some(boundary) = result.compaction_boundary.clone() {
+        conversation
+            .context_state
+            .compaction_boundaries
+            .push(boundary);
     }
     push_assistant_message(
         app,
@@ -2617,7 +2642,7 @@ pub(crate) async fn push_assistant_message(
                     resolve_conversation_title(
                         settings,
                         state,
-                        &conversation.id,
+                        conversation,
                         user_content,
                         &stored_content,
                     )
@@ -3156,16 +3181,21 @@ fn mark_tool_result_errors(messages: &mut [ModelMessage], tool_calls: &[ToolCall
 async fn resolve_conversation_title(
     settings: &Settings,
     state: &State<'_, AppState>,
-    conversation_id: &str,
+    conversation: &Conversation,
     user_content: &str,
     assistant_content: &str,
 ) -> String {
+    let session = SessionModel {
+        provider_id: conversation.provider_id.as_str(),
+        model: conversation.model.as_str(),
+    };
     match timeout(
         Duration::from_secs(8),
         generate_title_with_model(
             settings,
             state,
-            conversation_id,
+            &conversation.id,
+            Some(session),
             user_content,
             assistant_content,
         ),
@@ -3182,10 +3212,11 @@ async fn generate_title_with_model(
     settings: &Settings,
     state: &State<'_, AppState>,
     conversation_id: &str,
+    session: Option<SessionModel<'_>>,
     user_content: &str,
     assistant_content: &str,
 ) -> Option<String> {
-    let (provider_id, model) = settings.effective_title_summary_model();
+    let (provider_id, model) = settings.effective_title_summary_model_for_session(session);
     let provider = settings.get_provider(&provider_id)?.clone();
     if provider.api_keys.is_empty() || model.trim().is_empty() {
         return None;
@@ -3713,6 +3744,7 @@ fn auxiliary_vision_model_for_images(
     main_provider: Option<&ModelProvider>,
     main_model: &str,
     image_paths: &[PathBuf],
+    session: Option<SessionModel<'_>>,
 ) -> Option<AuxiliaryVisionModel> {
     if image_paths.is_empty() {
         return None;
@@ -3725,7 +3757,7 @@ fn auxiliary_vision_model_for_images(
     }
 
     if settings.has_explicit_vision_model() {
-        let (provider_id, model) = settings.effective_vision_model();
+        let (provider_id, model) = settings.effective_vision_model_for_session(session);
         return auxiliary_vision_model_from_selection(settings, &provider_id, &model);
     }
 
@@ -3840,11 +3872,21 @@ async fn compute_context_state(
                 provider,
                 &effective_chat_tools,
                 settings.chat_memory.enabled,
-                crate::settings::chat_image_generation_enabled(&settings),
+                crate::settings::chat_image_generation_enabled_for_session(
+                    &settings,
+                    Some(session_model_for_conversation(conversation)),
+                ),
             )
         })
         .unwrap_or(false);
-    let mut tools = list_tools_for_chat(app, state.inner(), &settings, provider_supports_tools).await;
+    let mut tools = list_tools_for_chat(
+        app,
+        state.inner(),
+        &settings,
+        provider_supports_tools,
+        Some(session_model_for_conversation(conversation)),
+    )
+    .await;
     agent_prepare::apply_assistant_mcp_restrictions(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -3878,6 +3920,7 @@ async fn compute_context_state(
         provider.as_ref(),
         &conversation.model,
         last_user_image_paths,
+        Some(session_model_for_conversation(conversation)),
     )
     .is_some();
     let empty_image_paths: &[PathBuf] = &[];
@@ -4010,6 +4053,7 @@ async fn compute_context_state(
         compressed_message_count,
         compression_count,
         summary,
+        compaction_boundaries: conversation.context_state.compaction_boundaries.clone(),
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
         context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
         token_count_source: None,
@@ -4063,7 +4107,7 @@ fn should_auto_compress_context(
     if ratio < AUTO_COMPRESS_RATIO {
         return false;
     }
-    compression_boundary_index(conversation).is_some()
+    compression_boundary_index(conversation, "auto").is_some()
 }
 
 async fn try_auto_compress_context_after_update(
@@ -4076,7 +4120,7 @@ async fn try_auto_compress_context_after_update(
     if !should_auto_compress_context(&conversation.context_state, conversation) {
         return;
     }
-    match compress_conversation_context(app, state, conversation).await {
+    match compress_conversation_context(app, state, conversation, "auto").await {
         Ok(()) => {
             match compute_context_state(
                 app,
@@ -4105,12 +4149,29 @@ async fn try_auto_compress_context_after_update(
     }
 }
 
+/// 混音器未单独指定压缩模型时，用当前会话的 provider/model（顶栏主模型），
+/// 而不是设置里的全局 Chat 默认（`effective_chat_model`）。
+fn session_model_for_conversation(conversation: &Conversation) -> SessionModel<'_> {
+    SessionModel {
+        provider_id: conversation.provider_id.as_str(),
+        model: conversation.model.as_str(),
+    }
+}
+
 async fn compress_conversation_context(
-    _app: &AppHandle,
+    app: &AppHandle,
     state: &State<'_, AppState>,
     conversation: &mut Conversation,
+    trigger: &str,
 ) -> Result<(), String> {
-    let boundary_index = compression_boundary_index(conversation)
+    emit_chat_compaction_state(
+        app,
+        &conversation.id,
+        "started",
+        Some(trigger),
+        None,
+    );
+    let boundary_index = compression_boundary_index(conversation, trigger)
         .ok_or_else(|| "没有足够的旧消息可以压缩".to_string())?;
     let source_start = summary_boundary_index(conversation)
         .map(|idx| idx + 1)
@@ -4127,7 +4188,9 @@ async fn compress_conversation_context(
     }
 
     let settings = state.settings_read().clone();
-    let (provider_id, model) = settings.effective_compression_model();
+    let (provider_id, model) = settings.effective_compression_model_for_session(Some(
+        session_model_for_conversation(conversation),
+    ));
     let provider = settings
         .get_provider(&provider_id)
         .ok_or_else(|| "Compression provider not found".to_string())?
@@ -4197,7 +4260,7 @@ async fn compress_conversation_context(
         id: format!("ctxsum_{}", Uuid::new_v4()),
         content: summary_content.clone(),
         source_message_ids,
-        source_until_message_id,
+        source_until_message_id: source_until_message_id.clone(),
         token_estimate_before,
         token_estimate_after: agent_prepare::estimate_tokens(&summary_content),
         created_at,
@@ -4211,21 +4274,41 @@ async fn compress_conversation_context(
         .context_state
         .compression_count
         .saturating_add(1);
+    let boundary_record = CompactionBoundaryRecord {
+        id: format!("ctxbd_{}", Uuid::new_v4()),
+        source_until_message_id: source_until_message_id.clone(),
+        token_estimate_before,
+        token_estimate_after: agent_prepare::estimate_tokens(&summary_content),
+        summary_content: summary_content.clone(),
+        trigger: trigger.to_string(),
+        created_at,
+    };
+    conversation
+        .context_state
+        .compaction_boundaries
+        .push(boundary_record.clone());
     conversation.context_state.warning = None;
+    emit_chat_compaction_state(
+        app,
+        &conversation.id,
+        "completed",
+        Some(trigger),
+        Some(&boundary_record),
+    );
     Ok(())
 }
 
-fn compression_boundary_index(conversation: &Conversation) -> Option<usize> {
-    if conversation.messages.len() <= KEEP_RECENT_RAW_MESSAGES + 2 {
+/// 压缩切点：自上次摘要之后到对话末尾，取最后一条 assistant。
+/// 「保留最近 N 条原文」若存在，属于发给模型的回放策略，不参与此处切点计算。
+fn compression_boundary_index(conversation: &Conversation, _trigger: &str) -> Option<usize> {
+    let len = conversation.messages.len();
+    if len < 2 {
         return None;
     }
     let min_boundary = summary_boundary_index(conversation)
         .map(|idx| idx + 1)
         .unwrap_or(0);
-    let max_boundary = conversation
-        .messages
-        .len()
-        .saturating_sub(KEEP_RECENT_RAW_MESSAGES + 1);
+    let max_boundary = len.saturating_sub(1);
     if min_boundary > max_boundary {
         return None;
     }
@@ -4322,6 +4405,24 @@ fn emit_chat_context_state(
     );
 }
 
+fn emit_chat_compaction_state(
+    app: &AppHandle,
+    conversation_id: &str,
+    phase: &str,
+    trigger: Option<&str>,
+    boundary: Option<&CompactionBoundaryRecord>,
+) {
+    let _ = app.emit(
+        "chat-compaction",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "phase": phase,
+            "trigger": trigger,
+            "boundary": boundary,
+        }),
+    );
+}
+
 fn emit_chat_plan_state(app: &AppHandle, conversation_id: &str, plan_state: &AgentPlanState) {
     let _ = app.emit(
         "chat-plan",
@@ -4359,18 +4460,42 @@ async fn list_tools_for_chat(
     state: &AppState,
     settings: &Settings,
     provider_supports_tools: bool,
+    session: Option<SessionModel<'_>>,
 ) -> Vec<ChatToolDefinition> {
     if !provider_supports_tools
         || !(settings.chat_tools.enabled
             || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
             || crate::settings::chat_memory_tools_enabled(settings)
-            || crate::settings::chat_image_generation_enabled(settings))
+            || crate::settings::chat_image_generation_enabled_for_session(settings, session))
     {
         return Vec::new();
     }
-    mcp::registry::list_enabled_tool_defs(app, state)
+    let mut tools = mcp::registry::list_enabled_tool_defs(app, state)
         .await
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some((provider_id, model)) =
+        crate::chat::model_metadata::image_generation_model_for_session(settings, session)
+    {
+        if !tools
+            .iter()
+            .any(|tool| tool.name == "mixer_generate_image")
+        {
+            let mut tool = mcp::types::mixer_generate_image_tool();
+            let provider_name = settings
+                .get_provider(&provider_id)
+                .map(|provider| {
+                    if provider.name.trim().is_empty() {
+                        provider.id.clone()
+                    } else {
+                        provider.name.clone()
+                    }
+                })
+                .unwrap_or(provider_id);
+            tool.server_id = Some(format!("{provider_name} / {model}"));
+            tools.push(tool);
+        }
+    }
+    tools
 }
 
 fn append_agent_todo_tools(
@@ -4783,6 +4908,7 @@ pub(crate) async fn read_image_as_tool_result(
         provider,
         model,
         std::slice::from_ref(&path_buf),
+        Some(session_model_for_conversation(&conversation)),
     ) {
         let language = crate::settings::resolve_chat_language(settings);
         let retry_attempts = if settings.retry_enabled {
@@ -4936,6 +5062,16 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         record: &ToolCallRecord,
     ) {
         emit_chat_tool_record(&self.app, conversation_id, run_id, message_id, record);
+    }
+
+    fn emit_compaction_status(
+        &self,
+        conversation_id: &str,
+        phase: &str,
+        trigger: Option<&str>,
+        boundary: Option<&CompactionBoundaryRecord>,
+    ) {
+        emit_chat_compaction_state(&self.app, conversation_id, phase, trigger, boundary);
     }
 
     fn persist_partial_assistant(
@@ -6192,6 +6328,7 @@ mod tests {
             Some(&main_provider),
             "deepseek-v4-flash",
             &[PathBuf::from("image.png")],
+            None,
         )
         .expect("auto should select a vision-capable model");
 
@@ -6212,6 +6349,7 @@ mod tests {
                 Some(&main_provider),
                 "gpt-4o",
                 &[PathBuf::from("image.png")],
+                None,
             ),
             None
         );
@@ -6248,6 +6386,7 @@ mod tests {
                 Some(&main_provider),
                 "models/gemini-3.1-flash-lite",
                 &[PathBuf::from("image.png")],
+                None,
             ),
             None,
             "vision-capable main model should keep images, not route to the mixer"
@@ -7219,6 +7358,67 @@ mod tests {
     }
 
     #[test]
+    fn effective_side_models_auto_use_session_main_model() {
+        let mut settings = Settings::default();
+        settings.providers.push(test_provider(
+            "global",
+            "Global",
+            vec!["gemini-3.1-flash-lite"],
+        ));
+        settings.providers.push(test_provider("session", "Session", vec!["gpt-4.1"]));
+        settings.default_models.chat.provider_id = "global".to_string();
+        settings.default_models.chat.model = "gemini-3.1-flash-lite".to_string();
+
+        let session = SessionModel {
+            provider_id: "session",
+            model: "gpt-4.1",
+        };
+
+        assert_eq!(
+            settings.effective_compression_model_for_session(Some(session)),
+            ("session".to_string(), "gpt-4.1".to_string())
+        );
+        assert_eq!(
+            settings.effective_title_summary_model_for_session(Some(session)),
+            ("session".to_string(), "gpt-4.1".to_string())
+        );
+        assert_eq!(
+            settings.effective_vision_model_for_session(Some(session)),
+            ("session".to_string(), "gpt-4.1".to_string())
+        );
+    }
+
+    #[test]
+    fn effective_side_models_honor_explicit_mixer_selection() {
+        let mut settings = Settings::default();
+        settings.providers.push(test_provider(
+            "global",
+            "Global",
+            vec!["gemini-3.1-flash-lite"],
+        ));
+        settings.providers.push(test_provider(
+            "cheap",
+            "Cheap",
+            vec!["gemini-3.1-flash-lite"],
+        ));
+        settings.default_models.compression.provider_id = "cheap".to_string();
+        settings.default_models.compression.model = "gemini-3.1-flash-lite".to_string();
+
+        let session = SessionModel {
+            provider_id: "global",
+            model: "gpt-4.1",
+        };
+
+        assert_eq!(
+            settings.effective_compression_model_for_session(Some(session)),
+            (
+                "cheap".to_string(),
+                "gemini-3.1-flash-lite".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn should_auto_compress_allows_recompression_when_summary_exists() {
         let mut conversation = test_conversation_with_summary(false);
         for i in 0..12 {
@@ -7239,7 +7439,13 @@ mod tests {
 
     #[test]
     fn should_auto_compress_false_when_no_new_compressible_range() {
-        let conversation = test_conversation_with_summary(false);
+        let mut conversation = test_conversation_with_summary(false);
+        conversation
+            .context_state
+            .summary
+            .as_mut()
+            .expect("summary")
+            .source_until_message_id = "msg_assistant_2".to_string();
         let context_state = ConversationContextState {
             usage_ratio: Some(0.9),
             ..ConversationContextState::default()
@@ -7259,7 +7465,8 @@ mod tests {
                 10 + i,
             ));
         }
-        let boundary = compression_boundary_index(&conversation).expect("boundary");
+        let boundary = compression_boundary_index(&conversation, "auto").expect("boundary");
+        assert_eq!(boundary, conversation.messages.len() - 1);
         assert!(boundary > 1);
     }
 

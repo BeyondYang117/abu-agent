@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
-use crate::chat::types::{ChatMessageSegment, ToolCallRecord};
+use crate::chat::types::{ChatMessageSegment, CompactionBoundaryRecord, ToolCallRecord};
 
 use super::execute::ToolExecutionContext;
 
@@ -34,6 +34,16 @@ pub trait AgentHost: Send + Sync {
         message_id: &str,
         record: &ToolCallRecord,
     );
+
+    /// Live compaction progress for chat timeline UI. Default no-op.
+    fn emit_compaction_status(
+        &self,
+        _conversation_id: &str,
+        _phase: &str,
+        _trigger: Option<&str>,
+        _boundary: Option<&CompactionBoundaryRecord>,
+    ) {
+    }
 
     /// Persist a best-effort snapshot of the in-progress assistant message to
     /// durable storage after a completed tool round. The full assistant message

@@ -100,6 +100,7 @@ import {
   touchGroup,
 } from './groupStreamingStore'
 import { compareTimelineSegments, segmentStepNumber, segmentToolCallId } from './segments'
+import { latestCompactionBoundaryId, mergeCompactionContextState } from './compactionBoundary'
 
 const AssistantCenter = lazy(() => import('./AssistantCenter').then((module) => ({
   default: module.AssistantCenter,
@@ -648,6 +649,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const [contextState, setContextState] = useState<ConversationContextState | null>(null)
   const [contextLoading, setContextLoading] = useState(false)
   const [contextCompressing, setContextCompressing] = useState(false)
+  const [agentLoopCompacting, setAgentLoopCompacting] = useState(false)
+  const [animateCompactionBoundaryId, setAnimateCompactionBoundaryId] = useState<string | null>(null)
   const [contextError, setContextError] = useState('')
   const [imageViewerItem, setImageViewerItem] = useState<ChatImageViewerItem | null>(null)
   const currentConversationIdRef = useRef<string | null>(null)
@@ -766,10 +769,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [])
 
   const patchContextState = useCallback((nextState: ConversationContextState) => {
-    setContextState(nextState)
-    setCurrentConversation((prev) => prev
-      ? { ...prev, context_state: nextState, contextState: nextState }
-      : prev)
+    setContextState((prev) => {
+      const merged = mergeCompactionContextState(prev, nextState)
+      setCurrentConversation((conversation) => conversation
+        ? { ...conversation, context_state: merged, contextState: merged }
+        : conversation)
+      return merged
+    })
   }, [])
 
   const patchAgentTodoState = useCallback((nextState: AgentTodoState) => {
@@ -1378,9 +1384,18 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     try {
       const result = await chatApi.compressContext(conversationId)
       if (currentConversationIdRef.current === conversationId) {
-        applyConversation(result.conversation)
-        setContextState(result.contextState)
+        const latestId = latestCompactionBoundaryId(result.contextState)
+        if (latestId) {
+          setAnimateCompactionBoundaryId(latestId)
+          window.setTimeout(() => {
+            setAnimateCompactionBoundaryId((current) => (current === latestId ? null : current))
+          }, 1800)
+        }
+        patchContextState(result.contextState)
         refreshSidebar()
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 360)
+        })
       }
     } catch (err) {
       if (currentConversationIdRef.current === conversationId) {
@@ -1391,7 +1406,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
         setContextCompressing(false)
       }
     }
-  }, [applyConversation, contextCompressing, refreshSidebar])
+  }, [contextCompressing, patchContextState, refreshSidebar])
 
   const finishStreamingRun = useCallback(
     async (payload: { reason?: string; conversationId?: string }) => {
@@ -1616,6 +1631,62 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       unlisten?.()
     }
   }, [patchContextState])
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const setupListener = async () => {
+      unlisten = await api.onChatCompaction((payload) => {
+        if (cancelled) return
+        const currentConversationId = currentConversationIdRef.current
+        if (!currentConversationId || payload.conversationId !== currentConversationId) {
+          return
+        }
+        if (payload.phase === 'started') {
+          if (payload.trigger !== 'manual') {
+            setAgentLoopCompacting(true)
+          }
+          return
+        }
+        if (payload.trigger !== 'manual') {
+          setAgentLoopCompacting(false)
+        }
+        const boundary = payload.boundary
+        if (boundary?.id) {
+          setAnimateCompactionBoundaryId(boundary.id)
+          window.setTimeout(() => {
+            setAnimateCompactionBoundaryId((current) => (current === boundary.id ? null : current))
+          }, 1800)
+        }
+        if (boundary && payload.phase === 'completed') {
+          setCurrentConversation((conversation) => {
+            if (!conversation) return conversation
+            const prevState = conversation.context_state ?? conversation.contextState
+            const existing = prevState?.compaction_boundaries ?? prevState?.compactionBoundaries ?? []
+            if (existing.some((item) => item.id === boundary.id)) return conversation
+            const nextBoundaries = [...existing, boundary]
+            const nextState = {
+              ...(prevState ?? {}),
+              compaction_boundaries: nextBoundaries,
+              compactionBoundaries: nextBoundaries,
+            }
+            setContextState(nextState)
+            return { ...conversation, context_state: nextState, contextState: nextState }
+          })
+        }
+      })
+      if (cancelled) {
+        unlisten()
+      }
+    }
+
+    setupListener()
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -3406,6 +3477,10 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                       onExecuteAgentPlan={handleExecuteAgentPlan}
                       groupSelections={currentConversation?.group_selections ?? currentConversation?.groupSelections ?? {}}
                       onSetGroupSelection={handleSetGroupSelection}
+                      contextState={contextState}
+                      compactionInProgress={contextCompressing || agentLoopCompacting}
+                      animateCompactionBoundaryId={animateCompactionBoundaryId}
+                      lang={uiLang}
                     />
                   </Suspense>
                   <InputBar

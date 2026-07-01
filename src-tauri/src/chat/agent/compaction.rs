@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::chat::model_metadata::{context_window_for_model, safe_context_window_for_model};
+use crate::chat::types::CompactionBoundaryRecord;
 
 use super::loop_::{LoopEnv, RunState};
 use super::planning::call_chat_completion_message_streamed;
@@ -480,6 +481,33 @@ fn summary_output_tokens(config_max: u32) -> u32 {
 /// `window == 0`（未知）时用 `SUMMARY_INPUT_BUDGET_FALLBACK_TOKENS` 兜底。
 /// `cancel`：进行中取消的 future——自动路径传 host 的取消等待，手动路径传 `None`（强制压缩不取消）。
 #[allow(clippy::too_many_arguments)]
+/// Map a runtime split to the last UI message id fully covered by the summarized segment.
+pub(crate) fn source_until_message_id_for_split(
+    ui_message_order: &[(String, String)],
+    runtime_messages: &[Value],
+    keep_tokens: usize,
+) -> Option<String> {
+    let (_system_prefix, old_segment, _recent) = select_recent_by_tokens(runtime_messages, keep_tokens);
+    if old_segment.is_empty() {
+        return None;
+    }
+    let ui_consumed = old_segment
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.get("role").and_then(Value::as_str),
+                Some("user") | Some("assistant")
+            )
+        })
+        .count();
+    if ui_consumed == 0 {
+        return None;
+    }
+    ui_message_order
+        .get(ui_consumed.saturating_sub(1))
+        .map(|(id, _)| id.clone())
+}
+
 async fn summarize_history(
     state: &crate::state::AppState,
     provider: &crate::settings::ModelProvider,
@@ -493,7 +521,7 @@ async fn summarize_history(
     message_id: &str,
     focus: Option<&str>,
     cancel: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>>,
-) -> Option<Vec<Value>> {
+) -> Option<(Vec<Value>, String)> {
     let (system_prefix, old_segment, recent) = select_recent_by_tokens(messages, keep_tokens);
     if old_segment.is_empty() {
         // 没有可摘要的旧段（全在受保护近期窗口里）——压缩无能为力。
@@ -585,7 +613,10 @@ async fn summarize_history(
                 eprintln!("Chat context compaction returned empty summary; keeping raw view");
                 return None;
             }
-            Some(replace_with_summary(system_prefix, text.trim(), recent))
+            Some((
+                replace_with_summary(system_prefix, text.trim(), recent),
+                text.trim().to_string(),
+            ))
         }
         Err(err) => {
             eprintln!("Chat context compaction failed: {err}; keeping raw view");
@@ -623,12 +654,20 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
         "Chat context compaction: est {estimated} tokens over budget {budget} (safe_window {safe_window}, window {window}); summarizing old history"
     );
 
+    env.host.emit_compaction_status(
+        &config.conversation_id,
+        "started",
+        Some("agent_loop"),
+        None,
+    );
+
     let cancel = env
         .host
         .wait_for_generation_inactive(&config.conversation_id, config.generation);
     // 受保护近期窗口默认 8000 token，但不得超过压缩预算——否则窗口比 8000 还小的模型上，
     // 整段历史会被近期窗口吞掉，没有可摘要的旧段，压缩永远救不了超窗。
     let keep_tokens = RECENT_KEEP_TOKENS.min(budget);
+    let runtime_before_compact = state.runtime_messages.clone();
     let compacted = summarize_history(
         config.state,
         &config.provider,
@@ -646,21 +685,38 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     .await;
 
     match compacted {
-        Some(compacted) => {
+        Some((compacted, summary_text)) => {
             let after = estimate_messages_tokens(&compacted);
             eprintln!("Chat context compaction: est {estimated} -> {after} tokens");
-            // 摘要写回工作副本：后续轮次基于压缩后的历史继续，避免每轮重复摘要。
-            // 置 compacted 标志：finalize 据此把压缩后的完整历史回传给跨轮调用方
-            // （交互模式据 compacted_history 替换其累积历史，让压缩真正跨轮生效）。
             state.runtime_messages = compacted.clone();
             state.compacted = true;
-            // Gap 2: 压缩确实把上下文压到了预算内吗？是 → anti-thrashing 计数清零；
-            // 否（摘要成功但仍超预算，例如近期窗口本身已超）→ 计为一次未解决，防止后续轮空转。
             if after <= budget {
                 state.compaction_unresolved_rounds = 0;
             } else {
                 state.compaction_unresolved_rounds =
                     state.compaction_unresolved_rounds.saturating_add(1);
+            }
+            if let Some(source_until_message_id) = source_until_message_id_for_split(
+                &config.ui_message_order,
+                &runtime_before_compact,
+                keep_tokens,
+            ) {
+                let boundary = CompactionBoundaryRecord {
+                    id: format!("ctxbd_{}", uuid::Uuid::new_v4()),
+                    source_until_message_id,
+                    token_estimate_before: estimated,
+                    token_estimate_after: after,
+                    summary_content: summary_text,
+                    trigger: "agent_loop".to_string(),
+                    created_at: chrono::Local::now().timestamp(),
+                };
+                env.host.emit_compaction_status(
+                    &config.conversation_id,
+                    "completed",
+                    Some("agent_loop"),
+                    Some(&boundary),
+                );
+                state.pending_compaction_boundary = Some(boundary);
             }
             compacted
         }
@@ -691,9 +747,6 @@ pub(crate) async fn force_compact(
     message_id: &str,
     focus: Option<&str>,
 ) -> Option<Vec<Value>> {
-    // 手动路径自行计算窗口（自动路径已有 window；此处与触发判定同源的元数据查询）。
-    // Gap 3：摘要输入封顶基于 safe_window（裸窗口 × SAFE_WINDOW_RATIO），与自动路径同源，
-    // 保证两条路径的摘要请求预算一致。safe_window == 0（未知模型）时 summarize_history 用兜底常量。
     let safe_window = safe_context_window_for_model(Some(provider), model);
     summarize_history(
         state,
@@ -710,11 +763,29 @@ pub(crate) async fn force_compact(
         None,
     )
     .await
+    .map(|(messages, _summary)| messages)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_until_message_id_for_split_maps_ui_order() {
+        let ui = vec![
+            ("m1".to_string(), "user".to_string()),
+            ("m2".to_string(), "assistant".to_string()),
+            ("m3".to_string(), "user".to_string()),
+        ];
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "a".repeat(4000) }),
+            json!({ "role": "assistant", "content": "b".repeat(4000) }),
+            json!({ "role": "user", "content": "recent" }),
+        ];
+        let until = source_until_message_id_for_split(&ui, &messages, 500);
+        assert_eq!(until.as_deref(), Some("m2"));
+    }
 
     #[test]
     fn estimate_counts_content_and_structured_fields() {

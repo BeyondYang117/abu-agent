@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::chat::types::{ChatAssistantSnapshot, ChatMessageSegment, ToolCallRecord};
+use crate::chat::types::{ChatAssistantSnapshot, ChatMessageSegment, CompactionBoundaryRecord, ToolCallRecord};
 use crate::mcp::ChatToolDefinition;
 use crate::settings::{ChatToolsConfig, ModelProvider, Settings};
 use crate::skills;
@@ -69,6 +69,8 @@ pub struct AgentRunConfig<'a> {
     pub assistant_snapshot: Option<ChatAssistantSnapshot>,
     pub custom_system_prompt: String,
     pub provider_tools_fallback_system_prompt: String,
+    /// UI message ids in conversation order `(id, role)` for compaction boundary mapping.
+    pub ui_message_order: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,4 +101,6 @@ pub struct AgentRunResult {
     /// 跨轮调用方（kivio-code 交互模式）据此**替换**自己累积的 runtime_messages，
     /// 让压缩真正跨轮生效；为 None 时维持"追加 api_messages"的旧行为。
     pub compacted_history: Option<Vec<Value>>,
+    /// Agent-loop L2 compaction boundary for timeline UI persistence.
+    pub compaction_boundary: Option<CompactionBoundaryRecord>,
 }

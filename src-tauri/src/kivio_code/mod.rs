@@ -574,6 +574,7 @@ impl TurnAssembly {
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: self.system_prompt.clone(),
+            ui_message_order: Vec::new(),
         }
     }
 }

@@ -711,6 +711,7 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: req.system_prompt.clone(),
+            ui_message_order: Vec::new(),
         };
 
         // No wall-clock cap: a sub-agent now runs to natural completion or until
@@ -1454,6 +1455,7 @@ mod tests {
             stream_outcome: String::new(),
             usage: None,
             compacted_history: None,
+            compaction_boundary: None,
         })
     }
 
@@ -1473,6 +1475,7 @@ mod tests {
             stream_outcome: "cancelled".to_string(),
             usage: None,
             compacted_history: None,
+            compaction_boundary: None,
         })
     }
 
@@ -1923,6 +1926,7 @@ mod tests {
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: String::new(),
+            ui_message_order: Vec::new(),
         }
     }
 

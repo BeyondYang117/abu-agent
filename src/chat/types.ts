@@ -313,6 +313,21 @@ export interface ContextUsageSegment {
   color?: string | null
 }
 
+export interface CompactionBoundaryRecord {
+  id: string
+  source_until_message_id?: string
+  sourceUntilMessageId?: string
+  token_estimate_before?: number
+  tokenEstimateBefore?: number
+  token_estimate_after?: number
+  tokenEstimateAfter?: number
+  summary_content?: string
+  summaryContent?: string
+  trigger?: 'manual' | 'auto' | 'agent_loop' | string
+  created_at?: number
+  createdAt?: number
+}
+
 export interface ConversationContextSummary {
   id: string
   content: string
@@ -352,6 +367,8 @@ export interface ConversationContextState {
   compression_count?: number
   compressionCount?: number
   summary?: ConversationContextSummary | null
+  compaction_boundaries?: CompactionBoundaryRecord[]
+  compactionBoundaries?: CompactionBoundaryRecord[]
   warning?: string | null
   warningMessage?: string | null
   context_source?: 'kivio_builtin' | 'external_cli' | string

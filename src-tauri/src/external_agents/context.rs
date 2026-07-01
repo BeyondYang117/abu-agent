@@ -150,6 +150,7 @@ pub fn compute_external_context_state(
         compressed_message_count: 0,
         compression_count,
         summary: None,
+        compaction_boundaries: conversation.context_state.compaction_boundaries.clone(),
         warning: conversation.context_state.warning.clone(),
         context_source: Some(CONTEXT_SOURCE_EXTERNAL.to_string()),
         token_count_source: Some(usage.token_count_source.to_string()),

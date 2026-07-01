@@ -18,6 +18,20 @@ pub struct ContextUsageSegment {
     pub color: Option<String>,
 }
 
+/// Timeline marker for a context compaction event (user/auto compress or agent-loop L2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionBoundaryRecord {
+    pub id: String,
+    /// Divider renders after the message with this id.
+    pub source_until_message_id: String,
+    pub token_estimate_before: usize,
+    pub token_estimate_after: usize,
+    pub summary_content: String,
+    /// `manual` | `auto` | `agent_loop`
+    pub trigger: String,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationContextSummary {
     pub id: String,
@@ -61,6 +75,8 @@ pub struct ConversationContextState {
     pub compression_count: usize,
     #[serde(default)]
     pub summary: Option<ConversationContextSummary>,
+    #[serde(default)]
+    pub compaction_boundaries: Vec<CompactionBoundaryRecord>,
     #[serde(default)]
     pub warning: Option<String>,
     /// `kivio_builtin` or `external_cli`.

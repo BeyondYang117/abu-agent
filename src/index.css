@@ -1169,6 +1169,163 @@ body {
   );
 }
 
+.chat-compaction-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0 4px;
+  color: var(--color-neutral-500, #737373);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  user-select: none;
+}
+
+.chat-compaction-divider--animate {
+  animation: chat-compaction-divider-in 680ms var(--kv-ease-standard) both;
+}
+
+.chat-compaction-divider--pre-enter {
+  opacity: 0;
+}
+
+.chat-compaction-divider--pre-enter .chat-compaction-divider-line {
+  opacity: 0;
+  transform: scaleX(0);
+}
+
+.chat-compaction-divider--pre-enter .chat-compaction-divider-content {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.chat-compaction-divider-line {
+  flex: 1;
+  height: 1px;
+  background: rgba(120, 120, 120, 0.28);
+  transform-origin: center;
+}
+
+.chat-compaction-divider--animate .chat-compaction-divider-line {
+  animation: chat-compaction-line-in 560ms var(--kv-ease-standard) both;
+}
+
+.chat-compaction-divider--animate .chat-compaction-divider-content {
+  animation: chat-compaction-content-in 560ms 120ms var(--kv-ease-standard) both;
+}
+
+.chat-compaction-divider-line--dim {
+  opacity: 0.55;
+}
+
+.chat-compaction-divider-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.chat-compaction-divider-arrow {
+  color: rgba(120, 120, 120, 0.72);
+}
+
+.chat-compaction-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0 4px;
+  animation: chat-compaction-progress-in 320ms var(--kv-ease-standard) both;
+}
+
+.chat-compaction-progress-label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chat-compaction-summary {
+  margin: 0 0 8px;
+}
+
+.chat-compaction-summary-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0 6px;
+  font-size: 11px;
+  color: var(--color-neutral-500, #737373);
+  cursor: pointer;
+}
+
+.chat-compaction-summary-toggle:hover {
+  color: var(--color-neutral-700, #404040);
+}
+
+.dark .chat-compaction-summary-toggle:hover {
+  color: var(--color-neutral-300, #d4d4d4);
+}
+
+.chat-compaction-summary-chevron {
+  transition: transform var(--kv-dur-fast) var(--kv-ease-standard);
+}
+
+.chat-compaction-summary-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.chat-compaction-summary-body {
+  margin-left: 18px;
+  padding-bottom: 8px;
+  font-size: 12px;
+  color: var(--color-neutral-600, #525252);
+}
+
+.dark .chat-compaction-summary-body {
+  color: var(--color-neutral-300, #d4d4d4);
+}
+
+@keyframes chat-compaction-line-in {
+  from {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes chat-compaction-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-compaction-divider-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes chat-compaction-progress-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 子 Agent 头部星芒指示器：字符摩点星芒。非运行态静止暗淡，运行中逐帧循环摩变（Claude Code 风格） */
 .subagent-sparkle {
   display: inline-flex;
@@ -1245,7 +1402,12 @@ body {
   .chat-motion-popover,
   .chat-motion-row,
   .chat-motion-soft-pulse,
-  .chat-motion-search-reveal {
+  .chat-motion-search-reveal,
+  .chat-compaction-divider--pre-enter,
+  .chat-compaction-divider--animate,
+  .chat-compaction-divider--animate .chat-compaction-divider-line,
+  .chat-compaction-divider--animate .chat-compaction-divider-content,
+  .chat-compaction-progress {
     animation: none;
   }
 

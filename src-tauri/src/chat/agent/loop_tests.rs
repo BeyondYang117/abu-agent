@@ -579,6 +579,7 @@
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: String::new(),
+            ui_message_order: vec![("message".to_string(), "user".to_string())],
         }
     }
 
@@ -2549,6 +2550,7 @@
             usage: None,
             compacted: false,
             compaction_unresolved_rounds: 0,
+            pending_compaction_boundary: None,
         }
     }
 

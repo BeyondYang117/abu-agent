@@ -1,14 +1,19 @@
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, RotateCw } from 'lucide-react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
-import type { AgentPlanState, ChatMessage } from './types'
+import type { AgentPlanState, ChatMessage, ConversationContextState } from './types'
 import { MessageBubble } from './MessageBubble'
 import { MessageGroup } from './MessageGroup'
+import { CompactionDivider } from './CompactionDivider'
+import { CompactionInProgress } from './CompactionInProgress'
+import { CompactionSummaryPanel } from './CompactionSummaryPanel'
+import { resolveCompactionBoundaries, resolvePendingCompactionAfterIndex, type CompactionBoundaryView } from './compactionBoundary'
 import { isExecutableAgentPlanText } from './agentPlan'
 import { foldMessageGroups } from './messageGroups'
 import { useStreamCoarse, useStreamSnapshot } from './streamingStore'
 import { getActiveGroup, useGroupsVersion } from './groupStreamingStore'
 import { prefersReducedMotion } from './utils'
+import type { Lang } from '../settings/i18n'
 
 export interface AssistantStreamStats {
   messageId: string
@@ -31,6 +36,10 @@ interface MessageListProps {
   // 多模型一问多答（任务 06-30）：多答组「选中条」映射 + 点选回调。
   groupSelections?: Record<string, string>
   onSetGroupSelection?: (groupId: string, messageId: string) => void
+  contextState?: ConversationContextState | null
+  compactionInProgress?: boolean
+  animateCompactionBoundaryId?: string | null
+  lang?: Lang
 }
 
 const LIST_EDGE_PADDING_PX = 16
@@ -45,6 +54,9 @@ type RenderItem =
   | { kind: 'streaming'; key: 'streaming-assistant'; message: ChatMessage; messageStreaming: boolean; reasoningStreaming: boolean }
   | { kind: 'thinking'; key: 'thinking' }
   | { kind: 'error'; key: 'error'; text: string; retryMessageId: string | null }
+  | { kind: 'compaction-divider'; key: string; boundary: CompactionBoundaryView; animate: boolean }
+  | { kind: 'compaction-summary'; key: string; boundary: CompactionBoundaryView }
+  | { kind: 'compaction-progress'; key: string; afterIndex: number }
 
 // R8（多模型一问多答）：多答组的「本次所发模型」列表，渲染在该组对应 user 消息顶部。
 type GroupModelLabel = { providerId: string | null; model: string | null }
@@ -61,6 +73,10 @@ function MessageListBase({
   onRetryLastUser,
   groupSelections = {},
   onSetGroupSelection,
+  contextState = null,
+  compactionInProgress = false,
+  animateCompactionBoundaryId = null,
+  lang = 'zh',
 }: MessageListProps) {
   // 流式预览状态直接订阅 streamingStore——只有本组件随每帧内容重渲，Chat/侧栏/输入栏不动。
   const coarse = useStreamCoarse()
@@ -101,6 +117,78 @@ function MessageListBase({
       ?.id ?? null
   }, [agentPlanState, messages])
 
+  const messageIndexById = useMemo(() => {
+    const map = new Map<string, number>()
+    messages.forEach((message, index) => map.set(message.id, index))
+    return map
+  }, [messages])
+
+  const boundariesByAfterIndex = useMemo(() => {
+    const map = new Map<number, CompactionBoundaryView[]>()
+    for (const boundary of resolveCompactionBoundaries(messages, contextState)) {
+      const existing = map.get(boundary.afterIndex) ?? []
+      existing.push(boundary)
+      map.set(boundary.afterIndex, existing)
+    }
+    return map
+  }, [contextState, messages])
+
+  const pendingCompactionAfterIndex = useMemo(
+    () => (
+      compactionInProgress
+        ? resolvePendingCompactionAfterIndex(messages, contextState, animateCompactionBoundaryId)
+        : null
+    ),
+    [animateCompactionBoundaryId, compactionInProgress, contextState, messages],
+  )
+
+  const appendCompactionItems = useCallback((
+    list: RenderItem[],
+    afterIndex: number,
+  ) => {
+    const boundaries = boundariesByAfterIndex.get(afterIndex)
+    if (!boundaries) return
+    for (const boundary of boundaries) {
+      const recordId = boundary.record.id
+      list.push({
+        kind: 'compaction-divider',
+        key: `compaction-divider-${recordId}`,
+        boundary,
+        animate: animateCompactionBoundaryId === recordId,
+      })
+      list.push({
+        kind: 'compaction-summary',
+        key: `compaction-summary-${recordId}`,
+        boundary,
+      })
+    }
+  }, [animateCompactionBoundaryId, boundariesByAfterIndex])
+
+  const appendCompactionSlot = useCallback((
+    list: RenderItem[],
+    afterIndex: number,
+  ) => {
+    const hasBoundary = boundariesByAfterIndex.has(afterIndex)
+    if (
+      compactionInProgress
+      && pendingCompactionAfterIndex === afterIndex
+      && !hasBoundary
+    ) {
+      list.push({
+        kind: 'compaction-progress',
+        key: `compaction-progress-after-${afterIndex}`,
+        afterIndex,
+      })
+      return
+    }
+    appendCompactionItems(list, afterIndex)
+  }, [
+    appendCompactionItems,
+    boundariesByAfterIndex,
+    compactionInProgress,
+    pendingCompactionAfterIndex,
+  ])
+
   // 把消息 + 流式预览 + 占位拼成统一的虚拟列表项数组。
   const items = useMemo<RenderItem[]>(() => {
     const list: RenderItem[] = [
@@ -139,11 +227,21 @@ function MessageListBase({
           groupId: item.groupId,
           messages: item.messages,
         })
+        const boundaryIndices = new Set<number>()
+        for (const message of item.messages) {
+          const index = messageIndexById.get(message.id)
+          if (index != null) boundaryIndices.add(index)
+        }
+        for (const index of boundaryIndices) {
+          appendCompactionSlot(list, index)
+        }
       } else {
         const message = item.message
         const groupId = message.role === 'user' ? (message.group_id ?? message.groupId ?? null) : null
         const sentModels = groupId ? sentModelsByGroup.get(groupId) : undefined
         list.push({ kind: 'message', key: message.id, message, sentModels })
+        const index = messageIndexById.get(message.id)
+        if (index != null) appendCompactionSlot(list, index)
       }
     }
 
@@ -197,9 +295,13 @@ function MessageListBase({
     streamingToolCalls,
     streamingSegments,
     error,
+    appendCompactionItems,
+    appendCompactionSlot,
+    compactionInProgress,
+    messageIndexById,
+    pendingCompactionAfterIndex,
   ])
 
-  // 瞬时把视口对齐到底部。自动跟随保持瞬时（平滑会抖）；smooth 仅用于用户主动点「回到底部」。
   const scrollToBottom = useCallback((smooth = false) => {
     const index = items.length - 1
     if (index < 0) return
@@ -354,6 +456,23 @@ function MessageListBase({
               <span className="reasoning-shimmer-text text-sm font-medium">正在思考…</span>
             </div>
           )
+        case 'compaction-divider':
+          return (
+            <CompactionDivider
+              boundary={item.boundary}
+              lang={lang}
+              animate={item.animate}
+            />
+          )
+        case 'compaction-summary':
+          return (
+            <CompactionSummaryPanel
+              boundary={item.boundary}
+              lang={lang}
+            />
+          )
+        case 'compaction-progress':
+          return <CompactionInProgress lang={lang} />
         case 'error':
           return (
             <div className="chat-motion-fade-up flex flex-col items-start gap-2 py-3">
@@ -388,6 +507,7 @@ function MessageListBase({
       onSetGroupSelection,
       streamingReasoningDurationMs,
       streamingReasoningDurationMsBySegmentId,
+      lang,
     ],
   )
 

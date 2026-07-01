@@ -152,6 +152,7 @@ impl<'a> RunResultBuilder<'a> {
             stream_outcome: self.outcome.to_string(),
             usage: None,
             compacted_history: None,
+            compaction_boundary: None,
         }
     }
 }
@@ -314,6 +315,7 @@ pub(crate) fn finalize_planning_final(
         stream_outcome: "completed".to_string(),
         usage: None,
         compacted_history: None,
+        compaction_boundary: None,
     })
 }
 
@@ -374,6 +376,7 @@ pub(crate) fn finalize_completed(
         stream_outcome: "completed".to_string(),
         usage: None,
         compacted_history: None,
+        compaction_boundary: None,
     }
 }
 
@@ -510,6 +513,7 @@ pub(crate) fn cancelled_tool_round_run_result(
         stream_outcome: "cancelled".to_string(),
         usage: None,
         compacted_history: None,
+        compaction_boundary: None,
     }
 }
 

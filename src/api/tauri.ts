@@ -128,6 +128,21 @@ export type ChatContextSummary = {
   stale?: boolean
 }
 
+export type CompactionBoundaryRecord = {
+  id: string
+  source_until_message_id?: string
+  sourceUntilMessageId?: string
+  token_estimate_before?: number
+  tokenEstimateBefore?: number
+  token_estimate_after?: number
+  tokenEstimateAfter?: number
+  summary_content?: string
+  summaryContent?: string
+  trigger?: 'manual' | 'auto' | 'agent_loop' | string
+  created_at?: number
+  createdAt?: number
+}
+
 export type ChatContextState = {
   estimated_input_tokens?: number
   estimatedInputTokens?: number
@@ -148,6 +163,8 @@ export type ChatContextState = {
   compression_count?: number
   compressionCount?: number
   summary?: ChatContextSummary | null
+  compaction_boundaries?: CompactionBoundaryRecord[]
+  compactionBoundaries?: CompactionBoundaryRecord[]
   warning?: string | null
   warningMessage?: string | null
 }
@@ -155,6 +172,13 @@ export type ChatContextState = {
 export type ChatContextPayload = {
   conversationId: string
   contextState: ChatContextState
+}
+
+export type ChatCompactionPayload = {
+  conversationId: string
+  phase: 'started' | 'completed' | string
+  trigger?: 'manual' | 'auto' | 'agent_loop' | string
+  boundary?: CompactionBoundaryRecord | null
 }
 
 export type ChatTodoStatus = 'pending' | 'in_progress' | 'completed'
@@ -1307,6 +1331,10 @@ export const api = {
   onChatContext: (listener: (payload: ChatContextPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return on<ChatContextPayload>('chat-context', (payload) => listener(payload))
+  },
+  onChatCompaction: (listener: (payload: ChatCompactionPayload) => void) => {
+    if (!isTauriRuntime()) return Promise.resolve(() => {})
+    return on<ChatCompactionPayload>('chat-compaction', (payload) => listener(payload))
   },
   onChatTodo: (listener: (payload: ChatTodoPayload) => void) => {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
