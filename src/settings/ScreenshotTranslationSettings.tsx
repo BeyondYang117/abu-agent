@@ -80,7 +80,7 @@ export function ScreenshotTranslationSettings({
 
           {screenshot?.enabled !== false && (
             <>
-              <SettingRow label={t.screenshotHotkey} description={t.screenshotHotkey} stack>
+              <SettingRow label={t.screenshotHotkey} stack>
                 <HotkeyInput
                   value={screenshot?.hotkey ?? ''}
                   placeholder="CommandOrControl+Shift+A"
@@ -95,7 +95,7 @@ export function ScreenshotTranslationSettings({
                 />
               </SettingRow>
 
-              <SettingRow label={t.screenshotTextHotkey} description={t.selectedText} stack>
+              <SettingRow label={t.screenshotTextHotkey} stack>
                 <HotkeyInput
                   value={screenshot?.textHotkey ?? ''}
                   placeholder="CommandOrControl+Shift+T"
@@ -115,8 +115,7 @@ export function ScreenshotTranslationSettings({
 
       {screenshot?.enabled !== false && (
         <SettingsGroup title={t.replaceTranslate}>
-          <p className="kv-row-desc px-1 pb-1">{t.replaceTranslateScopeHint}</p>
-          <SettingRow label={t.replaceTranslateHotkey} description={t.replaceTranslateHint} stack>
+          <SettingRow label={t.replaceTranslateHotkey} stack>
             <HotkeyInput
               value={screenshot?.replaceHotkey ?? ''}
               placeholder="CommandOrControl+Shift+R"
@@ -131,7 +130,7 @@ export function ScreenshotTranslationSettings({
             />
           </SettingRow>
 
-          <SettingRow label={t.replaceTranslateEnabled} description={t.replaceTranslate}>
+          <SettingRow label={t.replaceTranslateEnabled}>
             <Toggle
               checked={screenshot?.replaceEnabled !== false}
               onChange={(replaceEnabled) => onUpdate({ replaceEnabled })}
@@ -178,7 +177,6 @@ export function ScreenshotTranslationSettings({
 
               <SettingRow
                 label={t.screenshotTranslationStream}
-                description={t.screenshotTranslationStreamHint}
               >
                 <Toggle
                   checked={screenshot?.streamEnabled !== false}

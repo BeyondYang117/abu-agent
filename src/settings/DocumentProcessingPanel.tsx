@@ -38,10 +38,6 @@ export function DocumentProcessingPanel({
       <SettingsGroup title={t('解析选项', 'Parsing options')}>
         <SettingRow
           label={t('OCR 引擎', 'OCR engine')}
-          description={t(
-            '图片入库前识别文字；关闭则跳过图片文件。',
-            'Recognize text in images before indexing; off skips image files.',
-          )}
         >
           <Select
             className="w-52"
@@ -67,10 +63,6 @@ export function DocumentProcessingPanel({
 
         <SettingRow
           label={t('PDF 处理策略', 'PDF strategy')}
-          description={t(
-            '默认读取 PDF 文字层；扫描版强制 OCR 暂未启用。',
-            'Reads the PDF text layer by default; force OCR for scans is not enabled yet.',
-          )}
         >
           <Select
             className="w-52"

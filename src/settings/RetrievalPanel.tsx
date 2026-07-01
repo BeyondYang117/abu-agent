@@ -36,10 +36,6 @@ export function RetrievalPanel({
       <SettingsGroup title={t('混合检索', 'Hybrid search')}>
         <SettingRow
           label={t('Hybrid 融合', 'Hybrid fusion')}
-          description={t(
-            '向量召回 + 关键词 BM25，经 RRF 融合；对中文短词和精确匹配更有帮助。',
-            'Fuses vector recall with keyword BM25 via RRF — helps CJK short terms and exact match.',
-          )}
         >
           <Toggle checked={cfg.hybridEnabled} onChange={(v) => patch({ hybridEnabled: v })} />
         </SettingRow>
@@ -48,7 +44,6 @@ export function RetrievalPanel({
           <div className="grid gap-1 sm:grid-cols-2">
             <SettingRow
               label={t('向量权重', 'Vector weight')}
-              description={t('调高更偏语义相似。', 'Higher favors semantic similarity.')}
               stack
             >
               <Input
@@ -60,7 +55,6 @@ export function RetrievalPanel({
             </SettingRow>
             <SettingRow
               label={t('关键词权重', 'Keyword weight')}
-              description={t('调高更偏字面匹配。', 'Higher favors literal match.')}
               stack
             >
               <Input
@@ -78,8 +72,8 @@ export function RetrievalPanel({
         <SettingRow
           label={t('Rerank 提供商', 'Rerank provider')}
           description={t(
-            'Cohere / Jina 兼容；留空关闭，调用失败自动降级为融合顺序。',
-            'Cohere/Jina-compatible; blank = off, failures fall back to fused order.',
+            '留空关闭；失败时降级为融合顺序',
+            'Blank = off; failures use fused order',
           )}
         >
           <Select

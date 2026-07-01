@@ -114,11 +114,6 @@ export function KivioCodeSettings({ lang, providers }: KivioCodeSettingsProps) {
       <SettingsGroup title={zh ? '默认模型与权限' : 'Default model & permissions'}>
         <SettingRow
           label={zh ? '默认模型' : 'Default model'}
-          description={
-            zh
-              ? '留空则跟随 Chat 默认模型。命令行 --model / --provider 仍优先生效。'
-              : 'Leave unset to follow the Chat default model. CLI --model / --provider still take precedence.'
-          }
         >
           <ModelPairSelect
             providerId={config.defaultProviderId || ''}
@@ -133,11 +128,6 @@ export function KivioCodeSettings({ lang, providers }: KivioCodeSettingsProps) {
 
         <SettingRow
           label={zh ? '工具审批策略' : 'Tool approval policy'}
-          description={
-            zh
-              ? '决定 kivio-code 执行工具前是否需要确认。命令行 --no-approve 会强制为"每次确认"。'
-              : 'Whether kivio-code confirms before running tools. CLI --no-approve forces "confirm every call".'
-          }
         >
           <Select
             value={config.approvalPolicy || 'auto'}
@@ -155,11 +145,6 @@ export function KivioCodeSettings({ lang, providers }: KivioCodeSettingsProps) {
 
         <SettingRow
           label={zh ? '读取 CLAUDE.md / .claude 上下文' : 'Read CLAUDE.md / .claude context'}
-          description={
-            zh
-              ? '开启后 kivio-code 会读取项目与全局的 CLAUDE.md / .claude 指令文件(跨工具兼容)。'
-              : "When on, kivio-code reads project and global CLAUDE.md / .claude instruction files for cross-tool compatibility."
-          }
         >
           <Toggle
             checked={config.readClaudeDir}
@@ -171,8 +156,8 @@ export function KivioCodeSettings({ lang, providers }: KivioCodeSettingsProps) {
       <SettingsGroup title={zh ? '全局指令' : 'Global instructions'}>
         <div className="px-1 pb-2 text-[12px] leading-relaxed text-neutral-500 dark:text-neutral-400">
           {zh
-            ? '每次运行 kivio-code 都会注入的全局指令。项目根目录的 KIVIO.md / AGENTS.md 会在其后叠加。'
-            : "Global instructions injected on every kivio-code run. A project's root KIVIO.md / AGENTS.md layers on top."}
+            ? '每次运行注入；项目 KIVIO.md / AGENTS.md 会叠加。'
+            : 'Injected every run; project KIVIO.md / AGENTS.md layers on top.'}
         </div>
         <TextArea
           value={instructions ?? ''}
@@ -191,48 +176,33 @@ export function KivioCodeSettings({ lang, providers }: KivioCodeSettingsProps) {
         <div className="px-1 py-2 text-[13px] leading-relaxed text-neutral-500 dark:text-neutral-400">
           {zh ? (
             <>
-              kivio code 是随应用一起构建的终端编码代理。先点击下方「安装命令行工具」把{' '}
-              <code className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                kivio
-              </code>{' '}
-              命令加入 PATH,然后在新终端里进入你的项目目录运行{' '}
+              安装 CLI 后在项目目录运行{' '}
               <code className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
                 kivio code
-              </code>{' '}
-              即可启动;它会读取上面这些设置(默认模型、审批策略、上下文开关)。加{' '}
+              </code>
+              ；读取上方设置，{' '}
               <code className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
                 --model provider:model
               </code>{' '}
-              可临时覆盖默认模型。
+              可临时覆盖模型。
             </>
           ) : (
             <>
-              kivio code is the terminal coding agent bundled with this app. First click "Install
-              command line tool" below to add the{' '}
-              <code className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                kivio
-              </code>{' '}
-              command to your PATH, then run{' '}
+              Install the CLI, then run{' '}
               <code className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
                 kivio code
               </code>{' '}
-              in a new terminal from your project directory; it reads the settings above (default
-              model, approval policy, context toggle). Pass{' '}
+              in a project; uses settings above. Pass{' '}
               <code className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
                 --model provider:model
               </code>{' '}
-              to override the default model for a run.
+              to override for one run.
             </>
           )}
         </div>
 
         <SettingRow
           label={zh ? '安装命令行工具' : 'Install command line tool'}
-          description={
-            zh
-              ? '把 kivio 命令注册进用户 PATH(Windows)/软链到 ~/.local/bin(macOS),装好后在新终端可直接用 kivio code。'
-              : 'Register the kivio command on your user PATH (Windows) / symlink it to ~/.local/bin (macOS). After installing, use kivio code in a new terminal.'
-          }
         >
           <button
             type="button"

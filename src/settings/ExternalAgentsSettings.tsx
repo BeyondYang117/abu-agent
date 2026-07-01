@@ -108,7 +108,6 @@ export function ExternalAgentsSettings({
   return (
     <>
       <SettingsGroup title={t.externalAgentsDefaultSection}>
-        <p className="kv-row-desc mb-3 px-0">{t.externalAgentsDefaultHint}</p>
         <div className="mb-4 flex flex-wrap gap-2">
           <button
             type="button"
@@ -200,7 +199,6 @@ export function ExternalAgentsSettings({
 
       <SettingsGroup title={t.externalAgentsDetectSection}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
-          <p className="kv-row-desc m-0">{t.externalAgentsDetectHint}</p>
           <button
             type="button"
             className="kv-btn sm"

@@ -721,7 +721,9 @@ export function ConnectorsPanel({
             {connectedServers.map(renderConnectedCard)}
           </div>
         )}
-        <div className="kv-row-desc py-1 opacity-70">{t.connectorsSaveHint}</div>
+        {t.connectorsSaveHint ? (
+          <div className="kv-row-desc py-1 opacity-70">{t.connectorsSaveHint}</div>
+        ) : null}
       </SettingsGroup>
 
       <SettingsGroup title={t.connectorsSectionAvailable}>
