@@ -3437,7 +3437,11 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     <div className="flex h-full flex-col">
                       <div className="mb-2">
                         <div className="kv-row-label">{lang === 'zh' ? '工具超时' : 'Tool timeout'}</div>
-                        <p className="kv-row-desc">{lang === 'zh' ? '单次工具调用的最长等待时间。' : 'Maximum wait time for a single tool call.'}</p>
+                        <p className="kv-row-desc">
+                          {lang === 'zh'
+                            ? '单次工具调用的最长等待时间，适用于技能脚本、Shell、Python 与 MCP 工具。保存后对新的调用生效。'
+                            : 'Maximum wait for one tool call (skills, shell, Python, MCP). Takes effect after you save settings.'}
+                        </p>
                       </div>
                       <div className="mt-auto">
                         <Select
@@ -3468,8 +3472,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         <div className="kv-row-label">{lang === 'zh' ? 'MCP 空闲超时' : 'MCP idle timeout'}</div>
                         <p className="kv-row-desc">
                           {lang === 'zh'
-                            ? '持久连接空闲超过此值后回收子进程，下次调用透明重连。'
-                            : 'Persistent MCP connections idle beyond this are recycled; the next call reconnects transparently.'}
+                            ? '持久连接空闲超过此值后回收子进程，下次调用透明重连。不控制单次工具的执行时长——执行超时请改「工具超时」。'
+                            : 'Recycle idle MCP child processes; the next call reconnects. Does not cap how long a single tool may run — use Tool timeout for that.'}
                         </p>
                       </div>
                       <div className="mt-auto">

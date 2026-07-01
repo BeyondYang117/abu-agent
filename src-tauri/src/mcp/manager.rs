@@ -507,8 +507,12 @@ impl AppState {
         }
 
         let params = serde_json::json!({ "name": name, "arguments": arguments });
+        // stdio 会话在连接时写入 timeout，但用户可在设置里随时调高/调低 tool_timeout_ms。
+        // 每次 tools/call 前刷新，避免旧连接一直沿用首次握手时的 60s 默认值。
+        let stdio_timeout = self.mcp_tool_timeout();
         let result = match &mut guard.transport {
             McpTransport::Stdio(conn) => {
+                conn.timeout = stdio_timeout;
                 let value = conn.request("tools/call", params.clone()).await;
                 match value {
                     Ok(value) => Ok(client::parse_tool_result(value)),
@@ -527,6 +531,7 @@ impl AppState {
                             sink.emit_server_state(server, &McpServerState::Connected);
                             match &mut guard.transport {
                                 McpTransport::Stdio(conn) => {
+                                    conn.timeout = self.mcp_tool_timeout();
                                     let value = conn.request("tools/call", params).await?;
                                     Ok(client::parse_tool_result(value))
                                 }
@@ -1702,6 +1707,102 @@ while True:
                 guard.config_fingerprint.clone()
             };
             assert_ne!(first_fp, second_fp, "config change must rebuild session");
+
+            state.mcp_disconnect_all().await;
+            let _ = std::fs::remove_file(&script);
+        }
+    }
+
+    /// 跨平台 fake MCP stdio 测试：验证复用会话时也会读取最新的 tool_timeout_ms。
+    mod stdio_cross_platform {
+        use super::*;
+        use std::io::Write;
+
+        fn python_command() -> &'static str {
+            if cfg!(windows) {
+                "python"
+            } else {
+                "python3"
+            }
+        }
+
+        fn write_fake_server() -> std::path::PathBuf {
+            let script = r#"#!/usr/bin/env python3
+import sys, json, os, time
+delay_ms = int(os.environ.get("KIVIO_DELAY_CALL_MS", "0"))
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    mid = msg.get("id")
+    method = msg.get("method")
+    if mid is None:
+        continue
+    if method == "initialize":
+        resp = {"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1.0.0"}}}
+    elif method == "tools/list":
+        resp = {"jsonrpc":"2.0","id":mid,"result":{"tools":[{"name":"echo","description":"Echo","inputSchema":{"type":"object","properties":{"text":{"type":"string"}}}}]}}
+    elif method == "tools/call":
+        text = ""
+        try:
+            text = msg["params"]["arguments"].get("text","")
+        except Exception:
+            text = ""
+        if delay_ms:
+            time.sleep(delay_ms / 1000.0)
+        resp = {"jsonrpc":"2.0","id":mid,"result":{"content":[{"type":"text","text":"echo: "+str(text)}]}}
+        sys.stdout.write(json.dumps(resp)+"\n")
+        sys.stdout.flush()
+        continue
+    else:
+        resp = {"jsonrpc":"2.0","id":mid,"result":{}}
+    sys.stdout.write(json.dumps(resp)+"\n")
+    sys.stdout.flush()
+"#;
+            let mut path = std::env::temp_dir();
+            path.push(format!("kivio-fake-mcp-xplat-{}.py", uuid::Uuid::new_v4()));
+            let mut file = std::fs::File::create(&path).expect("create fake server");
+            file.write_all(script.as_bytes()).expect("write fake server");
+            path
+        }
+
+        fn python_server(script: &std::path::Path) -> ChatMcpServer {
+            stdio_server(python_command(), &["-u", script.to_str().unwrap()])
+        }
+
+        #[tokio::test]
+        async fn reused_stdio_session_honors_increased_tool_timeout() {
+            let script = write_fake_server();
+            let state = test_app_state();
+            state.settings_write().chat_tools.tool_timeout_ms = 1_000;
+
+            let mut server = python_server(&script);
+            server
+                .env
+                .insert("KIVIO_DELAY_CALL_MS".to_string(), "2500".to_string());
+
+            let err = state
+                .mcp_call_tool(&(), &server, "echo", serde_json::json!({ "text": "slow" }))
+                .await
+                .expect_err("1s timeout should fail on a 2.5s tool");
+            assert!(
+                err.contains("timed out"),
+                "expected timeout error, got: {err}"
+            );
+
+            state.settings_write().chat_tools.tool_timeout_ms = 5_000;
+            let result = state
+                .mcp_call_tool(&(), &server, "echo", serde_json::json!({ "text": "slow" }))
+                .await
+                .expect("5s timeout should succeed on the same reused session");
+            assert_eq!(result.content, "echo: slow");
 
             state.mcp_disconnect_all().await;
             let _ = std::fs::remove_file(&script);

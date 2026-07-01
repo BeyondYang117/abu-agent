@@ -1156,4 +1156,25 @@ mod tests {
             crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS + 1
         );
     }
+
+    #[test]
+    fn five_minute_tool_timeout_applies_to_bash_and_skill_script() {
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = 300_000;
+        let bash = crate::mcp::types::native_run_command_tool();
+        let skill = crate::mcp::types::native_skill_run_script_tool();
+
+        assert_eq!(
+            effective_tool_timeout_ms(&settings, &bash, &serde_json::json!({})),
+            300_000
+        );
+        assert_eq!(
+            effective_tool_timeout_ms(
+                &settings,
+                &skill,
+                &serde_json::json!({ "timeout_ms": 60_000 })
+            ),
+            300_000
+        );
+    }
 }
