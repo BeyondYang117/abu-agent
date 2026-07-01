@@ -2640,7 +2640,8 @@ pub(crate) async fn push_assistant_message(
     match compute_context_state(app, state, conversation, None, &[]).await {
         Ok(context_state) => {
             conversation.context_state = context_state.clone();
-            emit_chat_context_state(app, &conversation.id, &context_state);
+            try_auto_compress_context_after_update(app, state, conversation, None, &[]).await;
+            emit_chat_context_state(app, &conversation.id, &conversation.context_state);
         }
         Err(err) => {
             eprintln!("Context usage estimate failed after assistant reply: {err}");
@@ -3992,6 +3993,10 @@ async fn compute_context_state(
         .filter(|summary| !summary.stale)
         .map(|summary| summary.source_message_ids.len())
         .unwrap_or_default();
+    let mut compression_count = conversation.context_state.compression_count;
+    if compression_count == 0 && active_summary(conversation).is_some() {
+        compression_count = 1;
+    }
 
     Ok(ConversationContextState {
         estimated_input_tokens,
@@ -4003,6 +4008,7 @@ async fn compute_context_state(
         last_measured_at: chrono::Local::now().timestamp(),
         last_compressed_at,
         compressed_message_count,
+        compression_count,
         summary,
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
         context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
@@ -4057,10 +4063,46 @@ fn should_auto_compress_context(
     if ratio < AUTO_COMPRESS_RATIO {
         return false;
     }
-    if active_summary(conversation).is_some() {
-        return false;
-    }
     compression_boundary_index(conversation).is_some()
+}
+
+async fn try_auto_compress_context_after_update(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+) {
+    if !should_auto_compress_context(&conversation.context_state, conversation) {
+        return;
+    }
+    match compress_conversation_context(app, state, conversation).await {
+        Ok(()) => {
+            match compute_context_state(
+                app,
+                state,
+                conversation,
+                last_user_api_content,
+                last_user_image_paths,
+            )
+            .await
+            {
+                Ok(refreshed) => {
+                    conversation.context_state = refreshed;
+                    conversation.context_state.warning = None;
+                }
+                Err(err) => {
+                    eprintln!("Context usage estimate failed after auto compression: {err}");
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("Auto context compression failed: {err}");
+            conversation.context_state.warning = Some(format!(
+                "Automatic compression failed: {err}."
+            ));
+        }
+    }
 }
 
 async fn compress_conversation_context(
@@ -4070,13 +4112,17 @@ async fn compress_conversation_context(
 ) -> Result<(), String> {
     let boundary_index = compression_boundary_index(conversation)
         .ok_or_else(|| "没有足够的旧消息可以压缩".to_string())?;
-    let source_messages = conversation
-        .messages
-        .iter()
-        .take(boundary_index + 1)
-        .cloned()
-        .collect::<Vec<_>>();
-    if source_messages.len() < 2 {
+    let source_start = summary_boundary_index(conversation)
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    if boundary_index < source_start {
+        return Err("没有足够的旧消息可以压缩".to_string());
+    }
+    let source_messages = conversation.messages[source_start..=boundary_index].to_vec();
+    if source_start == 0 && source_messages.len() < 2 {
+        return Err("没有足够的旧消息可以压缩".to_string());
+    }
+    if source_messages.is_empty() {
         return Err("没有足够的旧消息可以压缩".to_string());
     }
 
@@ -4093,9 +4139,16 @@ async fn compress_conversation_context(
         return Err(chat_missing_model_error());
     }
 
-    let source_text = format_messages_for_context_summary(&source_messages);
-    let prompt = build_context_compression_prompt(&source_text);
-    let token_estimate_before = agent_prepare::estimate_tokens(&source_text);
+    let serialized_new = format_messages_for_context_summary(&source_messages);
+    let source_text = if let Some(summary) = active_summary(conversation) {
+        build_context_recompression_prompt(&summary.content, &serialized_new)
+    } else {
+        build_context_compression_prompt(&serialized_new)
+    };
+    let token_estimate_before = active_summary(conversation)
+        .map(|summary| summary.token_estimate_after)
+        .unwrap_or(0)
+        + agent_prepare::estimate_tokens(&serialized_new);
     let retry_attempts = if settings.retry_enabled {
         settings.retry_attempts as usize
     } else {
@@ -4108,7 +4161,7 @@ async fn compress_conversation_context(
         }),
         serde_json::json!({
             "role": "user",
-            "content": prompt,
+            "content": source_text,
         }),
     ];
     let source_until_message_id = source_messages
@@ -4134,10 +4187,11 @@ async fn compress_conversation_context(
         return Err("Compression model returned an empty summary".to_string());
     }
 
-    let source_message_ids = source_messages
-        .iter()
-        .map(|message| message.id.clone())
-        .collect::<Vec<_>>();
+    let mut source_message_ids = active_summary(conversation)
+        .map(|summary| summary.source_message_ids.clone())
+        .unwrap_or_default();
+    source_message_ids.extend(source_messages.iter().map(|message| message.id.clone()));
+    let compressed_message_count = source_message_ids.len();
     let created_at = chrono::Local::now().timestamp();
     conversation.context_state.summary = Some(ConversationContextSummary {
         id: format!("ctxsum_{}", Uuid::new_v4()),
@@ -4152,7 +4206,11 @@ async fn compress_conversation_context(
         stale: false,
     });
     conversation.context_state.last_compressed_at = Some(created_at);
-    conversation.context_state.compressed_message_count = source_messages.len();
+    conversation.context_state.compressed_message_count = compressed_message_count;
+    conversation.context_state.compression_count = conversation
+        .context_state
+        .compression_count
+        .saturating_add(1);
     conversation.context_state.warning = None;
     Ok(())
 }
@@ -4161,11 +4219,17 @@ fn compression_boundary_index(conversation: &Conversation) -> Option<usize> {
     if conversation.messages.len() <= KEEP_RECENT_RAW_MESSAGES + 2 {
         return None;
     }
+    let min_boundary = summary_boundary_index(conversation)
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
     let max_boundary = conversation
         .messages
         .len()
         .saturating_sub(KEEP_RECENT_RAW_MESSAGES + 1);
-    (0..=max_boundary)
+    if min_boundary > max_boundary {
+        return None;
+    }
+    (min_boundary..=max_boundary)
         .rev()
         .find(|idx| conversation.messages[*idx].role == "assistant")
 }
@@ -4228,6 +4292,12 @@ fn format_messages_for_context_summary(messages: &[ChatMessage]) -> String {
 fn build_context_compression_prompt(source_text: &str) -> String {
     format!(
         "Compress the older part of this Kivio Chat conversation into a dense factual memory for future model requests.\n\nRules:\n- Preserve user goals, preferences, constraints, decisions, file paths, commands, tool results, unresolved questions, and important facts.\n- Preserve chronological cause/effect when it matters.\n- Mention attachments by file name and relevance, but do not invent image contents.\n- Do not include small talk, redundant phrasing, or style commentary.\n- Do not invent facts.\n- Output concise Markdown only.\n\nConversation to compress:\n\n{source_text}"
+    )
+}
+
+fn build_context_recompression_prompt(previous_summary: &str, new_messages: &str) -> String {
+    format!(
+        "Update the existing conversation summary below by merging in the newer messages.\n\nRules:\n- Preserve still-true details from the existing summary; remove stale details.\n- Preserve user goals, preferences, constraints, decisions, file paths, commands, tool results, unresolved questions, and important facts.\n- Do not invent facts.\n- Output concise Markdown only.\n\nExisting summary:\n\n{previous_summary}\n\nNewer messages to merge:\n\n{new_messages}"
     )
 }
 
@@ -7146,6 +7216,51 @@ mod tests {
         assert!(conversation.messages[3].api_messages.is_empty());
         // user 消息不动。
         assert!(!conversation.messages[0].api_messages.is_empty());
+    }
+
+    #[test]
+    fn should_auto_compress_allows_recompression_when_summary_exists() {
+        let mut conversation = test_conversation_with_summary(false);
+        for i in 0..12 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            conversation.messages.push(test_chat_message(
+                &format!("msg_extra_{i}"),
+                role,
+                &format!("extra content {i}"),
+                10 + i,
+            ));
+        }
+        let context_state = ConversationContextState {
+            usage_ratio: Some(0.9),
+            ..ConversationContextState::default()
+        };
+        assert!(should_auto_compress_context(&context_state, &conversation));
+    }
+
+    #[test]
+    fn should_auto_compress_false_when_no_new_compressible_range() {
+        let conversation = test_conversation_with_summary(false);
+        let context_state = ConversationContextState {
+            usage_ratio: Some(0.9),
+            ..ConversationContextState::default()
+        };
+        assert!(!should_auto_compress_context(&context_state, &conversation));
+    }
+
+    #[test]
+    fn compression_boundary_index_starts_after_existing_summary() {
+        let mut conversation = test_conversation_with_summary(false);
+        for i in 0..12 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            conversation.messages.push(test_chat_message(
+                &format!("msg_extra_{i}"),
+                role,
+                "x",
+                10 + i,
+            ));
+        }
+        let boundary = compression_boundary_index(&conversation).expect("boundary");
+        assert!(boundary > 1);
     }
 
     #[test]

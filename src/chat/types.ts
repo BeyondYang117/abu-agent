@@ -349,6 +349,8 @@ export interface ConversationContextState {
   lastCompressedAt?: number | null
   compressed_message_count?: number
   compressedMessageCount?: number
+  compression_count?: number
+  compressionCount?: number
   summary?: ConversationContextSummary | null
   warning?: string | null
   warningMessage?: string | null

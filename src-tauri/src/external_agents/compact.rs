@@ -36,6 +36,10 @@ pub async fn request_external_compaction(
     run_external_cli_slash_command(app, state, conversation, compact_prompt).await?;
 
     conversation.context_state.summary = None;
+    conversation.context_state.compression_count = conversation
+        .context_state
+        .compression_count
+        .saturating_add(1);
     conversation.context_state.last_compressed_at = Some(chrono::Local::now().timestamp());
     conversation.context_state.warning = None;
 

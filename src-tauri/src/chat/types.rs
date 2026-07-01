@@ -56,6 +56,9 @@ pub struct ConversationContextState {
     pub last_compressed_at: Option<i64>,
     #[serde(default)]
     pub compressed_message_count: usize,
+    /// 本会话累计执行压缩的次数（含自动与手动）。
+    #[serde(default)]
+    pub compression_count: usize,
     #[serde(default)]
     pub summary: Option<ConversationContextSummary>,
     #[serde(default)]

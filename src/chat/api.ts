@@ -244,6 +244,9 @@ function estimateMockContext(conversation: Conversation): ConversationContextSta
     last_measured_at: nowSeconds(),
     last_compressed_at: summary?.created_at ?? summary?.createdAt ?? null,
     compressed_message_count: summary?.source_message_ids?.length ?? summary?.sourceMessageIds?.length ?? 0,
+    compression_count: conversation.context_state?.compression_count
+      ?? conversation.contextState?.compressionCount
+      ?? (summary ? 1 : 0),
     summary,
   }
 }
@@ -810,6 +813,9 @@ const mockChatApi = {
       model: conversation.model,
       stale: false,
     }
+    const priorCount = conversation.context_state?.compression_count
+      ?? conversation.contextState?.compressionCount
+      ?? 0
     const baseState = estimateMockContext(conversation)
     conversation.context_state = {
       ...baseState,
@@ -817,6 +823,7 @@ const mockChatApi = {
       summary,
       last_compressed_at: summary.created_at,
       compressed_message_count: source.length,
+      compression_count: priorCount + 1,
       segments: [
         ...(baseState.segments ?? []).filter((segment) => segment.id !== 'summarized_conversation'),
         { id: 'summarized_conversation', label: 'Summarized conversation', estimated_tokens: 20, color: '#BF3F66' },

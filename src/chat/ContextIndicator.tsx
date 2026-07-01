@@ -74,10 +74,15 @@ function messageCountLabel(messageCount: number, compressedMessageCount: number,
   return t.contextMessages.replace('{count}', String(messageCount))
 }
 
-function panelHeading(t: I18n, isExternalContext: boolean): string {
-  if (isExternalContext) return t.contextPanelTitle
+function panelHeading(t: I18n, isExternalContext: boolean, compressionCount: number): string {
+  const countLabel = t.contextCompressionCount.replace('{count}', String(compressionCount))
+  if (isExternalContext) {
+    return compressionCount > 0
+      ? `${t.contextPanelTitle} · ${countLabel}`
+      : t.contextPanelTitle
+  }
   const auto = t.contextPanelAutoCompress.replace('{auto}', String(CONTEXT_AUTO_COMPRESS_PERCENT))
-  return `${t.contextPanelTitle} · ${auto}`
+  return `${t.contextPanelTitle} · ${auto} · ${countLabel}`
 }
 
 const THRESHOLD_MARKERS = [
@@ -148,6 +153,11 @@ export function ContextIndicator({
     contextState?.compressedMessageCount,
     0,
   )
+  const compressionCount = valueFrom(
+    contextState?.compression_count,
+    contextState?.compressionCount,
+    0,
+  )
   const color = statusColor(status, usageRatio)
   const rawSegments = useMemo(
     () => (contextState?.segments ?? []).filter((segment) => segmentTokens(segment) > 0),
@@ -213,7 +223,7 @@ export function ContextIndicator({
         >
           <div className="mb-2 flex items-baseline justify-between gap-2">
             <h3 className="shrink-0 text-[12px] font-medium leading-snug text-neutral-700 dark:text-neutral-300">
-              {panelHeading(t, isExternalContext)}
+              {panelHeading(t, isExternalContext, compressionCount)}
             </h3>
             <div className="flex min-w-0 items-baseline gap-2">
               <span className="min-w-0 truncate text-[11px] leading-none tabular-nums text-neutral-500 dark:text-neutral-400">
