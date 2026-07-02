@@ -257,28 +257,35 @@ pub(crate) async fn planning_step(
                     "Chat tools planning stream interrupted; retrying once without streaming: {}",
                     err
                 );
-                call_chat_completion_message_with_usage(
-                    config.state,
-                    &config.provider,
-                    &config.model,
-                    prepared.runtime_messages.clone(),
-                    Some(&prepared.active_tools),
-                    config.retry_attempts,
-                    config.thinking_enabled,
-                    config.thinking_level.clone(),
-                    config.max_output_tokens,
-                    &config.conversation_id,
-                    &config.message_id,
-                    "Chat tools planning",
-                )
-                .await
-                .map(|(message, usage)| {
-                    state.merge_usage(usage);
-                    ChatPlanningStep {
-                        message,
-                        streamed: false,
+                // 与下方非流式路径同款 select：降级重试内部有 send_with_retry 的多次退避
+                // （每次 60s 超时），不接取消的话，用户点停止后会卡在这里直到重试耗尽。
+                tokio::select! {
+                    result = call_chat_completion_message_with_usage(
+                        config.state,
+                        &config.provider,
+                        &config.model,
+                        prepared.runtime_messages.clone(),
+                        Some(&prepared.active_tools),
+                        config.retry_attempts,
+                        config.thinking_enabled,
+                        config.thinking_level.clone(),
+                        config.max_output_tokens,
+                        &config.conversation_id,
+                        &config.message_id,
+                        "Chat tools planning",
+                    ) => result.map(|(message, usage)| {
+                        state.merge_usage(usage);
+                        ChatPlanningStep {
+                            message,
+                            streamed: false,
+                        }
+                    }),
+                    _ = host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
+                        return Ok(PlanningStepOutcome::Cancelled(
+                            cancelled_run_result_from_state(env, state),
+                        ));
                     }
-                })
+                }
             }
             Err(err) => Err(err.to_string()),
         }

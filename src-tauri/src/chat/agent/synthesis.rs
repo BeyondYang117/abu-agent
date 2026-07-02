@@ -420,21 +420,26 @@ async fn recover_overflow_compact_and_retry(env: &LoopEnv<'_>, state: &mut RunSt
     let config = env.config;
     // 压缩一次(L1 snip → L2 摘要);返回压缩后的发送视图,并已写回 state.runtime_messages。
     let compacted = super::compaction::maybe_compact_send_view(env, state).await;
-    let result = call_chat_completion_message_with_usage(
-        config.state,
-        &config.provider,
-        &config.model,
-        compacted,
-        None,
-        config.retry_attempts,
-        config.thinking_enabled,
-        config.thinking_level.clone(),
-        config.max_output_tokens,
-        &config.conversation_id,
-        &config.message_id,
-        "Chat synthesis overflow recovery",
-    )
-    .await;
+    // 恢复重试内部有 send_with_retry 多次退避——必须接取消，否则用户点停止后卡到重试耗尽。
+    let result = tokio::select! {
+        result = call_chat_completion_message_with_usage(
+            config.state,
+            &config.provider,
+            &config.model,
+            compacted,
+            None,
+            config.retry_attempts,
+            config.thinking_enabled,
+            config.thinking_level.clone(),
+            config.max_output_tokens,
+            &config.conversation_id,
+            &config.message_id,
+            "Chat synthesis overflow recovery",
+        ) => result,
+        _ = env.host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
+            Err("cancelled".to_string())
+        }
+    };
     let text = match result {
         Ok((message, usage)) => {
             state.merge_usage(usage);
@@ -471,21 +476,26 @@ async fn recover_remediate(
 ) -> String {
     let config = env.config;
     let reduced = build_neutral_reduced_messages(state, &config.language);
-    let result = call_chat_completion_message_with_usage(
-        config.state,
-        &config.provider,
-        &config.model,
-        reduced,
-        None,
-        config.retry_attempts,
-        config.thinking_enabled,
-        config.thinking_level.clone(),
-        config.max_output_tokens,
-        &config.conversation_id,
-        &config.message_id,
-        "Chat synthesis recovery",
-    )
-    .await;
+    // 同 recover_overflow_compact_and_retry：恢复重试必须接取消。
+    let result = tokio::select! {
+        result = call_chat_completion_message_with_usage(
+            config.state,
+            &config.provider,
+            &config.model,
+            reduced,
+            None,
+            config.retry_attempts,
+            config.thinking_enabled,
+            config.thinking_level.clone(),
+            config.max_output_tokens,
+            &config.conversation_id,
+            &config.message_id,
+            "Chat synthesis recovery",
+        ) => result,
+        _ = env.host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
+            Err("cancelled".to_string())
+        }
+    };
     let text = match result {
         Ok((message, usage)) => {
             state.merge_usage(usage);
