@@ -1,8 +1,8 @@
 import type { I18n } from '../settings/i18n'
 import type { ContextUsageSegment } from './types'
 
-/** 与 `commands.rs` 中 `AUTO_COMPRESS_RATIO` 保持一致 */
-export const CONTEXT_AUTO_COMPRESS_PERCENT = 85
+/** 与 `chat/agent/compaction.rs` 中 `AUTO_COMPACT_RATIO`（0.90）保持一致 */
+export const CONTEXT_AUTO_COMPRESS_PERCENT = 90
 export const CONTEXT_WARNING_PERCENT = 70
 export const CONTEXT_CRITICAL_PERCENT = 95
 
