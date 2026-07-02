@@ -519,6 +519,7 @@
             background_commands: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            request_debug: Mutex::new(std::collections::VecDeque::new()),
         }
     }
 

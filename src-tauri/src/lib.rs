@@ -288,6 +288,7 @@ pub fn run() {
                 rapidocr: rapidocr::RapidOcrClient::new(&app.handle(), build_http_client()),
                 sub_agents: chat::sub_agent::SubAgentManager::default(),
                 background_commands: std::sync::Arc::new(Mutex::new(HashMap::new())),
+                request_debug: Mutex::new(std::collections::VecDeque::new()),
             });
 
             // Apply the stored sub-agent concurrency cap (default sizes the gate
@@ -459,6 +460,8 @@ pub fn run() {
             commands::rapidocr_install,
             usage::usage_get_stats,
             usage::usage_clear,
+            chat::commands::get_request_debug_records,
+            chat::commands::clear_request_debug_records,
             // Chat 模块命令
             chat::commands::chat_get_conversations,
             chat::commands::chat_list_background_commands,

@@ -38,6 +38,7 @@ import { ModelIcon } from '../chat/ModelIcon'
 import { ProviderSortableList } from './ProviderSortableList'
 import { PromptField, ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
+import { RequestDebugPanel } from './RequestDebugPanel'
 import { KivioCodeSettings } from './KivioCodeSettings'
 import { ExternalAgentsSettings } from './ExternalAgentsSettings'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
@@ -53,7 +54,7 @@ import {
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { KnowledgeBasePanel } from './KnowledgeBasePanel'
 
-export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'externalAgents' | 'mcp' | 'skill' | 'webSearch' | 'connectors' | 'knowledge' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'externalAgents' | 'mcp' | 'skill' | 'webSearch' | 'connectors' | 'knowledge' | 'usage' | 'requestDebug' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 type MemoryLayerKey = 'l1' | 'l2'
@@ -315,6 +316,7 @@ function defaultChatTools(): ChatToolsConfig {
     maxToolOutputChars: null,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
     subAgentConcurrency: 12,
+    requestDebugEnabled: false,
     nativeTools: defaultNativeTools(),
   }
 }
@@ -2101,6 +2103,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'skill' as const, label: 'Skill', icon: SkillIcon },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
     { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: UsageIcon },
+    { id: 'requestDebug' as const, label: lang === 'zh' ? '请求调试' : 'Request debug', icon: CodeIcon },
     { id: 'providers' as const, label: t.tabModels, icon: ProvidersIcon },
   ]
   const pageMeta: Record<typeof activeTab, { title: string; subtitle: string; right?: string }> = {
@@ -2181,6 +2184,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? '查看本地模型请求、Token、成本估算和来源分布。'
         : 'Inspect local model requests, tokens, estimated cost, and usage distribution.',
+    },
+    requestDebug: {
+      title: lang === 'zh' ? '请求调试' : 'Request debug',
+      subtitle: lang === 'zh'
+        ? '内建 provider 抓包：记录请求 headers（脱敏）+ body + 响应。默认关闭，仅内存。'
+        : 'Built-in provider capture: request headers (masked) + body + response. Off by default, in-memory only.',
     },
     providers: {
       title: t.tabModels,
@@ -4054,6 +4063,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== 用量统计标签页 ===== */}
             {activeTab === 'usage' && (
               <UsageStatsPanel lang={lang} />
+            )}
+
+            {activeTab === 'requestDebug' && (
+              <RequestDebugPanel
+                lang={lang}
+                enabled={chatTools.requestDebugEnabled ?? false}
+                onToggleEnabled={(v) => updateChatTools({ requestDebugEnabled: v })}
+              />
             )}
 
             {/* ===== 模型管理标签页 ===== */}

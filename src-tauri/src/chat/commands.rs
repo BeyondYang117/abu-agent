@@ -1456,6 +1456,20 @@ pub(crate) fn chat_confirm_tool_call(
     Ok(())
 }
 
+/// 返回开发者「请求调试」缓冲快照（最新在前）。仅内存，未开启开关时通常为空。
+#[tauri::command]
+pub(crate) fn get_request_debug_records(
+    state: State<AppState>,
+) -> Vec<crate::chat::request_debug::RequestDebugRecord> {
+    crate::chat::request_debug::snapshot(&state)
+}
+
+/// 清空开发者「请求调试」缓冲。
+#[tauri::command]
+pub(crate) fn clear_request_debug_records(state: State<AppState>) {
+    crate::chat::request_debug::clear(&state);
+}
+
 /// 列出当前仍在运行的后台命令（chat agent 用 `run_command background:true` 起的）。
 /// 只返回 Running 的——UI 仅在有后台任务时才显示指示器，终止/退出的不必展示。
 #[tauri::command]

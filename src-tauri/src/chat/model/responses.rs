@@ -97,12 +97,14 @@ impl OpenAiResponsesProvider<'_> {
         .await
         .map_err(|err| {
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, false, &err, started_at, started.elapsed());
             ModelError::new(err)
         })?;
 
         let raw = response.text().await.map_err(|err| {
             let message = format!("{label} read body: {err}");
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
             ModelError::new(message)
         })?;
         match serde_json::from_str::<Value>(&raw) {
@@ -115,6 +117,7 @@ impl OpenAiResponsesProvider<'_> {
                     started.elapsed(),
                     output.usage.clone(),
                 );
+                self.record_debug_success(&request, &label, false, &output, started_at, started.elapsed());
                 Ok(output)
             }
             Err(json_err) => {
@@ -135,6 +138,14 @@ impl OpenAiResponsesProvider<'_> {
                         started.elapsed(),
                         &message,
                     );
+                    self.record_debug_failure(
+                        &request,
+                        &label,
+                        false,
+                        &message,
+                        started_at,
+                        started.elapsed(),
+                    );
                     return Err(ModelError::new(message));
                 }
                 match output_from_sse_body(&raw) {
@@ -146,6 +157,14 @@ impl OpenAiResponsesProvider<'_> {
                             started.elapsed(),
                             output.usage.clone(),
                         );
+                        self.record_debug_success(
+                            &request,
+                            &label,
+                            false,
+                            &output,
+                            started_at,
+                            started.elapsed(),
+                        );
                         Ok(output)
                     }
                     Err(err) => {
@@ -155,6 +174,14 @@ impl OpenAiResponsesProvider<'_> {
                             started_at,
                             started.elapsed(),
                             &err.to_string(),
+                        );
+                        self.record_debug_failure(
+                            &request,
+                            &label,
+                            false,
+                            &err.to_string(),
+                            started_at,
+                            started.elapsed(),
                         );
                         Err(err)
                     }
@@ -194,6 +221,7 @@ impl OpenAiResponsesProvider<'_> {
         .await
         .map_err(|err| {
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, true, &err, started_at, started.elapsed());
             ModelError::new(err)
         })?;
 
@@ -209,6 +237,14 @@ impl OpenAiResponsesProvider<'_> {
                     started_at,
                     started.elapsed(),
                     &model_error.to_string(),
+                );
+                self.record_debug_failure(
+                    &request,
+                    &label,
+                    true,
+                    &model_error.to_string(),
+                    started_at,
+                    started.elapsed(),
                 );
                 model_error
             })?;
@@ -226,6 +262,14 @@ impl OpenAiResponsesProvider<'_> {
                         started.elapsed(),
                         &err,
                     );
+                    self.record_debug_failure(
+                        &request,
+                        &label,
+                        true,
+                        &err,
+                        started_at,
+                        started.elapsed(),
+                    );
                     return Err(ModelError::new(err));
                 }
             }
@@ -239,6 +283,7 @@ impl OpenAiResponsesProvider<'_> {
             started.elapsed(),
             output.usage.clone(),
         );
+        self.record_debug_success(&request, &label, true, &output, started_at, started.elapsed());
         Ok(output)
     }
 
@@ -276,6 +321,87 @@ impl OpenAiResponsesProvider<'_> {
             }
         }
         body
+    }
+
+    /// 重建本次请求实际会带的 headers（脱敏后）供请求调试面板展示。镜像发送路径：
+    /// bearer_auth(key) + Accept-Encoding identity + JSON content-type。
+    /// Authorization 用首个 key（正常发送用的也是它）派生脱敏预览。
+    fn debug_request_headers(&self) -> std::collections::BTreeMap<String, String> {
+        let mut headers = std::collections::BTreeMap::new();
+        if let Some(key) = self.provider.api_keys.first() {
+            headers.insert("Authorization".to_string(), format!("Bearer {key}"));
+        }
+        headers.insert("Accept-Encoding".to_string(), "identity".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        crate::chat::request_debug::sanitize_headers(headers)
+    }
+
+    /// 记录一次成功调用到请求调试缓冲。开关关时首行短路（零开销）。
+    fn record_debug_success(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        output: &GenerateOutput,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "success",
+                url: self.responses_url(),
+                headers: self.debug_request_headers(),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_output(
+                    output,
+                    Some(200),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
+    }
+
+    /// 记录一次失败调用到请求调试缓冲。开关关时首行短路（零开销）。
+    fn record_debug_failure(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        error: &str,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "error",
+                url: self.responses_url(),
+                headers: self.debug_request_headers(),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_error(
+                    error,
+                    crate::api::extract_status_code(error),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
     }
 
     fn record_usage_success(

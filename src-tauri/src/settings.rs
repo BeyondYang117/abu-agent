@@ -1,4 +1,4 @@
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
@@ -823,6 +823,10 @@ pub struct ChatToolsConfig {
     /// 同一时刻最多并行运行的子 agent 数。受 [`SUB_AGENT_CONCURRENCY_MIN`]..[`MAX`] 钳制。
     #[serde(default = "default_sub_agent_concurrency")]
     pub sub_agent_concurrency: usize,
+    /// 开发者「请求调试」总开关：开启后每次 provider 调用被记录到内存环形缓冲（脱敏）。
+    /// 默认关闭；关闭时 adapter 零开销（不构造记录）。仅内存、不落盘。
+    #[serde(default)]
+    pub request_debug_enabled: bool,
     pub native_tools: ChatNativeToolsConfig,
 }
 
@@ -842,6 +846,7 @@ impl Default for ChatToolsConfig {
             max_tool_output_chars: default_max_tool_output_chars(),
             approval_policy: default_chat_approval_policy(),
             sub_agent_concurrency: default_sub_agent_concurrency(),
+            request_debug_enabled: false,
             native_tools: ChatNativeToolsConfig::default(),
         }
     }

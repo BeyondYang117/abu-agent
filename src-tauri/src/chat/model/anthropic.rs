@@ -86,12 +86,14 @@ impl AnthropicMessagesProvider<'_> {
         .await
         .map_err(|err| {
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, false, &err, started_at, started.elapsed());
             ModelError::new(err)
         })?;
 
         let raw = response.text().await.map_err(|err| {
             let message = format!("{label} read body: {err}");
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
             ModelError::new(message)
         })?;
         let value: Value = serde_json::from_str(&raw).map_err(|err| {
@@ -101,6 +103,7 @@ impl AnthropicMessagesProvider<'_> {
                 raw.chars().take(500).collect::<String>()
             );
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
             ModelError::new(message)
         })?;
         let output = output_from_anthropic_message(&value, &label)?;
@@ -111,6 +114,7 @@ impl AnthropicMessagesProvider<'_> {
             started.elapsed(),
             output.usage.clone(),
         );
+        self.record_debug_success(&request, &label, false, &output, started_at, started.elapsed());
         Ok(output)
     }
 
@@ -145,6 +149,7 @@ impl AnthropicMessagesProvider<'_> {
         .await
         .map_err(|err| {
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, true, &err, started_at, started.elapsed());
             ModelError::new(err)
         })?;
 
@@ -167,6 +172,14 @@ impl AnthropicMessagesProvider<'_> {
                     started_at,
                     started.elapsed(),
                     &model_error.to_string(),
+                );
+                self.record_debug_failure(
+                    &request,
+                    &label,
+                    true,
+                    &model_error.to_string(),
+                    started_at,
+                    started.elapsed(),
                 );
                 model_error
             })?;
@@ -232,6 +245,14 @@ impl AnthropicMessagesProvider<'_> {
                             started.elapsed(),
                             output.usage.clone(),
                         );
+                        self.record_debug_success(
+                            &request,
+                            &label,
+                            true,
+                            &output,
+                            started_at,
+                            started.elapsed(),
+                        );
                         return Ok(output);
                     }
                     Some(AnthropicSseEvent::MessageStopWithReason {
@@ -254,6 +275,14 @@ impl AnthropicMessagesProvider<'_> {
                             started_at,
                             started.elapsed(),
                             output.usage.clone(),
+                        );
+                        self.record_debug_success(
+                            &request,
+                            &label,
+                            true,
+                            &output,
+                            started_at,
+                            started.elapsed(),
                         );
                         return Ok(output);
                     }
@@ -318,6 +347,91 @@ impl AnthropicMessagesProvider<'_> {
             }
         }
         body
+    }
+
+    /// 重建本次请求实际会带的 headers（脱敏后）供请求调试面板展示。镜像 `anthropic_headers`
+    /// （x-api-key / anthropic-version / content-type）+ 发送路径另加的 Accept-Encoding。
+    /// x-api-key 用首个 key（正常发送用的也是它）派生脱敏预览。
+    fn debug_request_headers(&self) -> std::collections::BTreeMap<String, String> {
+        let mut headers = std::collections::BTreeMap::new();
+        if let Some(key) = self.provider.api_keys.first() {
+            headers.insert("x-api-key".to_string(), key.clone());
+        }
+        headers.insert(
+            "anthropic-version".to_string(),
+            ANTHROPIC_VERSION.to_string(),
+        );
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert("Accept-Encoding".to_string(), "identity".to_string());
+        crate::chat::request_debug::sanitize_headers(headers)
+    }
+
+    /// 记录一次成功调用到请求调试缓冲。开关关时首行短路（零开销）。
+    fn record_debug_success(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        output: &GenerateOutput,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "success",
+                url: self.messages_url(),
+                headers: self.debug_request_headers(),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_output(
+                    output,
+                    Some(200),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
+    }
+
+    /// 记录一次失败调用到请求调试缓冲。开关关时首行短路（零开销）。
+    fn record_debug_failure(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        error: &str,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "error",
+                url: self.messages_url(),
+                headers: self.debug_request_headers(),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_error(
+                    error,
+                    crate::api::extract_status_code(error),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
     }
 
     fn record_usage_success(

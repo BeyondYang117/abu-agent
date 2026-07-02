@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicI32, AtomicU64},
@@ -158,6 +158,10 @@ pub struct AppState {
     /// 不随发起的 run 取消。仅在 insert/lookup/sweep 时短暂持锁。
     pub background_commands:
         Arc<Mutex<HashMap<String, crate::native_tools::BackgroundCommand>>>,
+    /// 开发者「请求调试」内存环形缓冲：最近 [`REQUEST_DEBUG_CAPACITY`] 条 provider 调用的
+    /// 请求（脱敏 headers + body）+ 响应摘要。默认关闭（`chat_tools.request_debug_enabled`），
+    /// 关闭时 adapter 短路、不构造记录。仅内存、不落盘，进程退出即清。
+    pub request_debug: Mutex<VecDeque<crate::chat::request_debug::RequestDebugRecord>>,
 }
 
 /// 单个 key 触发 failover 后的冷却时长。
@@ -233,6 +237,7 @@ impl AppState {
             rapidocr: RapidOcrClient::headless(crate::api::build_http_client()),
             sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
             background_commands: Arc::new(Mutex::new(HashMap::new())),
+            request_debug: Mutex::new(VecDeque::new()),
         }
     }
     /// 安全读取设置（锁中毒时返回内部数据，不 panic）
@@ -242,6 +247,10 @@ impl AppState {
     /// 安全写入设置（锁中毒时返回内部数据，不 panic）
     pub fn settings_write(&self) -> std::sync::RwLockWriteGuard<'_, Settings> {
         self.settings.write().unwrap_or_else(|e| e.into_inner())
+    }
+    /// 开发者「请求调试」开关。关时 adapter 短路，不构造任何记录（零开销）。
+    pub fn request_debug_enabled(&self) -> bool {
+        self.settings_read().chat_tools.request_debug_enabled
     }
     /// 安全获取解释图片映射锁
     pub fn images_lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, PathBuf>> {
@@ -755,6 +764,7 @@ pub(crate) fn test_app_state() -> AppState {
         rapidocr: RapidOcrClient::disabled(),
         sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
         background_commands: Arc::new(Mutex::new(HashMap::new())),
+        request_debug: Mutex::new(VecDeque::new()),
     }
 }
 

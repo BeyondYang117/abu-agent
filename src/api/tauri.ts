@@ -512,6 +512,8 @@ export type ChatToolsConfig = {
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
   /** 同一时刻最多并行运行的子 agent 数（后端钳制 1..64，默认 12）。 */
   subAgentConcurrency?: number
+  /** 开发者「请求调试」开关：开启后每次 provider 调用被记录到内存环形缓冲（脱敏）。默认关。 */
+  requestDebugEnabled?: boolean
   nativeTools: ChatNativeToolsConfig
 }
 
@@ -925,6 +927,44 @@ export type UsageStatsResponse = {
   skippedRecords: number
 }
 
+/** 一条 provider 请求调试记录（内存环形缓冲，脱敏，仅开发者面板可见）。 */
+export type RequestDebugRecord = {
+  id: string
+  createdAt: number
+  durationMs: number
+  providerId: string
+  providerName: string
+  model: string
+  apiFormat: string
+  operation: string
+  source: string
+  conversationId?: string | null
+  messageId?: string | null
+  status: string
+  request: {
+    url: string
+    headers: Record<string, string>
+    body: unknown
+    stream: boolean
+  }
+  response: {
+    statusCode?: number | null
+    text?: string | null
+    reasoning?: string | null
+    toolCalls?: unknown
+    finishReason?: string | null
+    usage?: {
+      inputTokens?: number | null
+      outputTokens?: number | null
+      totalTokens?: number | null
+      cachedInputTokens?: number | null
+      cacheCreationInputTokens?: number | null
+      reasoningTokens?: number | null
+    } | null
+    error?: string | null
+  }
+}
+
 /** 更新检查结果（来自后端 GitHub Releases API 调用） */
 export type UpdateInfo = {
   available: boolean
@@ -1002,6 +1042,7 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     subAgentConcurrency: Math.min(64, Math.max(1, Math.round(current.subAgentConcurrency ?? 12))),
+    requestDebugEnabled: current.requestDebugEnabled ?? false,
     nativeTools: {
       ...defaultNativeTools(),
       ...current.nativeTools,
@@ -1241,6 +1282,9 @@ export const api = {
   usageGetStats: (query?: UsageStatsQuery) =>
     invoke<UsageStatsResponse>('usage_get_stats', { query }),
   usageClear: () => invoke<void>('usage_clear'),
+  getRequestDebugRecords: () =>
+    invoke<RequestDebugRecord[]>('get_request_debug_records'),
+  clearRequestDebugRecords: () => invoke<void>('clear_request_debug_records'),
 
   // 提供商相关
   fetchModels: (providerId: string, provider?: ProviderConnectionInput) =>

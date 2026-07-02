@@ -88,12 +88,14 @@ impl OpenAiChatProvider<'_> {
         .await
         .map_err(|err| {
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, false, &err, started_at, started.elapsed());
             ModelError::new(err)
         })?;
 
         let raw = response.text().await.map_err(|err| {
             let message = format!("{label} read body: {err}");
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
             ModelError::new(message)
         })?;
         let value: Value = serde_json::from_str(&raw).map_err(|err| {
@@ -103,6 +105,7 @@ impl OpenAiChatProvider<'_> {
                 raw.chars().take(500).collect::<String>()
             );
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
             ModelError::new(message)
         })?;
         let output = output_from_chat_completion(&value, &raw, &label)?;
@@ -113,6 +116,7 @@ impl OpenAiChatProvider<'_> {
             started.elapsed(),
             output.usage.clone(),
         );
+        self.record_debug_success(&request, &label, false, &output, started_at, started.elapsed());
         Ok(output)
     }
 
@@ -150,6 +154,7 @@ impl OpenAiChatProvider<'_> {
         .await
         .map_err(|err| {
             self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, true, &err, started_at, started.elapsed());
             ModelError::new(err)
         })?;
 
@@ -169,6 +174,14 @@ impl OpenAiChatProvider<'_> {
                     started_at,
                     started.elapsed(),
                     &model_error.to_string(),
+                );
+                self.record_debug_failure(
+                    &request,
+                    &label,
+                    true,
+                    &model_error.to_string(),
+                    started_at,
+                    started.elapsed(),
                 );
                 model_error
             })?;
@@ -208,6 +221,14 @@ impl OpenAiChatProvider<'_> {
                         started_at,
                         started.elapsed(),
                         output.usage.clone(),
+                    );
+                    self.record_debug_success(
+                        &request,
+                        &label,
+                        true,
+                        &output,
+                        started_at,
+                        started.elapsed(),
                     );
                     return Ok(output);
                 }
@@ -259,6 +280,7 @@ impl OpenAiChatProvider<'_> {
             started.elapsed(),
             output.usage.clone(),
         );
+        self.record_debug_success(&request, &label, true, &output, started_at, started.elapsed());
         Ok(output)
     }
 
@@ -271,22 +293,104 @@ impl OpenAiChatProvider<'_> {
 
     /// 会话亲和头（对齐 opencode）：同一对话每轮带同一 id。会话亲和型代理据此把请求
     /// 稳定路由到同一上游会话（不再靠前缀指纹猜，杜绝串台/复用脏会话）；正经 provider
-    /// 忽略未知头，无副作用。
+    /// 忽略未知头，无副作用。发送与请求调试记录共用 `session_header_pairs`，杜绝漂移。
     fn with_session_headers(
         &self,
         request: reqwest::RequestBuilder,
         metadata: &crate::chat::model::RequestMetadata,
     ) -> reqwest::RequestBuilder {
-        match metadata
-            .conversation_id
-            .as_deref()
-            .filter(|id| !id.is_empty())
-        {
-            Some(id) => request
-                .header("x-session-id", id)
-                .header("x-session-affinity", id),
-            None => request,
+        let mut request = request;
+        for (name, value) in session_header_pairs(metadata) {
+            request = request.header(name, value);
         }
+        request
+    }
+
+    /// 重建本次请求实际会带的 headers（脱敏后）供请求调试面板展示。静态头（Authorization/
+    /// Accept-Encoding/Content-Type）与发送路径一一对应；动态会话头共用 `session_header_pairs`，
+    /// 故与真实发送零漂移。Authorization 用首个 key（正常发送用的也是它）派生脱敏预览。
+    fn debug_request_headers(
+        &self,
+        metadata: &crate::chat::model::RequestMetadata,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut headers = std::collections::BTreeMap::new();
+        if let Some(key) = self.provider.api_keys.first() {
+            headers.insert("Authorization".to_string(), format!("Bearer {key}"));
+        }
+        headers.insert("Accept-Encoding".to_string(), "identity".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        for (name, value) in session_header_pairs(metadata) {
+            headers.insert(name.to_string(), value);
+        }
+        crate::chat::request_debug::sanitize_headers(headers)
+    }
+
+    /// 记录一次成功调用到请求调试缓冲。开关关时首行短路 → 不构造 body/headers（零开销）。
+    fn record_debug_success(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        output: &GenerateOutput,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "success",
+                url: self.chat_completions_url(),
+                headers: self.debug_request_headers(&request.metadata),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_output(
+                    output,
+                    Some(200),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
+    }
+
+    /// 记录一次失败调用到请求调试缓冲。开关关时首行短路（零开销）。
+    fn record_debug_failure(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        error: &str,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "error",
+                url: self.chat_completions_url(),
+                headers: self.debug_request_headers(&request.metadata),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_error(
+                    error,
+                    crate::api::extract_status_code(error),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
     }
 
     fn request_body(&self, request: &GenerateRequest, stream: bool) -> Value {
@@ -466,6 +570,24 @@ fn request_label(request: &GenerateRequest, fallback: &str) -> String {
         .is_empty()
         .then(|| fallback.to_string())
         .unwrap_or_else(|| request.metadata.label.clone())
+}
+
+/// 会话亲和头键值对。发送路径（`with_session_headers`）与请求调试记录
+/// （`debug_request_headers`）共用此单一来源，保证记录的头与真实发送零漂移。
+fn session_header_pairs(
+    metadata: &crate::chat::model::RequestMetadata,
+) -> Vec<(&'static str, String)> {
+    match metadata
+        .conversation_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => vec![
+            ("x-session-id", id.to_string()),
+            ("x-session-affinity", id.to_string()),
+        ],
+        None => Vec::new(),
+    }
 }
 
 fn invalid_response(label: &str, raw: &str) -> ModelError {
