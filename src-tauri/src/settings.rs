@@ -2089,29 +2089,28 @@ pub fn load_settings(app: &AppHandle) -> Settings {
  * has_image=true 时为视觉助手；为 false 时为通用对话助手（不假设有图片）
  * 风格统一：简短直答、无小标题、思考过程尽量精简
  */
-/// Local system clock for Chat date/time questions. Models must not guess dates from training data.
+/// Local system date for Chat date questions. Models must not guess dates from training data.
+/// 只到日期级、不含时分：系统提示词是每轮请求的公共前缀，分钟级时钟会让同一对话每轮前缀
+/// 都变——打穿 provider 的 prompt cache（前缀匹配），也让会话亲和型代理无法续会话。
+/// 回答"今天/明天/星期几"日期粒度已足够。
 pub fn chat_current_datetime_context(language: &str) -> String {
     let now = Local::now();
     let weekday = weekday_label(language, now.weekday());
     if language.starts_with("zh") {
         format!(
-            "\n\n当前本地时间（系统时钟；回答今天/明天/星期几等日期时间问题必须以此为准，禁止凭记忆臆测）：{}年{}月{}日 {} {:02}:{:02}。",
+            "\n\n当前日期（系统时钟；回答今天/明天/星期几等日期问题必须以此为准，禁止凭记忆臆测）：{}年{}月{}日 {}。",
             now.year(),
             now.month(),
             now.day(),
-            weekday,
-            now.hour(),
-            now.minute()
+            weekday
         )
     } else {
         format!(
-            "\n\nCurrent local time (system clock; use for today/tomorrow/weekday questions—never guess from training data): {}-{:02}-{:02} {} {:02}:{:02}.",
+            "\n\nToday's date (system clock; use for today/tomorrow/weekday questions—never guess from training data): {}-{:02}-{:02} {}.",
             now.year(),
             now.month(),
             now.day(),
-            weekday,
-            now.hour(),
-            now.minute()
+            weekday
         )
     }
 }
@@ -3513,6 +3512,30 @@ mod tests {
         let en = chat_current_datetime_context("en");
         assert!(en.contains("system clock"));
         assert!(en.contains(&format!("{}-", now.year())));
+    }
+
+    #[test]
+    fn chat_current_datetime_context_is_date_only_prefix_stable() {
+        // 前缀稳定性：不含时分（HH:MM 会让同一对话每轮系统提示词都变，打穿 prompt cache）。
+        // 同一天内多次调用必须逐字节一致。
+        let has_hh_mm = |s: &str| {
+            s.as_bytes().windows(5).any(|w| {
+                w[0].is_ascii_digit()
+                    && w[1].is_ascii_digit()
+                    && w[2] == b':'
+                    && w[3].is_ascii_digit()
+                    && w[4].is_ascii_digit()
+            })
+        };
+        for lang in ["zh", "en"] {
+            let a = chat_current_datetime_context(lang);
+            let b = chat_current_datetime_context(lang);
+            assert_eq!(a, b, "same-day calls must be byte-identical ({lang})");
+            assert!(
+                !has_hh_mm(&a),
+                "no HH:MM clock in the prompt prefix ({lang}): {a}"
+            );
+        }
     }
 
     #[test]

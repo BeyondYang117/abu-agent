@@ -482,11 +482,11 @@ pub fn build_chat_system_prompt_with_segments(
         );
         if language.starts_with("zh") {
             runtime.push_str(
-                " 若用户只问今天/明天/星期几等可由上文「当前本地时间」直接推算的日期问题，直接回答，不要调用工具。",
+                " 若用户只问今天/明天/星期几等可由上文「当前日期」直接推算的日期问题，直接回答，不要调用工具。",
             );
         } else {
             runtime.push_str(
-                " If the user only asks for today/tomorrow/weekday derivable from the system local time above, answer directly without calling tools.",
+                " If the user only asks for today/tomorrow/weekday derivable from the system date above, answer directly without calling tools.",
             );
         }
         append_context_segment(

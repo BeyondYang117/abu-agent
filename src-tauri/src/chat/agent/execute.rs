@@ -57,9 +57,25 @@ pub fn match_tool_call<'a>(
     tools: &'a [ChatToolDefinition],
     function_name: &str,
 ) -> Option<&'a ChatToolDefinition> {
-    tools
+    if let Some(exact) = tools
         .iter()
         .find(|tool| tool.openai_tool_name() == function_name || tool.name == function_name)
+    {
+        return Some(exact);
+    }
+    // 大小写不敏感兜底：Cursor 系模型（grok-composer 等）训练时烙着大写工具名
+    // （Grep/Read/Bash），在别的工具集下会间歇性按原名出牌。仅当忽略大小写后
+    // **唯一**命中才采用——MCP 服务器可能真有同名不同大小写的工具，多义时不猜。
+    let lowered = function_name.to_ascii_lowercase();
+    let mut case_insensitive = tools.iter().filter(|tool| {
+        tool.openai_tool_name().to_ascii_lowercase() == lowered
+            || tool.name.to_ascii_lowercase() == lowered
+    });
+    let candidate = case_insensitive.next()?;
+    if case_insensitive.next().is_some() {
+        return None; // 多义：不猜，走未知工具自愈路径。
+    }
+    Some(candidate)
 }
 
 pub fn unknown_tool_record(call: &PendingToolCall, round: u32, error: String) -> ToolCallRecord {
@@ -831,6 +847,40 @@ mod tests {
             annotations: None,
             output_schema: None,
         }
+    }
+
+    fn named_test_tool(name: &str) -> ChatToolDefinition {
+        ChatToolDefinition {
+            id: format!("native__{name}"),
+            name: name.to_string(),
+            description: String::new(),
+            source: "native".to_string(),
+            server_id: None,
+            server_name: Some("Kivio".to_string()),
+            input_schema: serde_json::json!({ "type": "object" }),
+            sensitive: false,
+            annotations: None,
+            output_schema: None,
+        }
+    }
+
+    #[test]
+    fn match_tool_call_falls_back_to_case_insensitive_unique_hit() {
+        // Cursor 系模型按训练时的大写工具名出牌（Grep/Read/Bash）——唯一命中时采用。
+        let tools = vec![named_test_tool("grep"), named_test_tool("read")];
+        assert_eq!(match_tool_call(&tools, "grep").unwrap().name, "grep");
+        assert_eq!(match_tool_call(&tools, "Grep").unwrap().name, "grep");
+        assert_eq!(match_tool_call(&tools, "READ").unwrap().name, "read");
+        assert!(match_tool_call(&tools, "Glob").is_none());
+    }
+
+    #[test]
+    fn match_tool_call_refuses_ambiguous_case_variants() {
+        // MCP 可能真有同名不同大小写的工具：精确匹配照常，忽略大小写多义时不猜。
+        let tools = vec![named_test_tool("fetch"), named_test_tool("Fetch")];
+        assert_eq!(match_tool_call(&tools, "fetch").unwrap().name, "fetch");
+        assert_eq!(match_tool_call(&tools, "Fetch").unwrap().name, "Fetch");
+        assert!(match_tool_call(&tools, "FETCH").is_none());
     }
 
     #[test]

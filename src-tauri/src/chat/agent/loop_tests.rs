@@ -1067,6 +1067,57 @@
             .filter(|event| event.starts_with("start:"))
             .collect::<Vec<_>>();
         assert_eq!(start_events.len(), 4, "only executable tools should run");
+
+        // 喂回自愈（对齐 opencode）：未知工具的 tool result 必须列出已声明工具，
+        // 让模型下一轮自我纠正，而不是只丢一句 Unknown。
+        let unknown_message = result
+            .response_messages
+            .iter()
+            .find(|message| message["tool_call_id"] == "call_missing")
+            .expect("unknown tool response present");
+        let content = unknown_message["content"].as_str().unwrap_or_default();
+        assert!(content.contains("Unknown tool: missing_tool"), "{content}");
+        assert!(content.contains("Available tools:"), "{content}");
+        assert!(content.contains("read"), "{content}");
+        assert!(content.contains("web_fetch"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn tool_round_matches_capitalized_tool_names_case_insensitively() {
+        // Cursor 系模型（grok-composer 等）会按训练时的大写工具名出牌（Read/Grep）。
+        // 唯一命中时按声明工具执行，不走未知工具路径。
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let settings = Settings::default();
+        let tools = vec![native_read_file_tool(), native_web_fetch_tool()];
+        let mut skill_cache = skills::SkillRunCache::default();
+
+        let result = execute_tool_round(
+            &host,
+            &executor,
+            &settings,
+            test_round_context(),
+            &tools,
+            &[],
+            vec![pending_tool_call("call_cap_read", "Read")],
+            &mut skill_cache,
+        )
+        .await;
+
+        assert!(
+            result
+                .tool_records
+                .iter()
+                .all(|record| !matches!(record.status, ToolCallStatus::Error)),
+            "capitalized Read must execute, not error: {:?}",
+            result.tool_records
+        );
+        let start_events = executor
+            .events()
+            .into_iter()
+            .filter(|event| event.starts_with("start:"))
+            .collect::<Vec<_>>();
+        assert_eq!(start_events.len(), 1, "the case-variant call executes");
     }
 
     #[tokio::test]
@@ -2557,6 +2608,7 @@
             tried_skill_only_tools: false,
             planning_final_message: None,
             planning_final_streamed: false,
+            planning_empty_retried: false,
             skill_cache: skills::SkillRunCache::default(),
             applied_allowed_tools_len: 0,
             usage: None,

@@ -60,6 +60,10 @@ pub(crate) struct RunState {
     pub(crate) tried_skill_only_tools: bool,
     pub(crate) planning_final_message: Option<Value>,
     pub(crate) planning_final_streamed: bool,
+    /// 空响应重试守门（一次）：抽风网关会间歇性返回 200 + 空正文（无文本无工具调用）。
+    /// 第一次遇到时 planning 返回 `RetryEmptyResponse` 原地重试；已重试过则照旧走
+    /// FinalAnswer → finalize 报 "empty assistant response"。
+    pub(crate) planning_empty_retried: bool,
     pub(crate) skill_cache: skills::SkillRunCache,
     /// Count of `activated_allowed_tools` already folded into the effective tool
     /// set (T3). The loop only recomputes when this grows, so the (idempotent)
@@ -149,6 +153,7 @@ pub async fn run_agent_loop(
         tried_skill_only_tools: false,
         planning_final_message: None,
         planning_final_streamed: false,
+        planning_empty_retried: false,
         skill_cache: skills::SkillRunCache::default(),
         applied_allowed_tools_len: 0,
         usage: None,
@@ -190,6 +195,7 @@ pub async fn run_agent_loop(
                 PlanningStepOutcome::FinalAnswer => break,
                 PlanningStepOutcome::ToolsUnsupported => break,
                 PlanningStepOutcome::RetryWithSkillTools => continue,
+                PlanningStepOutcome::RetryEmptyResponse => continue,
                 PlanningStepOutcome::DraftFailed(result) => {
                     return Ok(attach_usage(result, &mut state))
                 }

@@ -224,7 +224,8 @@ pub(crate) async fn execute_tool_round(
                 );
                 break;
             }
-            let result = unknown_or_disabled_tool_result(host, &ctx, blocked_tool_calls, tool_call);
+            let result =
+                unknown_or_disabled_tool_result(host, &ctx, tools, blocked_tool_calls, tool_call);
             push_tool_execution_result(result, &mut response_messages, &mut tool_records);
             continue;
         };
@@ -577,6 +578,7 @@ fn cancelled_tool_result(
 fn unknown_or_disabled_tool_result(
     host: &dyn AgentHost,
     ctx: &ToolRoundContext<'_>,
+    tools: &[ChatToolDefinition],
     blocked_tool_calls: &[ChatToolDefinition],
     tool_call: PendingToolCall,
 ) -> ToolExecutionResult {
@@ -606,8 +608,21 @@ fn unknown_or_disabled_tool_result(
     } else {
         None
     };
-    let content =
-        disabled.unwrap_or_else(|| format!("Unknown tool requested: {}", tool_call.function_name));
+    // 喂回自愈（对齐 opencode）：错误作为 tool result 返回时附上已声明工具清单，
+    // 让模型下一轮自我纠正（Cursor 系模型会间歇性按训练时的工具名出牌，如大写 Grep）。
+    let content = disabled.unwrap_or_else(|| {
+        let mut available: Vec<String> = tools
+            .iter()
+            .map(|tool| tool.openai_tool_name())
+            .collect();
+        available.sort();
+        available.dedup();
+        format!(
+            "Unknown tool: {}. Available tools: {}. Please call one of the declared tools with its exact name.",
+            tool_call.function_name,
+            available.join(", ")
+        )
+    });
     ToolExecutionResult {
         response_message: tool_message(tool_call.id, content),
         record,
