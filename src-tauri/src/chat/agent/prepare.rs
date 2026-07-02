@@ -153,6 +153,8 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
     // Builtin name set = static native registry (17 native + todo/ask_user)
     // plus the non-native builtin sources listed here.
     const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image"];
+    // 模型按 wire 名（保留名别名）调用——反查回内部名再比对注册表。
+    let function_name = crate::mcp::types::resolve_reserved_wire_alias(function_name);
     let is_builtin = crate::mcp::native_registry::find_entry(function_name).is_some()
         || EXTRA_BUILTIN_NAMES.contains(&function_name);
     if is_builtin {
@@ -736,7 +738,13 @@ fn native_tools_prompt(
     if native_tool_names.is_empty() {
         return None;
     }
-    let list = native_tool_names.join(", ");
+    // 提示词展示 wire 名（保留名规避后的别名）：模型必须按请求里声明的函数名调用，
+    // 提示词与 tools 声明不一致会诱发未知工具调用。逻辑判断仍用内部名。
+    let list = native_tool_names
+        .iter()
+        .map(|name| crate::mcp::types::apply_reserved_wire_alias(name))
+        .collect::<Vec<_>>()
+        .join(", ");
     // 运行时取值,让同一份 prompt 在不同平台都说真话(run_command 的 shell 是编译期 cfg 选的)。
     let (os_name, shell_name) = if cfg!(target_os = "windows") {
         ("Windows", "cmd.exe")
@@ -767,16 +775,16 @@ fn native_tools_prompt(
         .map(str::trim)
         .filter(|dir| !dir.is_empty() && has_write);
     let zh_live_access_hint = match (has_web_search, has_web_fetch) {
-        (true, true) => "实时搜索或网页读取必须优先用 web_search/web_fetch 或对应 Skill 脚本。",
-        (true, false) => "实时搜索必须优先用 web_search 或对应 Skill 脚本。",
+        (true, true) => "实时搜索或网页读取必须优先用 search_web/web_fetch 或对应 Skill 脚本。",
+        (true, false) => "实时搜索必须优先用 search_web 或对应 Skill 脚本。",
         (false, true) => "网页读取必须优先用 web_fetch 或对应 Skill 脚本。",
         (false, false) => "需要联网/API 访问时，请启用对应联网工具或使用对应 Skill 脚本。",
     };
     let en_live_access_hint = match (has_web_search, has_web_fetch) {
         (true, true) => {
-            "Use web_search/web_fetch or the relevant Skill script for live web/API access."
+            "Use search_web/web_fetch or the relevant Skill script for live web/API access."
         }
-        (true, false) => "Use web_search or the relevant Skill script for live web/API access.",
+        (true, false) => "Use search_web or the relevant Skill script for live web/API access.",
         (false, true) => "Use web_fetch or the relevant Skill script for web page access.",
         (false, false) => {
             "Enable the relevant web tool or use the relevant Skill script for live web/API access."
@@ -1221,6 +1229,23 @@ mod tests {
         assert!(feedback.contains("not enabled"));
         assert!(feedback.contains("web_search"));
         assert!(disabled_builtin_tool_feedback("mcp__server__tool").is_none());
+        // 模型按 wire 别名调用时同样识别为内置工具（保留名规避）。
+        let alias_feedback = disabled_builtin_tool_feedback("search_web")
+            .expect("wire alias resolves to the builtin tool");
+        assert!(alias_feedback.contains("not enabled"));
+    }
+
+    #[test]
+    fn native_tools_prompt_renders_wire_alias_for_web_search() {
+        // 提示词必须展示 wire 名（search_web）——与 tools 声明一致，否则模型会调用
+        // 未声明的 web_search（且该名会被 Cursor 系上游吞掉）。
+        let names = vec!["web_fetch".to_string(), "web_search".to_string()];
+        let prompt = native_tools_prompt(&names, "zh", None).expect("prompt");
+        assert!(prompt.contains("search_web"), "{prompt}");
+        assert!(!prompt.contains("web_search"), "{prompt}");
+        let en = native_tools_prompt(&names, "en", None).expect("prompt");
+        assert!(en.contains("search_web"), "{en}");
+        assert!(!en.contains("web_search"), "{en}");
     }
 
     #[test]

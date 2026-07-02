@@ -2,6 +2,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings::{ChatMcpServer, ChatNativeToolsConfig};
 
+/// 保留名规避（wire 层别名）：部分上游把特定工具名当作**内部保留工具**拦截消化——
+/// 实测 Cursor 系上游（grok-composer 等经 cursor2api 类代理）会把名为 `web_search` 的
+/// 工具调用吞掉（模型明确决定调用，流里却什么都不返回，表现为空响应）。全局把这类
+/// 内置工具名映射成无歧义的 wire 别名：请求里声明别名、系统提示词渲染别名，收到
+/// 别名调用后经 `match_tool_call`（匹配 `openai_tool_name()`）自然映射回内部工具执行。
+/// 对正经 provider 无副作用（别名同样是合法工具名）。
+const RESERVED_WIRE_ALIASES: &[(&str, &str)] = &[("web_search", "search_web")];
+
+/// 内部工具名 → wire 别名（无命中原样返回）。
+pub fn apply_reserved_wire_alias(name: &str) -> String {
+    RESERVED_WIRE_ALIASES
+        .iter()
+        .find(|(from, _)| *from == name)
+        .map(|(_, to)| (*to).to_string())
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// wire 别名 → 内部工具名（无命中原样返回）。供按模型侧函数名反查内部工具的路径使用
+/// （如 disabled-tool 反馈）。
+pub fn resolve_reserved_wire_alias(name: &str) -> &str {
+    RESERVED_WIRE_ALIASES
+        .iter()
+        .find(|(_, to)| *to == name)
+        .map(|(from, _)| *from)
+        .unwrap_or(name)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatToolDefinition {
@@ -24,7 +51,9 @@ impl ChatToolDefinition {
         match self.source.as_str() {
             // Native and Skill tools are model-facing APIs owned by Kivio. Keep their names
             // aligned with the system prompt so models can call exactly what we instruct.
-            "native" | "skill" | "mixer" => sanitize_openai_tool_name(&self.name),
+            "native" | "skill" | "mixer" => {
+                apply_reserved_wire_alias(&sanitize_openai_tool_name(&self.name))
+            }
             _ => sanitize_openai_tool_name(&self.id),
         }
     }
@@ -1197,5 +1226,40 @@ mod tests {
 
         assert!(tool.sensitive);
         assert!(!tool.is_read_only_tool());
+    }
+
+    #[test]
+    fn reserved_wire_alias_maps_web_search_both_ways() {
+        // Cursor 系上游把 web_search 当内部保留工具吞掉（实测空响应）——wire 层全局改名。
+        assert_eq!(apply_reserved_wire_alias("web_search"), "search_web");
+        assert_eq!(apply_reserved_wire_alias("web_fetch"), "web_fetch");
+        assert_eq!(resolve_reserved_wire_alias("search_web"), "web_search");
+        assert_eq!(resolve_reserved_wire_alias("read"), "read");
+    }
+
+    #[test]
+    fn native_web_search_tool_declares_alias_on_the_wire() {
+        let tool = ChatToolDefinition {
+            id: "native__web_search".to_string(),
+            name: "web_search".to_string(),
+            description: "Search the web".to_string(),
+            source: "native".to_string(),
+            server_id: None,
+            server_name: Some("Kivio".to_string()),
+            input_schema: serde_json::json!({ "type": "object" }),
+            sensitive: false,
+            annotations: None,
+            output_schema: None,
+        };
+        assert_eq!(tool.openai_tool_name(), "search_web");
+        let wire = tool.to_openai_tool();
+        assert_eq!(wire["function"]["name"], "search_web");
+        // MCP 工具不受别名影响（按 id 命名）。
+        let mcp_tool = ChatToolDefinition {
+            source: "mcp".to_string(),
+            id: "mcp__srv__web_search".to_string(),
+            ..tool
+        };
+        assert_eq!(mcp_tool.openai_tool_name(), "mcp__srv__web_search");
     }
 }
