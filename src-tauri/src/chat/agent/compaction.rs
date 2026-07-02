@@ -31,6 +31,9 @@ const DECAY_WARNING_COMPRESSION_COUNT: usize = 3;
 /// 序列化喂给摘要模型时，单条 `[Tool result]` / `[Tool error]` 的字符上限（R5）。
 /// 仅截工具输出——用户/助手/推理/工具入参全文保留。对齐 OpenCode `TOOL_OUTPUT_MAX_CHARS = 2_000`。
 const TOOL_OUTPUT_SUMMARY_MAX_CHARS: usize = 2_000;
+/// Microcompact（R-1）降级旧工具结果时替换成的短标记。触发压缩时先把 old_segment 里的工具结果
+/// 换成此标记、重估预算；够了就跳过昂贵的 LLM 摘要（对齐 Claude Code 的 microcompact）。
+const MICROCOMPACT_TOOL_MARKER: &str = "[earlier tool result omitted to save context]";
 /// 摘要调用允许产生的最大输出 token 数（R9）。Claude Code 9 段 prompt 先吐 `<analysis>`
 /// 再吐 `<summary>`，真实大旧段时二者合计易超 4096 被截——提到 8192 以容纳完整产出
 /// （仍远小于窗口，安全）。`summary_output_tokens` 保持 `min()`：真实上限更小的模型不受影响。
@@ -442,6 +445,59 @@ fn replace_with_summary(system_prefix: Vec<Value>, summary: &str, recent: Vec<Va
     }));
     out.extend(recent);
     out
+}
+
+/// Microcompact 增量降级（R-1）：触发压缩时、发起 LLM 摘要**之前**的轻量兜底。
+/// 把 old_segment（近期 `keep_tokens` 尾窗**之前**的段）里的 `role=="tool"` 结果内容换成
+/// `MICROCOMPACT_TOOL_MARKER`，组回完整视图并重估 token。
+///
+/// **仅当降级足以把整体压回 `budget` 内才返回 `Some(view)`（= 可跳过昂贵摘要）**；否则 `None`，
+/// 调用方落到既有 LLM 摘要路径。近期尾窗原样保留（近期工具结果不动）；不拆 tool_call↔tool 配对
+/// （复用 `select_recent_by_tokens` 的切分与配对保护）；已是标记的工具结果不再重复降级（幂等）。
+fn microcompact_send_view(
+    messages: &[Value],
+    keep_tokens: usize,
+    budget: usize,
+) -> Option<Vec<Value>> {
+    let (system_prefix, old_segment, recent) = select_recent_by_tokens(messages, keep_tokens);
+    if old_segment.is_empty() {
+        return None;
+    }
+    let mut degraded_any = false;
+    let degraded_old: Vec<Value> = old_segment
+        .into_iter()
+        .map(|message| {
+            if !is_tool_result(&message) {
+                return message;
+            }
+            let already_marker = message.get("content").and_then(Value::as_str)
+                == Some(MICROCOMPACT_TOOL_MARKER);
+            if already_marker {
+                return message;
+            }
+            let mut degraded = message;
+            if let Some(obj) = degraded.as_object_mut() {
+                obj.insert(
+                    "content".to_string(),
+                    Value::String(MICROCOMPACT_TOOL_MARKER.to_string()),
+                );
+                degraded_any = true;
+            }
+            degraded
+        })
+        .collect();
+    if !degraded_any {
+        // old_segment 里没有可降级的工具结果——microcompact 无能为力，交给摘要。
+        return None;
+    }
+    let mut view = system_prefix;
+    view.extend(degraded_old);
+    view.extend(recent);
+    if estimate_messages_tokens(&view) <= budget {
+        Some(view)
+    } else {
+        None
+    }
 }
 
 /// 构造摘要请求的 user 指令体（R5/R6/R8/R10）：序列化后的旧段对话历史 + Claude Code 9 段 prompt；
@@ -906,12 +962,31 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
         None,
     );
 
-    let cancel = env
-        .host
-        .wait_for_generation_inactive(&config.conversation_id, config.generation);
     // 受保护近期窗口默认 20k token，但不得超过压缩预算——否则小窗口模型上整段历史会被近期窗口
     // 吞掉，没有可摘要的旧段，压缩永远救不了超窗。
     let keep_tokens = RECENT_KEEP_TOKENS.min(budget);
+
+    // Microcompact（R-1）：先尝试把旧段工具结果降级成标记，够了就跳过昂贵的 LLM 摘要
+    // （对齐 Claude Code "能拖就拖、便宜优先"）。仅当降级足以回到预算内才走此分支。
+    if let Some(degraded) = microcompact_send_view(&state.runtime_messages, keep_tokens, budget) {
+        let after = estimate_messages_tokens(&degraded);
+        eprintln!("Chat context microcompaction: est {estimated} -> {after} tokens (skipped summary)");
+        state.runtime_messages = degraded.clone();
+        state.compacted = true;
+        state.compaction_unresolved_rounds = 0;
+        env.host.emit_compaction_status(
+            &config.conversation_id,
+            "microcompacted",
+            Some("agent_loop"),
+            None,
+        );
+        return degraded;
+    }
+
+    // 降级不足以回到预算内——走重型 LLM 摘要。取消 future 只在这条路径需要。
+    let cancel = env
+        .host
+        .wait_for_generation_inactive(&config.conversation_id, config.generation);
     let runtime_before_compact = state.runtime_messages.clone();
     let compacted = summarize_history(
         config.state,
@@ -1550,6 +1625,69 @@ mod tests {
         // Order preserved: old then recent reconstruct the post-system messages.
         assert_eq!(old[0]["content"], messages[1]["content"]);
         assert_eq!(recent.last().unwrap()["content"], messages[40]["content"]);
+    }
+
+    #[test]
+    fn microcompact_reclaims_old_tool_results_and_skips_summary() {
+        // old_segment 由两条大工具结果主导；降级后应回到预算内 → Some（可跳过摘要）。
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "assistant", "content": "", "tool_calls": [{ "id": "c1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }),
+            json!({ "role": "tool", "tool_call_id": "c1", "content": "T".repeat(40_000) }),
+            json!({ "role": "assistant", "content": "", "tool_calls": [{ "id": "c2", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }),
+            json!({ "role": "tool", "tool_call_id": "c2", "content": "T".repeat(40_000) }),
+            json!({ "role": "user", "content": "recent question" }),
+            json!({ "role": "assistant", "content": "recent answer" }),
+        ];
+        // 总 ~20000 tok，budget 12000 → 超；keep 8000 → recent = 末尾两条小消息，两条大工具结果进 old。
+        let view = microcompact_send_view(&messages, 8_000, 12_000).expect("microcompact should suffice");
+        assert!(estimate_messages_tokens(&view) <= 12_000, "degraded view within budget");
+        let markers = view
+            .iter()
+            .filter(|m| m.get("content").and_then(Value::as_str) == Some(MICROCOMPACT_TOOL_MARKER))
+            .count();
+        assert_eq!(markers, 2, "both old tool results degraded");
+        assert_eq!(view[view.len() - 2]["content"], "recent question");
+        assert_eq!(view[view.len() - 1]["content"], "recent answer");
+    }
+
+    #[test]
+    fn microcompact_returns_none_when_insufficient() {
+        // old 段含可降级工具结果 + 一条无法降级的大 user 文本；降级工具后仍超 budget → None。
+        // keep_tokens 取小，确保大 user + 工具结果都落在 old（不被拉进近期窗口）。
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "U".repeat(80_000) }), // ~20000 tok，无法降级
+            json!({ "role": "tool", "tool_call_id": "c1", "content": "T".repeat(4_000) }), // 可降级
+            json!({ "role": "assistant", "content": "recent answer" }),
+        ];
+        assert!(microcompact_send_view(&messages, 100, 12_000).is_none());
+    }
+
+    #[test]
+    fn microcompact_returns_none_when_no_old_segment() {
+        // 全在近期窗口内（无旧段）→ None。
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "hi" }),
+            json!({ "role": "assistant", "content": "hello" }),
+        ];
+        assert!(microcompact_send_view(&messages, 8_000, 12_000).is_none());
+    }
+
+    #[test]
+    fn microcompact_leaves_recent_tool_results_untouched() {
+        // 近期窗口里的工具结果不降级——只降 old_segment。
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "tool", "tool_call_id": "old", "content": "T".repeat(40_000) }),
+            json!({ "role": "user", "content": "q" }),
+            json!({ "role": "tool", "tool_call_id": "recent", "content": "recent tool output kept" }),
+            json!({ "role": "assistant", "content": "a" }),
+        ];
+        let view = microcompact_send_view(&messages, 8_000, 12_000).expect("suffices");
+        assert!(view.iter().any(|m| m.get("content").and_then(Value::as_str) == Some(MICROCOMPACT_TOOL_MARKER)));
+        assert!(view.iter().any(|m| m.get("content").and_then(Value::as_str) == Some("recent tool output kept")));
     }
 
     #[test]
