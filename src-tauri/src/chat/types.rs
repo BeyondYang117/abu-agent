@@ -22,8 +22,15 @@ pub struct ContextUsageSegment {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompactionBoundaryRecord {
     pub id: String,
-    /// Divider renders after the message with this id.
+    /// Last UI message fully covered by the summary (context split point; replay
+    /// truth lives in `ConversationContextSummary.source_until_message_id`).
     pub source_until_message_id: String,
+    /// Timeline anchor: the divider renders after this message — the last message
+    /// at the moment compaction was triggered — so the marker shows *when* the
+    /// compaction happened, not where the token split landed. Older records
+    /// without it fall back to `source_until_message_id`.
+    #[serde(default)]
+    pub display_after_message_id: Option<String>,
     pub token_estimate_before: usize,
     pub token_estimate_after: usize,
     pub summary_content: String,

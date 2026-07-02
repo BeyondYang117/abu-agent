@@ -317,6 +317,8 @@ export interface CompactionBoundaryRecord {
   id: string
   source_until_message_id?: string
   sourceUntilMessageId?: string
+  display_after_message_id?: string | null
+  displayAfterMessageId?: string | null
   token_estimate_before?: number
   tokenEstimateBefore?: number
   token_estimate_after?: number

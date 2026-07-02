@@ -1050,6 +1050,13 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
                 let boundary = CompactionBoundaryRecord {
                     id: format!("ctxbd_{}", uuid::Uuid::new_v4()),
                     source_until_message_id,
+                    // 时间线锚点：触发压缩时 runtime 里最后一条可映射的 UI 消息（run 进行中
+                    // assistant 尚未落库，即最后一条 user）——divider 标记压缩发生的时刻。
+                    display_after_message_id: runtime_before_compact
+                        .iter()
+                        .rev()
+                        .find_map(|m| m.get(UI_MESSAGE_ID_KEY).and_then(Value::as_str))
+                        .map(str::to_string),
                     token_estimate_before: estimated,
                     token_estimate_after: after,
                     summary_content: summary_text,
@@ -1308,6 +1315,9 @@ async fn compact_conversation_inner(
     let boundary_record = CompactionBoundaryRecord {
         id: format!("ctxbd_{}", uuid::Uuid::new_v4()),
         source_until_message_id,
+        // 时间线锚点：divider 显示在「触发压缩时的最后一条消息」之后——标记压缩发生的
+        // 时刻，而非 token 切分落点（切分落点在长对话里远高于触发点，观感是"横线跑上面去"）。
+        display_after_message_id: conversation.messages.last().map(|m| m.id.clone()),
         token_estimate_before,
         token_estimate_after,
         summary_content: summary_text,
