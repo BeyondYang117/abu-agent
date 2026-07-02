@@ -1411,6 +1411,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const finishStreamingRun = useCallback(
     async (payload: { reason?: string; conversationId?: string }) => {
       const conversationId = payload.conversationId ?? currentConversationIdRef.current
+      // 兜底：run 结束时压缩必然已终止；防御后端遗漏终止事件把"压缩中"状态卡死。
+      setAgentLoopCompacting(false)
       if (payload.reason !== 'cancelled') {
         resetLocalCancellation()
       }

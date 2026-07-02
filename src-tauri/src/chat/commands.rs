@@ -1040,11 +1040,7 @@ pub(crate) async fn chat_compress_context(
             "conversation": conversation,
         }));
     }
-    compress_conversation_context(&app, &state, &mut conversation, "manual").await.map_err(|err| {
-        emit_chat_compaction_state(&app, &conversation.id, "completed", Some("manual"), None);
-        err
-    })?;
-    conversation.context_state.warning = None;
+    compress_conversation_context(&app, &state, &mut conversation, "manual").await?;
     let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
     conversation.context_state = context_state.clone();
     conversation.updated_at = chrono::Local::now().timestamp();
@@ -2189,11 +2185,6 @@ async fn complete_assistant_reply_inner(
             assistant_snapshot: conversation.assistant_snapshot.clone(),
             custom_system_prompt: settings.chat.system_prompt.clone(),
             provider_tools_fallback_system_prompt,
-            ui_message_order: conversation
-                .messages
-                .iter()
-                .map(|message| (message.id.clone(), message.role.clone()))
-                .collect(),
         },
         &host,
         &executor,
@@ -4451,6 +4442,20 @@ fn group_answer_excluded_from_context(conversation: &Conversation, message: &Cha
     selected != Some(message.id.as_str())
 }
 
+/// 给一条 runtime 消息标注来源 UI 消息 id（`_ui_message_id`）。
+/// 该字段只存在于运行期视图：发给 provider 前会经 `model_message_from_openai_message`
+/// 只抽取已知字段，未知字段天然被剥离，不会进任何 wire 请求。压缩落盘时
+/// `compaction::source_until_message_id_for_split` 据此把 runtime 旧段精确映射回 UI 消息。
+fn tag_ui_message_id(mut message: Value, ui_message_id: &str) -> Value {
+    if let Some(obj) = message.as_object_mut() {
+        obj.insert(
+            "_ui_message_id".to_string(),
+            Value::String(ui_message_id.to_string()),
+        );
+    }
+    message
+}
+
 fn build_chat_api_messages(
     system_prompt: &str,
     conversation: &Conversation,
@@ -4496,22 +4501,29 @@ fn build_chat_api_messages(
                 .map(image_content_part)
                 .collect::<Result<Vec<_>, _>>()?;
             parts.push(serde_json::json!({ "type": "text", "text": sanitized_content }));
-            messages.push(serde_json::json!({
-                "role": message.role,
-                "content": parts,
-            }));
+            messages.push(tag_ui_message_id(
+                serde_json::json!({
+                    "role": message.role,
+                    "content": parts,
+                }),
+                &message.id,
+            ));
         } else {
-            messages.push(serde_json::json!({
-                "role": message.role,
-                "content": sanitized_content,
-            }));
+            messages.push(tag_ui_message_id(
+                serde_json::json!({
+                    "role": message.role,
+                    "content": sanitized_content,
+                }),
+                &message.id,
+            ));
         }
         if message.role == "assistant" && !message.model_messages.is_empty() {
             messages.pop();
             messages.extend(
                 openai_messages_from_model_messages(&message.model_messages)
                     .iter()
-                    .map(sanitize_api_message_for_model),
+                    .map(sanitize_api_message_for_model)
+                    .map(|expanded| tag_ui_message_id(expanded, &message.id)),
             );
         } else if message.role == "assistant" && !message.api_messages.is_empty() {
             messages.pop();
@@ -4519,7 +4531,8 @@ fn build_chat_api_messages(
                 message
                     .api_messages
                     .iter()
-                    .map(sanitize_api_message_for_model),
+                    .map(sanitize_api_message_for_model)
+                    .map(|expanded| tag_ui_message_id(expanded, &message.id)),
             );
         }
     }

@@ -176,7 +176,7 @@ export type ChatContextPayload = {
 
 export type ChatCompactionPayload = {
   conversationId: string
-  phase: 'started' | 'completed' | string
+  phase: 'started' | 'completed' | 'microcompacted' | 'failed' | string
   trigger?: 'manual' | 'auto' | 'agent_loop' | string
   boundary?: CompactionBoundaryRecord | null
 }

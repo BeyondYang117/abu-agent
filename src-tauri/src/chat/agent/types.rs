@@ -69,8 +69,6 @@ pub struct AgentRunConfig<'a> {
     pub assistant_snapshot: Option<ChatAssistantSnapshot>,
     pub custom_system_prompt: String,
     pub provider_tools_fallback_system_prompt: String,
-    /// UI message ids in conversation order `(id, role)` for compaction boundary mapping.
-    pub ui_message_order: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]

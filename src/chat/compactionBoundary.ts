@@ -165,7 +165,17 @@ export function resolvePendingCompactionAfterIndex(
       .find((view) => view.record.id === pendingBoundaryId)
     if (match) return match.afterIndex
   }
-  return estimatePendingCompactionAfterIndex(messages, contextState)
+  const estimated = estimatePendingCompactionAfterIndex(messages, contextState)
+  if (estimated !== null) return estimated
+  // Token tail window covers the whole conversation (small context windows, or a
+  // short-but-triggered compaction) → the token estimate has no old segment. Fall back
+  // to the last assistant message after the summary boundary so the in-progress
+  // compaction animation still has a slot to render at (matches pre-token-window behavior).
+  const minBoundary = (summaryBoundaryIndex(messages, contextState) ?? -1) + 1
+  for (let index = messages.length - 1; index >= minBoundary; index -= 1) {
+    if (messages[index]?.role === 'assistant') return index
+  }
+  return null
 }
 
 export function latestCompactionBoundaryId(

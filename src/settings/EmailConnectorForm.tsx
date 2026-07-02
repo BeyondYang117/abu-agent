@@ -10,6 +10,7 @@ const ENCRYPTION_OPTIONS = [
   { value: 'none', label: 'None' },
 ]
 
+// eslint-disable-next-line react-refresh/only-export-components -- draft factory shared with Settings; hot-reload loss here is acceptable
 export function defaultEmailDraft(preset?: EmailProviderPreset): EmailAccountConfig {
   return {
     id: '',

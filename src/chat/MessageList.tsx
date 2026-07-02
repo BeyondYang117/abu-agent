@@ -295,11 +295,8 @@ function MessageListBase({
     streamingToolCalls,
     streamingSegments,
     error,
-    appendCompactionItems,
     appendCompactionSlot,
-    compactionInProgress,
     messageIndexById,
-    pendingCompactionAfterIndex,
   ])
 
   const scrollToBottom = useCallback((smooth = false) => {

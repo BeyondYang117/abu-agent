@@ -115,4 +115,11 @@ describe('compactionBoundary', () => {
     }
     expect(resolvePendingCompactionAfterIndex(messages, contextState, 'b-new')).toBe(1)
   })
+
+  it('falls back to last assistant so the in-progress animation shows on small conversations', () => {
+    // Tail window covers the whole (small) conversation → token estimate is null,
+    // but a triggered compaction must still render its animation somewhere.
+    expect(estimatePendingCompactionAfterIndex(messages)).toBeNull()
+    expect(resolvePendingCompactionAfterIndex(messages, null)).toBe(1) // m2 (assistant)
+  })
 })

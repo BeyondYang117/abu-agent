@@ -553,32 +553,41 @@ fn summary_output_tokens(config_max: u32) -> u32 {
 /// `window * SUMMARY_INPUT_BUDGET_RATIO`（R1/R2），保证摘要调用绝不超窗（"用超窗请求救超窗"的根因）。
 /// `window == 0`（未知）时用 `SUMMARY_INPUT_BUDGET_FALLBACK_TOKENS` 兜底。
 /// `cancel`：进行中取消的 future——自动路径传 host 的取消等待，手动路径传 `None`（强制压缩不取消）。
-#[allow(clippy::too_many_arguments)]
-/// Map a runtime split to the last UI message id fully covered by the summarized segment.
+/// runtime 消息上的来源 UI 消息 id 标注（由 `commands.rs::build_chat_api_messages` 注入；
+/// 一条 UI 消息展开出的多条 runtime 消息共享同一 id）。发给 provider 前该字段会被
+/// `model_message_from_openai_message` 剥离，绝不进 wire 请求。
+pub(crate) const UI_MESSAGE_ID_KEY: &str = "_ui_message_id";
+
+fn ui_message_id_of(message: &Value) -> Option<&str> {
+    message.get(UI_MESSAGE_ID_KEY).and_then(Value::as_str)
+}
+
+/// 把 runtime 切分映射回 UI 消息：返回「其 runtime 展开**完全**落入旧段」的最后一条
+/// UI 消息 id。旧实现按 user|assistant 条数当 `ui_message_order` 下标推算，工具多轮
+/// 展开/多答组剔除/摘要锚点都会错位（错位的 boundary 落盘后会静默丢上下文）；现改为
+/// 读 `_ui_message_id` 标注精确映射。
+///
+/// 若旧段末尾的 UI 消息有展开条残留在近期窗口（横跨边界），回退到旧段内上一个不同的
+/// 完整 id。旧段无任何带标注消息（只有摘要锚点/系统注入）→ None（调用方不落盘
+/// boundary，运行时压缩视图照常生效）。
 pub(crate) fn source_until_message_id_for_split(
-    ui_message_order: &[(String, String)],
     runtime_messages: &[Value],
     keep_tokens: usize,
 ) -> Option<String> {
-    let (_system_prefix, old_segment, _recent) = select_recent_by_tokens(runtime_messages, keep_tokens);
+    let (_system_prefix, old_segment, recent) =
+        select_recent_by_tokens(runtime_messages, keep_tokens);
     if old_segment.is_empty() {
         return None;
     }
-    let ui_consumed = old_segment
+    // 近期窗口里出现过的 id：这些 UI 消息有展开条不在旧段里，不能作为 boundary。
+    let ids_in_recent: std::collections::HashSet<&str> =
+        recent.iter().filter_map(ui_message_id_of).collect();
+    old_segment
         .iter()
-        .filter(|message| {
-            matches!(
-                message.get("role").and_then(Value::as_str),
-                Some("user") | Some("assistant")
-            )
-        })
-        .count();
-    if ui_consumed == 0 {
-        return None;
-    }
-    ui_message_order
-        .get(ui_consumed.saturating_sub(1))
-        .map(|(id, _)| id.clone())
+        .rev()
+        .filter_map(ui_message_id_of)
+        .find(|id| !ids_in_recent.contains(id))
+        .map(str::to_string)
 }
 
 /// 把单条 UI `ChatMessage` 估算成 token 数：content + reasoning + 工具入参全文 + 结果预览。
@@ -1022,11 +1031,9 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
                 state.compaction_unresolved_rounds =
                     state.compaction_unresolved_rounds.saturating_add(1);
             }
-            if let Some(source_until_message_id) = source_until_message_id_for_split(
-                &config.ui_message_order,
-                &runtime_before_compact,
-                keep_tokens,
-            ) {
+            if let Some(source_until_message_id) =
+                source_until_message_id_for_split(&runtime_before_compact, keep_tokens)
+            {
                 let created_at = chrono::Local::now().timestamp();
                 let summary_record = ConversationContextSummary {
                     id: format!("ctxsum_{}", uuid::Uuid::new_v4()),
@@ -1057,6 +1064,15 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
                 );
                 state.pending_compaction_boundary = Some(boundary);
                 state.pending_compaction_summary = Some(summary_record);
+            } else {
+                // 压缩视图已生效但无法可靠映射回 UI 消息（旧段只有摘要锚点/系统注入）——
+                // 不落盘 boundary，但必须发终止事件让前端"压缩中"归位。
+                env.host.emit_compaction_status(
+                    &config.conversation_id,
+                    "completed",
+                    Some("agent_loop"),
+                    None,
+                );
             }
             compacted
         }
@@ -1066,6 +1082,13 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
             // 而不是反复触发压缩并失败 6+ 次后才报错。
             state.compaction_unresolved_rounds =
                 state.compaction_unresolved_rounds.saturating_add(1);
+            // started 已发——失败也必须发终止事件，否则前端"压缩中"状态永久卡死。
+            env.host.emit_compaction_status(
+                &config.conversation_id,
+                "failed",
+                Some("agent_loop"),
+                None,
+            );
             state.runtime_messages.clone()
         }
     }
@@ -1106,6 +1129,34 @@ pub(crate) async fn force_compact(
     .map(|(messages, _summary)| messages)
 }
 
+/// 手动压缩的保底切分（R4）：token 尾窗覆盖全部消息（无旧段）时，`/compact` 不该直接报
+/// "没有足够的旧消息可以压缩"——旧行为（≤v2.7 落盘路径）小对话也可压。仅 `trigger == "manual"`
+/// 且 `summary_start..len` 区间 UI 消息数 > 4 时生效：保留最后一条 user 及其后消息为近期窗口，
+/// 其余进 old_segment；返回 old_segment 末尾下标。区间太短或末尾无可切点 → None（保持原报错）。
+/// auto / agent_loop 触发条件不受影响（它们要超 90% 窗口才会走到这里）。
+fn manual_fallback_split(
+    messages: &[ChatMessage],
+    summary_start: usize,
+    trigger: &str,
+) -> Option<usize> {
+    if trigger != "manual" {
+        return None;
+    }
+    let len = messages.len();
+    if len.saturating_sub(summary_start) <= 4 {
+        return None;
+    }
+    let last_user = messages[summary_start..]
+        .iter()
+        .rposition(|m| m.role == "user")
+        .map(|offset| summary_start + offset)?;
+    // 最后一条 user 之前必须还有可摘要内容。
+    if last_user <= summary_start {
+        return None;
+    }
+    Some(last_user - 1)
+}
+
 /// 落盘压缩统一入口（手动 `chat_compress_context` / 自动发送前 / L2 run 结束三处共用）。
 /// 按 token 尾窗切 old_segment / recent_tail，序列化 old_segment（含完整工具转录，工具结果截 2000 字），
 /// 调统一核心 `compact_with_summary_model`（Claude 9 段 prompt + 流式 + 质量兜底），写回
@@ -1113,6 +1164,10 @@ pub(crate) async fn force_compact(
 ///
 /// `trigger`: `"manual"` | `"auto"`。`focus`：手动 `/compact <focus>` 聚焦指令（自动为 None）。
 /// 失败 / 无可摘要旧段 / 摘要质量不达标 → `Err`，**不覆盖**旧 summary。
+///
+/// 事件配对保证：入口发 `started`，任何 `Err` 出口发 `failed`，成功出口发 `completed`
+/// （由 `compact_conversation_inner` 发）。前端靠终止事件把"压缩中"状态归位——
+/// 缺失终止事件会让 UI 永久卡在压缩中。
 pub(crate) async fn compact_conversation(
     app: &AppHandle,
     state: &AppState,
@@ -1122,7 +1177,21 @@ pub(crate) async fn compact_conversation(
     focus: Option<&str>,
 ) -> Result<(), String> {
     emit_compaction_event(app, &conversation.id, "started", Some(trigger), None);
+    let result = compact_conversation_inner(app, state, settings, conversation, trigger, focus).await;
+    if result.is_err() {
+        emit_compaction_event(app, &conversation.id, "failed", Some(trigger), None);
+    }
+    result
+}
 
+async fn compact_conversation_inner(
+    app: &AppHandle,
+    state: &AppState,
+    settings: &Settings,
+    conversation: &mut Conversation,
+    trigger: &str,
+    focus: Option<&str>,
+) -> Result<(), String> {
     // 上一份落盘 summary 之后才进 old_segment；其之前已被摘要覆盖，不重复进。
     let summary_start = conversation
         .context_state
@@ -1139,6 +1208,7 @@ pub(crate) async fn compact_conversation(
         .unwrap_or(0);
 
     let split = token_split_chat_messages(&conversation.messages, summary_start, RECENT_KEEP_TOKENS)
+        .or_else(|| manual_fallback_split(&conversation.messages, summary_start, trigger))
         .ok_or_else(|| "没有足够的旧消息可以压缩".to_string())?;
     let old_segment = &conversation.messages[summary_start..=split];
     if old_segment.is_empty() {
@@ -1521,21 +1591,102 @@ mod tests {
         );
     }
 
+    /// 构造带 `_ui_message_id` 标注的 runtime 消息（模拟 build_chat_api_messages 的注入）。
+    fn tagged(ui_id: &str, role: &str, content: &str) -> Value {
+        json!({ "role": role, "content": content, UI_MESSAGE_ID_KEY: ui_id })
+    }
+
     #[test]
-    fn source_until_message_id_for_split_maps_ui_order() {
-        let ui = vec![
-            ("m1".to_string(), "user".to_string()),
-            ("m2".to_string(), "assistant".to_string()),
-            ("m3".to_string(), "user".to_string()),
-        ];
+    fn source_until_maps_by_ui_tag_with_tool_expansion() {
+        // UI 消息 m2（assistant）展开成 3 条 runtime（tool_calls / tool / 最终答复），
+        // 全部落在旧段 → boundary 精确落在 m2；旧的条数推算会把展开的每条都计数而错位。
         let messages = vec![
             json!({ "role": "system", "content": "sys" }),
-            json!({ "role": "user", "content": "a".repeat(4000) }),
-            json!({ "role": "assistant", "content": "b".repeat(4000) }),
-            json!({ "role": "user", "content": "recent" }),
+            tagged("m1", "user", &"a".repeat(4_000)),
+            {
+                let mut m = json!({ "role": "assistant", "content": "", "tool_calls": [{ "id": "c1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] });
+                m.as_object_mut().unwrap().insert(UI_MESSAGE_ID_KEY.into(), json!("m2"));
+                m
+            },
+            {
+                let mut m = json!({ "role": "tool", "tool_call_id": "c1", "content": "b".repeat(4_000) });
+                m.as_object_mut().unwrap().insert(UI_MESSAGE_ID_KEY.into(), json!("m2"));
+                m
+            },
+            tagged("m2", "assistant", &"c".repeat(4_000)),
+            tagged("m3", "user", "recent"),
         ];
-        let until = source_until_message_id_for_split(&ui, &messages, 500);
+        let until = source_until_message_id_for_split(&messages, 500);
         assert_eq!(until.as_deref(), Some("m2"));
+    }
+
+    #[test]
+    fn source_until_skips_ui_message_straddling_boundary() {
+        // m2 的展开条横跨边界（一部分在近期窗口）→ 不能作为 boundary，回退到 m1。
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            tagged("m1", "user", &"a".repeat(8_000)),
+            tagged("m2", "assistant", &"b".repeat(8_000)),
+            tagged("m2", "assistant", "tail piece in recent"),
+            tagged("m3", "user", "recent"),
+        ];
+        // keep=1000：recent 从尾部起 ~2 条小消息（m2 尾块 + m3），m2 首块在旧段 → 跨边界。
+        let until = source_until_message_id_for_split(&messages, 1_000);
+        assert_eq!(until.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    fn source_until_none_when_old_segment_untagged() {
+        // 旧段只有摘要锚点/系统注入（无 _ui_message_id）→ None，调用方不落盘 boundary。
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": format!("{SUMMARY_MARKER_PREFIX} 摘要：\n{}", "s".repeat(8_000)) }),
+            json!({ "role": "assistant", "content": "已了解早前对话的摘要，继续当前任务。" }),
+            tagged("m9", "user", "recent question"),
+        ];
+        assert!(source_until_message_id_for_split(&messages, 1_000).is_none());
+    }
+
+    #[test]
+    fn source_until_none_when_no_old_segment() {
+        let messages = vec![
+            json!({ "role": "system", "content": "sys" }),
+            tagged("m1", "user", "hi"),
+            tagged("m2", "assistant", "hello"),
+        ];
+        assert!(source_until_message_id_for_split(&messages, 8_000).is_none());
+    }
+
+    #[test]
+    fn manual_fallback_split_keeps_last_user_pair() {
+        // 6 条小消息（token 尾窗覆盖全部）：manual 保底切到最后一条 user 之前。
+        let msgs: Vec<ChatMessage> = [
+            ("m0", "user"), ("m1", "assistant"), ("m2", "user"),
+            ("m3", "assistant"), ("m4", "user"), ("m5", "assistant"),
+        ]
+        .iter()
+        .map(|(id, role)| chat_msg(id, role, "short"))
+        .collect();
+        assert!(token_split_chat_messages(&msgs, 0, RECENT_KEEP_TOKENS).is_none());
+        // 最后一条 user 是 m4(index 4) → old_segment 末尾 = index 3。
+        assert_eq!(manual_fallback_split(&msgs, 0, "manual"), Some(3));
+        // 非手动触发不放宽。
+        assert_eq!(manual_fallback_split(&msgs, 0, "auto"), None);
+    }
+
+    #[test]
+    fn manual_fallback_split_rejects_short_conversations() {
+        let msgs: Vec<ChatMessage> = [("m0", "user"), ("m1", "assistant"), ("m2", "user"), ("m3", "assistant")]
+            .iter()
+            .map(|(id, role)| chat_msg(id, role, "short"))
+            .collect();
+        // ≤ 4 条 → None（保持"没有足够的旧消息可以压缩"报错）。
+        assert_eq!(manual_fallback_split(&msgs, 0, "manual"), None);
+        // summary_start 之后区间太短同样拒绝。
+        let six: Vec<ChatMessage> = (0..6)
+            .map(|i| chat_msg(&format!("m{i}"), if i % 2 == 0 { "user" } else { "assistant" }, "s"))
+            .collect();
+        assert_eq!(manual_fallback_split(&six, 2, "manual"), None);
     }
 
     #[test]
