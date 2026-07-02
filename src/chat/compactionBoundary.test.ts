@@ -56,21 +56,36 @@ describe('compactionBoundary', () => {
     expect(collectCompactionRecords(contextState)).toHaveLength(0)
   })
 
-  it('estimates pending compaction boundary index', () => {
-    const longThread = Array.from({ length: 12 }, (_, index) => ({
+  it('estimates pending compaction boundary index (token tail window)', () => {
+    // 每条 ~7500 tokens（30000 chars / 4）；4 条总 30000 > 20000 尾窗 → 从尾累积 2 条
+    // (15000) 后第 3 条越预算 → divider 落在 index 1（old_segment=[m0,m1], recent=[m2,m3]）。
+    const longThread = Array.from({ length: 4 }, (_, index) => ({
+      id: `m${index}`,
+      role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: 'x'.repeat(30_000),
+      timestamp: index,
+    }))
+    expect(estimatePendingCompactionAfterIndex(longThread)).toBe(1)
+  })
+
+  it('returns null when recent tail window covers all messages', () => {
+    // 全是小消息，远不到 20k 尾窗 → 没有可压缩旧段。
+    const smallThread = Array.from({ length: 12 }, (_, index) => ({
       id: `m${index}`,
       role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
       content: `msg ${index}`,
       timestamp: index,
     }))
-    expect(estimatePendingCompactionAfterIndex(longThread)).toBe(11)
+    expect(estimatePendingCompactionAfterIndex(smallThread)).toBeNull()
   })
 
-  it('estimates re-compression after existing summary boundary', () => {
-    const longThread = Array.from({ length: 20 }, (_, index) => ({
+  it('estimates re-compression after existing summary boundary (token tail window)', () => {
+    // summary source_until = m3 → minBoundary = 4。m4/m5 各 ~12500 tokens（50000 chars），
+    // 从尾累积：m5(12500) 进窗口，m4(12500) → 25000 > 20000 → divider 落在 index 4。
+    const longThread = Array.from({ length: 6 }, (_, index) => ({
       id: `m${index}`,
       role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
-      content: `msg ${index}`,
+      content: 'x'.repeat(50_000),
       timestamp: index,
     }))
     const contextState: ConversationContextState = {
@@ -83,7 +98,7 @@ describe('compactionBoundary', () => {
         stale: false,
       },
     }
-    expect(estimatePendingCompactionAfterIndex(longThread, contextState)).toBe(19)
+    expect(estimatePendingCompactionAfterIndex(longThread, contextState)).toBe(4)
   })
 
   it('prefers actual boundary id over estimate while compacting', () => {

@@ -1575,7 +1575,6 @@ pub(crate) fn chat_python_complete(
     Ok(())
 }
 
-const AUTO_COMPRESS_RATIO: f32 = 0.85;
 const CONTEXT_BLOCK_RATIO: f32 = 1.0;
 const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: usize = 1_600;
 const AUXILIARY_VISION_RESULT_TOKEN_ESTIMATE: usize = 800;
@@ -2246,6 +2245,21 @@ async fn complete_assistant_reply_inner(
             .context_state
             .compaction_boundaries
             .push(boundary);
+    }
+    // L2 压缩对齐落盘路径：run 结束时把 L2 产出的 summary 写回 context_state.summary +
+    // compression_count（不再只 push boundary）。质量兜底已在 compaction 核心拦截，此处直接采用。
+    if let Some(summary) = result.compaction_summary.clone() {
+        conversation.context_state.last_compressed_at = Some(summary.created_at);
+        conversation.context_state.compressed_message_count = summary.source_message_ids.len();
+        conversation.context_state.compression_count = conversation
+            .context_state
+            .compression_count
+            .saturating_add(1);
+        conversation.context_state.summary = Some(summary);
+        // R-4：多次链式压缩后提示准确性下降（与 compact_conversation 口径一致）。
+        conversation.context_state.warning = crate::chat::agent::compaction::decay_warning_for(
+            conversation.context_state.compression_count,
+        );
     }
     push_assistant_message(
         app,
@@ -4104,10 +4118,10 @@ fn should_auto_compress_context(
     let Some(ratio) = context_state.usage_ratio else {
         return false;
     };
-    if ratio < AUTO_COMPRESS_RATIO {
+    if ratio < crate::chat::agent::compaction::AUTO_COMPACT_RATIO {
         return false;
     }
-    compression_boundary_index(conversation, "auto").is_some()
+    crate::chat::agent::compaction::has_compressible_old_segment(conversation)
 }
 
 async fn try_auto_compress_context_after_update(
@@ -4164,231 +4178,16 @@ async fn compress_conversation_context(
     conversation: &mut Conversation,
     trigger: &str,
 ) -> Result<(), String> {
-    emit_chat_compaction_state(
-        app,
-        &conversation.id,
-        "started",
-        Some(trigger),
-        None,
-    );
-    let boundary_index = compression_boundary_index(conversation, trigger)
-        .ok_or_else(|| "没有足够的旧消息可以压缩".to_string())?;
-    let source_start = summary_boundary_index(conversation)
-        .map(|idx| idx + 1)
-        .unwrap_or(0);
-    if boundary_index < source_start {
-        return Err("没有足够的旧消息可以压缩".to_string());
-    }
-    let source_messages = conversation.messages[source_start..=boundary_index].to_vec();
-    if source_start == 0 && source_messages.len() < 2 {
-        return Err("没有足够的旧消息可以压缩".to_string());
-    }
-    if source_messages.is_empty() {
-        return Err("没有足够的旧消息可以压缩".to_string());
-    }
-
     let settings = state.settings_read().clone();
-    let (provider_id, model) = settings.effective_compression_model_for_session(Some(
-        session_model_for_conversation(conversation),
-    ));
-    let provider = settings
-        .get_provider(&provider_id)
-        .ok_or_else(|| "Compression provider not found".to_string())?
-        .clone();
-    if provider.api_keys.is_empty() {
-        return Err(format_chat_missing_api_key_error(&provider.name));
-    }
-    if model.trim().is_empty() {
-        return Err(chat_missing_model_error());
-    }
-
-    let serialized_new = format_messages_for_context_summary(&source_messages);
-    let source_text = if let Some(summary) = active_summary(conversation) {
-        build_context_recompression_prompt(&summary.content, &serialized_new)
-    } else {
-        build_context_compression_prompt(&serialized_new)
-    };
-    let token_estimate_before = active_summary(conversation)
-        .map(|summary| summary.token_estimate_after)
-        .unwrap_or(0)
-        + agent_prepare::estimate_tokens(&serialized_new);
-    let retry_attempts = if settings.retry_enabled {
-        settings.retry_attempts as usize
-    } else {
-        1
-    };
-    let messages = vec![
-        serde_json::json!({
-            "role": "system",
-            "content": "You compress chat history into dense factual memory for future assistant requests. Output only the summary.",
-        }),
-        serde_json::json!({
-            "role": "user",
-            "content": source_text,
-        }),
-    ];
-    let source_until_message_id = source_messages
-        .last()
-        .map(|message| message.id.clone())
-        .ok_or_else(|| "没有足够的旧消息可以压缩".to_string())?;
-    let message = call_chat_completion_message(
-        state,
-        &provider,
-        &model,
-        messages,
-        None,
-        retry_attempts,
-        false,
-        Some(&conversation.id),
-        Some(&source_until_message_id),
-        "Chat context compression",
-    )
-    .await?;
-    let raw_summary = agent_stop::assistant_content_from_api_message(&message);
-    let summary_content = sanitize_context_summary(&raw_summary);
-    if summary_content.trim().is_empty() {
-        return Err("Compression model returned an empty summary".to_string());
-    }
-
-    let mut source_message_ids = active_summary(conversation)
-        .map(|summary| summary.source_message_ids.clone())
-        .unwrap_or_default();
-    source_message_ids.extend(source_messages.iter().map(|message| message.id.clone()));
-    let compressed_message_count = source_message_ids.len();
-    let created_at = chrono::Local::now().timestamp();
-    conversation.context_state.summary = Some(ConversationContextSummary {
-        id: format!("ctxsum_{}", Uuid::new_v4()),
-        content: summary_content.clone(),
-        source_message_ids,
-        source_until_message_id: source_until_message_id.clone(),
-        token_estimate_before,
-        token_estimate_after: agent_prepare::estimate_tokens(&summary_content),
-        created_at,
-        provider_id,
-        model,
-        stale: false,
-    });
-    conversation.context_state.last_compressed_at = Some(created_at);
-    conversation.context_state.compressed_message_count = compressed_message_count;
-    conversation.context_state.compression_count = conversation
-        .context_state
-        .compression_count
-        .saturating_add(1);
-    let boundary_record = CompactionBoundaryRecord {
-        id: format!("ctxbd_{}", Uuid::new_v4()),
-        source_until_message_id: source_until_message_id.clone(),
-        token_estimate_before,
-        token_estimate_after: agent_prepare::estimate_tokens(&summary_content),
-        summary_content: summary_content.clone(),
-        trigger: trigger.to_string(),
-        created_at,
-    };
-    conversation
-        .context_state
-        .compaction_boundaries
-        .push(boundary_record.clone());
-    conversation.context_state.warning = None;
-    emit_chat_compaction_state(
+    crate::chat::agent::compaction::compact_conversation(
         app,
-        &conversation.id,
-        "completed",
-        Some(trigger),
-        Some(&boundary_record),
-    );
-    Ok(())
-}
-
-/// 压缩切点：自上次摘要之后到对话末尾，取最后一条 assistant。
-/// 「保留最近 N 条原文」若存在，属于发给模型的回放策略，不参与此处切点计算。
-fn compression_boundary_index(conversation: &Conversation, _trigger: &str) -> Option<usize> {
-    let len = conversation.messages.len();
-    if len < 2 {
-        return None;
-    }
-    let min_boundary = summary_boundary_index(conversation)
-        .map(|idx| idx + 1)
-        .unwrap_or(0);
-    let max_boundary = len.saturating_sub(1);
-    if min_boundary > max_boundary {
-        return None;
-    }
-    (min_boundary..=max_boundary)
-        .rev()
-        .find(|idx| conversation.messages[*idx].role == "assistant")
-}
-
-fn format_messages_for_context_summary(messages: &[ChatMessage]) -> String {
-    messages
-        .iter()
-        .map(|message| {
-            let role = match message.role.as_str() {
-                "assistant" => "Assistant",
-                _ => "User",
-            };
-            let mut content = message.content.trim().to_string();
-            if !message.attachments.is_empty() {
-                let names = message
-                    .attachments
-                    .iter()
-                    .map(|attachment| {
-                        format!("{} ({})", attachment.name, attachment.attachment_type)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if !content.is_empty() {
-                    content.push_str("\n");
-                }
-                content.push_str(&format!("[Attachments: {names}]"));
-            }
-            if !message.tool_calls.is_empty() {
-                let tools = message
-                    .tool_calls
-                    .iter()
-                    .map(|tool| {
-                        let status = serde_json::to_string(&tool.status)
-                            .unwrap_or_else(|_| "\"unknown\"".to_string());
-                        format!(
-                            "{} {}: {}{}",
-                            tool.source,
-                            tool.name,
-                            status.trim_matches('"'),
-                            tool.result_preview
-                                .as_deref()
-                                .map(|preview| format!(" - {}", truncate_chars(preview, 500)))
-                                .unwrap_or_default()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !content.is_empty() {
-                    content.push_str("\n");
-                }
-                content.push_str("[Tool calls]\n");
-                content.push_str(&tools);
-            }
-            format!("{role}:\n{content}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn build_context_compression_prompt(source_text: &str) -> String {
-    format!(
-        "Compress the older part of this Kivio Chat conversation into a dense factual memory for future model requests.\n\nRules:\n- Preserve user goals, preferences, constraints, decisions, file paths, commands, tool results, unresolved questions, and important facts.\n- Preserve chronological cause/effect when it matters.\n- Mention attachments by file name and relevance, but do not invent image contents.\n- Do not include small talk, redundant phrasing, or style commentary.\n- Do not invent facts.\n- Output concise Markdown only.\n\nConversation to compress:\n\n{source_text}"
+        state.inner(),
+        &settings,
+        conversation,
+        trigger,
+        None,
     )
-}
-
-fn build_context_recompression_prompt(previous_summary: &str, new_messages: &str) -> String {
-    format!(
-        "Update the existing conversation summary below by merging in the newer messages.\n\nRules:\n- Preserve still-true details from the existing summary; remove stale details.\n- Preserve user goals, preferences, constraints, decisions, file paths, commands, tool results, unresolved questions, and important facts.\n- Do not invent facts.\n- Output concise Markdown only.\n\nExisting summary:\n\n{previous_summary}\n\nNewer messages to merge:\n\n{new_messages}"
-    )
-}
-
-fn sanitize_context_summary(raw: &str) -> String {
-    raw.trim()
-        .trim_matches(['`', ' ', '\n', '\r'])
-        .trim()
-        .to_string()
+    .await
 }
 
 fn emit_chat_context_state(
@@ -4664,6 +4463,10 @@ fn build_chat_api_messages(
         "content": system_prompt,
     })];
 
+    // 有 active summary 时：注入一条 system role 的 `Previous conversation summary:`，
+    // 之后只 replay boundary 之后的原文。boundary 由 token 预算决定（compaction::token_split_chat_messages，
+    // recent tail ≤ RECENT_KEEP_TOKENS）；boundary 之前的原文已被摘要覆盖、不重发。
+    // 当累计再增长到裸窗口 90% 时会触发再次压缩（auto / agent_loop）。
     let start_idx = if let Some(summary) = active_summary(conversation) {
         messages.push(summary_message(summary));
         summary_boundary_index(conversation)
@@ -7454,20 +7257,50 @@ mod tests {
     }
 
     #[test]
-    fn compression_boundary_index_starts_after_existing_summary() {
+    fn token_split_starts_after_existing_summary() {
         let mut conversation = test_conversation_with_summary(false);
-        for i in 0..12 {
+        // summary source_until = msg_assistant_1（index 1）→ summary_start = 2。
+        // 推 3 条大消息（每条 ~20000 tokens，ASCII 4 chars/token），recent 尾窗 20000 只够最后 1 条，
+        // 其余进 old_segment；boundary 落在倒数第 2 条（index = len-2）。
+        for i in 0..3 {
             let role = if i % 2 == 0 { "user" } else { "assistant" };
             conversation.messages.push(test_chat_message(
                 &format!("msg_extra_{i}"),
                 role,
-                "x",
-                10 + i,
+                &"a".repeat(80_000),
+                10 + i as i64,
             ));
         }
-        let boundary = compression_boundary_index(&conversation, "auto").expect("boundary");
-        assert_eq!(boundary, conversation.messages.len() - 1);
-        assert!(boundary > 1);
+        let summary_start = 2;
+        let boundary = crate::chat::agent::compaction::token_split_chat_messages(
+            &conversation.messages,
+            summary_start,
+            crate::chat::agent::compaction::RECENT_KEEP_TOKENS,
+        )
+        .expect("boundary");
+        assert_eq!(boundary, conversation.messages.len() - 2);
+        assert!(boundary > summary_start);
+    }
+
+    #[test]
+    fn token_split_returns_none_when_recent_window_covers_all() {
+        // 全是小消息，远不到 20k 尾窗 → 没有可摘要旧段。
+        let mut conversation = test_conversation_with_summary(false);
+        for i in 0..5 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            conversation.messages.push(test_chat_message(
+                &format!("msg_small_{i}"),
+                role,
+                "x",
+                10 + i as i64,
+            ));
+        }
+        let split = crate::chat::agent::compaction::token_split_chat_messages(
+            &conversation.messages,
+            2,
+            crate::chat::agent::compaction::RECENT_KEEP_TOKENS,
+        );
+        assert!(split.is_none());
     }
 
     #[test]

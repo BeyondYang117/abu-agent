@@ -153,6 +153,7 @@ impl<'a> RunResultBuilder<'a> {
             usage: None,
             compacted_history: None,
             compaction_boundary: None,
+            compaction_summary: None,
         }
     }
 }
@@ -316,6 +317,7 @@ pub(crate) fn finalize_planning_final(
         usage: None,
         compacted_history: None,
         compaction_boundary: None,
+        compaction_summary: None,
     })
 }
 
@@ -377,6 +379,7 @@ pub(crate) fn finalize_completed(
         usage: None,
         compacted_history: None,
         compaction_boundary: None,
+        compaction_summary: None,
     }
 }
 
@@ -514,6 +517,7 @@ pub(crate) fn cancelled_tool_round_run_result(
         usage: None,
         compacted_history: None,
         compaction_boundary: None,
+        compaction_summary: None,
     }
 }
 

@@ -77,6 +77,11 @@ pub(crate) struct RunState {
     /// （用已收集的工具结果降级），而不是反复触发压缩并连续失败后才报错。
     pub(crate) compaction_unresolved_rounds: u32,
     pub(crate) pending_compaction_boundary: Option<crate::chat::types::CompactionBoundaryRecord>,
+    /// L2 压缩产出的落盘 summary（与 boundary 同期生成）。run 结束时由 `attach_usage`
+    /// 挂到 `AgentRunResult.compaction_summary`，commands.rs 据此写回 `context_state.summary`
+    /// + `compression_count`（L2 不再只 push boundary，对齐落盘路径）。
+    pub(crate) pending_compaction_summary:
+        Option<crate::chat::types::ConversationContextSummary>,
 }
 
 /// 连续「需要压缩但压不下去」多少轮后停止工具循环、优雅收尾（Gap 2，Layer 3 anti-thrashing）。
@@ -150,6 +155,7 @@ pub async fn run_agent_loop(
         compacted: false,
         compaction_unresolved_rounds: 0,
         pending_compaction_boundary: None,
+        pending_compaction_summary: None,
     };
     // 把助手的技能白名单冻结进 skill_cache,作为 skill_activate 执行派发的硬 gate。
     // 无助手 = None = 不限(全局行为)。
@@ -261,6 +267,7 @@ fn attach_usage(mut result: AgentRunResult, state: &mut RunState) -> AgentRunRes
         result.compacted_history = Some(history);
     }
     result.compaction_boundary = state.pending_compaction_boundary.take();
+    result.compaction_summary = state.pending_compaction_summary.take();
     result
 }
 

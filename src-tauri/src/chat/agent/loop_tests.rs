@@ -583,6 +583,19 @@
         }
     }
 
+    /// 构造一条 SSE delta，其 content 为 `prefix + 240 个填充字符`（总 ≥200 chars），
+    /// 满足 compaction 质量兜底 `MIN_SUMMARY_CHARS`。L2 摘要 mock 用它返回达标摘要。
+    fn long_summary_sse(prefix: &str) -> String {
+        let pad = "细节填充".repeat(60);
+        format!(r#"{{"choices":[{{"delta":{{"content":"{prefix}{pad}"}}}}]}}"#)
+    }
+
+    /// 同上，但 content 包在 `<summary>...</summary>` 内（验证 extract_summary_text 抽签）。
+    fn long_summary_sse_tagged(prefix: &str) -> String {
+        let pad = "细节填充".repeat(60);
+        format!(r#"{{"choices":[{{"delta":{{"content":"<summary>\n{prefix}{pad}\n</summary>"}}}}]}}"#)
+    }
+
     /// Streaming planning step: one `read` tool call, then `[DONE]`.
     fn planning_tool_call_sse_events() -> Vec<String> {
         vec![
@@ -1867,7 +1880,7 @@
         let server = MockModelServer::start(vec![
             // 1) L2 摘要请求（**流式 SSE**）——压缩摘要调用现在走流式路径。
             MockResponse::Sse(vec![
-                r#"{"choices":[{"delta":{"content":"SUMMARY_MARKER: 早前轮次摘要"}}]}"#.to_string(),
+                long_summary_sse("SUMMARY_MARKER: 早前轮次摘要。"),
                 "[DONE]".to_string(),
             ]),
             // 2) 压缩后的规划请求 → 发起一次 read 工具调用。
@@ -2010,7 +2023,7 @@
         let server = MockModelServer::start(vec![
             // 1) Layer2 摘要请求（**流式 SSE**）——压缩摘要调用现在走流式路径。
             MockResponse::Sse(vec![
-                r#"{"choices":[{"delta":{"content":"SUMMARY_MARKER: 早前轮次已读取大文件"}}]}"#.to_string(),
+                long_summary_sse("SUMMARY_MARKER: 早前轮次已读取大文件。"),
                 "[DONE]".to_string(),
             ]),
             // 2) 压缩后的规划请求 → 直接给出最终回答（无工具调用）。
@@ -2091,7 +2104,7 @@
         let server = MockModelServer::start(vec![
             // 1) 摘要请求：仅以 SSE 提供（模拟仅支持流式的 provider）。
             MockResponse::Sse(vec![
-                r#"{"choices":[{"delta":{"content":"<summary>\nSUMMARY_MARKER: streamed summary\n</summary>"}}]}"#.to_string(),
+                long_summary_sse_tagged("SUMMARY_MARKER: streamed summary. "),
                 "[DONE]".to_string(),
             ]),
             // 2) 压缩后的规划请求 → 直接给出最终回答（无工具调用）。
@@ -2551,6 +2564,7 @@
             compacted: false,
             compaction_unresolved_rounds: 0,
             pending_compaction_boundary: None,
+            pending_compaction_summary: None,
         }
     }
 

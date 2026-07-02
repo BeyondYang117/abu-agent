@@ -103,4 +103,7 @@ pub struct AgentRunResult {
     pub compacted_history: Option<Vec<Value>>,
     /// Agent-loop L2 compaction boundary for timeline UI persistence.
     pub compaction_boundary: Option<CompactionBoundaryRecord>,
+    /// Agent-loop L2 compaction summary for `context_state.summary` persistence
+    /// (L2 不再只 push boundary，run 结束时由 commands.rs 写回 summary + compression_count）。
+    pub compaction_summary: Option<crate::chat::types::ConversationContextSummary>,
 }

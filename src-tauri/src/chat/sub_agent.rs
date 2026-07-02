@@ -1456,6 +1456,7 @@ mod tests {
             usage: None,
             compacted_history: None,
             compaction_boundary: None,
+            compaction_summary: None,
         })
     }
 
@@ -1476,6 +1477,7 @@ mod tests {
             usage: None,
             compacted_history: None,
             compaction_boundary: None,
+            compaction_summary: None,
         })
     }
 
