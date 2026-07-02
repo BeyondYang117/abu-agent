@@ -748,30 +748,49 @@ const mockChatApi = {
     return conversation
   },
 
-  async regenerateMessage(conversationId: string, messageId: string): Promise<Conversation> {
+  async regenerateMessage(conversationId: string, messageId: string, newContent?: string): Promise<Conversation> {
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
     if (index < 0) throw new Error('Conversation not found')
     const conversation = { ...conversations[index] }
     const messageIndex = conversation.messages.findIndex((message) => message.id === messageId)
     if (messageIndex < 0) throw new Error('Message not found')
-    if (conversation.messages[messageIndex].role !== 'assistant') {
-      throw new Error('仅支持重新生成助手回复')
+    const target = conversation.messages[messageIndex]
+    if (target.role === 'user') {
+      // 编辑提问并重新生成（镜像后端 chat_regenerate_message 的 user 分支）。
+      const trimmed = (newContent ?? '').trim()
+      if (newContent !== undefined && !trimmed) throw new Error('消息内容不能为空')
+      const edited = trimmed
+        ? { ...target, content: trimmed, timestamp: nowSeconds() }
+        : target
+      const kept = [...conversation.messages.slice(0, messageIndex), edited]
+      conversation.messages = [
+        ...kept,
+        {
+          id: `msg_dev_${crypto.randomUUID()}`,
+          role: 'assistant',
+          content: `（重新生成预览）${edited.content.slice(0, 80)}`,
+          timestamp: nowSeconds(),
+        },
+      ]
+    } else {
+      if (newContent !== undefined) throw new Error('编辑内容仅支持用户消息')
+      if (target.role !== 'assistant') throw new Error('仅支持重新生成助手回复')
+      const kept = conversation.messages.slice(0, messageIndex)
+      const lastUser = kept[kept.length - 1]
+      if (!lastUser || lastUser.role !== 'user') {
+        throw new Error('缺少对应的用户消息，无法重新生成')
+      }
+      conversation.messages = [
+        ...kept,
+        {
+          id: `msg_dev_${crypto.randomUUID()}`,
+          role: 'assistant',
+          content: `（重新生成预览）${lastUser.content.slice(0, 80)}`,
+          timestamp: nowSeconds(),
+        },
+      ]
     }
-    const kept = conversation.messages.slice(0, messageIndex)
-    const lastUser = kept[kept.length - 1]
-    if (!lastUser || lastUser.role !== 'user') {
-      throw new Error('缺少对应的用户消息，无法重新生成')
-    }
-    conversation.messages = [
-      ...kept,
-      {
-        id: `msg_dev_${crypto.randomUUID()}`,
-        role: 'assistant',
-        content: `（重新生成预览）${lastUser.content.slice(0, 80)}`,
-        timestamp: nowSeconds(),
-      },
-    ]
     conversation.updated_at = nowSeconds()
     const contextState = estimateMockContext(conversation)
     conversation.context_state = contextState
@@ -1291,15 +1310,15 @@ export const chatApi = {
     return result.conversation
   },
 
-  async regenerateMessage(conversationId: string, messageId: string): Promise<Conversation> {
+  async regenerateMessage(conversationId: string, messageId: string, newContent?: string): Promise<Conversation> {
     if (!isTauriRuntime()) {
-      return mockChatApi.regenerateMessage(conversationId, messageId)
+      return mockChatApi.regenerateMessage(conversationId, messageId, newContent)
     }
     const result = await invoke<{
       success: boolean
       conversation?: Conversation
       error?: string
-    }>('chat_regenerate_message', { conversationId, messageId })
+    }>('chat_regenerate_message', { conversationId, messageId, newContent: newContent ?? null })
     if (!result.success || !result.conversation) {
       throw new Error(result.error || 'Failed to regenerate message')
     }

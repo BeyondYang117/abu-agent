@@ -2898,24 +2898,39 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   )
 
   const handleRegenerateMessage = useCallback(
-    async (messageId: string) => {
+    async (messageId: string, newContent?: string) => {
       const conv = currentConversationRef.current
       if (!conv) return
 
       const conversationId = conv.id
-      if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) return
+      // Busy 拒绝（AC3）：入口已在 MessageList 按 streaming/frozen 收起，这里是兜底。
+      // 带编辑内容时静默 return 会无声丢掉用户改的文字，必须给出提示（与 handleSend 同文案）。
+      if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) {
+        setStreamErrorForConversation(conversationId, '该对话正在生成中，请稍后再试')
+        return
+      }
 
       const messageIndex = conv.messages.findIndex(
         (message) => message.id === messageId,
       )
       if (messageIndex < 0) return
 
-      // 助手消息：截到它之前重生成。用户消息（失败发送遗留的孤儿）：保留它、只丢其后内容再重试。
+      // 助手消息：截到它之前重生成。用户消息：保留它（编辑时先替换内容）、只丢其后内容再重试。
       const keepTarget = conv.messages[messageIndex].role === 'user'
       const cutFrom = keepTarget ? messageIndex + 1 : messageIndex
+      // 空白-only 的编辑内容按「未编辑」处理（纯重生成）：绝不能把 Some("") 发给后端——
+      // 乐观截断已经执行，后端再报「消息内容不能为空」会留下截断了却没重生成的线程。
+      const trimmedNewContent = newContent?.trim() || undefined
+      const keptMessages = conv.messages.slice(0, cutFrom)
+      if (keepTarget && trimmedNewContent) {
+        keptMessages[messageIndex] = {
+          ...keptMessages[messageIndex],
+          content: trimmedNewContent,
+        }
+      }
       applyConversation({
         ...conv,
-        messages: conv.messages.slice(0, cutFrom),
+        messages: keptMessages,
       })
       const removedMessageIds = new Set(
         conv.messages.slice(cutFrom).map((message) => message.id),
@@ -2954,7 +2969,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       markConversationInFlight(conversationId)
       let persistedConversation: Conversation | null = null
       try {
-        const updated = await chatApi.regenerateMessage(conversationId, messageId)
+        const updated = await chatApi.regenerateMessage(conversationId, messageId, trimmedNewContent)
         persistedConversation = updated
         if (currentConversationIdRef.current === conversationId) {
           applyAssistantStreamStats(updated)

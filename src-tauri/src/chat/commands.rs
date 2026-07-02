@@ -5620,13 +5620,53 @@ pub(crate) async fn chat_update_message(
     }))
 }
 
-/// 重新生成助手回复（移除该条及之后的消息，再基于此前上下文请求新回复）
+/// `chat_regenerate_message` 的截断/编辑核心（纯函数，便于单测）：
+/// - assistant：截到它之前（`new_content` 无意义 → 报错）。
+/// - user + `new_content`：trim 校验非空 → 替换内容（编辑提问；附件保留）→ 保留该条截掉其后。
+///   摘要失效用 `idx`（内容变了，覆盖到该条的摘要即失效）。
+/// - user 无 `new_content`：孤儿重试，摘要失效用 `idx + 1`，保留该条截掉其后。
+fn apply_regenerate_truncation(
+    conversation: &mut Conversation,
+    idx: usize,
+    new_content: Option<String>,
+) -> Result<(), String> {
+    match conversation.messages[idx].role.as_str() {
+        "assistant" => {
+            if new_content.is_some() {
+                return Err("编辑内容仅支持用户消息".to_string());
+            }
+            mark_summary_stale_if_needed(conversation, idx);
+            conversation.messages.truncate(idx);
+        }
+        "user" => {
+            if let Some(content) = new_content {
+                let trimmed = content.trim();
+                if trimmed.is_empty() {
+                    return Err("消息内容不能为空".to_string());
+                }
+                mark_summary_stale_if_needed(conversation, idx);
+                conversation.messages[idx].content = trimmed.to_string();
+                conversation.messages[idx].timestamp = chrono::Local::now().timestamp();
+            } else {
+                mark_summary_stale_if_needed(conversation, idx + 1);
+            }
+            conversation.messages.truncate(idx + 1);
+        }
+        _ => return Err("仅支持重新生成助手回复或重试用户消息".to_string()),
+    }
+    Ok(())
+}
+
+/// 重新生成助手回复（移除该条及之后的消息，再基于此前上下文请求新回复）。
+/// `new_content`：编辑用户提问并重新生成——仅当目标是 user 消息时有效，先替换其内容
+/// 再走截断+重生成（附件保留；一个原子命令，避免"改了历史但不重生成"的不一致状态）。
 #[tauri::command]
 pub(crate) async fn chat_regenerate_message(
     app: AppHandle,
     state: State<'_, AppState>,
     conversation_id: String,
     message_id: String,
+    new_content: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Busy 拒绝：该会话仍有任意一条 run 在跑时不允许再触发重新生成。
     // 原子哨兵预留关闭 TOCTOU 窗口；per-run 槽位 / generation 在 `complete_assistant_reply` 内注册。
@@ -5640,18 +5680,7 @@ pub(crate) async fn chat_regenerate_message(
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let idx = find_message_index(&conversation, &message_id)?;
-    match conversation.messages[idx].role.as_str() {
-        "assistant" => {
-            mark_summary_stale_if_needed(&mut conversation, idx);
-            conversation.messages.truncate(idx);
-        }
-        // 重试失败发送遗留的「孤儿用户消息」：保留它、丢掉其后的任何内容，再重新生成。
-        "user" => {
-            mark_summary_stale_if_needed(&mut conversation, idx + 1);
-            conversation.messages.truncate(idx + 1);
-        }
-        _ => return Err("仅支持重新生成助手回复或重试用户消息".to_string()),
-    }
+    apply_regenerate_truncation(&mut conversation, idx, new_content)?;
     if conversation.messages.last().map(|m| m.role.as_str()) != Some("user") {
         return Err("缺少对应的用户消息，无法重新生成".to_string());
     }
@@ -7414,6 +7443,55 @@ mod tests {
                 .map(|summary| summary.stale),
             Some(true)
         );
+    }
+
+    #[test]
+    fn regenerate_truncation_edits_user_content_and_truncates_after() {
+        // 编辑 msg_user_2（index 2）：内容替换、其后 assistant 被截、摘要保持未过期
+        // （msg_user_2 在摘要 boundary msg_assistant_1 之后，不触发 stale）。
+        let mut conversation = test_conversation_with_summary(false);
+        apply_regenerate_truncation(&mut conversation, 2, Some("edited question".to_string()))
+            .unwrap();
+        assert_eq!(conversation.messages.len(), 3);
+        assert_eq!(conversation.messages[2].id, "msg_user_2");
+        assert_eq!(conversation.messages[2].content, "edited question");
+        assert_eq!(
+            conversation.context_state.summary.as_ref().map(|s| s.stale),
+            Some(false)
+        );
+
+        // 编辑被摘要覆盖的 msg_user_1（index 0）：摘要必须标 stale（内容变了摘要即过期）。
+        let mut covered = test_conversation_with_summary(false);
+        apply_regenerate_truncation(&mut covered, 0, Some("rewritten first question".to_string()))
+            .unwrap();
+        assert_eq!(covered.messages.len(), 1);
+        assert_eq!(covered.messages[0].content, "rewritten first question");
+        assert_eq!(
+            covered.context_state.summary.as_ref().map(|s| s.stale),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn regenerate_truncation_rejects_bad_edit_targets() {
+        // 空内容 → 报错且对话未被改动。
+        let mut conversation = test_conversation_with_summary(false);
+        let err = apply_regenerate_truncation(&mut conversation, 2, Some("   ".to_string()))
+            .unwrap_err();
+        assert_eq!(err, "消息内容不能为空");
+        assert_eq!(conversation.messages.len(), 4);
+
+        // new_content 指向 assistant → 明确报错（不静默忽略）。
+        let err = apply_regenerate_truncation(&mut conversation, 3, Some("nope".to_string()))
+            .unwrap_err();
+        assert_eq!(err, "编辑内容仅支持用户消息");
+        assert_eq!(conversation.messages.len(), 4);
+
+        // 无 new_content 的既有行为不回归：assistant 截到它之前；user 孤儿保留自身。
+        let mut plain = test_conversation_with_summary(false);
+        apply_regenerate_truncation(&mut plain, 3, None).unwrap();
+        assert_eq!(plain.messages.len(), 3);
+        assert_eq!(plain.messages.last().unwrap().id, "msg_user_2");
     }
 
     #[test]

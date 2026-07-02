@@ -15,6 +15,7 @@ import {
   Globe,
   ImagePlus,
   ListChecks,
+  Pencil,
   Play,
   Plug,
   ScrollText,
@@ -61,7 +62,7 @@ interface MessageBubbleProps {
   /** R8（多模型一问多答）：本条 user 消息这一问发给了哪些模型；多模型时渲染在气泡顶部。 */
   sentModels?: { providerId: string | null; model: string | null }[]
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
-  onRegenerateMessage?: (messageId: string) => Promise<void>
+  onRegenerateMessage?: (messageId: string, newContent?: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
   agentPlanOverride?: AgentPlanState | null
   onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
@@ -697,13 +698,24 @@ function MessageBubbleComponent({
 
   if (isUser) {
     const hasText = message.content.trim().length > 0
+    const canEditUser = Boolean(onRegenerateMessage)
+    const handleEditAndRegenerate = () => {
+      const trimmed = draft.trim()
+      if (!trimmed || !onRegenerateMessage) return
+      // regenerate 的 Promise 要等整个生成结束才 resolve（agent run 可能数分钟），编辑框不陪跑：
+      // 乐观关闭编辑态（handleRegenerateMessage 的乐观截断会同步重渲本气泡）。失败时它内部
+      // 会 reload 会话恢复原文，并在线程里展示错误 + 重试。
+      // 内容没变 → 纯重新生成；变了 → 编辑并重新生成（后端原子替换+截断）。
+      setIsEditing(false)
+      void onRegenerateMessage(message.id, trimmed === message.content ? undefined : trimmed)
+    }
     // R8（多模型一问多答）：本问发给 ≥2 个模型时，在 user 气泡顶部渲染模型标签行（如 @deepseek @qwen）。
     // 单模型不显示这行（sentModels 缺省或 <2）。
     const replyModelTags = (sentModels ?? []).filter((m) => (m.model ?? '').trim().length > 0)
     const showModelTags = replyModelTags.length >= 2
     return (
       <div className="group chat-motion-fade-up flex justify-end py-2">
-        <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1">
+        <div className={`flex min-w-0 flex-col items-end gap-1 ${isEditing ? 'w-full max-w-full' : 'max-w-[85%]'}`}>
           {showModelTags && (
             <div className="flex flex-wrap items-center justify-end gap-1.5 pr-0.5">
               {replyModelTags.map((tag, index) => (
@@ -725,14 +737,49 @@ function MessageBubbleComponent({
               variant="user"
             />
           )}
-          {hasText && (
-            <div className="rounded-[20px] bg-neutral-100 px-4 py-2.5 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
-              <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed">
-                {message.content}
+          {isEditing ? (
+            <div className="w-full space-y-2">
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={4}
+                autoFocus
+                className="w-full resize-y rounded-[20px] border border-neutral-200/90 bg-neutral-50 px-4 py-2.5 text-[15px] leading-relaxed text-neutral-900 outline-none focus:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-neutral-500"
+              />
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(message.content)
+                    setIsEditing(false)
+                  }}
+                  className="rounded-lg px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  // 编辑中若本会话起了新 run（如输入栏又发了一条），回调被 MessageList 收走
+                  // （canEditUser 变 false）→ 禁用保存避免静默 no-op；取消仍可退出。
+                  disabled={!draft.trim() || !canEditUser}
+                  onClick={handleEditAndRegenerate}
+                  className="rounded-lg bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
+                  title="替换这条提问，并丢弃其后的回复重新生成"
+                >
+                  保存并重新生成
+                </button>
               </div>
             </div>
+          ) : (
+            hasText && (
+              <div className="rounded-[20px] bg-neutral-100 px-4 py-2.5 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100">
+                <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed">
+                  {message.content}
+                </div>
+              </div>
+            )
           )}
-          {hasText && (
+          {hasText && !isEditing && (
             <div className="flex items-center gap-0.5 pr-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
               <button
                 type="button"
@@ -743,6 +790,17 @@ function MessageBubbleComponent({
               >
                 {copied ? <Check size={14} strokeWidth={2} className="chat-motion-pop" /> : <Copy size={14} strokeWidth={2} />}
               </button>
+              {canEditUser && (
+                <button
+                  type="button"
+                  onClick={() => setIsEditing(true)}
+                  className={bubbleActionBtn}
+                  title="编辑并重新生成"
+                  aria-label="编辑并重新生成"
+                >
+                  <Pencil size={14} strokeWidth={2} />
+                </button>
+              )}
               {onDeleteMessage && (
                 <button
                   type="button"

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { MessageBubble } from './MessageBubble'
 import type { ChatMessage } from './types'
 
@@ -433,5 +433,57 @@ describe('MessageBubble 多模型所发模型标签（R8）', () => {
     expect(screen.queryByText('@deepseek-chat')).not.toBeInTheDocument()
     rerender(<MessageBubble message={userMessage} />)
     expect(screen.queryByText(/^@/)).not.toBeInTheDocument()
+  })
+})
+
+describe('MessageBubble 用户消息编辑并重新生成', () => {
+  const userMessage: ChatMessage = {
+    id: 'msg-user-edit',
+    role: 'user',
+    content: '原始问题',
+    timestamp: 1,
+  }
+
+  it('点击编辑进入编辑态，保存并重新生成携带新内容', async () => {
+    const onRegenerateMessage = vi.fn().mockResolvedValue(undefined)
+    render(<MessageBubble message={userMessage} onRegenerateMessage={onRegenerateMessage} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑并重新生成' }))
+    const textarea = screen.getByRole('textbox')
+    expect(textarea).toHaveValue('原始问题')
+
+    await userEvent.clear(textarea)
+    await userEvent.type(textarea, '改过的问题')
+    await userEvent.click(screen.getByRole('button', { name: '保存并重新生成' }))
+
+    expect(onRegenerateMessage).toHaveBeenCalledWith('msg-user-edit', '改过的问题')
+  })
+
+  it('内容未改动时保存走纯重新生成（不带 newContent）', async () => {
+    const onRegenerateMessage = vi.fn().mockResolvedValue(undefined)
+    render(<MessageBubble message={userMessage} onRegenerateMessage={onRegenerateMessage} />)
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑并重新生成' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存并重新生成' }))
+
+    expect(onRegenerateMessage).toHaveBeenCalledWith('msg-user-edit', undefined)
+  })
+
+  it('取消恢复原文并退出编辑态；无回调时不渲染编辑按钮', async () => {
+    const onRegenerateMessage = vi.fn().mockResolvedValue(undefined)
+    const { rerender } = render(
+      <MessageBubble message={userMessage} onRegenerateMessage={onRegenerateMessage} />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑并重新生成' }))
+    await userEvent.type(screen.getByRole('textbox'), '不想要的修改')
+    await userEvent.click(screen.getByRole('button', { name: '取消' }))
+
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.getByText('原始问题')).toBeInTheDocument()
+    expect(onRegenerateMessage).not.toHaveBeenCalled()
+
+    rerender(<MessageBubble message={userMessage} />)
+    expect(screen.queryByRole('button', { name: '编辑并重新生成' })).not.toBeInTheDocument()
   })
 })

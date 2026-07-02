@@ -28,7 +28,7 @@ interface MessageListProps {
   agentPlanState?: AgentPlanState | null
   assistantStreamStatsByMessageId?: Record<string, AssistantStreamStats>
   onUpdateMessage?: (messageId: string, content: string) => Promise<void>
-  onRegenerateMessage?: (messageId: string) => Promise<void>
+  onRegenerateMessage?: (messageId: string, newContent?: string) => Promise<void>
   onDeleteMessage?: (messageId: string) => Promise<void>
   onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
   // 失败发送后线程末尾留下的孤儿用户消息：点「重试」用它的 id 重新生成。
@@ -406,7 +406,10 @@ function MessageListBase({
               reasoningDurationMsBySegmentId={assistantStats?.reasoningDurationMsBySegmentId}
               sentModels={item.sentModels}
               onUpdateMessage={msg.role === 'assistant' ? onUpdateMessage : undefined}
-              onRegenerateMessage={msg.role === 'assistant' ? onRegenerateMessage : undefined}
+              // 编辑/重生成入口在任何 run 在飞时都不可用（AC3）。streamFrozen 也算在飞：
+              // 本地取消后 send invoke 尚未返回，此窗口内触发只会被 in-flight 兜底静默吞掉
+              // （编辑文本会被无声丢弃），所以从入口处直接收起。
+              onRegenerateMessage={streaming || streamFrozen ? undefined : onRegenerateMessage}
               onDeleteMessage={onDeleteMessage}
               agentPlanOverride={msg.id === legacyPlanMessageId ? agentPlanState : null}
               onExecuteAgentPlan={msg.role === 'assistant' ? onExecuteAgentPlan : undefined}
@@ -423,7 +426,7 @@ function MessageListBase({
               selectedMessageId={selectedMessageId}
               onSelectColumn={onSetGroupSelection}
               onUpdateMessage={onUpdateMessage}
-              onRegenerateMessage={onRegenerateMessage}
+              onRegenerateMessage={streaming || streamFrozen ? undefined : onRegenerateMessage}
               onDeleteMessage={onDeleteMessage}
             />
           )
@@ -500,6 +503,8 @@ function MessageListBase({
       onDeleteMessage,
       onExecuteAgentPlan,
       onRetryLastUser,
+      streaming,
+      streamFrozen,
       groupSelections,
       onSetGroupSelection,
       streamingReasoningDurationMs,
