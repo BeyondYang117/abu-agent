@@ -70,11 +70,14 @@ impl OpenAiChatProvider<'_> {
             |key| {
                 with_standard_request_timeout(
                     crate::api::attach_json_body(
-                        self.state
-                            .http
-                            .post(self.chat_completions_url())
-                            .bearer_auth(key)
-                            .header(ACCEPT_ENCODING, "identity"),
+                        self.with_session_headers(
+                            self.state
+                                .http
+                                .post(self.chat_completions_url())
+                                .bearer_auth(key)
+                                .header(ACCEPT_ENCODING, "identity"),
+                            &request.metadata,
+                        ),
                         &body,
                         self.provider.compress_request_body,
                     ),
@@ -130,11 +133,14 @@ impl OpenAiChatProvider<'_> {
             &self.provider.api_keys,
             |key| {
                 crate::api::attach_json_body(
-                    self.state
-                        .http
-                        .post(self.chat_completions_url())
-                        .bearer_auth(key)
-                        .header(ACCEPT_ENCODING, "identity"),
+                    self.with_session_headers(
+                        self.state
+                            .http
+                            .post(self.chat_completions_url())
+                            .bearer_auth(key)
+                            .header(ACCEPT_ENCODING, "identity"),
+                        &request.metadata,
+                    ),
                     &body,
                     self.provider.compress_request_body,
                 )
@@ -263,6 +269,26 @@ impl OpenAiChatProvider<'_> {
         )
     }
 
+    /// 会话亲和头（对齐 opencode）：同一对话每轮带同一 id。会话亲和型代理据此把请求
+    /// 稳定路由到同一上游会话（不再靠前缀指纹猜，杜绝串台/复用脏会话）；正经 provider
+    /// 忽略未知头，无副作用。
+    fn with_session_headers(
+        &self,
+        request: reqwest::RequestBuilder,
+        metadata: &crate::chat::model::RequestMetadata,
+    ) -> reqwest::RequestBuilder {
+        match metadata
+            .conversation_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        {
+            Some(id) => request
+                .header("x-session-id", id)
+                .header("x-session-affinity", id),
+            None => request,
+        }
+    }
+
     fn request_body(&self, request: &GenerateRequest, stream: bool) -> Value {
         let mut body = serde_json::json!({
             "model": request.model,
@@ -272,6 +298,9 @@ impl OpenAiChatProvider<'_> {
         });
         if stream {
             body["stream"] = Value::Bool(true);
+            // usage 随流返回（OpenAI 标准参数；AI SDK/opencode 同款）。缺省时部分
+            // provider 不在流里带 usage，token 统计只能靠估算。
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
         if !request.tools.is_empty() {
             body["tools"] = Value::Array(
@@ -281,6 +310,19 @@ impl OpenAiChatProvider<'_> {
                     .map(|tool| tool.to_openai_tool())
                     .collect(),
             );
+            body["tool_choice"] = Value::String("auto".to_string());
+        }
+        // 会话级缓存键（对齐 opencode/AI SDK）：同一对话每轮同值。OpenAI 官方参数是
+        // `prompt_cache_key`（提升缓存路由命中）；聚合器/代理普遍认 AI SDK 风格的
+        // `promptCacheKey`。两个都发——多余字段会被各家安静忽略，无副作用。
+        if let Some(conversation_id) = request
+            .metadata
+            .conversation_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        {
+            body["prompt_cache_key"] = Value::String(conversation_id.to_string());
+            body["promptCacheKey"] = Value::String(conversation_id.to_string());
         }
         if !request.options.thinking_enabled
             && utils::provider_supports_thinking_field(&self.provider.base_url)
@@ -762,6 +804,69 @@ mod tests {
 
         let high = build_openai_body(Some("high"), "https://api.openai.com/v1");
         assert_eq!(high["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn request_body_carries_session_cache_key_and_stream_usage() {
+        let state = AppState::new_headless(
+            crate::settings::Settings::default(),
+            std::env::temp_dir(),
+        );
+        let provider = ModelProvider {
+            id: "test".into(),
+            name: "Test".into(),
+            api_keys: vec!["sk-test".into()],
+            api_key_legacy: None,
+            base_url: "https://api.openai.com/v1".into(),
+            available_models: vec!["gpt-5".into()],
+            enabled_models: vec!["gpt-5".into()],
+            supports_tools: true,
+            enabled: true,
+            api_format: "openai_chat".into(),
+            model_overrides: Default::default(),
+            compress_request_body: false,
+        };
+        let adapter = OpenAiChatProvider::new(&state, &provider, 1);
+        let tool = crate::chat::model::ModelTool {
+            id: "native__web_fetch".into(),
+            name: "web_fetch".into(),
+            description: "Fetch".into(),
+            source: "native".into(),
+            server_id: None,
+            server_name: None,
+            input_schema: serde_json::json!({ "type": "object" }),
+            sensitive: false,
+        };
+        let mut request = GenerateRequest {
+            model: "gpt-5".into(),
+            system: "sys".into(),
+            messages: vec![ModelMessage {
+                role: ModelRole::User,
+                content: vec![MessagePart::Text { text: "hi".into() }],
+            }],
+            tools: vec![tool],
+            options: GenerateOptions::default(),
+            metadata: crate::chat::model::RequestMetadata {
+                conversation_id: Some("conv_abc".into()),
+                ..Default::default()
+            },
+        };
+
+        // 流式 + 有会话 id + 有工具：缓存键（双写法）、stream_options、tool_choice 齐全。
+        let body = adapter.request_body(&request, true);
+        assert_eq!(body["prompt_cache_key"], "conv_abc");
+        assert_eq!(body["promptCacheKey"], "conv_abc");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["tool_choice"], "auto");
+
+        // 非流式：不带 stream_options；无会话 id：不带缓存键；无工具：不带 tool_choice。
+        request.metadata.conversation_id = None;
+        request.tools = Vec::new();
+        let body = adapter.request_body(&request, false);
+        assert!(body.get("stream_options").is_none());
+        assert!(body.get("prompt_cache_key").is_none());
+        assert!(body.get("promptCacheKey").is_none());
+        assert!(body.get("tool_choice").is_none());
     }
 
     #[test]
