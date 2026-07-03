@@ -122,22 +122,27 @@ export function ProviderSortableList({
             className={`kv-provider-item ${selectedId === provider.id ? 'active' : ''}${isDragging ? ' is-dragging' : ''}`}
             style={transform ? { transform } : undefined}
             data-tauri-drag-region="false"
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelect(provider.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onSelect(provider.id)
+              }
+            }}
           >
-            <button
-              type="button"
-              className="kv-provider-item-select"
-              onClick={() => onSelect(provider.id)}
-              data-tauri-drag-region="false"
-            >
+            <span className="kv-provider-item-select">
               <span className={`kv-provider-dot ${!isProviderEnabled(provider) ? 'off' : configured ? 'on' : 'warn'}`} />
               <span className="kv-provider-name">{provider.name || providerNameLabel}</span>
-            </button>
+            </span>
             <button
               type="button"
               className="kv-provider-drag-handle"
               aria-label={dragLabel}
               title={dragLabel}
               onPointerDown={(e) => handlePointerDown(e, provider.id, index)}
+              onClick={(e) => e.stopPropagation()}
               data-tauri-drag-region="false"
             >
               <GripHorizontal size={13} strokeWidth={2} />

@@ -3067,7 +3067,7 @@ body {
   gap: 4px;
   padding: 5px 7px;
   border-radius: 5px;
-  cursor: default;
+  cursor: pointer;
   border: none;
   background: transparent;
   text-align: left;
@@ -3076,7 +3076,11 @@ body {
   color: var(--text);
   width: 100%;
   position: relative;
-  transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1), background 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+/* transform 过渡 + 合成层提升只在拖拽排序时启用：常态开启 will-change 会让 WebView2
+   把每行常驻为合成层，间歇性吞掉首个 pointer 事件（表现为“点不动、要点两下”）。 */
+.kv-provider-list-items.is-sorting .kv-provider-item {
   will-change: transform;
 }
 .kv-provider-list-items.is-sorting .kv-provider-item:not(.is-dragging) {
@@ -3095,7 +3099,7 @@ body {
   font-family: inherit;
   font-size: inherit;
   color: inherit;
-  cursor: default;
+  cursor: inherit;
 }
 .kv-provider-item-select:hover,
 .kv-provider-item:hover .kv-provider-item-select {
