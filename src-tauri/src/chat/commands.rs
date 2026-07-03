@@ -2320,9 +2320,10 @@ async fn complete_assistant_reply_inner(
 /// 从根本上避开 N 条并发 run 同写 `conversations/{id}.json` 的竞态。
 ///
 /// 返回：
-/// - 至少一条臂成功 → `Ok(())`（部分失败的臂忽略，不阻断成功的列）。
+/// - 至少一列产出（成功**或**报错）→ `Ok(())`。报错臂也会合成一条 `stream_outcome="error"`
+///   的列消息落库，避免整列被吞（只剩能正常回答的模型）。
 /// - 全部臂被取消 → `Err("cancelled")`。
-/// - 全部臂失败（且非取消）→ `Err(首个错误信息)`。
+/// - 无任何产出（理论兜底）→ `Err(首个错误信息)`。
 #[allow(clippy::too_many_arguments)]
 async fn run_reply_fan_out(
     app: &AppHandle,
@@ -2337,8 +2338,11 @@ async fn run_reply_fan_out(
     // 各臂独立克隆，互不写盘。arm 模式不走 push_assistant_message 的标题生成路径，
     // 故各臂统一传 title=None：多答首条回复的标题留给后续单模型轮或手动重命名
     // （避免 N 个克隆各自异步生成标题再丢弃）。
+    let run_entry = agent_run_entry_label(crate::chat::agent::AgentRunEntry::Send);
     let arm_futures = arms.iter().map(|(provider_id, model)| {
         let mut arm_conversation = conversation.clone();
+        let provider_id = provider_id.clone();
+        let model = model.clone();
         let arm = ReplyArm {
             group_id: group_id.to_string(),
             provider_id: provider_id.clone(),
@@ -2358,7 +2362,7 @@ async fn run_reply_fan_out(
                 false,
             )
             .await;
-            (outcome, arm_conversation)
+            (outcome, provider_id, model)
         }
     });
 
@@ -2367,7 +2371,7 @@ async fn run_reply_fan_out(
     let mut produced = 0usize;
     let mut cancelled = 0usize;
     let mut first_error: Option<String> = None;
-    for (outcome, _arm_conversation) in results {
+    for (outcome, provider_id, model) in results {
         match outcome {
             Ok(ArmReplyOutcome {
                 message: Some(message),
@@ -2382,6 +2386,12 @@ async fn run_reply_fan_out(
                 cancelled += 1;
             }
             Err(err) => {
+                // 报错臂也保留为一列：否则整列被吞、只剩能正常回答的模型。合成一条
+                // content=错误信息、stream_outcome="error" 的 assistant 列消息落库。
+                let message =
+                    build_error_arm_message(group_id, provider_id, model, err.clone(), run_entry, active_skill_id);
+                upsert_assistant_message(conversation, message);
+                produced += 1;
                 if first_error.is_none() {
                     first_error = Some(err);
                 }
@@ -2390,7 +2400,7 @@ async fn run_reply_fan_out(
     }
 
     if produced > 0 {
-        // 至少一列成功：合并后统一计算一次上下文并落盘。
+        // 至少一列产出（成功或报错）：合并后统一计算一次上下文并落盘。
         match compute_context_state(app, state, conversation, None, &[]).await {
             Ok(context_state) => {
                 conversation.context_state = context_state.clone();
@@ -2634,6 +2644,34 @@ fn build_assistant_message(
         model,
         timestamp: chrono::Local::now().timestamp(),
     }
+}
+
+/// 多答 fan-out 中某个臂报错时，合成一条「错误列」assistant 消息（不落盘由调用者 upsert）。
+/// 复用 build_assistant_message 保证列形态一致：带 group_id/provider/model，content 为错误信息，
+/// stream_outcome 标 "error"。这样报错的模型仍保留为一列，而不是被整列吞掉。
+fn build_error_arm_message(
+    group_id: &str,
+    provider_id: String,
+    model: String,
+    error: String,
+    run_entry: &str,
+    active_skill_id: Option<&str>,
+) -> ChatMessage {
+    build_assistant_message(
+        format!("msg_{}", Uuid::new_v4()),
+        error,
+        None,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        active_skill_id,
+        Some(run_entry),
+        Some("error"),
+        None,
+        None,
+        Some((group_id.to_string(), provider_id, model)),
+    )
 }
 
 pub(crate) async fn push_assistant_message(
@@ -8163,6 +8201,27 @@ mod tests {
         assert_eq!(arm.group_id.as_deref(), Some("grp_1"));
         assert_eq!(arm.provider_id.as_deref(), Some("anthropic"));
         assert_eq!(arm.model.as_deref(), Some("claude-3"));
+    }
+
+    #[test]
+    fn build_error_arm_message_keeps_column_identity_and_marks_error() {
+        // 报错臂合成的「错误列」：保留 group_id/provider/model，错误信息进 content，
+        // stream_outcome 标 error —— 这样前端仍按 group_id 聚合出该列，不再被吞掉。
+        let msg = build_error_arm_message(
+            "grp_err",
+            "provider-x".to_string(),
+            "model-y".to_string(),
+            "上游返回 429：额度不足".to_string(),
+            "send",
+            None,
+        );
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.group_id.as_deref(), Some("grp_err"));
+        assert_eq!(msg.provider_id.as_deref(), Some("provider-x"));
+        assert_eq!(msg.model.as_deref(), Some("model-y"));
+        assert_eq!(msg.stream_outcome.as_deref(), Some("error"));
+        assert!(msg.content.contains("429"));
+        assert!(msg.id.starts_with("msg_"));
     }
 
     #[test]
