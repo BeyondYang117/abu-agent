@@ -1308,6 +1308,7 @@ export const Sidebar = memo(function Sidebar({
                       sets={sets}
                       compact
                       showAssistantName={false}
+                      showFolderLabel
                       onSelectConversation={(id) => {
                         if (selectedProject) onSelectProject(null)
                         if (selectedSet) onSelectSet(null)
