@@ -49,6 +49,15 @@ const LONG_RUNNING_DEV_PATTERNS: &[&str] = &[
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
+    // 环境净化（对齐 codex 等）：关掉彩色输出与交互式分页，让给模型读的命令输出更干净。
+    // 只设"降噪"类，刻意不设 CI=1 —— 那会改变部分工具行为（如 CRA 把 warning 当 error、
+    // 某些 dev server 行为变样），本次目标仅是可读性，不改行为。无 AppState（headless
+    // kivio-code）也应用，故放在 state 早返回之前。
+    cmd.env("TERM", "dumb");
+    cmd.env("NO_COLOR", "1");
+    cmd.env("FORCE_COLOR", "0");
+    cmd.env("PAGER", "cat");
+
     let Some(state) = state else {
         return;
     };
@@ -442,9 +451,13 @@ async fn run_shell_command_background(
     apply_shell_tool_env(&mut cmd, state);
     #[cfg(target_os = "windows")]
     {
-        const DETACHED_PROCESS: u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        // 只用 CREATE_NO_WINDOW（+ 新进程组，便于 taskkill /T 按树杀）：cmd.exe 拿到隐藏
+        // 控制台，其 npm/vite/electron 子孙进程继承该隐藏控制台 → 全程无可见窗口。
+        // 不要叠加 DETACHED_PROCESS：按 MSDN，它与 CREATE_NO_WINDOW 同设会使后者失效，
+        // 且让 cmd.exe 无控制台可继承 → 控制台子孙各自新建**可见**窗口（就是那个黑框）。
+        // 跨轮存活由 kill_on_drop(false) + waiter 持有 Child 保证，不依赖 DETACHED_PROCESS。
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
     // Keep the child alive when its handle is dropped: background commands
     // survive across turns and are killed only by kill_background / app-exit.
@@ -795,6 +808,29 @@ mod tests {
             std::fs::canonicalize(&dir).expect("canonical temp dir")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn apply_shell_tool_env_injects_output_hygiene() {
+        // 无 AppState（headless 路径）也应注入降噪 env；刻意不含 CI。
+        let mut cmd = Command::new("cmd");
+        apply_shell_tool_env(&mut cmd, None);
+        let envs: std::collections::HashMap<String, Option<String>> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(envs.get("TERM"), Some(&Some("dumb".to_string())));
+        assert_eq!(envs.get("NO_COLOR"), Some(&Some("1".to_string())));
+        assert_eq!(envs.get("FORCE_COLOR"), Some(&Some("0".to_string())));
+        assert_eq!(envs.get("PAGER"), Some(&Some("cat".to_string())));
+        // 刻意不设 CI（避免改变工具行为，如 CRA warning-as-error）。
+        assert!(!envs.contains_key("CI"));
     }
 
     #[test]
