@@ -15,28 +15,35 @@ function buildToolCall(overrides: Partial<ToolCallRecord> = {}): ToolCallRecord 
 }
 
 describe('ToolCallBlock', () => {
-  it('renders success status with localized tool label', () => {
-    render(<ToolCallBlock toolCall={buildToolCall()} />)
-    expect(screen.getByRole('button', { name: /read_file/i })).toBeInTheDocument()
-    expect(screen.getByText(/已完成/)).toBeInTheDocument()
+  it('renders a capitalized verb + basename target, dropping status/source/duration', () => {
+    render(<ToolCallBlock toolCall={buildToolCall({ arguments: { path: 'src/a/README.md' } })} />)
+    const button = screen.getByRole('button', { name: /Read/ })
+    // Cursor-style row: 大写动词 + 目标（文件名 basename）
+    expect(within(button).getByText('Read')).toBeInTheDocument()
+    expect(within(button).getByText('README.md')).toBeInTheDocument()
+    // 已删除的后缀 / 全路径不再出现在折叠行
+    expect(within(button).queryByText(/已完成/)).not.toBeInTheDocument()
+    expect(within(button).queryByText(/Kivio/)).not.toBeInTheDocument()
+    expect(within(button).queryByText(/file contents loaded/)).not.toBeInTheDocument()
+    expect(within(button).queryByText(/src\/a/)).not.toBeInTheDocument()
   })
 
-  it('does not style row preview as error when status is success but error field is present', () => {
+  it('shows the real read line range from structured content', () => {
     render(
       <ToolCallBlock
         toolCall={buildToolCall({
-          status: 'success',
-          error: 'legacy warning text',
-          result_preview: 'ok',
+          toolName: 'read',
+          arguments: { path: 'src/chat/Lens.tsx' },
+          structured_content: { path: 'src/chat/Lens.tsx', start_line: 1880, end_line: 1939 },
         })}
       />,
     )
-    const button = screen.getByRole('button', { name: /read_file/i })
-    const preview = within(button).getByText(/legacy warning text/)
-    expect(preview.className).not.toContain('text-red-500')
+    const button = screen.getByRole('button', { name: /Read/ })
+    expect(within(button).getByText('Lens.tsx L1880-1939')).toBeInTheDocument()
   })
 
-  it('styles row preview as error only for error status', () => {
+  it('keeps the error out of the collapsed row and shows it (not red) in the expanded detail', async () => {
+    const user = userEvent.setup()
     render(
       <ToolCallBlock
         toolCall={buildToolCall({
@@ -45,9 +52,13 @@ describe('ToolCallBlock', () => {
         })}
       />,
     )
-    const button = screen.getByRole('button', { name: /read_file/i })
-    const preview = within(button).getByText(/permission denied/)
-    expect(preview.className).toContain('text-red-500')
+    const button = screen.getByRole('button', { name: /Read/ })
+    expect(within(button).queryByText(/permission denied/)).not.toBeInTheDocument()
+    await user.click(button)
+    const detail = screen.getByText(/permission denied/)
+    expect(detail).toBeInTheDocument()
+    // 错误不再标红
+    expect(detail.className).not.toContain('text-red-500')
   })
 
   it('expands details when clicked', async () => {
@@ -60,12 +71,12 @@ describe('ToolCallBlock', () => {
         defaultOpen={false}
       />,
     )
-    await user.click(screen.getByRole('button', { name: /read_file/i }))
+    await user.click(screen.getByRole('button', { name: /Read/ }))
     expect(screen.getByText('参数')).toBeInTheDocument()
-    expect(screen.getByText(/README\.md/)).toBeInTheDocument()
+    expect(screen.getAllByText(/README\.md/).length).toBeGreaterThan(0)
   })
 
-  it('formats grep preview with query and file path', () => {
+  it('uses the search pattern as the grep target', () => {
     render(
       <ToolCallBlock
         toolCall={buildToolCall({
@@ -78,27 +89,26 @@ describe('ToolCallBlock', () => {
         })}
       />,
     )
-    const button = screen.getByRole('button', { name: /grep/i })
-    expect(within(button).getByText(/搜索 ClaudeAgentClient/)).toBeInTheDocument()
-    expect(within(button).getByText(/providers\/claude\/agent\.ts/)).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: /Grep/ })
+    expect(within(button).getByText('Grep')).toBeInTheDocument()
+    expect(within(button).getByText('ClaudeAgentClient')).toBeInTheDocument()
+    // 目标只取 pattern，不再把 scope 塞进折叠行
+    expect(within(button).queryByText(/agent\.ts/)).not.toBeInTheDocument()
   })
 
-  it('formats grep preview with query and glob scope', () => {
+  it('renders glob as "Glob <pattern> in <dir>"', () => {
     render(
       <ToolCallBlock
         toolCall={buildToolCall({
-          toolName: 'grep',
+          toolName: 'glob',
           result_preview: '',
-          arguments: {
-            pattern: 'ClaudeAgentClient',
-            glob: '**/claude/agent.ts',
-          },
+          arguments: { pattern: '**/*overlay*', path: 'src/lens' },
         })}
       />,
     )
-    const button = screen.getByRole('button', { name: /grep/i })
-    expect(within(button).getByText(/搜索 ClaudeAgentClient/)).toBeInTheDocument()
-    expect(within(button).getByText(/\.\s\+\s\*\*\/claude\/agent\.ts/)).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: /Glob/ })
+    expect(within(button).getByText('Glob')).toBeInTheDocument()
+    expect(within(button).getByText('**/*overlay* in lens')).toBeInTheDocument()
   })
 
   it('falls back to stored grep argument preview when parsed arguments are unavailable', () => {
@@ -113,8 +123,23 @@ describe('ToolCallBlock', () => {
         })}
       />,
     )
-    const button = screen.getByRole('button', { name: /grep/i })
+    const button = screen.getByRole('button', { name: /Grep/ })
     expect(within(button).getByText(/正在生成工具参数/)).toBeInTheDocument()
-    expect(within(button).queryByText(/搜索文本/)).not.toBeInTheDocument()
+  })
+
+  it('shows the command as the bash target', () => {
+    render(
+      <ToolCallBlock
+        toolCall={buildToolCall({
+          toolName: 'run_command',
+          result_preview: 'exit_code: 0',
+          arguments: { command: 'npm test' },
+        })}
+      />,
+    )
+    const button = screen.getByRole('button', { name: /Run/ })
+    expect(within(button).getByText('Run')).toBeInTheDocument()
+    expect(within(button).getByText('npm test')).toBeInTheDocument()
+    expect(within(button).queryByText(/exit_code/)).not.toBeInTheDocument()
   })
 })
