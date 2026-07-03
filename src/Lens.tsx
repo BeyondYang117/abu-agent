@@ -1911,8 +1911,10 @@ export default function Lens() {
 
     // macOS 上窗口已经在 rebase 时搬到屏幕锚点,barRect 是窗口内坐标 (0, 0)。
     // 这里若再传 x/y 会把窗口搬到屏幕 (0, 0)。只传 width/height,让 OS 保持当前 origin。
-    // Windows 走 SetWindowRgn 必须传 x/y 才能更新裁剪区。
-    if (isMacPlatform) {
+    // translateText 是天生小窗(开窗即贴光标 set_size),同样只改尺寸——绝不 SetWindowRgn,
+    // 否则透明无边框 WebView2 + region 会渲染出黑块 + 原生标题栏(tauri#14764)。
+    // Windows 的截图翻译 / lens 全屏→浮动才走 SetWindowRgn(必须传 x/y 更新裁剪区)。
+    if (isMacPlatform || mode === 'translateText') {
       api.lensSetFloating({ width: w, height: h }).catch(err => console.error('[lens-floating] resize failed:', err))
     } else {
       api.lensSetFloating({ x, y, width: w, height: h }).catch(err => console.error('[lens-floating] resize failed:', err))

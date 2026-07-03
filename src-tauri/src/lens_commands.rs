@@ -2300,6 +2300,12 @@ pub(crate) fn lens_set_floating(app: AppHandle, rect: FloatingRect) -> Result<()
     {
         if let (Some(x), Some(y)) = (rect.x, rect.y) {
             lens_set_interactive_region(&window, x, y, rect.width, rect.height)?;
+        } else {
+            // size-only（选中翻译等天生小窗）：先清掉可能残留的旧裁剪 region，再真实改尺寸。
+            // 避开"透明+无边框+SetWindowRgn"在 WebView2 上的黑块/原生标题栏脆弱性（tauri#14764）——
+            // 全屏→浮动路径才需要 SetWindowRgn，天生小窗直接 set_size 即可。
+            lens_clear_interactive_region(&window);
+            let _ = window.set_size(tauri::LogicalSize::new(rect.width, rect.height));
         }
     }
 
