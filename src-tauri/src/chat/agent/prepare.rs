@@ -189,7 +189,7 @@ pub fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
 }
 
 /// True for the native file/shell tools gated by one-time per-conversation
-/// session consent (read/write/edit/bash/grep/find/ls). See
+/// session consent (read/write/edit/bash/grep/glob). See
 /// `native_registry::native_tool_requires_session_consent`.
 pub fn tool_requires_session_consent(tool: &ChatToolDefinition) -> bool {
     tool.source == "native"
@@ -450,7 +450,7 @@ pub fn build_chat_system_prompt_with_segments(
             action_examples.push("asking the user a blocking clarification");
         }
         if available_builtin_tools.iter().any(|tool| {
-            matches!(tool.as_str(), "read" | "ls" | "grep" | "find")
+            matches!(tool.as_str(), "read" | "grep" | "glob")
         }) {
             action_examples.push("reading or searching project files");
         }
@@ -715,6 +715,9 @@ pub(crate) fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommend
     if recommended.is_empty() {
         return false;
     }
+    // 旧名归一化：persona/skill 白名单里写的旧工具名（find/ls/todo_update/list_background）
+    // 规整到现名，避免改名后被静默剔除。
+    let recommended = crate::mcp::types::canonical_tool_name(recommended);
     tool.name == recommended
         || tool.id == recommended
         || tool.openai_tool_name() == recommended
@@ -839,7 +842,7 @@ fn native_tools_prompt(
 - Write/edit tools and bash may need user approval; memory_read (L2 on demand; L1 is auto-injected), memory_search (keyword search over L2; prefer it when you are unsure of the exact heading), and memory_modify do not.\n\
 - Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax (Windows: `%VAR%`, `dir`, `\\`; Unix: `$VAR`, `ls`, `/`). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
 - bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Skill scripts go through skill_run_script; never use host pip to bypass the run_python sandbox.\n\
-- Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list jobs with list_background, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
+- Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {en_live_access_hint}"
         ) + &generated_file_hint + image_generation_hint

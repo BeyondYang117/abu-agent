@@ -34,6 +34,11 @@
 - **内部逻辑全部仍见内部名**（`tool.name`）：`native_registry::find_entry`、`is_read_only_tool`、`parallel_safe`、`filter_tools_for_agent`、`agent_plan_allows_tool`、DSML 抽取。唯一收 wire 名的 `disabled_builtin_tool_feedback` 先 `resolve_reserved_wire_alias` 反解。
 - MCP 工具不受影响（按前缀 id 命名，走 `_ => sanitize(&id)` 分支）。
 
+**C4 — 旧名归一化（与 C3 方向相反，勿混用）。** 工具被移除/合并/改名后，旧名仍需能路由到现工具。`LEGACY_TOOL_ALIASES`（`mcp/types.rs`）+ `canonical_tool_name(name)` 把**旧输入名规整到现工具名**（`ls`→`read`、`find`→`glob`、`list_background`→`bash_output`、`todo_update`→`todo_write`）：
+- **方向相反**：C3 wire 别名是"内部名→模型可见名"（改对外暴露、参与 tools 声明+提示词渲染）；C4 是"旧输入名→现内部名"（规整历史输入，**不参与**声明/渲染，模型只看到现名）。
+- 消费点**两处**：`match_tool_call`（execute.rs，精确匹配失败后、大小写兜底前，用 `canonical_tool_name` 再比一次）覆盖模型发的旧名调用；`tool_matches_recommended_name`（prepare.rs，比对前规整 recommended 名）覆盖 persona/skill 存储白名单里的旧名，避免改名后被静默剔除。
+- 移除/改名一个工具：删注册表条目（或改 `name`），把旧名加进 `LEGACY_TOOL_ALIASES`，同步更新注册表快照测试即可；handler/内部逻辑仍按现名走。
+
 ### 4. Validation & Error Matrix
 
 | 条件 | 行为 |

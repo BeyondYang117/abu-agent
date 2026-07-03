@@ -9,32 +9,11 @@ use crate::mcp::types::McpToolCallResult;
 use crate::mcp::ChatToolDefinition;
 
 pub const TODO_WRITE_TOOL_NAME: &str = "todo_write";
-pub const TODO_UPDATE_TOOL_NAME: &str = "todo_update";
 
 #[derive(Debug, Deserialize)]
 struct TodoWriteArgs {
     #[serde(default)]
     todos: Vec<AgentTodoItem>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TodoUpdateArgs {
-    id: String,
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    status: Option<AgentTodoStatus>,
-    #[serde(default)]
-    blocks: Option<Vec<String>>,
-    #[serde(default)]
-    blocked_by: Option<Vec<String>>,
-    #[serde(default)]
-    owner: Option<String>,
-    /// true 时删除该条目（伪状态删除），并清理所有指向它的依赖边。
-    #[serde(default)]
-    delete: bool,
 }
 
 /// 一次 todo 工具调用的结果：归一后的状态 + 本次实际改动的字段（变更回执）。
@@ -44,7 +23,7 @@ pub struct TodoToolOutcome {
 }
 
 pub fn is_agent_todo_tool_name(name: &str) -> bool {
-    matches!(name, TODO_WRITE_TOOL_NAME | TODO_UPDATE_TOOL_NAME)
+    name == TODO_WRITE_TOOL_NAME
 }
 
 pub fn append_tool_definitions(tools: &mut Vec<ChatToolDefinition>) {
@@ -59,7 +38,7 @@ pub fn append_tool_definitions(tools: &mut Vec<ChatToolDefinition>) {
 }
 
 pub fn tool_definitions() -> Vec<ChatToolDefinition> {
-    vec![todo_write_tool(), todo_update_tool()]
+    vec![todo_write_tool()]
 }
 
 pub fn todo_write_tool() -> ChatToolDefinition {
@@ -92,73 +71,13 @@ pub fn todo_write_tool() -> ChatToolDefinition {
     }
 }
 
-pub fn todo_update_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "native__todo_update".to_string(),
-        name: TODO_UPDATE_TOOL_NAME.to_string(),
-        description: "Update one item in the assistant's internal todo list by id, or delete it. Use when work starts, switches, completes, is cancelled, or dependencies/owner change.".to_string(),
-        source: "native".to_string(),
-        server_id: None,
-        server_name: Some("Kivio".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 80,
-                    "description": "Existing todo item id"
-                },
-                "content": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 240
-                },
-                "description": {
-                    "type": "string",
-                    "maxLength": 2000,
-                    "description": "Longer details; empty string clears it"
-                },
-                "status": status_schema(),
-                "blocks": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "blocked_by": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "owner": {
-                    "type": "string",
-                    "maxLength": 80,
-                    "description": "Claimant; empty string clears it"
-                },
-                "delete": {
-                    "type": "boolean",
-                    "description": "Remove this item and clean up dependency edges referencing it"
-                }
-            },
-            "required": ["id"],
-            "additionalProperties": false
-        }),
-        sensitive: false,
-        annotations: Some(serde_json::json!({
-            "readOnlyHint": false,
-            "destructiveHint": false,
-            "openWorldHint": false
-        })),
-        output_schema: Some(todo_output_schema()),
-    }
-}
-
 pub fn apply_tool(
-    current: &AgentTodoState,
+    _current: &AgentTodoState,
     tool_name: &str,
     arguments: Value,
 ) -> Result<TodoToolOutcome, String> {
     match tool_name {
         TODO_WRITE_TOOL_NAME => apply_todo_write(arguments),
-        TODO_UPDATE_TOOL_NAME => apply_todo_update(current, arguments),
         other => Err(format!("Unknown todo tool: {other}")),
     }
 }
@@ -173,90 +92,11 @@ pub fn apply_todo_write(arguments: Value) -> Result<TodoToolOutcome, String> {
     })
 }
 
-pub fn apply_todo_update(
-    current: &AgentTodoState,
-    arguments: Value,
-) -> Result<TodoToolOutcome, String> {
-    let args: TodoUpdateArgs = serde_json::from_value(arguments)
-        .map_err(|err| format!("Invalid todo_update arguments: {err}"))?;
-    let id = args.id.trim().to_string();
-    if id.is_empty() {
-        return Err("todo_update id is empty".to_string());
-    }
-
-    // 删除：移除该条目，反向边清理在 normalized_state 里统一做（丢弃指向不存在 id 的边）。
-    if args.delete {
-        if !current.items.iter().any(|item| item.id == id) {
-            return Err(format!("Todo item not found: {id}"));
-        }
-        let items = current
-            .items
-            .iter()
-            .filter(|item| item.id != id)
-            .cloned()
-            .collect();
-        let state = normalized_state(items, None)?;
-        return Ok(TodoToolOutcome {
-            state,
-            changed: vec!["deleted".to_string()],
-        });
-    }
-
-    if args.content.is_none()
-        && args.description.is_none()
-        && args.status.is_none()
-        && args.blocks.is_none()
-        && args.blocked_by.is_none()
-        && args.owner.is_none()
-    {
-        return Err(
-            "todo_update requires at least one of: content, description, status, blocks, blocked_by, owner, delete"
-                .to_string(),
-        );
-    }
-
-    let mut items = current.items.clone();
-    let mut changed = Vec::new();
-    let item = items
-        .iter_mut()
-        .find(|item| item.id == id)
-        .ok_or_else(|| format!("Todo item not found: {id}"))?;
-    if let Some(content) = args.content {
-        item.content = content;
-        changed.push("content".to_string());
-    }
-    if let Some(description) = args.description {
-        // 空字符串视为清除描述。
-        item.description = Some(description).filter(|d| !d.trim().is_empty());
-        changed.push("description".to_string());
-    }
-    if let Some(status) = args.status {
-        item.status = status;
-        changed.push("status".to_string());
-    }
-    if let Some(blocks) = args.blocks {
-        item.blocks = blocks;
-        changed.push("blocks".to_string());
-    }
-    if let Some(blocked_by) = args.blocked_by {
-        item.blocked_by = blocked_by;
-        changed.push("blocked_by".to_string());
-    }
-    if let Some(owner) = args.owner {
-        item.owner = Some(owner).filter(|o| !o.trim().is_empty());
-        changed.push("owner".to_string());
-    }
-    let preferred_in_progress =
-        matches!(&item.status, AgentTodoStatus::InProgress).then(|| id.clone());
-    let state = normalized_state(items, preferred_in_progress.as_deref())?;
-    Ok(TodoToolOutcome { state, changed })
-}
-
 pub fn format_prompt(state: &AgentTodoState, language: &str, todo_tools_available: bool) -> String {
     let current = format_state_lines(state);
     if language.starts_with("zh") {
         let tool_hint = if todo_tools_available {
-            "你可以使用 todo_write 和 todo_update 维护这个列表。"
+            "你可以使用 todo_write 维护这个列表（整表替换）。"
         } else {
             "当前请求没有可用的 todo 工具；只能把它作为上下文参考。"
         };
@@ -265,7 +105,7 @@ pub fn format_prompt(state: &AgentTodoState, language: &str, todo_tools_availabl
         )
     } else {
         let tool_hint = if todo_tools_available {
-            "Use todo_write and todo_update to maintain it."
+            "Use todo_write to maintain it (full-list replace)."
         } else {
             "Todo tools are unavailable for this request; use it as context only."
         };
@@ -460,7 +300,7 @@ fn todo_item_schema() -> Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 80,
-                "description": "Stable id for future todo_update calls"
+                "description": "Stable id; reuse the same id across todo_write calls to preserve an item"
             },
             "content": {
                 "type": "string",
@@ -569,25 +409,19 @@ mod tests {
     }
 
     #[test]
-    fn update_prefers_new_in_progress_item() {
-        let current = apply_todo_write(serde_json::json!({
+    fn write_switches_in_progress_item() {
+        // 整表替换即可切换 in_progress：把 b 设为 in_progress、a 设为 pending。
+        let outcome = apply_todo_write(serde_json::json!({
             "todos": [
-                { "id": "a", "content": "First", "status": "in_progress" },
-                { "id": "b", "content": "Second", "status": "pending" }
+                { "id": "a", "content": "First", "status": "pending" },
+                { "id": "b", "content": "Second", "status": "in_progress" }
             ]
         }))
-        .expect("todo write should succeed")
-        .state;
-
-        let outcome = apply_todo_update(
-            &current,
-            serde_json::json!({ "id": "b", "status": "in_progress" }),
-        )
-        .expect("todo update should succeed");
+        .expect("todo write should succeed");
 
         assert_eq!(outcome.state.items[0].status, AgentTodoStatus::Pending);
         assert_eq!(outcome.state.items[1].status, AgentTodoStatus::InProgress);
-        assert_eq!(outcome.changed, vec!["status".to_string()]);
+        assert_eq!(outcome.changed, vec!["todos".to_string()]);
     }
 
     #[test]
@@ -604,26 +438,19 @@ mod tests {
     }
 
     #[test]
-    fn delete_removes_item_and_cleans_edges() {
-        let current = apply_todo_write(serde_json::json!({
+    fn write_removing_item_cleans_edges() {
+        // 整表重写为只剩 b（删除 a）；b.blocked_by 仍写着已删除的 a，应被清理。
+        let outcome = apply_todo_write(serde_json::json!({
             "todos": [
-                { "id": "a", "content": "First", "status": "completed", "blocks": ["b"] },
-                { "id": "b", "content": "Second", "status": "pending" }
+                { "id": "b", "content": "Second", "status": "pending", "blocked_by": ["a"] }
             ]
         }))
-        .expect("write")
-        .state;
-        // 写侧已自动给 b 补了 blocked_by: ["a"]
-        assert_eq!(current.items[1].blocked_by, vec!["a".to_string()]);
-
-        let outcome =
-            apply_todo_update(&current, serde_json::json!({ "id": "a", "delete": true }))
-                .expect("delete");
+        .expect("write");
         assert_eq!(outcome.state.items.len(), 1);
         assert_eq!(outcome.state.items[0].id, "b");
         // 指向已删除 a 的反向边被清理
         assert!(outcome.state.items[0].blocked_by.is_empty());
-        assert_eq!(outcome.changed, vec!["deleted".to_string()]);
+        assert_eq!(outcome.changed, vec!["todos".to_string()]);
     }
 
     #[test]
@@ -663,12 +490,11 @@ mod tests {
         assert_eq!(current.items[0].description.as_deref(), Some("details"));
         assert_eq!(current.items[0].owner.as_deref(), Some("researcher"));
 
-        // 空字符串清除
-        let outcome = apply_todo_update(
-            &current,
-            serde_json::json!({ "id": "a", "description": "", "owner": "" }),
-        )
-        .expect("update");
+        // 整表重写不带 description/owner → 字段被清除。
+        let outcome = apply_todo_write(serde_json::json!({
+            "todos": [{ "id": "a", "content": "Task", "status": "pending" }]
+        }))
+        .expect("write");
         assert_eq!(outcome.state.items[0].description, None);
         assert_eq!(outcome.state.items[0].owner, None);
     }

@@ -1584,14 +1584,15 @@ mod tests {
         );
         println!("\n=== Simulated agent session in {} ===", proj.display());
 
-        // 1) registry exposes exactly Pi's 7 file/shell short names.
+        // 1) registry exposes exactly the file/shell short names (read now also
+        // lists directories; find renamed glob; ls removed).
         let names: Vec<&str> = crate::mcp::native_registry::NATIVE_TOOLS
             .iter()
             .map(|e| e.name)
-            .filter(|n| matches!(*n, "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls"))
+            .filter(|n| matches!(*n, "read" | "write" | "edit" | "bash" | "grep" | "glob"))
             .collect();
         println!("\n[1] file/shell tools in registry: {names:?}");
-        assert_eq!(names.len(), 7, "exactly Pi's 7 short-named tools");
+        assert_eq!(names.len(), 6, "exactly the 6 file/shell short-named tools");
 
         // 2) grep "TODO" — finds src/app.rs, skips gitignored node_modules.
         let grep = search_files(&ws, &json!({ "query": "TODO" })).expect("grep");

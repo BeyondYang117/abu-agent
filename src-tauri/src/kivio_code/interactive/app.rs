@@ -1558,7 +1558,7 @@ fn tool_phase_label(tool_name: &str, arguments: &str) -> String {
             let target = basename("path").or_else(|| basename("dir"));
             with_target("listing", target.filter(|t| !t.is_empty()).or_else(|| Some(".".to_string())))
         }
-        "find" | "glob_files" => "finding files".to_string(),
+        "find" | "glob_files" | "glob" => "finding files".to_string(),
         "grep" | "search_files" => {
             with_target("searching", str_arg("pattern").or_else(|| str_arg("query")))
         }

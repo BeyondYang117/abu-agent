@@ -123,7 +123,7 @@ pub struct PrintOptions {
 }
 
 /// The core file/shell/web tools exposed to the model in print mode. Mirrors the
-/// PI 7-tool coding set (read/write/edit/ls/find/grep/bash) plus web_fetch.
+/// PI coding set (read/write/edit/ls/glob/grep/bash) plus web_fetch.
 pub fn core_tool_definitions() -> Vec<ChatToolDefinition> {
     vec![
         native_read_file_tool(),
@@ -677,7 +677,7 @@ mod tests {
             .collect();
         assert_eq!(names.len(), 8);
         for expected in [
-            "read", "ls", "grep", "find", "write", "edit", "bash", "web_fetch",
+            "read", "ls", "grep", "glob", "write", "edit", "bash", "web_fetch",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
@@ -1028,7 +1028,7 @@ mod tests {
 
         // Build mode keeps the full core set (incl. write/edit/bash).
         let build = tool_names(false);
-        for expected in ["read", "ls", "grep", "find", "write", "edit", "bash", "web_fetch"] {
+        for expected in ["read", "ls", "grep", "glob", "write", "edit", "bash", "web_fetch"] {
             assert!(build.iter().any(|n| n == expected), "build missing {expected}: {build:?}");
         }
 
@@ -1037,7 +1037,7 @@ mod tests {
         for blocked in ["write", "edit", "bash"] {
             assert!(!plan.iter().any(|n| n == blocked), "plan must drop {blocked}: {plan:?}");
         }
-        for kept in ["read", "ls", "grep", "find", "web_fetch"] {
+        for kept in ["read", "ls", "grep", "glob", "web_fetch"] {
             assert!(plan.iter().any(|n| n == kept), "plan must keep {kept}: {plan:?}");
         }
     }

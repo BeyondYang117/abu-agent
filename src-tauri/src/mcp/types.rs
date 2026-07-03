@@ -29,6 +29,29 @@ pub fn resolve_reserved_wire_alias(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+/// 旧工具名 → 现工具名。工具被移除/合并/改名后，旧名仍需能路由到现工具，覆盖两条输入
+/// 路径：① 模型发出的旧名工具调用（`match_tool_call`），② persona/skill 存储的工具白名单
+/// （`tool_matches_recommended_name`）。
+///
+/// **方向与 `RESERVED_WIRE_ALIASES` 相反**：wire 别名是"内部名 → 模型可见名"（改对外暴露）；
+/// 这里是"旧输入名 → 现内部名"（把历史输入规整到现工具），**不参与**工具声明/提示词渲染。
+const LEGACY_TOOL_ALIASES: &[(&str, &str)] = &[
+    ("ls", "read"),                    // ls 并入 read（read 现在可读目录）
+    ("find", "glob"),                  // find 改名 glob
+    ("list_background", "bash_output"), // list_background 并入 bash_output（无 job_id=列表）
+    ("todo_update", "todo_write"),     // todo_update 并入 todo_write（整表替换）
+];
+
+/// 旧工具名规整为现工具名（无命中原样返回）。
+pub fn canonical_tool_name(name: &str) -> &str {
+    LEGACY_TOOL_ALIASES
+        .iter()
+        .find(|(from, _)| *from == name)
+        .map(|(_, to)| *to)
+        .unwrap_or(name)
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatToolDefinition {
@@ -368,7 +391,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__read_file".to_string(),
         name: "read".to_string(),
-        description: "Read a local file. Text files are line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit old_string. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading. Image files (png/jpg/webp/…) are also supported: the image is shown to you directly when your model has vision, otherwise it is described or OCR'd to text — so you can `read` screenshots and photos by path. For PDF/Word/Excel, use the matching skill instead.".to_string(),
+        description: "Read a local file or directory. For a file: text is line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit old_string. Optional offset/limit select a 1-based line window — use them for large files; the result reports total_lines and next_offset so you can continue reading. For a directory path: returns its entries (folded in the former `ls` tool); offset/limit are ignored. Image files (png/jpg/webp/…) are also supported: the image is shown to you directly when your model has vision, otherwise it is described or OCR'd to text — so you can `read` screenshots and photos by path. For PDF/Word/Excel, use the matching skill instead.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -387,6 +410,9 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
     }
 }
 
+/// Directory listing tool def. No longer part of the chat native tool set (chat's
+/// `read` now lists directories directly), but still used by the Kivio Code surface,
+/// which keeps a dedicated `ls` in its own tool list.
 pub fn native_list_dir_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__list_dir".to_string(),
@@ -442,7 +468,7 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
 pub fn native_glob_files_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__glob_files".to_string(),
-        name: "find".to_string(),
+        name: "glob".to_string(),
         description: "Find files/directories under a directory by glob pattern such as \"src/**/*.tsx\". Relative paths resolve from the project root; respects .gitignore.".to_string(),
         source: "native".to_string(),
         server_id: None,
@@ -548,35 +574,16 @@ pub fn native_bash_output_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__bash_output".to_string(),
         name: "bash_output".to_string(),
-        description: "Read new output from a background command started by bash (background:true). Pass the job_id returned by that call. Returns the captured stdout/stderr since since_offset (default 0), the current status (running / exited with exit_code / killed / error), and next_offset to pass on the next poll for incremental reads. After dispatching a background command, do NOT poll immediately — keep working, then poll a bounded number of times (≤20). Always refresh once with bash_output before reporting a background command's result to the user.".to_string(),
+        description: "Inspect background commands started by bash (background:true). With a job_id: returns that job's captured stdout/stderr since since_offset (default 0), the current status (running / exited with exit_code / killed / error), and next_offset for incremental reads. With NO job_id: lists all background commands tracked in this app session (job_id, status, command, working directory, age) — background commands survive across turns until killed or the app exits. After dispatching a background command, do NOT poll immediately — keep working, then poll a bounded number of times (≤20). Always refresh once with bash_output before reporting a background command's result to the user.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "job_id": { "type": "string", "description": "The job_id returned when the background command was started" },
+                "job_id": { "type": "string", "description": "The job_id returned when the background command was started. Omit to list all tracked background jobs instead." },
                 "since_offset": { "type": "integer", "description": "Byte offset to read from (use next_offset from the previous bash_output call for incremental reads; default 0)" }
-            },
-            "required": ["job_id"]
-        }),
-        sensitive: false,
-        annotations: None,
-        output_schema: None,
-    }
-}
-
-pub fn native_list_background_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "native__list_background".to_string(),
-        name: "list_background".to_string(),
-        description: "List all background commands tracked in this app session, with their job_id, status (running / exited / killed / error), command, working directory, and age. Background commands survive across turns until you kill them or the app exits.".to_string(),
-        source: "native".to_string(),
-        server_id: None,
-        server_name: Some("Kivio".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {}
+            }
         }),
         sensitive: false,
         annotations: None,
@@ -968,7 +975,6 @@ mod tests {
     #[test]
     fn file_tool_path_descriptions_are_scope_specific() {
         let read_schema = native_read_file_tool().input_schema;
-        let ls_schema = native_list_dir_tool().input_schema;
         let grep = native_search_files_tool();
         let find = native_glob_files_tool();
 
@@ -976,10 +982,8 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("File path"));
-        assert!(ls_schema["properties"]["path"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("Directory"));
+        // read 现在也列目录，描述里应提到目录
+        assert!(native_read_file_tool().description.contains("directory"));
         assert!(grep.description.contains("file or under a directory"));
         assert!(grep.description.contains("pass that file path directly"));
         assert!(grep.input_schema["properties"]["path"]["description"]
@@ -1075,7 +1079,7 @@ mod tests {
         let native = crate::settings::ChatNativeToolsConfig::default();
         let defs = list_native_builtin_tool_defs(&native, false, false);
         let names: Vec<&str> = defs.iter().map(|tool| tool.name.as_str()).collect();
-        for expected in ["read", "ls", "grep", "find", "write", "edit", "bash"] {
+        for expected in ["read", "grep", "glob", "write", "edit", "bash"] {
             assert!(
                 names.contains(&expected),
                 "default config must expose `{expected}` (got {names:?})"
@@ -1262,5 +1266,18 @@ mod tests {
             ..tool
         };
         assert_eq!(mcp_tool.openai_tool_name(), "mcp__srv__web_search");
+    }
+
+    #[test]
+    fn canonical_tool_name_maps_legacy_names() {
+        // 旧名 → 现名（移除/合并/改名后仍可路由）。
+        assert_eq!(canonical_tool_name("ls"), "read");
+        assert_eq!(canonical_tool_name("find"), "glob");
+        assert_eq!(canonical_tool_name("list_background"), "bash_output");
+        assert_eq!(canonical_tool_name("todo_update"), "todo_write");
+        // 现名与未知名原样返回。
+        assert_eq!(canonical_tool_name("read"), "read");
+        assert_eq!(canonical_tool_name("glob"), "glob");
+        assert_eq!(canonical_tool_name("bash"), "bash");
     }
 }

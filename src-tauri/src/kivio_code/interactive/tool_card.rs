@@ -202,7 +202,7 @@ enum ToolKind {
 fn normalize_tool(name: &str) -> ToolKind {
     match name {
         "read" | "read_file" => ToolKind::Read,
-        "ls" | "list_dir" | "find" | "glob_files" => ToolKind::Listing,
+        "ls" | "list_dir" | "find" | "glob_files" | "glob" => ToolKind::Listing,
         "grep" | "search_files" => ToolKind::Grep,
         "write" | "write_file" | "edit" | "edit_file" => ToolKind::Mutation,
         "bash" | "run_command" => ToolKind::Bash,

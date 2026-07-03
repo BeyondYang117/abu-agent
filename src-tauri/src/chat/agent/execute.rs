@@ -63,6 +63,17 @@ pub fn match_tool_call<'a>(
     {
         return Some(exact);
     }
+    // 旧名归一化：工具被移除/合并/改名后（find→glob、ls→read、list_background→bash_output、
+    // todo_update→todo_write），模型仍可能按旧名出牌。规整到现名后精确再比一次。
+    let canonical = crate::mcp::types::canonical_tool_name(function_name);
+    if canonical != function_name {
+        if let Some(hit) = tools
+            .iter()
+            .find(|tool| tool.openai_tool_name() == canonical || tool.name == canonical)
+        {
+            return Some(hit);
+        }
+    }
     // 大小写不敏感兜底：Cursor 系模型（grok-composer 等）训练时烙着大写工具名
     // （Grep/Read/Bash），在别的工具集下会间歇性按原名出牌。仅当忽略大小写后
     // **唯一**命中才采用——MCP 服务器可能真有同名不同大小写的工具，多义时不猜。
@@ -872,6 +883,27 @@ mod tests {
         assert_eq!(match_tool_call(&tools, "Grep").unwrap().name, "grep");
         assert_eq!(match_tool_call(&tools, "READ").unwrap().name, "read");
         assert!(match_tool_call(&tools, "Glob").is_none());
+    }
+
+    #[test]
+    fn match_tool_call_routes_legacy_names_to_current_tools() {
+        // 旧名（移除/合并/改名前的名字）经归一化路由到现工具。
+        let tools = vec![
+            named_test_tool("read"),
+            named_test_tool("glob"),
+            named_test_tool("bash_output"),
+            named_test_tool("todo_write"),
+        ];
+        assert_eq!(match_tool_call(&tools, "ls").unwrap().name, "read");
+        assert_eq!(match_tool_call(&tools, "find").unwrap().name, "glob");
+        assert_eq!(
+            match_tool_call(&tools, "list_background").unwrap().name,
+            "bash_output"
+        );
+        assert_eq!(
+            match_tool_call(&tools, "todo_update").unwrap().name,
+            "todo_write"
+        );
     }
 
     #[test]

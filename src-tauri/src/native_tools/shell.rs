@@ -527,7 +527,7 @@ async fn run_shell_command_background(
     });
 
     Ok(format!(
-        "background: true\njob_id: {job_id}\npid: {pid_text}\ncwd: {}\ncommand: {command}\n\nStarted in the background; it keeps running after this tool returns and survives across turns until you call kill_background or the app exits. Poll its output and exit status with bash_output (job_id: {job_id}); list all background jobs with list_background; stop it with kill_background (job_id: {job_id}). Do not start the same dev server twice.\n",
+        "background: true\njob_id: {job_id}\npid: {pid_text}\ncwd: {}\ncommand: {command}\n\nStarted in the background; it keeps running after this tool returns and survives across turns until you call kill_background or the app exits. Poll its output and exit status with bash_output (job_id: {job_id}); list all background jobs by calling bash_output with no job_id; stop it with kill_background (job_id: {job_id}). Do not start the same dev server twice.\n",
         cwd.display()
     ))
 }

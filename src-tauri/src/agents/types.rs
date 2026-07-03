@@ -43,9 +43,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             model: None,
             tools: vec![
                 "read".to_string(),
-                "ls".to_string(),
                 "grep".to_string(),
-                "find".to_string(),
+                "glob".to_string(),
                 "web_search".to_string(),
                 "web_fetch".to_string(),
             ],
@@ -59,9 +58,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             model: None,
             tools: vec![
                 "read".to_string(),
-                "ls".to_string(),
                 "grep".to_string(),
-                "find".to_string(),
+                "glob".to_string(),
                 "edit".to_string(),
                 "write".to_string(),
             ],
@@ -75,9 +73,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             model: None,
             tools: vec![
                 "read".to_string(),
-                "ls".to_string(),
                 "grep".to_string(),
-                "find".to_string(),
+                "glob".to_string(),
             ],
             source: "builtin".to_string(),
         },

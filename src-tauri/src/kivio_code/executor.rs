@@ -113,7 +113,7 @@ impl CliToolExecutor {
                 file_mutation_tool_result(result)
             }
             "list_dir" | "ls" => Ok(text_tool_result(list_dir(&self.workspace, &arguments)?)),
-            "glob_files" | "find" => {
+            "glob_files" | "find" | "glob" => {
                 Ok(text_tool_result(glob_files(&self.workspace, &arguments)?))
             }
             "search_files" | "grep" => {

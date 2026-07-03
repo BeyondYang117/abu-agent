@@ -6350,7 +6350,6 @@ mod tests {
             crate::mcp::types::native_skill_run_script_tool(),
             crate::chat::ask_user::ask_user_tool(),
             crate::chat::todo::todo_write_tool(),
-            crate::chat::todo::todo_update_tool(),
             readonly_mcp_tool,
             write_mcp_tool,
         ];
@@ -6371,7 +6370,6 @@ mod tests {
         assert!(names.contains(&"skill_read_file".to_string()));
         assert!(names.contains(&"ask_user".to_string()));
         assert!(names.contains(&"todo_write".to_string()));
-        assert!(names.contains(&"todo_update".to_string()));
         assert!(names.contains(&"mcp__docs__search".to_string()));
         assert!(!names.contains(&"write".to_string()));
         assert!(!names.contains(&"bash".to_string()));

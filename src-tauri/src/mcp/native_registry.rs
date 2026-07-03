@@ -36,7 +36,7 @@ use crate::state::AppState;
 use super::registry::NativeToolContext;
 use super::types::{
     native_bash_output_tool, native_edit_file_tool, native_glob_files_tool,
-    native_kill_background_tool, native_list_background_tool, native_list_dir_tool,
+    native_kill_background_tool,
     native_knowledge_search_tool, native_memory_modify_tool, native_memory_read_tool,
     native_memory_search_tool, native_read_file_tool, native_run_command_tool,
     native_run_python_tool, native_save_assistant_tool, native_search_files_tool,
@@ -157,16 +157,6 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         call: NativeToolCall::Async(call_read_file),
     },
     NativeToolEntry {
-        name: "ls",
-        def: native_list_dir_tool,
-        enabled: |native, _, _| native.read_file,
-        parallel_safe: true,
-        bypasses_approval: false,
-        read_only: true,
-        requires_session_consent: true,
-        call: NativeToolCall::SyncText(crate::native_tools::list_dir),
-    },
-    NativeToolEntry {
         name: "grep",
         def: native_search_files_tool,
         enabled: |native, _, _| native.read_file,
@@ -177,7 +167,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         call: NativeToolCall::SyncText(crate::native_tools::search_files),
     },
     NativeToolEntry {
-        name: "find",
+        name: "glob",
         def: native_glob_files_tool,
         enabled: |native, _, _| native.read_file,
         parallel_safe: true,
@@ -216,11 +206,12 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         requires_session_consent: true,
         call: NativeToolCall::Async(call_run_command),
     },
-    // Background-command observability tools (PR2). Gated by the same
-    // `run_command` toggle + session consent as `bash` (they expose host-shell
-    // job state/control). bash_output/list_background are read-only and
-    // parallel-safe (pure registry/log reads); kill_background is a control
-    // action and is neither. None bypass approval — they ride bash's consent.
+    // Background-command observability tools. Gated by the same `run_command`
+    // toggle + session consent as `bash` (they expose host-shell job
+    // state/control). bash_output is read-only and parallel-safe (pure
+    // registry/log reads) and, with no job_id, lists all tracked jobs (folds in
+    // the former list_background tool); kill_background is a control action and
+    // is neither. Neither bypasses approval — they ride bash's consent.
     NativeToolEntry {
         name: "bash_output",
         def: native_bash_output_tool,
@@ -230,16 +221,6 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         read_only: true,
         requires_session_consent: true,
         call: NativeToolCall::Async(call_bash_output),
-    },
-    NativeToolEntry {
-        name: "list_background",
-        def: native_list_background_tool,
-        enabled: |native, _, _| native.run_command,
-        parallel_safe: true,
-        bypasses_approval: false,
-        read_only: true,
-        requires_session_consent: true,
-        call: NativeToolCall::Async(call_list_background),
     },
     NativeToolEntry {
         name: "kill_background",
@@ -321,16 +302,6 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         call: NativeToolCall::Conversation(crate::chat::todo::handle_conversation_tool_call),
     },
     NativeToolEntry {
-        name: crate::chat::todo::TODO_UPDATE_TOOL_NAME,
-        def: crate::chat::todo::todo_update_tool,
-        enabled: |_, _, _| false,
-        parallel_safe: false,
-        bypasses_approval: true,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::Conversation(crate::chat::todo::handle_conversation_tool_call),
-    },
-    NativeToolEntry {
         name: crate::chat::ask_user::ASK_USER_TOOL_NAME,
         def: crate::chat::ask_user::ask_user_tool,
         enabled: |_, _, _| false,
@@ -397,6 +368,11 @@ fn call_read_file(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
             .and_then(|value| value.as_str())
             .unwrap_or_default();
         if let Ok(path) = crate::native_tools::resolve_tool_read_path(ctx.workspace, raw_path) {
+            // 目录 → 列目录（并入原 ls 工具）。offset/limit 对目录忽略，走 list_dir 默认。
+            if path.is_dir() {
+                let listing = crate::native_tools::list_dir(ctx.workspace, ctx.arguments)?;
+                return Ok(text_tool_result(listing));
+            }
             // 图片 → 三级视觉/OCR 策略（需要会话上下文取主模型能力）。
             if crate::chat::knowledge_base::process::is_image_ext(&path) {
                 if let Some(nc) = ctx.native_ctx {
@@ -697,14 +673,18 @@ fn call_run_command(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
 
 fn call_bash_output(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     Box::pin(async move {
-        let content = crate::native_tools::bash_output(ctx.state, ctx.arguments)?;
-        Ok(text_tool_result(content))
-    })
-}
-
-fn call_list_background(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
-    Box::pin(async move {
-        let content = crate::native_tools::list_background(ctx.state, ctx.arguments)?;
+        // 无 job_id → 列出本会话所有后台作业（并入原 list_background 工具）。
+        let has_job = ctx
+            .arguments
+            .get("job_id")
+            .and_then(|value| value.as_str())
+            .map(|id| !id.trim().is_empty())
+            .unwrap_or(false);
+        let content = if has_job {
+            crate::native_tools::bash_output(ctx.state, ctx.arguments)?
+        } else {
+            crate::native_tools::list_background(ctx.state, ctx.arguments)?
+        };
         Ok(text_tool_result(content))
     })
 }
@@ -764,14 +744,12 @@ mod tests {
         "web_fetch",
         "knowledge_search",
         "read",
-        "ls",
         "grep",
-        "find",
+        "glob",
         "write",
         "edit",
         "bash",
         "bash_output",
-        "list_background",
         "kill_background",
         "save_assistant",
         "run_python",
@@ -779,13 +757,12 @@ mod tests {
         "memory_modify",
         "memory_search",
         "todo_write",
-        "todo_update",
         "ask_user",
         "agent",
     ];
 
     #[test]
-    fn session_consent_set_is_exactly_the_seven_file_shell_tools() {
+    fn session_consent_set_is_exactly_the_file_shell_tools() {
         let consent: Vec<&str> = NATIVE_TOOLS
             .iter()
             .filter(|entry| entry.requires_session_consent)
@@ -795,20 +772,18 @@ mod tests {
             consent,
             [
                 "read",
-                "ls",
                 "grep",
-                "find",
+                "glob",
                 "write",
                 "edit",
                 "bash",
                 "bash_output",
-                "list_background",
                 "kill_background"
             ],
-            "session-consent set must be exactly Pi's 7 file/shell tools plus the \
-             background-command observability trio (gated identically to bash); a \
-             new file/shell tool MUST set requires_session_consent or it silently \
-             bypasses the consent gate"
+            "session-consent set must be exactly the file/shell tools (read now also \
+             lists directories; find is renamed glob) plus the background-command \
+             observability tools (gated identically to bash); a new file/shell tool \
+             MUST set requires_session_consent or it silently bypasses the consent gate"
         );
         // The predicate agrees with the flag, and non-file tools are excluded.
         assert!(native_tool_requires_session_consent("bash"));
@@ -846,19 +821,17 @@ mod tests {
                 "web_fetch",
                 "knowledge_search",
                 "read",
-                "ls",
                 "grep",
-                "find",
+                "glob",
                 "bash_output",
-                "list_background",
                 "agent",
             ],
             "parallel-safe set is intentionally narrow per agent-runtime spec; \
-             bash_output/list_background join it because they are pure read-only \
-             registry/log reads; `agent` joins it because each spawn runs in \
-             isolation (own conversation/generation/message history), bypasses \
-             approval, and is capped by the SubAgentManager semaphore (default \
-             12), making concurrent fan-out the core multi-agent value"
+             bash_output joins it because it is a pure read-only registry/log read \
+             (and lists jobs when given no job_id); `agent` joins it because each \
+             spawn runs in isolation (own conversation/generation/message history), \
+             bypasses approval, and is capped by the SubAgentManager semaphore \
+             (default 12), making concurrent fan-out the core multi-agent value"
         );
     }
 
@@ -876,7 +849,6 @@ mod tests {
                 "memory_modify",
                 "memory_search",
                 "todo_write",
-                "todo_update",
                 "ask_user",
                 "agent",
             ]
@@ -897,11 +869,9 @@ mod tests {
                 "web_fetch",
                 "knowledge_search",
                 "read",
-                "ls",
                 "grep",
-                "find",
+                "glob",
                 "bash_output",
-                "list_background",
                 "memory_read",
                 "memory_search",
             ],
@@ -984,7 +954,7 @@ mod tests {
         read_only.read_file = true;
         assert_eq!(
             names(&read_only, false, false),
-            ["read", "ls", "grep", "find"]
+            ["read", "grep", "glob"]
         );
 
         // write gate exposes the whole-file write tool only. Deliverables are a
@@ -1019,14 +989,12 @@ mod tests {
                 "web_fetch",
                 "knowledge_search",
                 "read",
-                "ls",
                 "grep",
-                "find",
+                "glob",
                 "write",
                 "edit",
                 "bash",
                 "bash_output",
-                "list_background",
                 "kill_background",
                 "run_python",
                 "memory_read",
