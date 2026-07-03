@@ -4063,27 +4063,24 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     providerNameLabel={t.providerName}
                     onSelect={setSelectedProviderId}
                     onReorder={reorderProviders}
-                  />
-
-                  <div className="kv-provider-list-presets">
-                    <div className="kv-provider-list-section-label">
-                      {lang === 'zh' ? '快速预设' : 'Quick presets'}
-                    </div>
-                    <div className="kv-provider-list-preset-grid">
-                      {PROVIDER_PRESETS.map(preset => (
+                    trailing={PROVIDER_PRESETS
+                      .filter((preset) => !settings.providers.some((p) => p.baseUrl === preset.baseUrl))
+                      .map((preset) => (
                         <button
                           key={preset.name}
                           type="button"
                           onClick={() => addProviderFromPreset(preset)}
-                          className="kv-provider-preset-btn"
+                          className="kv-provider-item"
+                          title={lang === 'zh' ? `添加 ${preset.name}` : `Add ${preset.name}`}
                           data-tauri-drag-region="false"
                         >
-                          <Plus size={11} strokeWidth={2.25} />
-                          <span className="min-w-0 truncate">{preset.name}</span>
+                          <span className="kv-provider-item-select">
+                            <span className="kv-provider-dot off" />
+                            <span className="kv-provider-name">{preset.name}</span>
+                          </span>
                         </button>
                       ))}
-                    </div>
-                  </div>
+                  />
                 </div>
 
                 <div className="kv-provider-detail">
@@ -4129,7 +4126,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       )
                     })() : (
                       <p className="kv-provider-empty-hint">
-                        {lang === 'zh' ? '在左侧选择供应商，或使用快速预设添加。' : 'Select a provider on the left, or add one from quick presets.'}
+                        {lang === 'zh' ? '在左侧选择供应商，或点上方「添加」新建。' : 'Select a provider on the left, or click “Add” above.'}
                       </p>
                     )}
                   </SettingsGroup>

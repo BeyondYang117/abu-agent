@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { GripHorizontal } from 'lucide-react'
 import type { ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from './utils'
@@ -10,6 +10,8 @@ type ProviderSortableListProps = {
   providerNameLabel: string
   onSelect: (id: string) => void
   onReorder: (fromId: string, toId: string) => void
+  /** 追加在真实供应商项之后、同一列表容器内的节点（如快速预设项），保证连续排列不被撑到底部。 */
+  trailing?: ReactNode
 }
 
 export function ProviderSortableList({
@@ -19,6 +21,7 @@ export function ProviderSortableList({
   providerNameLabel,
   onSelect,
   onReorder,
+  trailing,
 }: ProviderSortableListProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overIndex, setOverIndex] = useState<number | null>(null)
@@ -150,6 +153,7 @@ export function ProviderSortableList({
           </div>
         )
       })}
+      {trailing}
     </div>
   )
 }
