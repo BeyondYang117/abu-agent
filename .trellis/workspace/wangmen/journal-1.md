@@ -275,3 +275,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Gemini 原生接口协议适配（generateContent peer adapter）
+
+**Date**: 2026-07-03
+**Task**: Gemini 原生接口协议适配（generateContent peer adapter）
+**Branch**: `main`
+
+### Summary
+
+为 Google Gemini 加原生协议 adapter chat/model/gemini.rs（peer of openai/anthropic/responses，实现 LanguageModelProvider），走原生 generateContent/streamGenerateContent?alt=sse，绕开 Gemini OpenAI-compat 端点对未知 body 字段（promptCacheKey）的 400。wire 形状据用户提供的 opencode→Gemini 真实抓包逐字段核对。新增 ProviderApiFormat::Gemini（from_raw/as_str + 别名）；5 处分派臂 + image_gen 兜底；mod.rs 导出；前端 normalizeProviderApiFormat + 格式下拉 Gemini。原生请求：x-goog-api-key 头、model+method 在 URL、systemInstruction、contents（functionCall/functionResponse 按函数名关联，无 call id 时合成）、tools.functionDeclarations、toolConfig AUTO、generationConfig；不发 promptCacheKey/tool_choice/stream_options；normalize_gemini_schema 剥 JSON-Schema 专有键；finishReason 由 functionCall 存在推导 tool_calls；usageMetadata→ModelUsage。关键：thoughtSignature 回传——chat-probe 实测发现 Gemini 3.x 回放 functionCall 必须带回响应给的 thoughtSignature 否则 synthesis 400；给 MessagePart::ToolCall + PendingToolCall 各加可选 signature 字段，贯穿 解析→流累加器/provider_messages(thought_signature 自定义键)→存储→回放(pending_tool_calls_from_openai_message 读回)→gemini contents 带回，每 chunk 预扫签名兜底（可能在兄弟 part），其他 provider 恒 None 忽略。chat-probe 真实 gemini-3.1-flash-lite 端到端验证：无 promptCacheKey 400、单轮工具往返 success、修复后多轮 synthesis completed（thought_signature 400 从 2→0）。cargo check --lib --tests + --release 干净、前端 typecheck/lint 绿、trellis-check PASS。本任务全程用上一任务建的 chat-probe 通道做真实回归验证，probe 累计抓到 3 个真实关键点（promptCacheKey/协议差异/thoughtSignature）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `06a6f19` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

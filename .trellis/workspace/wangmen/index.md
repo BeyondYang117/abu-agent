@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-07-03
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~277 | Active |
+| `journal-1.md` | ~310 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-07-03 | Gemini 原生接口协议适配（generateContent peer adapter） | `06a6f19` | `main` |
 | 8 | 2026-07-03 | Chat GUI 无头测试通道（文件监听 probe） | `e3491e7` | `main` |
 | 7 | 2026-07-03 | 原生工具集精简 MVP：24→20（旧名归一化别名） | `7fbd076` | `main` |
 | 6 | 2026-07-03 | 请求调试面板并入用量统计 + claude-tap 风格 trace 查看器重做 | `303cc37` | `main` |
