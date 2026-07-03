@@ -7,7 +7,6 @@ import { ONBOARDING_STEPS } from './types'
 import { canCompleteOnboarding, validateProviderStep } from './validation'
 import { DoneStep } from './steps/DoneStep'
 import { HotkeyStep } from './steps/HotkeyStep'
-import { LanguageStep } from './steps/LanguageStep'
 import { ProviderStep } from './steps/ProviderStep'
 import { WebSearchStep } from './steps/WebSearchStep'
 import { WelcomeStep } from './steps/WelcomeStep'
@@ -16,6 +15,14 @@ type OnboardingShellProps = {
   onComplete: () => void
   onSkip: () => void
   onSettingsChange?: () => void
+}
+
+/** 首次运行按系统语言（浏览器/系统 locale）自动选定界面语言：中文 locale → zh，其余 → en。 */
+function detectSystemLang(): Lang {
+  const raw = (
+    (typeof navigator !== 'undefined' && (navigator.language || navigator.languages?.[0])) || ''
+  ).toLowerCase()
+  return raw.startsWith('zh') ? 'zh' : 'en'
 }
 
 export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: OnboardingShellProps) {
@@ -36,7 +43,8 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setLoadError(null)
     try {
       const loaded = await api.getSettings()
-      setSettings(loaded)
+      // 首次运行无需让用户选语言：按系统语言自动设定，欢迎页起即本地化。
+      setSettings({ ...loaded, settingsLanguage: detectSystemLang() })
     } catch (err) {
       console.error('Failed to load settings for onboarding:', err)
       setLoadError(err instanceof Error ? err.message : String(err))
@@ -51,10 +59,6 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
   const updateSettings = useCallback((next: Settings) => {
     setSettings(next)
-  }, [])
-
-  const updateLanguage = useCallback((nextLang: Lang) => {
-    setSettings((current) => current ? { ...current, settingsLanguage: nextLang } : current)
   }, [])
 
   const providerValidation = useMemo(
@@ -208,9 +212,6 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
         <div className="onboarding-drag-rail" data-tauri-drag-region aria-hidden="true" />
         <div className="onboarding-body kv-scroll" data-tauri-drag-region="false">
           {stepId === 'welcome' ? <WelcomeStep t={t} /> : null}
-          {stepId === 'language' ? (
-            <LanguageStep t={t} lang={lang} onChange={updateLanguage} />
-          ) : null}
           {stepId === 'provider' ? (
             <ProviderStep
               t={t}

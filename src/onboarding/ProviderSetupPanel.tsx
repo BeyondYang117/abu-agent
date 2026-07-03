@@ -426,6 +426,23 @@ export function ProviderSetupPanel({ t, lang, settings, onChange }: ProviderSetu
                   placeholder="sk-..."
                   mono
                 />
+                {(() => {
+                  // 命中快速预设 baseUrl 时，给出「获取 API Key」外链引导申请（与设置页一致）。
+                  const preset = PROVIDER_PRESETS.find(
+                    (p) => p.baseUrl === provider.baseUrl && p.apiKeyUrl,
+                  )
+                  if (!preset?.apiKeyUrl) return null
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => void api.openExternal(preset.apiKeyUrl!)}
+                      className="mt-1 inline-flex w-fit items-center text-[12px] text-indigo-500 hover:underline dark:text-indigo-300"
+                      data-tauri-drag-region="false"
+                    >
+                      {lang === 'zh' ? `获取 ${preset.name} API Key ↗` : `Get ${preset.name} API key ↗`}
+                    </button>
+                  )
+                })()}
               </div>
 
               <div className="onboarding-action-row">

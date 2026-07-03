@@ -76,6 +76,20 @@ export function HotkeyStep({ t, settings, onChange }: HotkeyStepProps) {
 
   const sections: HotkeySection[] = [
     {
+      title: t.onboardingHotkeySectionLens,
+      fields: [{
+        id: 'lens',
+        label: t.onboardingHotkeyLens,
+        hint: t.onboardingHotkeyLensHint,
+        value: settings.lens?.hotkey || 'CommandOrControl+Shift+G',
+        placeholder: 'CommandOrControl+Shift+G',
+        onClear: () => onChange({
+          ...settings,
+          lens: { ...settings.lens, hotkey: '' },
+        }),
+      }],
+    },
+    {
       title: t.onboardingHotkeySectionTranslator,
       fields: [{
         id: 'main',
@@ -123,20 +137,6 @@ export function HotkeyStep({ t, settings, onChange }: HotkeyStepProps) {
           }),
         },
       ],
-    },
-    {
-      title: t.onboardingHotkeySectionLens,
-      fields: [{
-        id: 'lens',
-        label: t.onboardingHotkeyLens,
-        hint: t.onboardingHotkeyLensHint,
-        value: settings.lens?.hotkey || 'CommandOrControl+Shift+G',
-        placeholder: 'CommandOrControl+Shift+G',
-        onClear: () => onChange({
-          ...settings,
-          lens: { ...settings.lens, hotkey: '' },
-        }),
-      }],
     },
   ]
 
