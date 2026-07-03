@@ -2282,7 +2282,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         <main className={`kv-content ${variant === 'embedded' ? 'settings-embedded-main' : ''}`}>
           <header
             className={`kv-page-header ${variant === 'embedded' ? 'settings-embedded-header' : ''}`}
-            data-tauri-drag-region={variant === 'embedded' ? true : undefined}
+            onMouseDown={handleSettingsDragMouseDown}
           >
             <div>
               <div className="kv-page-title">{pageMeta[activeTab].title}</div>
@@ -3210,65 +3210,18 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       }}
                     />
                   </SettingRow>
+                  {/* 搜索 API（服务商 / Key / 结果数 / 深度）统一在「网络搜索」标签页配置，
+                      此处只保留启用开关，避免两处重复编辑同一份 settings.lens.webSearch。 */}
+                  <p className="kv-row-desc px-1 pb-1">
+                    {lang === 'zh'
+                      ? '搜索 API（服务商 / Key / 结果数 / 深度）在「网络搜索」设置里配置。'
+                      : 'Configure the search API (provider / key / results / depth) in Web Search settings.'}
+                  </p>
                   <SettingRow label={lang === 'zh' ? '网页抓取' : 'Web fetch'}>
                     <Toggle
                       checked={chatTools.nativeTools?.webFetch === true}
                       onChange={(webFetch) => updateNativeTools({ webFetch })}
                     />
-                  </SettingRow>
-                  <SettingRow label={t.webSearchApiSection} stack>
-                    <div className="flex w-full flex-col gap-2">
-                      <Select
-                        className="w-full"
-                        value={settings.lens?.webSearch?.provider || 'tavily'}
-                        onChange={(provider) => updateLensWebSearch({ provider: provider as 'tavily' | 'exa' })}
-                        options={[
-                          { value: 'tavily', label: 'Tavily' },
-                          { value: 'exa', label: 'Exa' },
-                        ]}
-                      />
-                      <Input
-                        type="password"
-                        value={settings.lens?.webSearch?.provider === 'exa'
-                          ? settings.lens?.webSearch?.exaApiKey || ''
-                          : settings.lens?.webSearch?.tavilyApiKey || ''}
-                        onChange={(value) => {
-                          if (settings.lens?.webSearch?.provider === 'exa') {
-                            updateLensWebSearch({ exaApiKey: value })
-                          } else {
-                            updateLensWebSearch({ tavilyApiKey: value })
-                          }
-                        }}
-                        placeholder={settings.lens?.webSearch?.provider === 'exa' ? 'exa-...' : 'tvly-...'}
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <FieldBlock label={lang === 'zh' ? '最大结果数' : 'Max results'}>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={10}
-                            value={String(settings.lens?.webSearch?.maxResults ?? 5)}
-                            onChange={(value) => updateLensWebSearch({
-                              maxResults: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 5)),
-                            })}
-                          />
-                        </FieldBlock>
-                        {settings.lens?.webSearch?.provider !== 'exa' && (
-                          <FieldBlock label={lang === 'zh' ? '搜索深度' : 'Search depth'}>
-                            <Select
-                              value={settings.lens?.webSearch?.searchDepth || 'basic'}
-                              onChange={(searchDepth) => updateLensWebSearch({
-                                searchDepth: searchDepth as 'basic' | 'advanced',
-                              })}
-                              options={[
-                                { value: 'basic', label: 'basic' },
-                                { value: 'advanced', label: 'advanced' },
-                              ]}
-                            />
-                          </FieldBlock>
-                        )}
-                      </div>
-                    </div>
                   </SettingRow>
                   <SettingRow label={lang === 'zh' ? '工作区根目录（可选）' : 'Workspace roots (optional)'} stack>
                     <div className="flex w-full flex-col gap-2">
@@ -4245,6 +4198,23 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
                           <FieldBlock label={t.apiKey} description={t.apiKeysHint}>
                             <div className="space-y-1.5">
+                              {(() => {
+                                // 命中快速预设 baseUrl 时，给出「获取 API Key」外链引导用户申请。
+                                const preset = PROVIDER_PRESETS.find(
+                                  (p) => p.baseUrl === provider.baseUrl && p.apiKeyUrl,
+                                )
+                                if (!preset?.apiKeyUrl) return null
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => void api.openExternal(preset.apiKeyUrl!)}
+                                    className="inline-flex w-fit items-center gap-0.5 text-[12px] text-indigo-500 hover:underline dark:text-indigo-300"
+                                    data-tauri-drag-region="false"
+                                  >
+                                    {lang === 'zh' ? `获取 ${preset.name} API Key ↗` : `Get ${preset.name} API key ↗`}
+                                  </button>
+                                )
+                              })()}
                               {(provider.apiKeys.length > 0 ? provider.apiKeys : ['']).map((key, idx) => {
                                 const total = Math.max(provider.apiKeys.length, 1)
                                 const keyId = `${provider.id}-${idx}`
