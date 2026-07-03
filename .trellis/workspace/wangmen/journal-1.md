@@ -242,3 +242,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Chat GUI 无头测试通道（文件监听 probe）
+
+**Date**: 2026-07-03
+**Task**: Chat GUI 无头测试通道（文件监听 probe）
+**Branch**: `main`
+
+### Summary
+
+为真实 GUI 客户端加 debug-only 无头测试通道：自动化写 <app_data>/chat_probe/request.json → 运行中的 app 走与聊天窗口完全相同的生成路径(chat_send_message/complete_assistant_reply_inner→run_agent_loop+全量工具集) → 写 result.json {answer, toolCalls:[{name,arguments,status}], streamOutcome, error}。BACKEND-DIRECT：lib.rs .setup 里 debug spawn tokio 轮询 watcher(700ms+mtime去抖+重命名consumed)，复用 Lens 外部注入通道思路但后端直跑并内联捕获结果。complete_assistant_reply_inner 加 probe:bool（两处现有调用传 false，行为零变化）→ 自动放行审批/consent/ask_user 的 ProbeAgentHost（避免无 GUI 挂起）+ approval_policy=auto（仅局部副本）；run_agent_loop 本就收 &dyn AgentHost。run_chat_probe 把会话绑到固定复用「Chat Probe」项目(根=cwd 使文件工具相对路径可解析)、标题🔬、按用户要求保留在会话列表不隔离便于观察。120s 超时兜底。全程 #[cfg(debug_assertions)]，release 编译确认被 cfg 掉。端到端自验(grok-composer 真实生成)：捕获 glob(改名自 find)/read(读目录) success + 正确数字，回溯验证上个工具精简任务在真实客户端正确。顺带抓到真实 provider bug：Google Gemini OpenAI-compat 端点拒绝 prompt_cache_key/promptCacheKey 返回 400，已记入 request-shape-contracts.md 校验矩阵待单独修。trellis-check PASS（7 项+release 编译）。docs/chat-probe.md 记用法。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e3491e7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
