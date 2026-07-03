@@ -845,6 +845,7 @@ fn finish_tool_call_partials(
             arguments,
             arguments_raw: raw,
             arguments_parse_error,
+            signature: None,
         };
         sink.emit(StreamPart::ToolCallDone { call: call.clone() })?;
         calls.push(call);

@@ -4202,6 +4202,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                                   { value: 'openai_chat', label: 'OpenAI Chat' },
                                   { value: 'openai_responses', label: 'OpenAI Responses' },
                                   { value: 'anthropic_messages', label: 'Anthropic' },
+                                  { value: 'gemini', label: 'Gemini' },
                                 ]}
                               />
                             </div>

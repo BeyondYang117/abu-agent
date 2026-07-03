@@ -765,6 +765,7 @@ fn pending_tool_call_from_partial(partial: &ResponsesToolPartial) -> PendingTool
         arguments,
         arguments_raw: raw,
         arguments_parse_error,
+        signature: None,
     }
 }
 
@@ -825,6 +826,7 @@ pub fn output_from_responses(
                     arguments,
                     arguments_raw: raw_args,
                     arguments_parse_error,
+                    signature: None,
                 });
             }
             _ => {}

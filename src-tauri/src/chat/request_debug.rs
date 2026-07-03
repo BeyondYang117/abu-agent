@@ -381,6 +381,7 @@ mod tests {
                 arguments: serde_json::json!({ "q": "rust" }),
                 arguments_raw: "{\"q\":\"rust\"}".into(),
                 arguments_parse_error: None,
+                signature: None,
             }],
             usage: Some(ModelUsage {
                 total_tokens: Some(42),

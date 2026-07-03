@@ -1,0 +1,1108 @@
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT_ENCODING};
+use serde_json::Value;
+
+use crate::api::{send_with_failover, with_standard_request_timeout};
+use crate::settings::ModelProvider;
+use crate::state::AppState;
+use crate::usage::{
+    chat_usage_source_for_label, error_kind_from_message, operation_from_label, record_model_call,
+    UsageRecordInput,
+};
+
+use super::{
+    parse_tool_arguments, stream_read_error, GenerateOutput, GenerateRequest,
+    LanguageModelProvider, MessagePart, ModelError, ModelFuture, ModelMessage, ModelRole,
+    ModelTool, ModelUsage, PendingToolCall, ProviderCapabilities, StreamPart, StreamSink,
+};
+
+/// Google Gemini **原生** `generateContent` adapter（peer of openai/anthropic）。
+/// 用 Gemini 原生协议，天然不发 OpenAI 专有字段（`promptCacheKey`/`tool_choice`/…），
+/// 绕开 Gemini OpenAI-compat 端点对未知 body 字段的 400 严格校验。
+/// wire 形状据 opencode 真实流量确认（见任务 research/opencode-real-traffic.md）。
+pub struct GeminiProvider<'a> {
+    state: &'a AppState,
+    provider: &'a ModelProvider,
+    retry_attempts: usize,
+}
+
+impl<'a> GeminiProvider<'a> {
+    pub fn new(state: &'a AppState, provider: &'a ModelProvider, retry_attempts: usize) -> Self {
+        Self {
+            state,
+            provider,
+            retry_attempts,
+        }
+    }
+}
+
+impl LanguageModelProvider for GeminiProvider<'_> {
+    fn generate<'a>(&'a self, request: GenerateRequest) -> ModelFuture<'a, GenerateOutput> {
+        Box::pin(async move { self.generate_inner(request).await })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        request: GenerateRequest,
+        sink: &'a mut (dyn StreamSink + Send),
+    ) -> ModelFuture<'a, GenerateOutput> {
+        Box::pin(async move { self.stream_inner(request, sink).await })
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            tool_calling: self.provider.supports_tools,
+            vision: true,
+            streaming: true,
+            reasoning: true,
+        }
+    }
+}
+
+impl GeminiProvider<'_> {
+    async fn generate_inner(&self, request: GenerateRequest) -> Result<GenerateOutput, ModelError> {
+        let label = request_label(&request, "Gemini generateContent");
+        let started_at = chrono::Local::now().timestamp();
+        let started = std::time::Instant::now();
+        let body = self.request_body(&request, false);
+        let url = self.endpoint_url(&request.model, false);
+        let response = send_with_failover(
+            self.state,
+            &label,
+            self.retry_attempts,
+            &self.provider.id,
+            &self.provider.api_keys,
+            |key| {
+                with_standard_request_timeout(crate::api::attach_json_body(
+                    self.state
+                        .http
+                        .post(&url)
+                        .headers(gemini_headers(key).unwrap_or_default())
+                        .header(ACCEPT_ENCODING, "identity"),
+                    &body,
+                    self.provider.compress_request_body,
+                ))
+                .send()
+            },
+        )
+        .await
+        .map_err(|err| {
+            self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, false, &err, started_at, started.elapsed());
+            ModelError::new(err)
+        })?;
+
+        let raw = response.text().await.map_err(|err| {
+            let message = format!("{label} read body: {err}");
+            self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
+            ModelError::new(message)
+        })?;
+        let value: Value = serde_json::from_str(&raw).map_err(|err| {
+            let message = format!(
+                "{label} parse JSON: {} (body: {})",
+                err,
+                raw.chars().take(500).collect::<String>()
+            );
+            self.record_usage_failure(&request, &label, started_at, started.elapsed(), &message);
+            self.record_debug_failure(&request, &label, false, &message, started_at, started.elapsed());
+            ModelError::new(message)
+        })?;
+        let output = output_from_gemini_response(&value, &label)?;
+        self.record_usage_success(
+            &request,
+            &label,
+            started_at,
+            started.elapsed(),
+            output.usage.clone(),
+        );
+        self.record_debug_success(&request, &label, false, &output, started_at, started.elapsed());
+        Ok(output)
+    }
+
+    async fn stream_inner(
+        &self,
+        request: GenerateRequest,
+        sink: &mut (dyn StreamSink + Send),
+    ) -> Result<GenerateOutput, ModelError> {
+        let label = request_label(&request, "Gemini stream");
+        let started_at = chrono::Local::now().timestamp();
+        let started = std::time::Instant::now();
+        let body = self.request_body(&request, true);
+        let url = self.endpoint_url(&request.model, true);
+        let mut response = send_with_failover(
+            self.state,
+            &label,
+            self.retry_attempts,
+            &self.provider.id,
+            &self.provider.api_keys,
+            |key| {
+                crate::api::attach_json_body(
+                    self.state
+                        .http
+                        .post(&url)
+                        .headers(gemini_headers(key).unwrap_or_default())
+                        .header(ACCEPT_ENCODING, "identity"),
+                    &body,
+                    self.provider.compress_request_body,
+                )
+                .send()
+            },
+        )
+        .await
+        .map_err(|err| {
+            self.record_usage_failure(&request, &label, started_at, started.elapsed(), &err);
+            self.record_debug_failure(&request, &label, true, &err, started_at, started.elapsed());
+            ModelError::new(err)
+        })?;
+
+        let mut buffer = String::new();
+        let mut full = String::new();
+        let mut reasoning_full = String::new();
+        let mut tool_calls: Vec<PendingToolCall> = Vec::new();
+        // thoughtSignature 兜底（跨 chunk 记住，functionCall 自身没有时回退用它）。
+        let mut carry_sig: Option<String> = None;
+        let mut finish_reason = "stop".to_string();
+        let mut usage: Option<ModelUsage> = None;
+
+        loop {
+            let chunk = response.chunk().await.map_err(|err| {
+                let model_error = stream_read_error(&label, &err);
+                self.record_usage_failure(
+                    &request,
+                    &label,
+                    started_at,
+                    started.elapsed(),
+                    &model_error.to_string(),
+                );
+                self.record_debug_failure(
+                    &request,
+                    &label,
+                    true,
+                    &model_error.to_string(),
+                    started_at,
+                    started.elapsed(),
+                );
+                model_error
+            })?;
+            let Some(chunk) = chunk else {
+                break;
+            };
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            // Gemini `alt=sse`：每个 `data:` 行是一整段 GenerateContentResponse 片段。
+            while let Some(pos) = buffer.find('\n') {
+                let line: String = buffer.drain(..=pos).collect();
+                let line = line.trim();
+                if !line.starts_with("data:") {
+                    continue;
+                }
+                let data = line.trim_start_matches("data:").trim();
+                if data.is_empty() {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                if let Some(err) = gemini_error_message(&value) {
+                    sink.emit(StreamPart::Error {
+                        message: err.clone(),
+                    })?;
+                    return Err(ModelError::new(format!("Gemini stream error: {err}")));
+                }
+                // 逐 part：text/thought → 增量；functionCall → 完整工具调用。
+                // 先整块预扫一个候选签名（thoughtSignature 可能在 functionCall 兄弟 part 上、
+                // 且顺序不定），functionCall 自身无签名时回退用它。
+                if let Some(sig) = gemini_candidate_signature(&value) {
+                    carry_sig = Some(sig);
+                }
+                for part in gemini_response_parts(&value) {
+                    if let Some(mut call) = gemini_tool_call_from_part(part) {
+                        if call.signature.is_none() {
+                            call.signature = carry_sig.clone();
+                        }
+                        sink.emit(StreamPart::ToolCallStart {
+                            id: call.id.clone(),
+                            name: call.function_name.clone(),
+                        })?;
+                        sink.emit(StreamPart::ToolCallDelta {
+                            id: call.id.clone(),
+                            delta: call.arguments_raw.clone(),
+                        })?;
+                        sink.emit(StreamPart::ToolCallDone { call: call.clone() })?;
+                        tool_calls.push(call);
+                    } else if let Some((text, is_thought)) = gemini_text_from_part(part) {
+                        if is_thought {
+                            reasoning_full.push_str(&text);
+                            sink.emit(StreamPart::ReasoningDelta { delta: text })?;
+                        } else {
+                            full.push_str(&text);
+                            sink.emit(StreamPart::TextDelta { delta: text })?;
+                        }
+                    }
+                }
+                if let Some(reason) = gemini_finish_reason_str(&value) {
+                    finish_reason = reason;
+                }
+                if let Some(next_usage) = gemini_usage(&value) {
+                    usage = Some(next_usage);
+                }
+            }
+        }
+
+        // 有工具调用则结束原因归一为 tool_calls（Gemini 常仍返回 STOP）。
+        let finish_reason = normalize_finish_reason(&finish_reason, !tool_calls.is_empty());
+        sink.emit(StreamPart::Finish {
+            reason: finish_reason.clone(),
+            full: full.clone(),
+        })?;
+        let output = stream_output(full, reasoning_full, tool_calls, finish_reason, usage);
+        self.record_usage_success(
+            &request,
+            &label,
+            started_at,
+            started.elapsed(),
+            output.usage.clone(),
+        );
+        self.record_debug_success(&request, &label, true, &output, started_at, started.elapsed());
+        Ok(output)
+    }
+
+    fn endpoint_url(&self, model: &str, stream: bool) -> String {
+        gemini_url(&self.provider.base_url, model, stream)
+    }
+
+    fn request_body(&self, request: &GenerateRequest, _stream: bool) -> Value {
+        // 注意：Gemini 的 model/method/stream 都在 URL 上，不在 body 里。
+        let mut body = serde_json::json!({
+            "contents": gemini_contents_from_generate_request(request),
+            "generationConfig": {
+                "temperature": request.options.temperature,
+                "maxOutputTokens": request.options.max_tokens,
+            },
+        });
+        if !request.system.trim().is_empty() {
+            body["systemInstruction"] = serde_json::json!({
+                "parts": [{ "text": request.system }]
+            });
+        }
+        let declarations = gemini_function_declarations(&request.tools);
+        if !declarations.is_empty() {
+            body["tools"] = serde_json::json!([{ "functionDeclarations": declarations }]);
+            // 显式声明工具调用模式（对齐 opencode 真实流量）。
+            body["toolConfig"] = serde_json::json!({
+                "functionCallingConfig": { "mode": "AUTO" }
+            });
+        }
+        // 思维：仅在用户显式选了等级时请求思维输出（字段名跨版本有漂移，保守只置 includeThoughts）。
+        if request
+            .options
+            .thinking_level
+            .as_deref()
+            .filter(|l| !l.is_empty())
+            .is_some()
+        {
+            body["generationConfig"]["thinkingConfig"] =
+                serde_json::json!({ "includeThoughts": true });
+        }
+        if let Some(overrides) = request.options.provider_options.as_object() {
+            for (key, value) in overrides {
+                body[key] = value.clone();
+            }
+        }
+        body
+    }
+
+    /// 重建本次请求实际会带的 headers（脱敏后）供请求调试面板展示。
+    fn debug_request_headers(&self) -> std::collections::BTreeMap<String, String> {
+        let mut headers = std::collections::BTreeMap::new();
+        if let Some(key) = self.provider.api_keys.first() {
+            headers.insert("x-goog-api-key".to_string(), key.clone());
+        }
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        headers.insert("Accept-Encoding".to_string(), "identity".to_string());
+        crate::chat::request_debug::sanitize_headers(headers)
+    }
+
+    fn record_debug_success(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        output: &GenerateOutput,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "success",
+                url: self.endpoint_url(&request.model, stream),
+                headers: self.debug_request_headers(),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_output(
+                    output,
+                    Some(200),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
+    }
+
+    fn record_debug_failure(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        stream: bool,
+        error: &str,
+        started_at: i64,
+        duration: std::time::Duration,
+    ) {
+        if !self.state.request_debug_enabled() {
+            return;
+        }
+        let record = crate::chat::request_debug::build_debug_record(
+            crate::chat::request_debug::DebugRecordArgs {
+                provider: self.provider,
+                request,
+                label,
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                status: "error",
+                url: self.endpoint_url(&request.model, stream),
+                headers: self.debug_request_headers(),
+                body: self.request_body(request, stream),
+                stream,
+                response: crate::chat::request_debug::RequestDebugResponse::from_error(
+                    error,
+                    crate::api::extract_status_code(error),
+                ),
+            },
+        );
+        crate::chat::request_debug::record(self.state, record);
+    }
+
+    fn record_usage_success(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        started_at: i64,
+        duration: std::time::Duration,
+        usage: Option<ModelUsage>,
+    ) {
+        let source = request
+            .metadata
+            .usage_source
+            .clone()
+            .unwrap_or_else(|| chat_usage_source_for_label(label));
+        let operation = request
+            .metadata
+            .usage_operation
+            .clone()
+            .unwrap_or_else(|| operation_from_label(label));
+        record_model_call(
+            self.state,
+            UsageRecordInput {
+                provider: self.provider,
+                model: &request.model,
+                source: &source,
+                operation: &operation,
+                status: "success",
+                status_code: Some(200),
+                usage,
+                usage_source: "provider_reported",
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                conversation_id: request.metadata.conversation_id.clone(),
+                message_id: request.metadata.message_id.clone(),
+                error_kind: None,
+            },
+        );
+    }
+
+    fn record_usage_failure(
+        &self,
+        request: &GenerateRequest,
+        label: &str,
+        started_at: i64,
+        duration: std::time::Duration,
+        error: &str,
+    ) {
+        let source = request
+            .metadata
+            .usage_source
+            .clone()
+            .unwrap_or_else(|| chat_usage_source_for_label(label));
+        let operation = request
+            .metadata
+            .usage_operation
+            .clone()
+            .unwrap_or_else(|| operation_from_label(label));
+        record_model_call(
+            self.state,
+            UsageRecordInput {
+                provider: self.provider,
+                model: &request.model,
+                source: &source,
+                operation: &operation,
+                status: "error",
+                status_code: crate::api::extract_status_code(error),
+                usage: None,
+                usage_source: "missing",
+                started_at,
+                duration_ms: duration.as_millis() as u64,
+                conversation_id: request.metadata.conversation_id.clone(),
+                message_id: request.metadata.message_id.clone(),
+                error_kind: Some(error_kind_from_message(error)),
+            },
+        );
+    }
+}
+
+fn gemini_headers(api_key: &str) -> Result<HeaderMap, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-goog-api-key",
+        HeaderValue::from_str(api_key).map_err(|err| format!("Invalid API key: {err}"))?,
+    );
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    Ok(headers)
+}
+
+/// `{base}/models/{model}:generateContent` 或 `:streamGenerateContent?alt=sse`。
+/// base_url 用户配 Gemini 原生根（如 `https://generativelanguage.googleapis.com/v1beta`）。
+fn gemini_url(base_url: &str, model: &str, stream: bool) -> String {
+    let base = base_url.trim_end_matches('/');
+    // model 可能已带 "models/" 前缀（如 "models/gemini-3.1-flash-lite"），去重。
+    let model = model.trim_start_matches("models/");
+    if stream {
+        format!("{base}/models/{model}:streamGenerateContent?alt=sse")
+    } else {
+        format!("{base}/models/{model}:generateContent")
+    }
+}
+
+/// canonical messages → Gemini `contents[]`。Tool 结果按函数名关联（Gemini 无 call id），
+/// 先扫 assistant 的 functionCall 建 `tool_call_id → name` 映射。
+pub fn gemini_contents_from_generate_request(request: &GenerateRequest) -> Vec<Value> {
+    let id_to_name = tool_call_id_to_name(&request.messages);
+    let mut contents: Vec<Value> = Vec::new();
+    for message in &request.messages {
+        let role = match message.role {
+            ModelRole::Assistant => "model",
+            // Gemini contents 只有 user/model；Tool 结果作为 user 载体。
+            ModelRole::User | ModelRole::Tool => "user",
+        };
+        let parts = gemini_parts_from_message(message, &id_to_name);
+        if parts.is_empty() {
+            continue;
+        }
+        contents.push(serde_json::json!({ "role": role, "parts": parts }));
+    }
+    merge_consecutive_gemini_roles(&mut contents);
+    contents
+}
+
+fn tool_call_id_to_name(messages: &[ModelMessage]) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for message in messages {
+        for part in &message.content {
+            if let MessagePart::ToolCall { id, name, .. } = part {
+                if !id.is_empty() {
+                    map.insert(id.clone(), name.clone());
+                }
+            }
+        }
+    }
+    map
+}
+
+fn gemini_parts_from_message(
+    message: &ModelMessage,
+    id_to_name: &std::collections::HashMap<String, String>,
+) -> Vec<Value> {
+    let mut parts = Vec::new();
+    for part in &message.content {
+        match part {
+            MessagePart::Text { text } => {
+                if !text.is_empty() {
+                    parts.push(serde_json::json!({ "text": text }));
+                }
+            }
+            MessagePart::Image { mime_type, data } => {
+                if matches!(message.role, ModelRole::User) {
+                    parts.push(serde_json::json!({
+                        "inlineData": { "mimeType": mime_type, "data": data }
+                    }));
+                }
+            }
+            MessagePart::ImageUrl { url } => {
+                if matches!(message.role, ModelRole::User) {
+                    parts.push(serde_json::json!({ "fileData": { "fileUri": url } }));
+                }
+            }
+            MessagePart::ToolCall {
+                name,
+                arguments,
+                arguments_raw,
+                signature,
+                ..
+            } => {
+                if matches!(message.role, ModelRole::Assistant) {
+                    let args = if arguments.is_null() {
+                        serde_json::from_str(arguments_raw).unwrap_or(serde_json::json!({}))
+                    } else {
+                        arguments.clone()
+                    };
+                    let mut part = serde_json::json!({
+                        "functionCall": { "name": name, "args": args }
+                    });
+                    // Gemini 3.x：回放 functionCall 必须带回响应给的 thoughtSignature，否则 400。
+                    if let Some(sig) = signature {
+                        part["thoughtSignature"] = Value::String(sig.clone());
+                    }
+                    parts.push(part);
+                }
+            }
+            MessagePart::ToolResult {
+                tool_call_id,
+                content,
+                ..
+            } => {
+                // Gemini 按函数名关联；用 id→name 映射还原，回退用 id 本身。
+                let name = id_to_name
+                    .get(tool_call_id)
+                    .cloned()
+                    .unwrap_or_else(|| tool_call_id.clone());
+                // response 必须是 JSON 对象；字符串输出包进 { output }。
+                let response = serde_json::from_str::<Value>(content)
+                    .ok()
+                    .filter(|v| v.is_object())
+                    .unwrap_or_else(|| serde_json::json!({ "output": content }));
+                parts.push(serde_json::json!({
+                    "functionResponse": { "name": name, "response": response }
+                }));
+            }
+            MessagePart::Reasoning { .. } => {
+                // 思维文本回放时丢弃（thoughtSignature 未保存；对连续性影响可接受）。
+            }
+        }
+    }
+    parts
+}
+
+fn merge_consecutive_gemini_roles(contents: &mut Vec<Value>) {
+    if contents.len() < 2 {
+        return;
+    }
+    let mut i = 1;
+    while i < contents.len() {
+        let prev_role = contents[i - 1]
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let curr_role = contents[i].get("role").and_then(|v| v.as_str()).unwrap_or("");
+        if prev_role == curr_role {
+            let curr_parts = contents[i]
+                .get("parts")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if let Some(prev) = contents[i - 1]
+                .get_mut("parts")
+                .and_then(|v| v.as_array_mut())
+            {
+                prev.extend(curr_parts);
+            }
+            contents.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+pub fn gemini_function_declarations(tools: &[ModelTool]) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for tool in tools {
+        let name = tool.openai_tool_name();
+        if name.is_empty() || !seen.insert(name.clone()) {
+            continue;
+        }
+        out.push(serde_json::json!({
+            "name": name,
+            "description": tool.description,
+            "parameters": normalize_gemini_schema(tool.input_schema.clone()),
+        }));
+    }
+    out
+}
+
+/// Gemini 只收 OpenAPI 子集：剥 JSON Schema 专有键（`$schema`/`additionalProperties`/
+/// `$defs` 等），nullable `anyOf` 折成非空分支。递归处理 properties/items。
+fn normalize_gemini_schema(schema: Value) -> Value {
+    match schema {
+        Value::Object(mut map) => {
+            // nullable anyOf（[T, null]）→ 取非空分支。
+            if let Some(any_of) = map.get("anyOf").and_then(|v| v.as_array()).cloned() {
+                if any_of.len() == 2
+                    && any_of
+                        .iter()
+                        .any(|it| it.get("type").and_then(|v| v.as_str()) == Some("null"))
+                {
+                    if let Some(non_null) = any_of
+                        .iter()
+                        .find(|it| it.get("type").and_then(|v| v.as_str()) != Some("null"))
+                    {
+                        let mut result = normalize_gemini_schema(non_null.clone());
+                        if let (Some(obj), Some(desc)) =
+                            (result.as_object_mut(), map.get("description"))
+                        {
+                            obj.insert("description".into(), desc.clone());
+                        }
+                        return result;
+                    }
+                }
+            }
+            for key in [
+                "$schema",
+                "additionalProperties",
+                "$defs",
+                "definitions",
+                "$id",
+                "$ref",
+                "title",
+            ] {
+                map.remove(key);
+            }
+            if let Some(props) = map.get_mut("properties").and_then(|v| v.as_object_mut()) {
+                for value in props.values_mut() {
+                    *value = normalize_gemini_schema(value.clone());
+                }
+            }
+            if let Some(items) = map.get("items").cloned() {
+                map.insert("items".into(), normalize_gemini_schema(items));
+            }
+            Value::Object(map)
+        }
+        other => other,
+    }
+}
+
+pub fn output_from_gemini_response(value: &Value, label: &str) -> Result<GenerateOutput, ModelError> {
+    if let Some(msg) = gemini_error_message(value) {
+        return Err(ModelError::new(format!("{label}: {msg}")));
+    }
+    let mut content_parts: Vec<String> = Vec::new();
+    let mut reasoning_parts: Vec<String> = Vec::new();
+    let mut tool_calls: Vec<PendingToolCall> = Vec::new();
+    // thoughtSignature 可能在 functionCall 兄弟 part 上：先扫全 parts 取一个候选签名兜底。
+    let carry_sig = gemini_candidate_signature(value);
+    for part in gemini_response_parts(value) {
+        if let Some(mut call) = gemini_tool_call_from_part(part) {
+            if call.signature.is_none() {
+                call.signature = carry_sig.clone();
+            }
+            tool_calls.push(call);
+        } else if let Some((text, is_thought)) = gemini_text_from_part(part) {
+            if is_thought {
+                reasoning_parts.push(text);
+            } else {
+                content_parts.push(text);
+            }
+        }
+    }
+    let finish_reason = normalize_finish_reason(
+        gemini_finish_reason_str(value).as_deref().unwrap_or("stop"),
+        !tool_calls.is_empty(),
+    );
+    let content = content_parts.join("");
+    let reasoning = if reasoning_parts.is_empty() {
+        None
+    } else {
+        Some(reasoning_parts.join(""))
+    };
+    let usage = gemini_usage(value);
+    let provider_message =
+        openai_compatible_message(&content, reasoning.as_deref(), &tool_calls, Some(&finish_reason));
+    Ok(GenerateOutput {
+        text: content,
+        reasoning,
+        tool_calls,
+        usage,
+        finish_reason: Some(finish_reason),
+        provider_messages: vec![provider_message],
+        cancelled: false,
+    })
+}
+
+/// 取 `candidates[0].content.parts[]`（片段响应亦同）。
+fn gemini_response_parts(value: &Value) -> impl Iterator<Item = &Value> {
+    value
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|cand| cand.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|p| p.as_array())
+        .map(|v| v.iter())
+        .unwrap_or_else(|| [].iter())
+}
+
+/// part 里的 functionCall → PendingToolCall（合成 id；args 是对象；捕获同 part 上的 thoughtSignature）。
+fn gemini_tool_call_from_part(part: &Value) -> Option<PendingToolCall> {
+    let call = part.get("functionCall")?;
+    let name = call.get("name").and_then(|v| v.as_str())?.to_string();
+    let args = call.get("args").cloned().unwrap_or(serde_json::json!({}));
+    let arguments_raw = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+    let (arguments, arguments_parse_error) = parse_tool_arguments(&arguments_raw);
+    Some(PendingToolCall {
+        id: format!("call_{}", uuid::Uuid::new_v4()),
+        function_name: name,
+        arguments,
+        arguments_raw,
+        arguments_parse_error,
+        signature: gemini_part_thought_signature(part),
+    })
+}
+
+/// part 里的 text → (文本, 是否思维)。空文本返回 None（如仅带 thoughtSignature 的占位 part）。
+fn gemini_text_from_part(part: &Value) -> Option<(String, bool)> {
+    let text = part.get("text").and_then(|v| v.as_str())?;
+    if text.is_empty() {
+        return None;
+    }
+    let is_thought = part
+        .get("thought")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    Some((text.to_string(), is_thought))
+}
+
+/// part 上的 thoughtSignature（Gemini 3.x 思维签名，回放 functionCall 时须带回）。
+fn gemini_part_thought_signature(part: &Value) -> Option<String> {
+    part.get("thoughtSignature")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// 扫一个候选（或流片段）里所有 part，取第一个 thoughtSignature——签名可能不在
+/// functionCall part 自身上，而在同轮兄弟 part 上，且顺序不定。
+fn gemini_candidate_signature(value: &Value) -> Option<String> {
+    gemini_response_parts(value).find_map(gemini_part_thought_signature)
+}
+
+fn gemini_finish_reason_str(value: &Value) -> Option<String> {
+    value
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|cand| cand.get("finishReason"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Gemini finishReason → canonical。有工具调用时恒为 tool_calls（Gemini 常仍返回 STOP）。
+fn normalize_finish_reason(reason: &str, has_tool_calls: bool) -> String {
+    if has_tool_calls {
+        return "tool_calls".to_string();
+    }
+    match reason {
+        "STOP" => "stop",
+        "MAX_TOKENS" => "length",
+        other => {
+            if other.eq_ignore_ascii_case("stop") {
+                "stop"
+            } else {
+                return other.to_ascii_lowercase();
+            }
+        }
+    }
+    .to_string()
+}
+
+fn gemini_usage(value: &Value) -> Option<ModelUsage> {
+    let meta = value.get("usageMetadata")?;
+    let get = |key: &str| meta.get(key).and_then(|v| v.as_u64());
+    Some(ModelUsage {
+        input_tokens: get("promptTokenCount"),
+        output_tokens: get("candidatesTokenCount"),
+        total_tokens: get("totalTokenCount"),
+        cached_input_tokens: get("cachedContentTokenCount"),
+        cache_creation_input_tokens: None,
+        reasoning_tokens: get("thoughtsTokenCount"),
+    })
+}
+
+fn gemini_error_message(value: &Value) -> Option<String> {
+    value
+        .get("error")
+        .and_then(|err| err.get("message"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn openai_compatible_message(
+    text: &str,
+    reasoning: Option<&str>,
+    tool_calls: &[PendingToolCall],
+    finish_reason: Option<&str>,
+) -> Value {
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": if text.is_empty() { Value::Null } else { Value::String(text.to_string()) },
+    });
+    if let Some(reasoning) = reasoning.map(str::trim).filter(|v| !v.is_empty()) {
+        message["reasoning_content"] = Value::String(reasoning.to_string());
+    }
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(
+            tool_calls
+                .iter()
+                .map(|call| {
+                    let mut tc = serde_json::json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": { "name": call.function_name, "arguments": call.arguments_raw }
+                    });
+                    // Gemini thoughtSignature：写在自定义键上，经存储/回放带回（其他 provider 忽略）。
+                    if let Some(sig) = &call.signature {
+                        tc["thought_signature"] = Value::String(sig.clone());
+                    }
+                    tc
+                })
+                .collect(),
+        );
+    }
+    if let Some(finish_reason) = finish_reason {
+        message["finish_reason"] = Value::String(finish_reason.to_string());
+    }
+    message
+}
+
+fn stream_output(
+    text: String,
+    reasoning: String,
+    tool_calls: Vec<PendingToolCall>,
+    finish_reason: String,
+    usage: Option<ModelUsage>,
+) -> GenerateOutput {
+    let reasoning = non_empty(reasoning);
+    let provider_message =
+        openai_compatible_message(&text, reasoning.as_deref(), &tool_calls, Some(&finish_reason));
+    GenerateOutput {
+        text,
+        reasoning,
+        tool_calls,
+        usage,
+        finish_reason: Some(finish_reason),
+        provider_messages: vec![provider_message],
+        cancelled: false,
+    }
+}
+
+fn request_label(request: &GenerateRequest, fallback: &str) -> String {
+    request
+        .metadata
+        .label
+        .trim()
+        .is_empty()
+        .then(|| fallback.to_string())
+        .unwrap_or_else(|| request.metadata.label.clone())
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::model::GenerateOptions;
+
+    fn provider() -> crate::settings::ModelProvider {
+        crate::settings::ModelProvider {
+            id: "test".into(),
+            name: "Gemini".into(),
+            api_keys: vec!["AIza-test".into()],
+            api_key_legacy: None,
+            base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
+            available_models: vec!["gemini-3.1-flash-lite".into()],
+            enabled_models: vec!["gemini-3.1-flash-lite".into()],
+            supports_tools: true,
+            enabled: true,
+            api_format: "gemini".into(),
+            model_overrides: Default::default(),
+            compress_request_body: false,
+        }
+    }
+
+    fn body_for(request: &GenerateRequest, stream: bool) -> Value {
+        let state = crate::state::AppState::new_headless(
+            crate::settings::Settings::default(),
+            std::env::temp_dir(),
+        );
+        let p = provider();
+        GeminiProvider::new(&state, &p, 1).request_body(request, stream)
+    }
+
+    #[test]
+    fn url_builds_generate_and_stream_and_dedupes_models_prefix() {
+        let base = "https://generativelanguage.googleapis.com/v1beta/";
+        assert_eq!(
+            gemini_url(base, "gemini-3.1-flash-lite", false),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+        );
+        assert_eq!(
+            gemini_url(base, "models/gemini-3.1-flash-lite", true),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn request_body_shape_and_no_openai_specific_fields() {
+        let request = GenerateRequest {
+            model: "gemini-3.1-flash-lite".into(),
+            system: "sys".into(),
+            messages: vec![ModelMessage {
+                role: ModelRole::User,
+                content: vec![MessagePart::Text { text: "hi".into() }],
+            }],
+            tools: vec![ModelTool {
+                id: "native__glob".into(),
+                name: "glob".into(),
+                description: "find files".into(),
+                source: "native".into(),
+                server_id: None,
+                server_name: None,
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "additionalProperties": false,
+                    "properties": { "pattern": { "type": "string" } },
+                    "required": ["pattern"]
+                }),
+                sensitive: false,
+            }],
+            options: GenerateOptions::default(),
+            metadata: Default::default(),
+        };
+        let body = body_for(&request, true);
+        assert_eq!(body["systemInstruction"]["parts"][0]["text"], "sys");
+        assert_eq!(body["contents"][0]["role"], "user");
+        assert_eq!(body["contents"][0]["parts"][0]["text"], "hi");
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 8192);
+        assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "AUTO");
+        let decl = &body["tools"][0]["functionDeclarations"][0];
+        assert_eq!(decl["name"], "glob");
+        // schema 归一化：JSON Schema 专有键被剥掉。
+        assert!(decl["parameters"].get("$schema").is_none());
+        assert!(decl["parameters"].get("additionalProperties").is_none());
+        assert_eq!(decl["parameters"]["properties"]["pattern"]["type"], "string");
+        // 绝不含 OpenAI 专有字段（撞 Gemini 400 的元凶）。
+        assert!(body.get("promptCacheKey").is_none());
+        assert!(body.get("prompt_cache_key").is_none());
+        assert!(body.get("tool_choice").is_none());
+        assert!(body.get("stream_options").is_none());
+        assert!(body.get("model").is_none()); // model 在 URL，不在 body
+    }
+
+    #[test]
+    fn tool_round_trip_maps_functioncall_and_functionresponse_by_name() {
+        let request = GenerateRequest {
+            model: "gemini".into(),
+            system: String::new(),
+            messages: vec![
+                ModelMessage {
+                    role: ModelRole::Assistant,
+                    content: vec![MessagePart::ToolCall {
+                        id: "call_abc".into(),
+                        name: "glob".into(),
+                        arguments: serde_json::json!({ "pattern": "*.rs" }),
+                        arguments_raw: "{\"pattern\":\"*.rs\"}".into(),
+                        signature: Some("SIG123".into()),
+                    }],
+                },
+                ModelMessage {
+                    role: ModelRole::Tool,
+                    content: vec![MessagePart::ToolResult {
+                        tool_call_id: "call_abc".into(),
+                        content: "found 5 files".into(),
+                        is_error: false,
+                        artifacts: Vec::new(),
+                    }],
+                },
+            ],
+            tools: Vec::new(),
+            options: Default::default(),
+            metadata: Default::default(),
+        };
+        let contents = gemini_contents_from_generate_request(&request);
+        // assistant functionCall（args 为对象）
+        assert_eq!(contents[0]["role"], "model");
+        assert_eq!(contents[0]["parts"][0]["functionCall"]["name"], "glob");
+        assert_eq!(
+            contents[0]["parts"][0]["functionCall"]["args"]["pattern"],
+            "*.rs"
+        );
+        // thoughtSignature 回放时带回（Gemini 3.x 必需）。
+        assert_eq!(contents[0]["parts"][0]["thoughtSignature"], "SIG123");
+        // tool functionResponse：按 call id → name 还原为 "glob"；字符串输出包成 { output }
+        assert_eq!(contents[1]["role"], "user");
+        let fr = &contents[1]["parts"][0]["functionResponse"];
+        assert_eq!(fr["name"], "glob");
+        assert_eq!(fr["response"]["output"], "found 5 files");
+    }
+
+    #[test]
+    fn parses_gemini_response_text_and_finish() {
+        let response = serde_json::json!({
+            "candidates": [{
+                "content": { "role": "model", "parts": [
+                    { "text": "收到" },
+                    { "text": "", "thoughtSignature": "abc" }
+                ] },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": { "promptTokenCount": 9449, "candidatesTokenCount": 7, "totalTokenCount": 9456 }
+        });
+        let out = output_from_gemini_response(&response, "test").expect("output");
+        assert_eq!(out.text, "收到");
+        assert_eq!(out.finish_reason.as_deref(), Some("stop"));
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.usage.as_ref().and_then(|u| u.total_tokens), Some(9456));
+        assert_eq!(out.usage.as_ref().and_then(|u| u.input_tokens), Some(9449));
+    }
+
+    #[test]
+    fn parses_gemini_response_functioncall_forces_tool_calls_finish() {
+        let response = serde_json::json!({
+            "candidates": [{
+                "content": { "role": "model", "parts": [
+                    { "functionCall": { "name": "glob", "args": { "pattern": "*.rs" } } }
+                ] },
+                "finishReason": "STOP"  // Gemini 有工具调用仍常返回 STOP
+            }]
+        });
+        let out = output_from_gemini_response(&response, "test").expect("output");
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].function_name, "glob");
+        assert_eq!(out.tool_calls[0].arguments["pattern"], "*.rs");
+        assert!(out.tool_calls[0].id.starts_with("call_"));
+        // 由 functionCall 存在推导 tool_calls（而非 STOP→stop）
+        assert_eq!(out.finish_reason.as_deref(), Some("tool_calls"));
+    }
+}

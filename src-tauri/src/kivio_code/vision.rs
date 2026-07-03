@@ -127,6 +127,11 @@ async fn analyze_one_image(
                 .generate(request)
                 .await
         }
+        ProviderApiFormat::Gemini => {
+            crate::chat::model::GeminiProvider::new(state, provider, 1)
+                .generate(request)
+                .await
+        }
     }
     .map_err(|err| err.to_string())?;
 

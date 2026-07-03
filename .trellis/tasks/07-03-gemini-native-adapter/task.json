@@ -3,7 +3,7 @@
   "name": "gemini-native-adapter",
   "title": "Gemini 原生接口协议适配（GenerateContent peer adapter）",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

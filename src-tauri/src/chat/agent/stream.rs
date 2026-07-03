@@ -569,14 +569,20 @@ impl ChatStreamOutput {
                 self.tool_calls
                     .iter()
                     .map(|call| {
-                        serde_json::json!({
+                        let mut tc = serde_json::json!({
                             "id": call.id,
                             "type": "function",
                             "function": {
                                 "name": call.function_name,
                                 "arguments": call.arguments_raw,
                             }
-                        })
+                        });
+                        // Gemini thoughtSignature：搭在自定义键上，经存储/回放 → canonical
+                        // MessagePart::ToolCall.signature → 回放时带回 functionCall（其他 provider 无此字段）。
+                        if let Some(signature) = &call.signature {
+                            tc["thought_signature"] = Value::String(signature.clone());
+                        }
+                        tc
                     })
                     .collect(),
             );
@@ -769,6 +775,7 @@ mod tests {
             }),
             arguments_raw: "{\"path\":\"demo.html\",\"content\":\"<html></html>\"}".to_string(),
             arguments_parse_error: None,
+            signature: None,
         };
         sink.emit(StreamPart::ToolCallDone { call })
             .expect("done should emit");

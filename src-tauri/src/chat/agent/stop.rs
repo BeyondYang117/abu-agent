@@ -108,6 +108,7 @@ pub fn pending_tool_calls_from_dsml(content: &str) -> Vec<PendingToolCall> {
                 arguments,
                 arguments_raw,
                 arguments_parse_error: None,
+                signature: None,
             }
         })
         .collect()

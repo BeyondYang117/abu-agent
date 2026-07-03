@@ -649,6 +649,7 @@
             arguments_raw: serde_json::to_string(&arguments).expect("serialize test arguments"),
             arguments,
             arguments_parse_error: None,
+            signature: None,
         }
     }
 

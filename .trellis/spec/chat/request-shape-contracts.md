@@ -47,7 +47,7 @@
 | provider 拒绝 `tool_choice` | `is_tools_unsupported_error`（stop.rs）识别并降级无工具重试 |
 | 模型调用内部名（未经别名，如某些不读提示词的模型） | `match_tool_call` 精确匹配 `openai_tool_name()`==别名失败 → 大小写兜底 → 未知工具喂回（不崩） |
 | 新发现的保留名撞车 | 往 `RESERVED_WIRE_ALIASES` 加一行即可，无需改逻辑 |
-| **Gemini OpenAI-compat 端点拒绝未知字段** | ⚠️ **协议不兼容（非本项目 bug）**：Google Gemini 的 OpenAI-compat 端点对未知字段严格校验，收到 `promptCacheKey`/`prompt_cache_key` 即返回 `400 Unknown name "promptCacheKey": Cannot find field`。**opencode 用同样的 url+key 也复现完全相同的报错**——是 OpenAI 风格客户端普遍撞 Gemini shim 的结果，与 Kivio 无关。**正确方向**：为 Gemini 做**原生接口协议适配**（GenerateContent，作为 `openai.rs`/`anthropic.rs` 的 peer adapter），而非在 OpenAI 适配里门控字段打补丁。**待单独任务**（以后适配）。 |
+| **Gemini OpenAI-compat 端点拒绝未知字段** | ✅ **已由原生 adapter 解决**：`chat/model/gemini.rs`（`ProviderApiFormat::Gemini`，peer of openai/anthropic）走 Gemini 原生 `generateContent`/`streamGenerateContent?alt=sse`，天然不发 `promptCacheKey` 等 OpenAI 专有字段。provider 的 apiFormat 选 `gemini`、baseUrl 用原生根（`…/v1beta`）、认证 `x-goog-api-key` 头。**thoughtSignature 契约**：Gemini 3.x 响应 functionCall 带 `thoughtSignature`，**回放该 functionCall 时必须原样带回，否则 synthesis 400**（`Function call is missing a thought_signature`）；载体是 `PendingToolCall.signature` / `MessagePart::ToolCall.signature` ↔ OpenAI 形状 tool_call 的自定义键 `thought_signature`，其他 provider 恒 None 忽略。chat-probe 实测：单轮工具往返 + 多轮 synthesis 均 completed、无 400。 |
 
 ### 5. Good/Base/Bad Cases
 

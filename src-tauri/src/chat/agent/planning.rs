@@ -753,6 +753,11 @@ pub(crate) async fn generate_with_chat_provider(
                 .generate(request)
                 .await
         }
+        ProviderApiFormat::Gemini => {
+            crate::chat::model::GeminiProvider::new(state, provider, retry_attempts)
+                .generate(request)
+                .await
+        }
     }
 }
 
@@ -776,6 +781,11 @@ pub(crate) async fn stream_with_chat_provider(
         }
         ProviderApiFormat::OpenAiResponses => {
             OpenAiResponsesProvider::new(state, provider, retry_attempts)
+                .stream(request, sink)
+                .await
+        }
+        ProviderApiFormat::Gemini => {
+            crate::chat::model::GeminiProvider::new(state, provider, retry_attempts)
                 .stream(request, sink)
                 .await
         }

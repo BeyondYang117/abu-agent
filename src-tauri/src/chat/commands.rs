@@ -5316,6 +5316,11 @@ async fn generate_with_chat_provider(
                 .generate(request)
                 .await
         }
+        ProviderApiFormat::Gemini => {
+            crate::chat::model::GeminiProvider::new(state, provider, retry_attempts)
+                .generate(request)
+                .await
+        }
     }
     .map_err(|err| err.to_string())
 }

@@ -835,6 +835,7 @@ mod tests {
             arguments_raw: serde_json::to_string(&arguments).expect("serialize test args"),
             arguments,
             arguments_parse_error: None,
+            signature: None,
         }
     }
 
@@ -923,6 +924,7 @@ mod tests {
             arguments: Value::Null,
             arguments_raw: "{}".to_string(),
             arguments_parse_error: None,
+            signature: None,
         };
 
         let record = unknown_tool_record(&call, 2, "Unknown tool requested: missing".to_string());

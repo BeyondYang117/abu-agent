@@ -84,6 +84,9 @@ pub enum ProviderApiFormat {
     /// OpenAI Responses API (`POST /v1/responses`). Used by Codex / Responses-native
     /// models and proxies that only emit tool-call arguments over this protocol.
     OpenAiResponses,
+    /// Google Gemini native `generateContent` protocol. Avoids the OpenAI-compat
+    /// endpoint's strict rejection of unknown fields (e.g. `promptCacheKey` 400).
+    Gemini,
 }
 
 impl ProviderApiFormat {
@@ -91,6 +94,7 @@ impl ProviderApiFormat {
         match raw.trim() {
             "anthropic" | "anthropic_messages" => Self::AnthropicMessages,
             "openai_responses" | "responses" => Self::OpenAiResponses,
+            "gemini" | "google" | "gemini_generate" => Self::Gemini,
             _ => Self::OpenAiChat,
         }
     }
@@ -100,6 +104,7 @@ impl ProviderApiFormat {
             Self::OpenAiChat => "openai_chat",
             Self::AnthropicMessages => "anthropic_messages",
             Self::OpenAiResponses => "openai_responses",
+            Self::Gemini => "gemini",
         }
     }
 }

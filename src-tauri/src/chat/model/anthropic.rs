@@ -664,6 +664,7 @@ fn parse_anthropic_response(response: &Value) -> AnthropicParsedResponse {
                         },
                         arguments_raw,
                         arguments_parse_error: None,
+                        signature: None,
                     });
                 }
                 _ => {}
@@ -809,6 +810,7 @@ fn assemble_tool_call_from_stream(
         arguments,
         arguments_raw,
         arguments_parse_error,
+        signature: None,
     }
 }
 
@@ -845,6 +847,7 @@ fn anthropic_content_blocks(message: &ModelMessage, role: ModelRole) -> Vec<Valu
                 name,
                 arguments,
                 arguments_raw,
+                ..
             } => {
                 if matches!(role, ModelRole::Assistant) {
                     let input = if arguments.is_null() {
@@ -1192,6 +1195,7 @@ mod tests {
                     name: "web_search".to_string(),
                     arguments: serde_json::json!({"query": "rust"}),
                     arguments_raw: "{\"query\":\"rust\"}".to_string(),
+                    signature: None,
                 }],
             }],
             tools: Vec::new(),

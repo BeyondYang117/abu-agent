@@ -41,6 +41,12 @@ pub enum MessagePart {
         name: String,
         arguments: Value,
         arguments_raw: String,
+        /// Provider-specific opaque signature that must be echoed back when this
+        /// tool call is replayed (Gemini 3.x `thoughtSignature`: required on
+        /// `functionCall` parts in follow-up requests, else 400). Other providers
+        /// leave this `None` and ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
     ToolResult {
         tool_call_id: String,
@@ -235,6 +241,11 @@ pub struct PendingToolCall {
     pub arguments: Value,
     pub arguments_raw: String,
     pub arguments_parse_error: Option<String>,
+    /// Provider-specific opaque signature echoed back on replay (Gemini 3.x
+    /// `thoughtSignature`; other providers leave `None`). Rides through the
+    /// stream accumulator + provider_messages so tool-call turns replay intact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -652,6 +663,7 @@ fn model_message_from_openai_message(message: &Value) -> Option<ModelMessage> {
             name: call.function_name,
             arguments: call.arguments,
             arguments_raw: call.arguments_raw,
+            signature: call.signature,
         });
     }
     Some(ModelMessage {
@@ -682,6 +694,11 @@ pub fn pending_tool_calls_from_openai_message(message: &Value) -> Vec<PendingToo
                         arguments,
                         arguments_raw,
                         arguments_parse_error,
+                        // Gemini thoughtSignature（自定义键）随回放带回。
+                        signature: call
+                            .get("thought_signature")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string),
                     })
                 })
                 .collect()
@@ -734,16 +751,22 @@ fn openai_messages_from_model_message(message: &ModelMessage) -> Vec<Value> {
                 id,
                 name,
                 arguments_raw,
+                signature,
                 ..
             } => {
-                tool_calls.push(serde_json::json!({
+                let mut call = serde_json::json!({
                     "id": id,
                     "type": "function",
                     "function": {
                         "name": name,
                         "arguments": arguments_raw,
                     }
-                }));
+                });
+                // Gemini thoughtSignature 挂在自定义键上带过存储/回放（其他 provider 忽略）。
+                if let Some(signature) = signature {
+                    call["thought_signature"] = Value::String(signature.clone());
+                }
+                tool_calls.push(call);
             }
             MessagePart::Reasoning { text } => {
                 reasoning = Some(text.clone());
@@ -929,6 +952,7 @@ mod tests {
                     name: "web_search".to_string(),
                     arguments: serde_json::json!({ "query": "吉林市 明天 天气" }),
                     arguments_raw: "{\"query\":\"吉林市 明天 天气\"}".to_string(),
+                    signature: None,
                 }],
             },
             ModelMessage {
