@@ -1673,20 +1673,41 @@ fn dequote_unescape_path(token: &str) -> String {
     } else {
         trimmed
     };
-    // 反斜杠转义还原。
+    // 反斜杠转义还原（见 backslash_escapes：Windows 上 `\` 是路径分隔符，仅转义空白）。
     let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
+    let mut chars = inner.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+            match chars.peek().copied() {
+                Some(next) if backslash_escapes(next) => {
+                    out.push(next);
+                    chars.next();
+                }
+                // Windows 路径分隔符：`\` 后跟普通字符 → 字面保留（`C:\dir\file`）。
+                Some(_) => out.push('\\'),
+                // 末尾孤立的反斜杠：丢弃。
+                None => {}
             }
-            // 末尾孤立的反斜杠：丢弃。
         } else {
             out.push(c);
         }
     }
     out
+}
+
+/// 反斜杠是否转义其后字符。非 Windows 沿用 macOS/iTerm 拖入语义（`\<任意>` 皆转义，
+/// 覆盖 `\ ` / `\(` 等）；Windows 上 `\` 主要是路径分隔符，仅当其后是 shell 特殊字符
+/// （空白、括号、引号等，即"非路径安全字符"）时才视为转义，保证 `C:\dir\file.png`
+/// 里 `\<字母/数字>` 保留为字面分隔符不被拆坏。
+#[cfg(windows)]
+fn backslash_escapes(next: char) -> bool {
+    // 路径安全字符：字母数字（含 CJK 等 unicode）、以及路径里常见的 `_ . - / \ :`。
+    // 其后跟这些字符时 `\` 视为字面分隔符；否则（空格、`()` 等）才当转义。
+    !(next.is_alphanumeric() || matches!(next, '_' | '.' | '-' | '/' | '\\' | ':'))
+}
+#[cfg(not(windows))]
+fn backslash_escapes(_next: char) -> bool {
+    true
 }
 
 /// 判断一个路径串是否指向一个**存在的本地图片文件**（扩展名 ∈ [`IMAGE_EXTENSIONS`] 且 `is_file()`）。
@@ -1758,14 +1779,18 @@ fn extract_image_paths_from_text(
             let _ = closed;
         } else {
             // 反斜杠转义的空白（`\ `）属于 token 一部分，不在此断开（drag 路径常见形态）。
+            // Windows 上 `\` 是路径分隔符（`C:\dir\file`），不吞掉其后普通字符（见 backslash_escapes）。
             while let Some(&(idx, t)) = chars.peek() {
                 if t == '\\' {
-                    // 吞掉反斜杠 + 紧随的转义字符（含空格）。
                     end = idx + t.len_utf8();
                     chars.next();
                     if let Some(&(nidx, n)) = chars.peek() {
-                        end = nidx + n.len_utf8();
-                        chars.next();
+                        if backslash_escapes(n) {
+                            // `\<空白>` 等转义：连同被转义字符并入 token，不在此断开。
+                            end = nidx + n.len_utf8();
+                            chars.next();
+                        }
+                        // 否则 `\` 是字面分隔符（Windows 路径）：下一轮正常处理 n。
                     }
                     continue;
                 }
