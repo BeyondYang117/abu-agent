@@ -784,7 +784,14 @@ fn handle_openai_stream_tool_calls(
             partials.push(PartialToolCall::default());
         }
         let partial = &mut partials[index];
-        if let Some(id) = call.get("id").and_then(|value| value.as_str()) {
+        // id 只在该 tool_call 首个分片给;续片不带 id 或带空串 `""`(如 SenseNova）。
+        // 只在**非空**时才覆盖，否则空续片会把首片的真 id 冲掉 → 回放空 tool_call_id →
+        // 严格校验端点(商汤 DeepSeek 等)400 invalid tool_call_id。与下面 name 的空过滤一致。
+        if let Some(id) = call
+            .get("id")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+        {
             partial.id = Some(id.to_string());
         }
         if let Some(name) = call
@@ -850,7 +857,11 @@ fn finish_tool_call_partials(
         let Some(name) = partial.name else {
             continue;
         };
-        let id = partial.id.unwrap_or_else(|| format!("tool_{index}"));
+        // 兜底:None 或空串都生成合法非空 id,绝不产出空 tool_call_id。
+        let id = partial
+            .id
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("call_{index}"));
         let raw = if partial.arguments_raw.trim().is_empty() {
             "{}".to_string()
         } else {
@@ -1167,6 +1178,54 @@ mod tests {
             parts.last(),
             Some(StreamPart::ToolCallDone { .. })
         ));
+    }
+
+    #[test]
+    fn stream_tool_call_keeps_first_chunk_id_over_empty_continuation() {
+        // SenseNova 等:首片给真 id,续片给空 id `""`。空续片不得覆盖真 id。
+        let mut parts = Vec::new();
+        let mut sink = |part| {
+            parts.push(part);
+            Ok(())
+        };
+        let mut partials = Vec::new();
+        let start = serde_json::json!({
+            "choices": [{ "delta": { "tool_calls": [{
+                "index": 0, "id": "call_real", "function": {"name": "bash", "arguments": "{\"c\""}
+            }]}}]
+        });
+        let cont = serde_json::json!({
+            "choices": [{ "delta": { "tool_calls": [{
+                "index": 0, "id": "", "function": {"arguments": ":\"x\"}"}
+            }]}}]
+        });
+        handle_openai_stream_tool_calls(&start, &mut partials, &mut sink).expect("start");
+        handle_openai_stream_tool_calls(&cont, &mut partials, &mut sink).expect("cont");
+        let calls = finish_tool_call_partials(&mut partials, &mut sink).expect("finish");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_real", "empty continuation id must not overwrite real id");
+        assert_eq!(calls[0].arguments["c"], "x");
+    }
+
+    #[test]
+    fn stream_tool_call_synthesizes_id_when_all_empty() {
+        // id 从头到尾都空 → 生成合法非空 id,绝不发空 tool_call_id。
+        let mut parts = Vec::new();
+        let mut sink = |part| {
+            parts.push(part);
+            Ok(())
+        };
+        let mut partials = Vec::new();
+        let chunk = serde_json::json!({
+            "choices": [{ "delta": { "tool_calls": [{
+                "index": 0, "id": "", "function": {"name": "bash", "arguments": "{}"}
+            }]}}]
+        });
+        handle_openai_stream_tool_calls(&chunk, &mut partials, &mut sink).expect("chunk");
+        let calls = finish_tool_call_partials(&mut partials, &mut sink).expect("finish");
+        assert_eq!(calls.len(), 1);
+        assert!(!calls[0].id.is_empty(), "id must not be empty");
+        assert_eq!(calls[0].id, "call_0");
     }
 
     #[test]
