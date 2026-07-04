@@ -66,14 +66,11 @@ pub(crate) fn atomic_write(path: &Path, content: &str, label: &str) -> Result<()
             attempt
         ));
 
-        let write_result = fs::write(&tmp_path, content).and_then(|_| {
-            fs::rename(&tmp_path, path).or_else(|_| {
-                if path.exists() {
-                    fs::remove_file(path)?;
-                }
-                fs::rename(&tmp_path, path)
-            })
-        });
+        // 直接 rename 覆盖:Windows/Unix 的 fs::rename 都会原子替换已存在目标。
+        // 绝不"先 remove 再 rename"——那会制造"目标文件中途消失"的窗口:一旦紧接的
+        // rename 失败,index.json 就没了,下次读到空索引会把其余对话文件全部孤立(数据看似丢失)。
+        // 瞬时失败(锁 / 杀软占用)交给下面的外层重试循环 sleep 后重试整次写,期间旧文件始终保留。
+        let write_result = fs::write(&tmp_path, content).and_then(|_| fs::rename(&tmp_path, path));
 
         match write_result {
             Ok(()) => return Ok(()),
@@ -134,15 +131,63 @@ fn load_conversation_list_from_files(app: &AppHandle) -> Result<Vec<Conversation
 }
 
 fn load_index_or_scan(app: &AppHandle) -> Result<ConversationIndex, String> {
+    // index.json 只是缓存；conv_<id>.json 才是真相源。读取时用文件对账缓存:
+    // 只要有对话文件不在索引里(索引残缺/缺失/写坏),就以文件为准重扫重建并写回修复,
+    // 从根本上杜绝"残缺索引覆盖真实数据引用"导致的对话消失。
+    let file_ids = conversation_file_ids(app).unwrap_or_default();
     match load_index(app) {
-        Ok(index) => Ok(index),
+        Ok(index) => {
+            let indexed: std::collections::HashSet<&str> =
+                index.conversations.iter().map(|c| c.id.as_str()).collect();
+            // 索引覆盖了每个磁盘对话文件 → 信任它(允许含多余幽灵条目,无害);
+            // 缺任一文件 → 索引残缺 → 重建。
+            if file_ids.iter().all(|id| indexed.contains(id.as_str())) {
+                Ok(index)
+            } else {
+                rebuild_and_heal_index(app)
+            }
+        }
         Err(e) => {
             eprintln!("conversation index unavailable, rebuilding list from files: {e}");
-            Ok(ConversationIndex {
-                conversations: load_conversation_list_from_files(app)?,
-            })
+            rebuild_and_heal_index(app)
         }
     }
+}
+
+/// 仅按文件名廉价收集磁盘上的有效对话 id(不读文件内容)。
+/// `validate_conversation_id` 要求 `conv_` 前缀 → 天然排除 index/projects/assistants.json。
+fn conversation_file_ids(app: &AppHandle) -> Result<Vec<String>, String> {
+    let dir = conversations_dir(app)?;
+    conversation_file_ids_in_dir(&dir)
+}
+
+/// 纯逻辑:扫描给定目录,收集有效对话 id(便于单测)。
+fn conversation_file_ids_in_dir(dir: &Path) -> Result<Vec<String>, String> {
+    let mut ids = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| format!("read conversations dir: {e}"))? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            if validate_conversation_id(stem).is_ok() {
+                ids.push(stem.to_string());
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// 从对话文件重扫重建列表,并尽力写回修复 index.json(写失败仅告警,不影响返回)。
+fn rebuild_and_heal_index(app: &AppHandle) -> Result<ConversationIndex, String> {
+    let index = ConversationIndex {
+        conversations: load_conversation_list_from_files(app)?,
+    };
+    if let Err(e) = save_index(app, &index) {
+        eprintln!("heal conversation index write failed (non-fatal): {e}");
+    }
+    Ok(index)
 }
 
 /// 获取对话存储根目录：{app_data_dir}/conversations/
@@ -1240,5 +1285,61 @@ mod builtin_assistant_tests {
         // Researcher/coder need no document skills.
         let coder = defs.iter().find(|d| d.id == "asst_builtin_coder").unwrap();
         assert!(coder.skill_ids.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod index_self_heal_tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("kivio-storage-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_file() {
+        let dir = temp_dir();
+        let path = dir.join("index.json");
+        atomic_write(&path, "AAA", "test").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "AAA");
+        // 覆盖已存在文件应成功(不再"先删后 rename");目标文件始终有内容。
+        atomic_write(&path, "BBBB", "test").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "BBBB");
+        assert!(path.exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn conversation_file_ids_in_dir_only_collects_valid_conv_files() {
+        let dir = temp_dir();
+        // 有效对话文件
+        fs::write(dir.join("conv_aaa.json"), "{}").unwrap();
+        fs::write(dir.join("conv_bbb-1.json"), "{}").unwrap();
+        // 应被排除:缓存/索引文件、非 json、非 conv_ 前缀(无效 id)
+        fs::write(dir.join("index.json"), "{}").unwrap();
+        fs::write(dir.join("projects.json"), "{}").unwrap();
+        fs::write(dir.join("assistants.json"), "{}").unwrap();
+        fs::write(dir.join("notes.txt"), "x").unwrap();
+        fs::write(dir.join("random.json"), "{}").unwrap();
+
+        let mut ids = conversation_file_ids_in_dir(&dir).unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["conv_aaa".to_string(), "conv_bbb-1".to_string()]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn covers_all_logic_detects_missing_conversation_files() {
+        // 模拟 load_index_or_scan 的核心判定:file_ids ⊆ indexed 才信任索引。
+        let indexed: std::collections::HashSet<&str> = ["conv_a", "conv_b"].into_iter().collect();
+        // 索引覆盖全部文件(还多一个幽灵条目 conv_b)→ 信任
+        let files_covered = ["conv_a"];
+        assert!(files_covered.iter().all(|id| indexed.contains(*id)));
+        // 有文件(conv_c)不在索引 → 需重建
+        let files_diverged = ["conv_a", "conv_c"];
+        assert!(!files_diverged.iter().all(|id| indexed.contains(*id)));
     }
 }
