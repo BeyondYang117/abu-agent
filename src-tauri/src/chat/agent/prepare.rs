@@ -319,6 +319,21 @@ pub fn build_chat_system_prompt_with_segments(
         "System prompt",
         &base_prompt,
     );
+    // 工作方式纪律（始终附加，独立于可被自定义人设覆盖的基座）：对齐 opencode 的
+    // Tone/Proactiveness 之「神」——默认简洁、先答后做、不过度、不注水；但刻意不搬其
+    // CLI 硬限制（≤4 行/一个词），保留 Kivio 富文本 GUI 该出的结构化 Markdown/报告能力。
+    let work_style = if language.starts_with("zh") {
+        "工作方式：回答只针对当前问题，不写无谓的开场白、结语或「我接下来要做…」这类旁白；做完文件改动后不必复述改了什么（用户看得到）。篇幅随任务而定：简单问题一两句说清，复杂或报告类任务才展开结构化输出——不要为显得完整而注水。用户只是问「怎么做/可不可以」时，先直接回答，不要擅自动手改东西，也不要做用户没要求的额外工作。"
+    } else {
+        "How you work: address only the current request — no filler preamble, no wrap-up postamble, no \"here's what I'll do next\" narration; after editing files you don't need to restate what changed (the user can see it). Match length to the task: answer simple questions in a sentence or two, and expand into structured output only for complex or report-style tasks — don't pad to look thorough. When the user only asks how to do something or whether it's possible, answer first; don't jump to making changes, and don't do work they didn't ask for."
+    };
+    append_context_segment(
+        &mut prompt,
+        &mut segments,
+        "system_prompt",
+        "System prompt",
+        work_style,
+    );
     if let Some(assistant) = assistant_snapshot {
         let assistant_prompt = assistant_prompt_segment(assistant);
         if !assistant_prompt.trim().is_empty() {
@@ -797,6 +812,24 @@ fn native_tools_prompt(
     let has_write = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "write");
+    let has_edit = native_tool_names
+        .iter()
+        .any(|tool| tool.as_str() == "edit");
+    let has_bash = native_tool_names
+        .iter()
+        .any(|tool| tool.as_str() == "bash");
+    // 代码工作纪律：仅当具备改文件/跑命令能力时注入（纯聊天/只读工具集不污染）。
+    // 对齐 opencode 的 Following conventions / Code style / Doing tasks / Tool usage /
+    // Code References，取神不取形（注释用温和的「除非要求不加」）。
+    let code_discipline: &str = if has_write || has_edit || has_bash {
+        if language.starts_with("zh") {
+            "\n- 改代码前先看邻近文件与现有约定，模仿既有风格、命名和已用的库/框架；别假设某个库可用，先确认项目已在用它。除非用户要求，不要加代码注释。改完能验证就验证（跑已有测试、lint/typecheck）；非用户明确要求，不要 git commit/push。引用代码位置用 `文件路径:行号`。多个互相独立的查询或命令，在同一条消息里并行调用多个工具，别一个个串行。"
+        } else {
+            "\n- Before changing code, read neighboring files and existing conventions — mimic the current style, naming, and the libraries/frameworks already in use; never assume a library is available without confirming the project already uses it. Do not add code comments unless asked. After code changes, verify when you can (run existing tests, lint/typecheck); never git commit/push unless the user explicitly asks. Reference code locations as `file_path:line_number`. When several independent lookups or commands are needed, call multiple tools in parallel in one message instead of serially."
+        }
+    } else {
+        ""
+    };
     // The delivery directory is surfaced (with its absolute path) only when the
     // write tool is available — that's the channel the model writes deliverables
     // into. Without write, there is no plain-file delivery path to mention.
@@ -844,7 +877,7 @@ fn native_tools_prompt(
 - bash 在宿主 shell 从项目根目录执行，非零退出码即失败；含空格的路径必须用 `cwd` 参数，禁止 `cd 路径 && 命令`；不要同时传 `cwd` 又在 command 里写 `cd ... &&`。`npm run dev` / `tauri dev` / `vite` 等长驻 dev 命令会自动后台启动并立刻返回 pid，不要重复启动。破坏性、联网、改环境的命令先说明并等确认。Skill 脚本走 skill_run_script；不要用 pip 装宿主包绕过沙盒。\n\
 - run_python 在 Pyodide 沙盒运行，用于数据运算、分析、文档处理、图表，以及需要 Python 库才能产出的文件（带格式 XLSX、PDF、渲染图）；不要用它生成或打印代码答案，也不要仅为把已有内容写成文件而调用它（那用 write 写到交付目录）。代码直接写在回答里。无宿主文件系统访问；files 挂载本地文件后用 KIVIO_INPUT_FILES[n] 路径，numpy、pandas、matplotlib、pillow、openpyxl、pypdf 可直接 import。产物保存为相对路径文件名（如 report.xlsx、chart.png、summary.csv），应用会自动捕获并显示文件卡片；不要 print base64。\n\
 - {zh_live_access_hint}"
-        ) + &generated_file_hint + image_generation_hint
+        ) + &generated_file_hint + image_generation_hint + code_discipline
     } else {
         let image_generation_hint = if has_image_generation {
             "\n- When the user asks to create, generate, or draw an image, call mixer_generate_image; do not merely describe it."
@@ -871,7 +904,7 @@ fn native_tools_prompt(
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {en_live_access_hint}"
-        ) + &generated_file_hint + image_generation_hint
+        ) + &generated_file_hint + image_generation_hint + code_discipline
     };
     if has_image_generation && !prompt.ends_with('.') && !prompt.ends_with('。') {
         prompt.push('.');
@@ -1300,6 +1333,24 @@ mod tests {
         let en = native_tools_prompt(&names, "en", None).expect("prompt");
         assert!(en.contains("search_web"), "{en}");
         assert!(!en.contains("web_search"), "{en}");
+    }
+
+    #[test]
+    fn native_tools_prompt_gates_code_discipline_on_file_or_bash_tools() {
+        // 代码工作纪律只在具备 write/edit/bash 时注入；纯只读/无这些工具时不出现，
+        // 避免污染纯聊天场景。
+        let with_bash = vec!["bash".to_string(), "read".to_string()];
+        let p = native_tools_prompt(&with_bash, "zh", None).expect("prompt");
+        assert!(p.contains("文件路径:行号"), "有 bash 应含代码纪律: {p}");
+        let en = native_tools_prompt(&with_bash, "en", None).expect("prompt");
+        assert!(en.contains("file_path:line_number"), "bash present should add discipline: {en}");
+
+        // 只有只读工具（无 write/edit/bash）时不注入。
+        let read_only = vec!["read".to_string(), "glob".to_string()];
+        let p2 = native_tools_prompt(&read_only, "zh", None).expect("prompt");
+        assert!(!p2.contains("文件路径:行号"), "只读工具集不应含代码纪律: {p2}");
+        let en2 = native_tools_prompt(&read_only, "en", None).expect("prompt");
+        assert!(!en2.contains("file_path:line_number"), "read-only should omit discipline: {en2}");
     }
 
     #[test]
