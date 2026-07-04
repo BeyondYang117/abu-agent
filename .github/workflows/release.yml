@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish to (e.g. v2.7.4)'
+        description: 'Release tag to publish to (e.g. v2.7.5)'
         required: true
-        default: 'v2.7.4'
+        default: 'v2.7.5'
       ref:
         description: 'Git ref to build from (branch/tag/commit)'
         required: true
@@ -23,8 +23,9 @@ env:
   BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
 
 jobs:
-  tauri-release-windows:
-    runs-on: windows-latest
+  tauri-release-macos:
+    # Apple Silicon runner → aarch64-apple-darwin DMG.
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -40,14 +41,17 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Swift sidecar stubs (Windows)
+      - name: Build Swift sidecar (macOS)
+        # Real kivio-ocr-helper (Apple Vision OCR); satisfies externalBin validation.
         run: npm run build:swift
 
-      - name: Build and publish Windows NSIS installer
+      - name: Build and publish macOS DMG
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,13 +59,13 @@ jobs:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: Kivio ${{ env.RELEASE_TAG }}
           releaseBody: |
-            Automated Windows build for ${{ env.RELEASE_TAG }}.
+            Automated macOS (Apple Silicon) build for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
-            - Windows: NSIS (.exe)
+            - macOS: DMG (Apple Silicon / aarch64, unsigned — first launch: right-click → Open, or run `xattr -cr /Applications/Kivio.app`)
 
-            macOS Apple Silicon DMG is built locally and uploaded separately.
+            Windows NSIS installer (.exe) is built locally and uploaded separately.
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
           tauriScript: npx tauri
-          args: --bundles nsis
+          args: --target aarch64-apple-darwin --bundles dmg
