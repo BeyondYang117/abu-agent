@@ -53,9 +53,9 @@ export function DoneStep({ t, settings }: DoneStepProps) {
 
   return (
     <OnboardingStepFrame title={t.onboardingDoneTitle} subtitle={t.onboardingDoneDesc}>
-      <div className="onboarding-panel">
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.onboardingDoneSectionModels}</div>
+      <div className="onboarding-section">
+        <div className="onboarding-section-label">{t.onboardingDoneSectionModels}</div>
+        <div className="onboarding-card onboarding-card--rows">
           <div className="onboarding-summary-list">
             {modelRows.map((row) => (
               <SummaryRow
@@ -72,11 +72,11 @@ export function DoneStep({ t, settings }: DoneStepProps) {
             />
           </div>
         </div>
+      </div>
 
-        <div className="onboarding-panel-divider" />
-
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.onboardingDoneHotkeys}</div>
+      <div className="onboarding-section">
+        <div className="onboarding-section-label">{t.onboardingDoneHotkeys}</div>
+        <div className="onboarding-card onboarding-card--rows">
           <div className="onboarding-summary-list">
             {hotkeyRows.map((row) => (
               <SummaryRow key={row.label} label={row.label} value={row.value} />

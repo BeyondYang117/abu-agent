@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{send_with_retry, with_standard_request_timeout},
-    settings::{LensWebSearchConfig, WebSearchProvider},
+    mcp::client::StreamableHttpMcpClient,
+    settings::{ChatMcpServer, LensWebSearchConfig, WebSearchProvider},
     state::AppState,
 };
 
@@ -77,7 +78,99 @@ pub async fn search_web(
     match config.provider {
         WebSearchProvider::Tavily => search_tavily(state, config, query, retry_attempts).await,
         WebSearchProvider::Exa => search_exa(state, config, query, retry_attempts).await,
+        WebSearchProvider::ExaMcp => search_exa_mcp(state, config, query).await,
+        WebSearchProvider::Unknown => {
+            Err("Selected web search provider is not supported yet".to_string())
+        }
     }
+}
+
+/// Exa MCP 搜索：调用 Exa 官方 MCP 服务器（默认 https://mcp.exa.ai/mcp）的
+/// `web_search_exa` 工具，复用通用的 Streamable HTTP MCP 客户端。API Key 走
+/// `?exaApiKey=` 查询参数（Exa MCP 的约定），无 key 也可低配额试用。
+async fn search_exa_mcp(
+    state: &AppState,
+    config: &LensWebSearchConfig,
+    query: &str,
+) -> Result<Vec<WebSearchResult>, String> {
+    let base = config.exa_mcp_url.trim();
+    if base.is_empty() {
+        return Err("Exa MCP endpoint is not configured".to_string());
+    }
+    let api_key = config.exa_api_key.trim();
+    let url = if api_key.is_empty() {
+        base.to_string()
+    } else if base.contains('?') {
+        format!("{base}&exaApiKey={api_key}")
+    } else {
+        format!("{base}?exaApiKey={api_key}")
+    };
+
+    let server = ChatMcpServer {
+        id: "exa-mcp".to_string(),
+        name: "Exa MCP".to_string(),
+        enabled: true,
+        transport: "streamable_http".to_string(),
+        url,
+        ..ChatMcpServer::default()
+    };
+    let client = StreamableHttpMcpClient::new(server, 30_000, state.http.clone());
+
+    let max_results = config.max_results.clamp(1, 10);
+    let result = client
+        .call_tool(
+            "web_search_exa",
+            serde_json::json!({ "query": query, "numResults": max_results }),
+        )
+        .await?;
+    if result.is_error {
+        return Err(format!("Exa MCP search failed: {}", result.content));
+    }
+
+    Ok(parse_exa_mcp_results(&result.content, max_results as usize))
+}
+
+/// Exa MCP 的工具返回体是一段文本，通常内嵌 JSON（`{ "results": [...] }`）。
+/// 尽量结构化解析；解析失败时把整段文本作为单条结果返回，保证至少有可用内容。
+fn parse_exa_mcp_results(content: &str, max_results: usize) -> Vec<WebSearchResult> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if let Ok(parsed) = serde_json::from_str::<ExaSearchResponse>(trimmed) {
+        let results: Vec<WebSearchResult> = parsed
+            .results
+            .into_iter()
+            .filter(|result| !result.url.trim().is_empty())
+            .map(|result| {
+                let content = if !result.highlights.is_empty() {
+                    result.highlights.join("\n")
+                } else if !result.summary.trim().is_empty() {
+                    result.summary
+                } else {
+                    result.text
+                };
+                WebSearchResult {
+                    title: result.title.trim().to_string(),
+                    url: result.url.trim().to_string(),
+                    content: content.trim().to_string(),
+                    published_date: result.published_date,
+                    score: result.score,
+                }
+            })
+            .take(max_results)
+            .collect();
+        if !results.is_empty() {
+            return results;
+        }
+    }
+    vec![WebSearchResult {
+        title: "Exa MCP result".to_string(),
+        url: "https://mcp.exa.ai/mcp".to_string(),
+        content: trimmed.chars().take(4000).collect(),
+        published_date: None,
+        score: None,
+    }]
 }
 
 async fn search_tavily(
@@ -281,7 +374,10 @@ pub fn format_web_context(results: &[WebSearchResult]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_web_context, ExaSearchResponse, TavilySearchResponse, WebSearchResult};
+    use super::{
+        format_web_context, parse_exa_mcp_results, ExaSearchResponse, TavilySearchResponse,
+        WebSearchResult,
+    };
 
     #[test]
     fn tavily_response_deserializes_results_and_answer() {
@@ -344,5 +440,30 @@ mod tests {
         assert!(context.contains("URL: https://docs.example.com"));
         assert!(context.contains("Published: 2026-03-03"));
         assert!(context.contains("Snippet: Helpful snippet"));
+    }
+
+    #[test]
+    fn exa_mcp_parses_embedded_json_results() {
+        let raw = r#"{
+            "results": [
+                { "title": "MCP Doc", "url": "https://exa.ai/mcp", "text": "body", "highlights": ["hl"], "publishedDate": "2026-04-04" }
+            ]
+        }"#;
+        let results = parse_exa_mcp_results(raw, 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://exa.ai/mcp");
+        assert_eq!(results[0].content, "hl");
+    }
+
+    #[test]
+    fn exa_mcp_falls_back_to_raw_text_when_not_json() {
+        let results = parse_exa_mcp_results("plain text answer", 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "plain text answer");
+    }
+
+    #[test]
+    fn exa_mcp_empty_content_yields_no_results() {
+        assert!(parse_exa_mcp_results("   ", 5).is_empty());
     }
 }

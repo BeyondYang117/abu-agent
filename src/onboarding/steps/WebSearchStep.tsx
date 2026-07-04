@@ -53,10 +53,10 @@ export function WebSearchStep({ t, settings, onChange }: WebSearchStepProps) {
 
   return (
     <OnboardingStepFrame title={t.onboardingWebSearchTitle} subtitle={t.onboardingWebSearchDesc}>
-      <div className="onboarding-panel">
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.webSearchApiSection}</div>
-          <OnboardingFormRow label={t.lensWebSearchProvider} border>
+      <div className="onboarding-section">
+        <div className="onboarding-section-label">{t.webSearchApiSection}</div>
+        <div className="onboarding-card onboarding-card--rows">
+          <OnboardingFormRow label={t.lensWebSearchProvider}>
             <Select
               className="w-full max-w-[220px]"
               value={webSearch.provider}
@@ -67,7 +67,11 @@ export function WebSearchStep({ t, settings, onChange }: WebSearchStepProps) {
               ]}
             />
           </OnboardingFormRow>
-          <OnboardingFormRow label={t.lensWebSearchApiKey} stack>
+          <OnboardingFormRow
+            label={t.lensWebSearchApiKey}
+            hint={!hasApiKey ? t.onboardingWebSearchKeyRequired : undefined}
+            stack
+          >
             <Input
               type="password"
               value={webSearch.provider === 'exa' ? webSearch.exaApiKey : webSearch.tavilyApiKey}
@@ -83,12 +87,12 @@ export function WebSearchStep({ t, settings, onChange }: WebSearchStepProps) {
             />
           </OnboardingFormRow>
         </div>
+      </div>
 
-        <div className="onboarding-panel-divider" />
-
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.webSearchChatSection}</div>
-          <OnboardingFormRow label={t.webSearchChatToggle} hint={t.webSearchChatHint}>
+      <div className="onboarding-section">
+        <div className="onboarding-section-label">{t.onboardingWebSearchEnableSection}</div>
+        <div className="onboarding-card onboarding-card--rows">
+          <OnboardingFormRow label={t.webSearchChatSection} hint={t.onboardingWebSearchChatHint}>
             <Toggle
               checked={hasApiKey && chatWebSearchEnabled}
               onChange={(enabled) => {
@@ -97,13 +101,7 @@ export function WebSearchStep({ t, settings, onChange }: WebSearchStepProps) {
               }}
             />
           </OnboardingFormRow>
-        </div>
-
-        <div className="onboarding-panel-divider" />
-
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.webSearchLensSection}</div>
-          <OnboardingFormRow label={t.enabled} hint={t.lensWebSearchHint}>
+          <OnboardingFormRow label={t.webSearchLensSection} hint={t.lensWebSearchHint}>
             <Toggle
               checked={hasApiKey && webSearch.enabled}
               onChange={(enabled) => {
@@ -113,15 +111,6 @@ export function WebSearchStep({ t, settings, onChange }: WebSearchStepProps) {
             />
           </OnboardingFormRow>
         </div>
-
-        {!hasApiKey ? (
-          <>
-            <div className="onboarding-panel-divider" />
-            <div className="onboarding-panel-section onboarding-panel-section--compact">
-              <p className="onboarding-panel-note">{t.onboardingWebSearchKeyRequired}</p>
-            </div>
-          </>
-        ) : null}
       </div>
     </OnboardingStepFrame>
   )

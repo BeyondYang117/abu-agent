@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { api, type Settings } from '../api/tauri'
 import { i18n, type Lang } from '../settings/i18n'
-import { OnboardingDragBar } from './OnboardingDragBar'
-import { ONBOARDING_STEPS } from './types'
+import { usesNativeTitlebar } from '../chat/platform'
+import { ONBOARDING_STEPS, type OnboardingStepId } from './types'
 import { canCompleteOnboarding, validateProviderStep } from './validation'
 import { DoneStep } from './steps/DoneStep'
 import { HotkeyStep } from './steps/HotkeyStep'
@@ -171,6 +171,15 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     )
   }
 
+  const stepLabels: Record<OnboardingStepId, string> = {
+    welcome: t.onboardingStepWelcome,
+    language: t.onboardingWelcomeStepLanguage,
+    provider: t.onboardingWelcomeStepProvider,
+    webSearch: t.onboardingWelcomeStepWebSearch,
+    hotkey: t.onboardingWelcomeStepHotkey,
+    done: t.onboardingStepDone,
+  }
+
   const primaryLabel = stepId === 'welcome'
     ? t.onboardingStart
     : stepId === 'done'
@@ -187,29 +196,52 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
   return (
     <div className="onboarding-shell settings-embedded kv">
-      <OnboardingDragBar>
-        <div className="onboarding-brand">Kivio</div>
-        <div className="onboarding-progress">
-          {ONBOARDING_STEPS.map((step, index) => (
-            <span
-              key={step}
-              className={`onboarding-progress-dot${index === stepIndex ? ' active' : ''}${index < stepIndex ? ' done' : ''}`}
-              title={step}
-            />
-          ))}
+      <aside
+        className={`onboarding-side${usesNativeTitlebar ? ' onboarding-side--mac' : ''}`}
+        data-tauri-drag-region
+      >
+        <div className="onboarding-side-brand" data-tauri-drag-region>
+          <img src="/logo-mark.png" alt="" className="onboarding-side-logo" draggable={false} />
+          <span className="onboarding-side-brand-name">Kivio</span>
         </div>
-        <button
-          type="button"
-          className="kv-btn ghost onboarding-skip-btn"
-          onClick={() => setSkipConfirmOpen(true)}
-          data-tauri-drag-region="false"
-        >
-          {t.onboardingSkip}
-        </button>
-      </OnboardingDragBar>
+        <nav className="onboarding-side-steps">
+          {ONBOARDING_STEPS.map((step, index) => {
+            const done = index < stepIndex
+            const active = index === stepIndex
+            return (
+              <button
+                key={step}
+                type="button"
+                className={`onboarding-side-step${active ? ' active' : ''}${done ? ' done' : ''}`}
+                data-clickable={done ? 'true' : 'false'}
+                disabled={!done}
+                onClick={() => {
+                  if (done) setStepIndex(index)
+                }}
+                data-tauri-drag-region="false"
+              >
+                <span className="onboarding-side-step-bullet">
+                  {done ? <Check size={11} strokeWidth={3} /> : index + 1}
+                </span>
+                <span className="onboarding-side-step-label">{stepLabels[step]}</span>
+              </button>
+            )
+          })}
+        </nav>
+      </aside>
 
-      <div className="onboarding-body-layout">
-        <div className="onboarding-drag-rail" data-tauri-drag-region aria-hidden="true" />
+      <div className="onboarding-main">
+        <div className="onboarding-topbar" data-tauri-drag-region>
+          <button
+            type="button"
+            className="kv-btn ghost"
+            onClick={() => setSkipConfirmOpen(true)}
+            data-tauri-drag-region="false"
+          >
+            {t.onboardingSkip}
+          </button>
+        </div>
+
         <div className="onboarding-body kv-scroll" data-tauri-drag-region="false">
           {stepId === 'welcome' ? <WelcomeStep t={t} /> : null}
           {stepId === 'provider' ? (
@@ -231,43 +263,46 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
           ) : null}
           {stepId === 'done' ? <DoneStep t={t} settings={settings} /> : null}
         </div>
-        <div className="onboarding-drag-rail" data-tauri-drag-region aria-hidden="true" />
-      </div>
 
-      <div className="onboarding-footer" data-tauri-drag-region="false">
-        <button
-          type="button"
-          className="kv-btn ghost"
-          onClick={goBack}
-          disabled={stepIndex === 0 || saving}
-          data-tauri-drag-region="false"
-        >
-          <ArrowLeft size={14} />
-          {t.onboardingBack}
-        </button>
-        <div className="onboarding-drag-spacer" data-tauri-drag-region />
-        <div className="onboarding-footer-actions" data-tauri-drag-region="false">
-          {stepId === 'webSearch' ? (
-            <button
-              type="button"
-              className="kv-btn ghost"
-              onClick={goNext}
-              disabled={saving}
-              data-tauri-drag-region="false"
-            >
-              {t.onboardingWebSearchSkipStep}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="kv-btn primary"
-            onClick={handlePrimary}
-            disabled={saving || (stepId !== 'done' && !canGoNext) || (stepId === 'done' && !canCompleteOnboarding(settings))}
-            data-tauri-drag-region="false"
-          >
-            {primaryLabel}
-            {stepId !== 'done' ? <ArrowRight size={14} /> : null}
-          </button>
+        <div className="onboarding-footer" data-tauri-drag-region="false">
+          <div className="onboarding-footer-inner">
+            {stepIndex > 0 ? (
+              <button
+                type="button"
+                className="kv-btn ghost"
+                onClick={goBack}
+                disabled={saving}
+                data-tauri-drag-region="false"
+              >
+                <ArrowLeft size={14} />
+                {t.onboardingBack}
+              </button>
+            ) : null}
+            <div className="onboarding-footer-spacer" />
+            <div className="onboarding-footer-actions">
+              {stepId === 'webSearch' ? (
+                <button
+                  type="button"
+                  className="kv-btn ghost"
+                  onClick={goNext}
+                  disabled={saving}
+                  data-tauri-drag-region="false"
+                >
+                  {t.onboardingWebSearchSkipStep}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="kv-btn primary"
+                onClick={handlePrimary}
+                disabled={saving || (stepId !== 'done' && !canGoNext) || (stepId === 'done' && !canCompleteOnboarding(settings))}
+                data-tauri-drag-region="false"
+              >
+                {primaryLabel}
+                {stepId !== 'done' ? <ArrowRight size={14} /> : null}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

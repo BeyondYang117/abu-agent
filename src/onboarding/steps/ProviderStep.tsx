@@ -32,7 +32,7 @@ export function ProviderStep({
           {!validationBypassed && onBypassValidation ? (
             <button
               type="button"
-              className="kv-btn ghost"
+              className="kv-btn"
               onClick={onBypassValidation}
               data-tauri-drag-region="false"
             >

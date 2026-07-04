@@ -754,9 +754,10 @@ export type Settings = {
     /** Lens 联网搜索配置 */
     webSearch?: {
       enabled: boolean
-      provider: 'tavily' | 'exa'
+      provider: 'tavily' | 'exa' | 'exa_mcp'
       tavilyApiKey: string
       exaApiKey: string
+      exaMcpUrl?: string
       maxResults: number
       searchDepth: 'ultra-fast' | 'fast' | 'basic' | 'advanced'
     }
@@ -1200,6 +1201,7 @@ function normalizeSettings(settings: Settings): Settings {
         provider: current.lens?.webSearch?.provider ?? 'tavily',
         tavilyApiKey: current.lens?.webSearch?.tavilyApiKey ?? '',
         exaApiKey: current.lens?.webSearch?.exaApiKey ?? '',
+        exaMcpUrl: current.lens?.webSearch?.exaMcpUrl ?? 'https://mcp.exa.ai/mcp',
         maxResults: current.lens?.webSearch?.maxResults ?? 5,
         searchDepth: current.lens?.webSearch?.searchDepth ?? 'basic',
       },

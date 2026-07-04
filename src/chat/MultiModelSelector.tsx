@@ -55,6 +55,17 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
   }, [open])
 
   const activeProviders = useMemo(() => providers.filter(isProviderEnabled), [providers])
+  // 只显示有可选模型的服务商，避免没配置模型的服务商变成空的分组标题。
+  const visibleProviders = useMemo(
+    () =>
+      activeProviders
+        .map((provider) => ({
+          provider,
+          models: provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels,
+        }))
+        .filter((entry) => entry.models.length > 0),
+    [activeProviders],
+  )
   const atLimit = value.length >= MAX_REPLY_MODELS
 
   const providerName = useCallback(
@@ -104,15 +115,12 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
             <div className="px-2.5 py-1 text-[11px] font-medium text-neutral-400">
               选择并行回答的模型（{value.length}/{MAX_REPLY_MODELS}）。选 0 或 1 个 = 单模型。
             </div>
-            {activeProviders.map((provider) => (
+            {visibleProviders.map(({ provider, models }) => (
               <div key={provider.id} className="px-1 py-0.5">
                 <div className="px-2.5 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
                   {provider.name}
                 </div>
-                {(provider.enabledModels.length > 0
-                  ? provider.enabledModels
-                  : provider.availableModels
-                ).map((model) => {
+                {models.map((model) => {
                   const checked = value.some((item) => sameRef(item, { provider_id: provider.id, model }))
                   const disabled = !checked && atLimit
                   return (
@@ -145,7 +153,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
                 })}
               </div>
             ))}
-            {activeProviders.length === 0 && (
+            {visibleProviders.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-neutral-500">暂无可用模型</div>
             )}
           </div>,

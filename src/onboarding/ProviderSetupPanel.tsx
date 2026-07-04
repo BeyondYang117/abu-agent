@@ -319,79 +319,56 @@ export function ProviderSetupPanel({ t, lang, settings, onChange }: ProviderSetu
   }
 
   const hasAnyEnabledModels = settings.providers.some((item) => item.enabledModels.length > 0)
+  // 未添加过的预设直接以「+ 名称」虚线 chip 混排在服务商列表尾部，避免「已添加」和「快速添加」两块重复列表。
+  const unaddedPresets = PROVIDER_PRESETS.filter(
+    (preset) => !settings.providers.some((item) => isPresetMatch(item, preset)),
+  )
 
   return (
     <div className="onboarding-provider-panel">
-      <div className="onboarding-panel">
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.onboardingProviderList}</div>
-          {settings.providers.length > 0 ? (
-            <div className="onboarding-pick-grid">
-              {settings.providers.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`onboarding-pick${item.id === activeProviderId ? ' active' : ''}`}
-                  onClick={() => selectProvider(item.id)}
-                  data-tauri-drag-region="false"
-                >
-                  {item.name.trim() || item.id}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="onboarding-field-hint">{t.onboardingProviderEmpty}</p>
-          )}
-        </div>
-
-        <div className="onboarding-panel-divider" />
-
-        <div className="onboarding-panel-section">
-          <div className="onboarding-panel-label">{t.onboardingProviderPresets}</div>
-          <div className="onboarding-pick-grid">
-            {PROVIDER_PRESETS.map((preset) => (
-              <button
-                key={preset.name}
-                type="button"
-                className="onboarding-pick onboarding-pick--add"
-                onClick={() => handleAddPreset(preset)}
-                data-tauri-drag-region="false"
-              >
-                <Plus size={12} />
-                {preset.name}
-              </button>
-            ))}
+      <div className="onboarding-section">
+        <div className="onboarding-section-label">{t.onboardingProviderList}</div>
+        <div className="onboarding-pick-grid">
+          {settings.providers.map((item) => (
             <button
+              key={item.id}
               type="button"
-              className="onboarding-pick onboarding-pick--custom onboarding-pick--add"
-              onClick={handleAddCustom}
+              className={`onboarding-pick${item.id === activeProviderId ? ' active' : ''}`}
+              onClick={() => selectProvider(item.id)}
+              data-tauri-drag-region="false"
+            >
+              {item.name.trim() || item.id}
+            </button>
+          ))}
+          {unaddedPresets.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              className="onboarding-pick onboarding-pick--add"
+              onClick={() => handleAddPreset(preset)}
               data-tauri-drag-region="false"
             >
               <Plus size={12} />
-              {t.onboardingProviderAddCustom}
+              {preset.name}
             </button>
-          </div>
+          ))}
+          <button
+            type="button"
+            className="onboarding-pick onboarding-pick--add"
+            onClick={handleAddCustom}
+            data-tauri-drag-region="false"
+          >
+            <Plus size={12} />
+            {t.onboardingProviderAddCustom}
+          </button>
         </div>
+        {settings.providers.length === 0 ? (
+          <p className="onboarding-panel-note">{t.onboardingProviderEmpty}</p>
+        ) : null}
 
         {provider ? (
-          <>
-            <div className="onboarding-panel-divider" />
-
-            <div className="onboarding-panel-section onboarding-panel-form">
-              <div className="onboarding-provider-form-head">
-                <div className="onboarding-panel-label">{t.onboardingProviderEditing}</div>
-                <button
-                  type="button"
-                  className="kv-icon-btn danger"
-                  onClick={() => setConfirmDelete(true)}
-                  data-tauri-drag-region="false"
-                  title={t.deleteProvider}
-                  aria-label={t.deleteProvider}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </div>
-
+          <div className="onboarding-card onboarding-provider-card">
+            <div className="onboarding-provider-grid">
               <div className="onboarding-field">
                 <Label>{t.onboardingProviderName}</Label>
                 <Input
@@ -400,7 +377,6 @@ export function ProviderSetupPanel({ t, lang, settings, onChange }: ProviderSetu
                   placeholder={t.onboardingProviderCustom}
                 />
               </div>
-
               <div className="onboarding-field">
                 <Label>{t.baseUrl}</Label>
                 <Input
@@ -416,146 +392,153 @@ export function ProviderSetupPanel({ t, lang, settings, onChange }: ProviderSetu
                   mono
                 />
               </div>
+            </div>
 
-              <div className="onboarding-field">
-                <Label>{t.onboardingProviderApiKey}</Label>
-                <Input
-                  type="password"
-                  value={provider.apiKeys[0] || ''}
-                  onChange={(value) => updateProvider({ apiKeys: value.trim() ? [value] : [] })}
-                  placeholder="sk-..."
-                  mono
-                />
-                {(() => {
-                  // 命中快速预设 baseUrl 时，给出「获取 API Key」外链引导申请（与设置页一致）。
-                  const preset = PROVIDER_PRESETS.find(
-                    (p) => p.baseUrl === provider.baseUrl && p.apiKeyUrl,
-                  )
-                  if (!preset?.apiKeyUrl) return null
-                  return (
-                    <button
-                      type="button"
-                      onClick={() => void api.openExternal(preset.apiKeyUrl!)}
-                      className="mt-1 inline-flex w-fit items-center text-[12px] text-indigo-500 hover:underline dark:text-indigo-300"
-                      data-tauri-drag-region="false"
-                    >
-                      {lang === 'zh' ? `获取 ${preset.name} API Key ↗` : `Get ${preset.name} API key ↗`}
-                    </button>
-                  )
-                })()}
-              </div>
+            <div className="onboarding-field">
+              <Label>{t.onboardingProviderApiKey}</Label>
+              <Input
+                type="password"
+                value={provider.apiKeys[0] || ''}
+                onChange={(value) => updateProvider({ apiKeys: value.trim() ? [value] : [] })}
+                placeholder="sk-..."
+                mono
+              />
+              {(() => {
+                // 命中快速预设 baseUrl 时，给出「获取 API Key」外链引导申请（与设置页一致）。
+                const preset = PROVIDER_PRESETS.find(
+                  (p) => p.baseUrl === provider.baseUrl && p.apiKeyUrl,
+                )
+                if (!preset?.apiKeyUrl) return null
+                return (
+                  <button
+                    type="button"
+                    onClick={() => void api.openExternal(preset.apiKeyUrl!)}
+                    className="inline-flex w-fit items-center text-[12px] text-indigo-500 hover:underline dark:text-indigo-300"
+                    data-tauri-drag-region="false"
+                  >
+                    {lang === 'zh' ? `获取 ${preset.name} API Key ↗` : `Get ${preset.name} API key ↗`}
+                  </button>
+                )
+              })()}
+            </div>
 
-              <div className="onboarding-action-row">
-                <button
-                  type="button"
-                  className="kv-btn"
-                  onClick={() => void handleTestConnection()}
-                  disabled={testing}
-                  data-tauri-drag-region="false"
-                >
-                  {testing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  {t.onboardingProviderTest}
-                </button>
-                <button
-                  type="button"
-                  className="kv-btn primary"
-                  onClick={openModelPicker}
-                  data-tauri-drag-region="false"
-                >
-                  {t.onboardingProviderManageModels}
-                  {provider.enabledModels.length > 0 ? ` · ${provider.enabledModels.length}` : ''}
-                </button>
-                {testFeedback ? (
-                  <span className={`kv-tag ${testFeedback.ok ? 'ok' : 'danger'}`}>{testFeedback.message}</span>
-                ) : null}
-              </div>
-
-              {provider.enabledModels.length > 0 ? (
-                <div className="onboarding-model-list">
-                  {provider.enabledModels.map((model) => (
-                    <span key={model} className="onboarding-model-chip">
-                      <Check size={12} />
-                      {model}
-                    </span>
-                  ))}
-                </div>
+            <div className="onboarding-action-row">
+              <button
+                type="button"
+                className="kv-btn"
+                onClick={() => void handleTestConnection()}
+                disabled={testing}
+                data-tauri-drag-region="false"
+              >
+                {testing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                {t.onboardingProviderTest}
+              </button>
+              <button
+                type="button"
+                className="kv-btn primary"
+                onClick={openModelPicker}
+                data-tauri-drag-region="false"
+              >
+                {t.onboardingProviderManageModels}
+                {provider.enabledModels.length > 0 ? ` · ${provider.enabledModels.length}` : ''}
+              </button>
+              {testFeedback ? (
+                <span className={`kv-tag ${testFeedback.ok ? 'ok' : 'danger'}`}>{testFeedback.message}</span>
               ) : null}
+              <button
+                type="button"
+                className="kv-icon-btn danger onboarding-action-trailing"
+                onClick={() => setConfirmDelete(true)}
+                data-tauri-drag-region="false"
+                title={t.deleteProvider}
+                aria-label={t.deleteProvider}
+              >
+                <Trash2 size={13} />
+              </button>
             </div>
-          </>
-        ) : null}
 
-        {hasAnyEnabledModels ? (
-          <>
-            <div className="onboarding-panel-divider" />
-            <div className="onboarding-panel-section">
-              <div className="onboarding-panel-label">{lang === 'zh' ? '默认模型' : 'Default models'}</div>
-              <div className="onboarding-model-picks onboarding-model-picks--stack">
-                <div className="onboarding-field">
-                  <Label>{t.onboardingProviderQuickTranslateModel}</Label>
-                  <ModelPairSelect
-                    providerId={settings.screenshotTranslation?.providerId || ''}
-                    model={settings.screenshotTranslation?.model || ''}
-                    providers={settings.providers}
-                    className="w-full"
-                    onChange={(providerId, model) => {
-                      onChange({
-                        ...settings,
-                        screenshotTranslation: {
-                          ...settings.screenshotTranslation,
-                          providerId,
-                          model,
-                        },
-                      })
-                    }}
-                  />
-                  <p className="onboarding-field-hint">{t.onboardingProviderQuickTranslateHint}</p>
-                </div>
-                <div className="onboarding-field">
-                  <Label>{t.onboardingProviderLensModel}</Label>
-                  <ModelPairSelect
-                    providerId={settings.lens?.providerId || ''}
-                    model={settings.lens?.model || ''}
-                    providers={settings.providers}
-                    className="w-full"
-                    onChange={(providerId, model) => {
-                      onChange({
-                        ...settings,
-                        lens: {
-                          ...settings.lens,
-                          providerId,
-                          model,
-                        },
-                      })
-                    }}
-                  />
-                  <p className="onboarding-field-hint">{t.onboardingProviderLensHint}</p>
-                </div>
-                <div className="onboarding-field">
-                  <Label>{t.onboardingProviderChatModel}</Label>
-                  <ModelPairSelect
-                    providerId={settings.defaultModels.chat.providerId}
-                    model={settings.defaultModels.chat.model}
-                    providers={settings.providers}
-                    className="w-full"
-                    onChange={(providerId, model) => {
-                      onChange({
-                        ...settings,
-                        defaultModels: {
-                          ...settings.defaultModels,
-                          chat: { providerId, model },
-                        },
-                        chatProviderId: providerId,
-                        chatModel: model,
-                      })
-                    }}
-                  />
-                  <p className="onboarding-field-hint">{t.onboardingProviderChatHint}</p>
-                </div>
+            {provider.enabledModels.length > 0 ? (
+              <div className="onboarding-model-list">
+                {provider.enabledModels.map((model) => (
+                  <span key={model} className="onboarding-model-chip">
+                    <Check size={12} />
+                    {model}
+                  </span>
+                ))}
               </div>
-            </div>
-          </>
+            ) : null}
+          </div>
         ) : null}
       </div>
+
+      {hasAnyEnabledModels ? (
+        <div className="onboarding-section">
+          <div className="onboarding-section-label">{t.onboardingProviderDefaultModels}</div>
+          <div className="onboarding-defaults-grid">
+            <div className="onboarding-default-cell">
+              <span className="onboarding-field-label">{t.onboardingProviderQuickTranslateModel}</span>
+              <ModelPairSelect
+                providerId={settings.screenshotTranslation?.providerId || ''}
+                model={settings.screenshotTranslation?.model || ''}
+                providers={settings.providers}
+                className="w-full"
+                onChange={(providerId, model) => {
+                  onChange({
+                    ...settings,
+                    screenshotTranslation: {
+                      ...settings.screenshotTranslation,
+                      providerId,
+                      model,
+                    },
+                  })
+                }}
+              />
+              <p className="onboarding-field-hint">{t.onboardingProviderQuickTranslateHint}</p>
+            </div>
+            <div className="onboarding-default-cell">
+              <span className="onboarding-field-label">{t.onboardingProviderLensModel}</span>
+              <ModelPairSelect
+                providerId={settings.lens?.providerId || ''}
+                model={settings.lens?.model || ''}
+                providers={settings.providers}
+                className="w-full"
+                onChange={(providerId, model) => {
+                  onChange({
+                    ...settings,
+                    lens: {
+                      ...settings.lens,
+                      providerId,
+                      model,
+                    },
+                  })
+                }}
+              />
+              <p className="onboarding-field-hint">{t.onboardingProviderLensHint}</p>
+            </div>
+            <div className="onboarding-default-cell">
+              <span className="onboarding-field-label">{t.onboardingProviderChatModel}</span>
+              <ModelPairSelect
+                providerId={settings.defaultModels.chat.providerId}
+                model={settings.defaultModels.chat.model}
+                providers={settings.providers}
+                className="w-full"
+                onChange={(providerId, model) => {
+                  onChange({
+                    ...settings,
+                    defaultModels: {
+                      ...settings.defaultModels,
+                      chat: { providerId, model },
+                    },
+                    chatProviderId: providerId,
+                    chatModel: model,
+                  })
+                }}
+              />
+              <p className="onboarding-field-hint">{t.onboardingProviderChatHint}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {confirmDelete && provider ? (
         <div

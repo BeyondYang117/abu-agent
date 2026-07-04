@@ -46,6 +46,13 @@ function ModelSelectorBase({
   }, [loadProviders])
 
   const activeProviders = providers.filter(isProviderEnabled)
+  // 只显示有可选模型的服务商，避免没配置模型的服务商变成空的分组标题。
+  const visibleProviders = activeProviders
+    .map((provider) => ({
+      provider,
+      models: provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels,
+    }))
+    .filter((entry) => entry.models.length > 0)
   const currentProvider = activeProviders.find((p) => p.id === currentProviderId)
     ?? providers.find((p) => p.id === currentProviderId)
   const displayName = currentModel || currentProvider?.enabledModels[0] || '选择模型'
@@ -71,15 +78,12 @@ function ModelSelectorBase({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-            {activeProviders.map((provider) => (
+            {visibleProviders.map(({ provider, models }) => (
               <div key={provider.id} className="px-1 py-1">
                 <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
                   {provider.name}
                 </div>
-                {(provider.enabledModels.length > 0
-                  ? provider.enabledModels
-                  : provider.availableModels
-                ).map((model) => (
+                {models.map((model) => (
                   <button
                     key={model}
                     type="button"
@@ -99,7 +103,7 @@ function ModelSelectorBase({
                 ))}
               </div>
             ))}
-            {activeProviders.length === 0 && (
+            {visibleProviders.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-neutral-500">暂无可用模型</div>
             )}
           </div>

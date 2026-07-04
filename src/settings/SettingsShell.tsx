@@ -53,6 +53,7 @@ import {
 } from './components'
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { KnowledgeBasePanel } from './KnowledgeBasePanel'
+import { WebSearchPanel } from './WebSearchPanel'
 
 export type SettingsTab = 'general' | 'translate' | 'screenshot' | 'lens' | 'chat' | 'memory' | 'mixer' | 'kivioCode' | 'externalAgents' | 'mcp' | 'skill' | 'webSearch' | 'connectors' | 'knowledge' | 'usage' | 'providers' | 'about'
 
@@ -3932,80 +3933,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
             {/* ===== 网络搜索标签页 ===== */}
             {activeTab === 'webSearch' && (
-              <>
-                <SettingsGroup title={t.webSearchApiSection}>
-                  <SettingRow label={t.lensWebSearchProvider}>
-                    <Select
-                      className="w-44"
-                      value={settings.lens?.webSearch?.provider || 'tavily'}
-                      onChange={(v) => updateLensWebSearch({ provider: v as 'tavily' | 'exa' })}
-                      options={[
-                        { value: 'tavily', label: 'Tavily' },
-                        { value: 'exa', label: 'Exa' },
-                      ]}
-                    />
-                  </SettingRow>
-                  <SettingRow label={t.lensWebSearchApiKey}>
-                    <Input
-                      type="password"
-                      value={settings.lens?.webSearch?.provider === 'exa'
-                        ? settings.lens?.webSearch?.exaApiKey || ''
-                        : settings.lens?.webSearch?.tavilyApiKey || ''}
-                      onChange={(value) => {
-                        if (settings.lens?.webSearch?.provider === 'exa') {
-                          updateLensWebSearch({ exaApiKey: value })
-                        } else {
-                          updateLensWebSearch({ tavilyApiKey: value })
-                        }
-                      }}
-                      placeholder={settings.lens?.webSearch?.provider === 'exa' ? 'exa-...' : 'tvly-...'}
-                      mono
-                    />
-                  </SettingRow>
-                  <SettingRow label={t.lensWebSearchMaxResults}>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10}
-                      className="w-24"
-                      value={String(settings.lens?.webSearch?.maxResults ?? 5)}
-                      onChange={(value) => updateLensWebSearch({
-                        maxResults: Math.min(10, Math.max(1, Number.parseInt(value, 10) || 1)),
-                      })}
-                    />
-                  </SettingRow>
-                  {settings.lens?.webSearch?.provider !== 'exa' && (
-                    <SettingRow label={t.lensWebSearchDepth}>
-                      <Select
-                        className="w-44"
-                        value={settings.lens?.webSearch?.searchDepth || 'basic'}
-                        onChange={(v) => updateLensWebSearch({ searchDepth: v as 'ultra-fast' | 'fast' | 'basic' | 'advanced' })}
-                        options={[
-                          { value: 'ultra-fast', label: 'Ultra fast' },
-                          { value: 'fast', label: 'Fast' },
-                          { value: 'basic', label: 'Basic' },
-                          { value: 'advanced', label: 'Advanced' },
-                        ]}
-                      />
-                    </SettingRow>
-                  )}
-                </SettingsGroup>
-
-                <SettingsGroup title={t.webSearchLensSection}>
-                  <SettingRow label={t.enabled} description={t.lensWebSearchHint}>
-                    <Toggle
-                      checked={settings.lens?.webSearch?.enabled === true}
-                      onChange={(v) => updateLensWebSearch({ enabled: v })}
-                    />
-                  </SettingRow>
-                </SettingsGroup>
-
-                <p className="kv-row-desc px-1 py-2">
-                  {lang === 'zh'
-                    ? 'Chat 联网开关在 MCP → 内置工具。'
-                    : 'Chat web toggles: MCP → Built-in tools.'}
-                </p>
-              </>
+              <WebSearchPanel
+                t={t}
+                lang={lang}
+                webSearch={settings.lens?.webSearch}
+                onChange={updateLensWebSearch}
+              />
             )}
 
             {/* ===== 用量统计标签页（内含请求调试二级视图） ===== */}
