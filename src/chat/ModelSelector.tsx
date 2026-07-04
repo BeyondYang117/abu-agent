@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { ChevronDown, Star } from 'lucide-react'
 import { api, type ModelProvider } from '../api/tauri'
 import { isProviderEnabled } from '../settings/utils'
 import { ModelIcon } from './ModelIcon'
@@ -11,6 +11,14 @@ interface ModelSelectorProps {
   onModelChange: (providerId: string, model: string) => void
 }
 
+/** 收藏键：providerId 无冒号，model 可能含冒号 → 只按首个冒号切分。 */
+const favKey = (providerId: string, model: string) => `${providerId}:${model}`
+const parseFavKey = (key: string): { providerId: string; model: string } | null => {
+  const idx = key.indexOf(':')
+  if (idx <= 0 || idx >= key.length - 1) return null
+  return { providerId: key.slice(0, idx), model: key.slice(idx + 1) }
+}
+
 function ModelSelectorBase({
   currentProviderId,
   currentModel,
@@ -18,11 +26,13 @@ function ModelSelectorBase({
 }: ModelSelectorProps) {
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
+  const [favorites, setFavorites] = useState<string[]>([])
 
-  const loadProviders = useCallback(async () => {
+  const loadSettings = useCallback(async () => {
     try {
       const settings = await api.getSettings()
       setProviders(settings.providers || [])
+      setFavorites(settings.favoriteModels || [])
     } catch (err) {
       console.error('Failed to load providers:', err)
       setProviders([
@@ -42,8 +52,8 @@ function ModelSelectorBase({
   }, [currentModel, currentProviderId])
 
   useEffect(() => {
-    loadProviders()
-  }, [loadProviders])
+    loadSettings()
+  }, [loadSettings])
 
   const activeProviders = providers.filter(isProviderEnabled)
   // 只显示有可选模型的服务商，避免没配置模型的服务商变成空的分组标题。
@@ -56,6 +66,83 @@ function ModelSelectorBase({
   const currentProvider = activeProviders.find((p) => p.id === currentProviderId)
     ?? providers.find((p) => p.id === currentProviderId)
   const displayName = currentModel || currentProvider?.enabledModels[0] || '选择模型'
+
+  // 收藏置顶组：按存储顺序，过滤掉失效的（provider 已删/禁用/模型已不在列表）。
+  const favoriteEntries = useMemo(() => {
+    return favorites
+      .map((key) => {
+        const parsed = parseFavKey(key)
+        if (!parsed) return null
+        const entry = visibleProviders.find((v) => v.provider.id === parsed.providerId)
+        if (!entry || !entry.models.includes(parsed.model)) return null
+        return { key, providerId: parsed.providerId, providerName: entry.provider.name, model: parsed.model }
+      })
+      .filter((v): v is { key: string; providerId: string; providerName: string; model: string } => v !== null)
+  }, [favorites, visibleProviders])
+
+  const toggleFavorite = useCallback(
+    (providerId: string, model: string) => {
+      const key = favKey(providerId, model)
+      const next = favorites.includes(key)
+        ? favorites.filter((k) => k !== key)
+        : [...favorites, key]
+      const previous = favorites
+      setFavorites(next) // 乐观更新
+      api.setFavoriteModels(next).catch((err) => {
+        console.error('Failed to save favorite models:', err)
+        setFavorites(previous) // 回滚
+      })
+    },
+    [favorites],
+  )
+
+  const renderModelRow = (providerId: string, model: string, keySuffix: string) => {
+    const selected = currentProviderId === providerId && currentModel === model
+    const isFav = favorites.includes(favKey(providerId, model))
+    return (
+      <div
+        key={`${providerId}:${model}:${keySuffix}`}
+        className={`group flex w-full items-center gap-1 rounded-lg pr-1 transition-colors ${
+          selected
+            ? 'bg-neutral-100 dark:bg-neutral-800'
+            : 'hover:bg-neutral-50 dark:hover:bg-neutral-800/80'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            onModelChange(providerId, model)
+            setOpen(false)
+          }}
+          className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] ${
+            selected
+              ? 'font-medium text-neutral-900 dark:text-neutral-100'
+              : 'text-neutral-700 dark:text-neutral-300'
+          }`}
+        >
+          <ModelIcon model={model} size={16} />
+          <span className="min-w-0 truncate">{model}</span>
+        </button>
+        <button
+          type="button"
+          aria-label={isFav ? '取消收藏' : '收藏置顶'}
+          title={isFav ? '取消收藏' : '收藏置顶'}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleFavorite(providerId, model)
+          }}
+          className={`shrink-0 rounded-md p-1.5 transition-colors ${
+            isFav
+              ? 'text-amber-500'
+              : 'text-neutral-300 opacity-0 group-hover:opacity-100 hover:text-amber-500 dark:text-neutral-600'
+          }`}
+          data-tauri-drag-region="false"
+        >
+          <Star size={14} fill={isFav ? 'currentColor' : 'none'} />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="relative max-w-full min-w-0" data-tauri-drag-region="false">
@@ -78,29 +165,23 @@ function ModelSelectorBase({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 max-h-[min(400px,60vh)] min-w-[240px] overflow-y-auto rounded-2xl border border-neutral-200/90 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+            {favoriteEntries.length > 0 && (
+              <div className="px-1 py-1">
+                <div className="flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-500">
+                  <Star size={11} fill="currentColor" />
+                  收藏
+                </div>
+                {favoriteEntries.map((entry) =>
+                  renderModelRow(entry.providerId, entry.model, 'fav'),
+                )}
+              </div>
+            )}
             {visibleProviders.map(({ provider, models }) => (
               <div key={provider.id} className="px-1 py-1">
                 <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
                   {provider.name}
                 </div>
-                {models.map((model) => (
-                  <button
-                    key={model}
-                    type="button"
-                    onClick={() => {
-                      onModelChange(provider.id, model)
-                      setOpen(false)
-                    }}
-                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] transition-colors ${
-                      currentProviderId === provider.id && currentModel === model
-                        ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
-                        : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/80'
-                    }`}
-                  >
-                    <ModelIcon model={model} size={16} />
-                    <span className="min-w-0 truncate">{model}</span>
-                  </button>
-                ))}
+                {models.map((model) => renderModelRow(provider.id, model, 'grp'))}
               </div>
             ))}
             {visibleProviders.length === 0 && (

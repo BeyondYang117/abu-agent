@@ -778,6 +778,8 @@ export type Settings = {
   imageArchivePath?: string
   /** Obsidian 笔记库本地路径（空表示未配置） */
   obsidianVaultPath?: string
+  /** 收藏并置顶的模型键（"providerId:model"）；顺序即置顶顺序。chat 模型选择器用。 */
+  favoriteModels?: string[]
   /** Himalaya IMAP/SMTP 邮箱账户 */
   emailAccounts?: EmailAccountConfig[]
 }
@@ -1227,6 +1229,7 @@ function normalizeSettings(settings: Settings): Settings {
     imageArchiveEnabled: current.imageArchiveEnabled ?? false,
     imageArchivePath: current.imageArchivePath ?? '',
     obsidianVaultPath: current.obsidianVaultPath ?? '',
+    favoriteModels: current.favoriteModels ?? [],
     emailAccounts: current.emailAccounts ?? [],
   }
 }
@@ -1294,6 +1297,9 @@ export const api = {
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
   saveSettings: async (settings: Settings) =>
     normalizeSettings(await invoke<Settings>('save_settings', { settings: prepareSettingsForSave(settings) })),
+  /** 轻量持久化收藏模型（不触发热键/托盘重注册，区别于 saveSettings 的全量事务保存）。 */
+  setFavoriteModels: (models: string[]) =>
+    invoke<void>('set_favorite_models', { models }),
   exportSettings: (path: string) => invoke<void>('export_settings', { path }),
   importSettings: async (path: string) =>
     normalizeSettings(await invoke<Settings>('import_settings', { path })),

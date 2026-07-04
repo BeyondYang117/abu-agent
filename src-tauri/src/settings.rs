@@ -1159,6 +1159,10 @@ pub struct Settings {
     /// 用户 Obsidian 笔记库本地路径（空表示未配置）；注入系统提示供 agent 读取笔记。
     #[serde(default)]
     pub obsidian_vault_path: String,
+    /// 收藏并置顶的模型键（"providerId:model"）；列表顺序即置顶顺序。
+    /// 只在 chat 模型选择器里展示为顶部"收藏"组；失效项（provider 删/禁用/模型没了）展示时过滤。
+    #[serde(default)]
+    pub favorite_models: Vec<String>,
     /// IMAP/SMTP 邮箱（Himalaya）；保存时同步到 ~/.config/himalaya/config.toml。
     #[serde(default)]
     pub email_accounts: Vec<EmailAccountConfig>,
@@ -1277,6 +1281,7 @@ impl Default for Settings {
             image_archive_enabled: false,
             image_archive_path: String::new(),
             obsidian_vault_path: String::new(),
+            favorite_models: Vec::new(),
             email_accounts: Vec::new(),
             openai: None,
         }

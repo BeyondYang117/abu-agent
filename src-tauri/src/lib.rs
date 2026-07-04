@@ -428,6 +428,7 @@ pub fn run() {
             commands::set_chat_window_background,
             commands::get_default_prompt_templates,
             commands::save_settings,
+            commands::set_favorite_models,
             commands::export_settings,
             commands::import_settings,
             commands::open_settings_window,

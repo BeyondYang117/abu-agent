@@ -144,6 +144,40 @@ pub(crate) fn save_settings(
     apply_settings(&app, &state, settings)
 }
 
+/// trim + 去空 + 去重（保序）。
+fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for item in items {
+        let trimmed = item.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.clone()) {
+            out.push(trimmed);
+        }
+    }
+    out
+}
+
+/// 轻量持久化收藏模型："providerId:model" 列表。
+/// 只更新内存 settings + 写盘，**不**走 apply_settings 的运行时重应用（热键/托盘/自启），
+/// 因为收藏切换与这些无关，没必要承担其开销与副作用。
+#[tauri::command]
+pub(crate) fn set_favorite_models(
+    app: AppHandle,
+    state: State<AppState>,
+    models: Vec<String>,
+) -> Result<(), String> {
+    let cleaned = dedup_preserve_order(models);
+    let snapshot = {
+        let mut guard = state.settings_write();
+        guard.favorite_models = cleaned;
+        guard.clone()
+    };
+    persist_settings(&app, &snapshot)
+}
+
 /// sanitize → 应用运行时（自启/热键/托盘）→ 持久化，失败回滚。save_settings 与 import_settings 共用。
 fn apply_settings(
     app: &AppHandle,
@@ -547,5 +581,28 @@ pub(crate) fn open_permission_settings(kind: String) -> Result<(), String> {
     {
         let _ = kind;
         Err("Permission settings are only available on macOS".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dedup_preserve_order;
+
+    #[test]
+    fn dedup_preserve_order_trims_dedups_keeps_order() {
+        let out = dedup_preserve_order(vec![
+            " p1:m ".into(),
+            "p2:m".into(),
+            "p1:m".into(), // 重复 → 去掉
+            "".into(),     // 空 → 去掉
+            "   ".into(),  // 纯空白 → 去掉
+            "p3:m".into(),
+        ]);
+        assert_eq!(out, vec!["p1:m", "p2:m", "p3:m"]);
+    }
+
+    #[test]
+    fn dedup_preserve_order_empty() {
+        assert!(dedup_preserve_order(vec![]).is_empty());
     }
 }
