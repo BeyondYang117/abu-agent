@@ -11,14 +11,39 @@ use crate::state::AppState;
 
 /// 调 GitHub Releases API 检查最新版本
 /// 发现新版只返回提示信息，让前端弹"去 GitHub 下载"按钮（不做自动下载安装，避免引入签名密钥那套）
-/// 网络失败 / API 限流时返回 available=false 静默处理，不打扰用户
+///
+/// 双通道：先查 `api.github.com`（能拿到 body/assets，供自动下载）；失败（网络 / 非 2xx /
+/// 限流 / 解析）时回退查 `github.com` 的 releases atom feed —— 因为 `api.github.com` 在部分
+/// 网络下被单独墙掉或限流（60 次/小时/IP），而 `github.com` 本体仍可访问。两条都失败时返回
+/// `checkFailed:true`，让前端明确显示"检查失败"而不是伪装成"已是最新"（会误导用户）。
 #[tauri::command]
 pub(crate) async fn check_github_latest_release(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     const REPO: &str = "abu/kivio";
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let current = env!("CARGO_PKG_VERSION");
 
+    // 主通道：api.github.com（成功即返回，无论 available 真假）。
+    if let Some(json) = try_api_latest(&state, REPO, current).await {
+        return Ok(json);
+    }
+    // 回退通道：github.com atom feed（用户能访问 github.com 但 api.github.com 不通/被限流时）。
+    if let Some(json) = try_atom_latest(&state, REPO, current).await {
+        return Ok(json);
+    }
+    // 两条都失败：明确告知检查失败，不伪装成"最新"。
+    Ok(serde_json::json!({ "available": false, "checkFailed": true }))
+}
+
+/// 主通道：`api.github.com/repos/{REPO}/releases/latest`。
+/// 返回 `Some(json)` 当且仅当请求成功且 JSON 解析成功（此时 available 可真可假）；
+/// 任何网络 / 非 2xx / 解析失败都返回 `None`，交给 atom 回退。
+async fn try_api_latest(
+    state: &AppState,
+    repo: &str,
+    current: &str,
+) -> Option<serde_json::Value> {
+    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
     let response = with_standard_request_timeout(
         state
             .http
@@ -28,21 +53,14 @@ pub(crate) async fn check_github_latest_release(
             .header("Accept", "application/vnd.github+json"),
     )
     .send()
-    .await;
-
-    let response = match response {
-        Ok(r) => r,
-        Err(_) => return Ok(serde_json::json!({ "available": false })),
-    };
+    .await
+    .ok()?;
 
     if !response.status().is_success() {
-        return Ok(serde_json::json!({ "available": false }));
+        return None;
     }
 
-    let value: serde_json::Value = match response.json().await {
-        Ok(v) => v,
-        Err(_) => return Ok(serde_json::json!({ "available": false })),
-    };
+    let value: serde_json::Value = response.json().await.ok()?;
 
     let tag = value.get("tag_name").and_then(|v| v.as_str()).unwrap_or("");
     let html_url = value.get("html_url").and_then(|v| v.as_str()).unwrap_or("");
@@ -54,9 +72,8 @@ pub(crate) async fn check_github_latest_release(
 
     // tag_name 通常是 "v2.5.0"，剥掉前缀 v 再比较
     let latest = tag.trim_start_matches('v');
-    let current = env!("CARGO_PKG_VERSION");
 
-    Ok(serde_json::json!({
+    Some(serde_json::json!({
       "available": is_newer_version(latest, current),
       "version": latest,
       "tag": tag,
@@ -64,6 +81,63 @@ pub(crate) async fn check_github_latest_release(
       "body": body,
       "publishedAt": published_at,
     }))
+}
+
+/// 回退通道：`github.com/{REPO}/releases.atom`（走 github.com 主体，非 api 子域）。
+/// 只解析最新 tag —— 没有 assets / body，`htmlUrl` 由 tag 拼出，够前端展示 + "去 GitHub 下载"。
+async fn try_atom_latest(
+    state: &AppState,
+    repo: &str,
+    current: &str,
+) -> Option<serde_json::Value> {
+    let url = format!("https://github.com/{repo}/releases.atom");
+    let response = with_standard_request_timeout(
+        state
+            .http
+            .get(&url)
+            .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+            .header("Accept", "application/atom+xml"),
+    )
+    .send()
+    .await
+    .ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let xml = response.text().await.ok()?;
+    let tag = parse_latest_tag_from_atom(&xml)?;
+    let latest = tag.trim_start_matches('v');
+
+    Some(serde_json::json!({
+      "available": is_newer_version(latest, current),
+      "version": latest,
+      "tag": tag,
+      "htmlUrl": format!("https://github.com/{repo}/releases/tag/{tag}"),
+      "body": "",
+      "publishedAt": "",
+      "viaFallback": true,
+    }))
+}
+
+/// 从 releases atom feed 里抽取最新 release 的 tag。
+/// atom 里首个 `<entry>` 是最新，其 `<link href=".../releases/tag/<TAG>">` 是可靠来源。
+/// 只做朴素字符串扫描（避免引 XML 依赖）：定位首个 `/releases/tag/`，读到下一个 `"`/`<`/空白为止。
+fn parse_latest_tag_from_atom(xml: &str) -> Option<String> {
+    const MARKER: &str = "/releases/tag/";
+    let start = xml.find(MARKER)? + MARKER.len();
+    let rest = &xml[start..];
+    let tag: String = rest
+        .chars()
+        .take_while(|c| !matches!(c, '"' | '<' | '>' | ' ' | '\t' | '\r' | '\n'))
+        .collect();
+    let tag = tag.trim();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
 }
 
 /// 朴素 semver 比较：把 "x.y.z" 拆成数字三元组按字典序比较
@@ -365,5 +439,27 @@ mod tests {
         assert!(!is_newer_version("", "1.0.0"));
         assert!(is_newer_version("1.0.0", ""));
         assert!(!is_newer_version("garbage", "1.0.0"));
+    }
+
+    #[test]
+    fn parse_latest_tag_from_atom_picks_first_entry() {
+        let xml = r#"<?xml version="1.0"?>
+<feed>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v2.7.5</id>
+    <title>v2.7.5</title>
+    <link rel="alternate" type="text/html" href="https://github.com/abu/kivio/releases/tag/v2.7.5"/>
+  </entry>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/abu/kivio/releases/tag/v2.7.4"/>
+  </entry>
+</feed>"#;
+        assert_eq!(parse_latest_tag_from_atom(xml).as_deref(), Some("v2.7.5"));
+    }
+
+    #[test]
+    fn parse_latest_tag_from_atom_returns_none_when_absent() {
+        assert_eq!(parse_latest_tag_from_atom("<feed></feed>"), None);
+        assert_eq!(parse_latest_tag_from_atom(""), None);
     }
 }

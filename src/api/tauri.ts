@@ -974,6 +974,10 @@ export type RequestDebugRecord = {
 /** 更新检查结果（来自后端 GitHub Releases API 调用） */
 export type UpdateInfo = {
   available: boolean
+  /** true = 检查本身失败（网络 / api.github.com 被墙 / 限流），并非"已是最新"。前端据此区分展示。 */
+  checkFailed?: boolean
+  /** true = 走了 github.com atom 回退通道（api.github.com 不通时）。仅诊断用。 */
+  viaFallback?: boolean
   /** 最新版本号（剥掉 v 前缀的 semver，如 "2.5.0"） */
   version?: string
   /** GitHub release tag (含 v 前缀，如 "v2.5.0") */

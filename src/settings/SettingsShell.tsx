@@ -623,8 +623,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [memorySavingLayer, setMemorySavingLayer] = useState<MemoryLayerKey | null>(null)
   const [memoryError, setMemoryError] = useState('')
   const [memorySuccess, setMemorySuccess] = useState('')
-  // 更新检查状态：'idle' / 'checking' / 'up-to-date' / 'available'
-  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available'>('idle')
+  // 更新检查状态：'idle' / 'checking' / 'up-to-date' / 'available' / 'check-failed'
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available' | 'check-failed'>('idle')
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   // 下载/安装两段式状态机:idle → downloading(进度条) → downloaded(显示安装按钮) → 用户点击 → 应用退出
   // failed 时显示错误 + 重试 + 跳 GitHub 兜底
@@ -828,7 +828,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     setUpdateStatus('checking')
     try {
       const info = await api.checkUpdate()
-      if (info.available) {
+      if (info.checkFailed) {
+        // 检查本身失败（网络 / api.github.com 受限）——明确提示，不伪装成"已是最新"。
+        setUpdateStatus('check-failed')
+      } else if (info.available) {
         setUpdateInfo(info)
         setUpdateStatus('available')
       } else {
@@ -838,7 +841,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       }
     } catch (err) {
       console.error('Check update failed:', err)
-      setUpdateStatus('idle')
+      setUpdateStatus('check-failed')
+    }
+  }, [])
+
+  /** 检查失败兜底：打开 GitHub releases 页（github.com 主体，通常可访问） */
+  const handleOpenGithubReleases = useCallback(async () => {
+    try {
+      await api.openExternal('https://github.com/abu/kivio/releases')
+    } catch (err) {
+      console.error('Open GitHub releases failed:', err)
     }
   }, [])
 
@@ -4329,6 +4341,22 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       {updateStatus === 'checking' ? t.checkingUpdate : t.checkUpdate}
                     </button>
                   </SettingRow>
+
+                  {updateStatus === 'check-failed' && (
+                    <div className="kv-panel mt-2">
+                      <div className="kv-panel-body mb-2 text-amber-700 dark:text-amber-400">
+                        {t.updateCheckFailed}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleOpenGithubReleases}
+                        className="kv-btn sm"
+                        data-tauri-drag-region="false"
+                      >
+                        {t.downloadFromGithub}
+                      </button>
+                    </div>
+                  )}
 
                   {updateStatus === 'available' && updateInfo && (
                     <div className="kv-panel info mt-2">
