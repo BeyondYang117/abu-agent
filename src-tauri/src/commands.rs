@@ -471,6 +471,30 @@ pub(crate) async fn test_provider_connection(
     }
 }
 
+/// 测试网络搜索：用传入的（可能未保存的）配置真实跑一次搜索，返回结果或错误。
+/// 供设置页「测试搜索」用，验证 key/endpoint 是否可用。
+#[tauri::command]
+pub(crate) async fn test_web_search(
+    state: State<'_, AppState>,
+    config: crate::settings::LensWebSearchConfig,
+    query: String,
+) -> Result<serde_json::Value, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(serde_json::json!({ "success": false, "error": "Empty query" }));
+    }
+    let settings = state.settings_read().clone();
+    let retry_attempts = effective_retry_attempts(&settings);
+    match crate::web_search::search_web(&state, &config, query, retry_attempts).await {
+        Ok(results) => Ok(serde_json::json!({
+            "success": true,
+            "provider": crate::web_search::provider_label(config.provider),
+            "results": results,
+        })),
+        Err(err) => Ok(serde_json::json!({ "success": false, "error": err })),
+    }
+}
+
 /// 获取平台权限状态（仅限 macOS：辅助功能和屏幕录制权限）
 #[tauri::command]
 pub(crate) fn get_permission_status() -> serde_json::Value {

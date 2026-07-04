@@ -754,10 +754,15 @@ export type Settings = {
     /** Lens 联网搜索配置 */
     webSearch?: {
       enabled: boolean
-      provider: 'tavily' | 'exa' | 'exa_mcp'
+      provider: 'tavily' | 'exa' | 'exa_mcp' | 'ollama' | 'grok'
       tavilyApiKey: string
       exaApiKey: string
       exaMcpUrl?: string
+      ollamaApiKey?: string
+      grokApiKey?: string
+      grokModel?: string
+      grokBaseUrl?: string
+      grokSystemPrompt?: string
       maxResults: number
       searchDepth: 'ultra-fast' | 'fast' | 'basic' | 'advanced'
     }
@@ -1202,6 +1207,12 @@ function normalizeSettings(settings: Settings): Settings {
         tavilyApiKey: current.lens?.webSearch?.tavilyApiKey ?? '',
         exaApiKey: current.lens?.webSearch?.exaApiKey ?? '',
         exaMcpUrl: current.lens?.webSearch?.exaMcpUrl ?? 'https://mcp.exa.ai/mcp',
+        ollamaApiKey: current.lens?.webSearch?.ollamaApiKey ?? '',
+        grokApiKey: current.lens?.webSearch?.grokApiKey ?? '',
+        grokModel: current.lens?.webSearch?.grokModel ?? 'grok-4-1-fast-non-reasoning',
+        grokBaseUrl: current.lens?.webSearch?.grokBaseUrl ?? 'https://api.x.ai/v1',
+        grokSystemPrompt: current.lens?.webSearch?.grokSystemPrompt
+          ?? "You are a helpful search assistant. Search the web to find accurate and up-to-date information for the user's query. Provide a comprehensive answer with citations.",
         maxResults: current.lens?.webSearch?.maxResults ?? 5,
         searchDepth: current.lens?.webSearch?.searchDepth ?? 'basic',
       },
@@ -1294,6 +1305,15 @@ export const api = {
     invoke<string[]>('fetch_models', { providerId, provider }),
   testProviderConnection: (providerId: string, provider?: ProviderConnectionInput) =>
     invoke<{ success: boolean; error?: string }>('test_provider_connection', { providerId, provider }),
+
+  // 测试网络搜索：用传入的（可能未保存的）配置真实跑一次搜索
+  testWebSearch: (config: NonNullable<Settings['lens']['webSearch']>, query: string) =>
+    invoke<{
+      success: boolean
+      provider?: string
+      results?: { title: string; url: string; content: string }[]
+      error?: string
+    }>('test_web_search', { config, query }),
 
   // 权限相关（macOS）
   getPermissionStatus: () => invoke<PermissionStatus>('get_permission_status'),

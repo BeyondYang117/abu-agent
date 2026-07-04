@@ -849,7 +849,12 @@ function getToolName(toolCall: ToolCallRecord): string {
       break
   }
   if (raw === 'run_python') return 'Python'
-  if (raw === 'web_search') return 'Web search'
+  if (raw === 'web_search') {
+    // 结果里带了实际使用的搜索服务名（后端 structured_content.provider），显示为「Web search · Ollama」。
+    const structured = objectValue(toolCall.structured_content ?? toolCall.structuredContent) ?? {}
+    const provider = stringValue(structured.provider)
+    return provider ? `Web search · ${provider}` : 'Web search'
+  }
   if (raw === 'web_fetch') return 'Fetch'
   if (raw === 'knowledge_search') return 'Knowledge search'
   if (raw === 'mixer_vision') return 'Vision'

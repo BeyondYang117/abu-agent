@@ -440,12 +440,14 @@ fn call_web_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
         )
         .await?;
         let raw = serde_json::to_value(&results).unwrap_or(Value::Null);
+        // 带上实际使用的搜索服务名，供前端工具卡片显示「Web search · <provider>」。
+        let provider = crate::web_search::provider_label(ctx.settings.lens.web_search.provider);
         Ok(McpToolCallResult {
             content: crate::web_search::format_web_context(&results),
             is_error: false,
             raw,
             artifacts: Vec::new(),
-            structured_content: None,
+            structured_content: Some(serde_json::json!({ "provider": provider })),
             follow_up_user_messages: Vec::new(),
         })
     })

@@ -147,6 +147,8 @@ pub fn web_search_configured(settings: &Settings) -> bool {
         WebSearchProvider::Exa => !settings.lens.web_search.exa_api_key.trim().is_empty(),
         // Exa MCP 可无 key 低配额试用；只要 endpoint 存在即视为可用。
         WebSearchProvider::ExaMcp => !settings.lens.web_search.exa_mcp_url.trim().is_empty(),
+        WebSearchProvider::Ollama => !settings.lens.web_search.ollama_api_key.trim().is_empty(),
+        WebSearchProvider::Grok => !settings.lens.web_search.grok_api_key.trim().is_empty(),
         WebSearchProvider::Unknown => false,
     }
 }

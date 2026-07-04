@@ -46,6 +46,22 @@ struct ExaSearchResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct OllamaSearchResponse {
+    #[serde(default)]
+    results: Vec<OllamaSearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaSearchResult {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExaSearchResult {
     #[serde(default)]
@@ -64,13 +80,24 @@ struct ExaSearchResult {
     published_date: Option<String>,
 }
 
+/// 搜索服务的显示名，供前端工具卡片标注「用了哪个搜索服务」。
+pub fn provider_label(provider: WebSearchProvider) -> &'static str {
+    match provider {
+        WebSearchProvider::Tavily => "Tavily",
+        WebSearchProvider::Exa => "Exa",
+        WebSearchProvider::ExaMcp => "Exa MCP",
+        WebSearchProvider::Ollama => "Ollama",
+        WebSearchProvider::Grok => "Grok",
+        WebSearchProvider::Unknown => "Web",
+    }
+}
+
 pub async fn search_web(
     state: &AppState,
     config: &LensWebSearchConfig,
     query: &str,
     retry_attempts: usize,
-) -> Result<Vec<WebSearchResult>, String> {
-    let query = query.trim();
+) -> Result<Vec<WebSearchResult>, String> {    let query = query.trim();
     if query.is_empty() {
         return Ok(Vec::new());
     }
@@ -79,10 +106,69 @@ pub async fn search_web(
         WebSearchProvider::Tavily => search_tavily(state, config, query, retry_attempts).await,
         WebSearchProvider::Exa => search_exa(state, config, query, retry_attempts).await,
         WebSearchProvider::ExaMcp => search_exa_mcp(state, config, query).await,
+        WebSearchProvider::Ollama => search_ollama(state, config, query, retry_attempts).await,
+        WebSearchProvider::Grok => search_grok(state, config, query, retry_attempts).await,
         WebSearchProvider::Unknown => {
             Err("Selected web search provider is not supported yet".to_string())
         }
     }
+}
+
+/// Ollama Web Search（Ollama Cloud）：`POST https://ollama.com/api/web_search`，
+/// Bearer key，body `{query, max_results}`，返回 `{results:[{title,url,content}]}`。
+async fn search_ollama(
+    state: &AppState,
+    config: &LensWebSearchConfig,
+    query: &str,
+    retry_attempts: usize,
+) -> Result<Vec<WebSearchResult>, String> {
+    let api_key = config.ollama_api_key.trim();
+    if api_key.is_empty() {
+        return Err("Ollama API key is not configured".to_string());
+    }
+
+    let max_results = config.max_results.clamp(1, 10);
+    let body = serde_json::json!({
+        "query": query,
+        "max_results": max_results,
+    });
+
+    let response = send_with_retry("Ollama search", retry_attempts, || {
+        with_standard_request_timeout(
+            state
+                .http
+                .post("https://ollama.com/api/web_search")
+                .bearer_auth(api_key)
+                .json(&body),
+        )
+        .send()
+    })
+    .await?;
+
+    let raw = response
+        .text()
+        .await
+        .map_err(|err| format!("Ollama search read body: {err}"))?;
+    let parsed: OllamaSearchResponse = serde_json::from_str(&raw).map_err(|err| {
+        format!(
+            "Ollama search parse JSON: {} (body: {})",
+            err,
+            raw.chars().take(500).collect::<String>()
+        )
+    })?;
+
+    Ok(parsed
+        .results
+        .into_iter()
+        .filter(|result| !result.url.trim().is_empty())
+        .map(|result| WebSearchResult {
+            title: result.title.trim().to_string(),
+            url: result.url.trim().to_string(),
+            content: result.content.trim().to_string(),
+            published_date: None,
+            score: None,
+        })
+        .collect())
 }
 
 /// Exa MCP 搜索：调用 Exa 官方 MCP 服务器（默认 https://mcp.exa.ai/mcp）的
@@ -323,6 +409,164 @@ async fn search_exa(
         .collect())
 }
 
+/// Grok（xAI）模型驱动搜索：走 xAI 的 Responses API（`{base}/responses`）+ `web_search`
+/// 工具，让模型自己联网并返回带引用的答案。旧版 chat completions 的 Live Search
+/// (`search_parameters`) 已于 2026-01 停用，故用 Responses API。答案作为首条结果，
+/// 引用 URL 追加为后续结果。
+async fn search_grok(
+    state: &AppState,
+    config: &LensWebSearchConfig,
+    query: &str,
+    retry_attempts: usize,
+) -> Result<Vec<WebSearchResult>, String> {
+    let api_key = config.grok_api_key.trim();
+    if api_key.is_empty() {
+        return Err("Grok API key is not configured".to_string());
+    }
+    let base = config.grok_base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Grok base URL is not configured".to_string());
+    }
+    let model = config.grok_model.trim();
+    let system = config.grok_system_prompt.trim();
+    let url = format!("{base}/responses");
+    let body = serde_json::json!({
+        "model": model,
+        "input": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": query },
+        ],
+        "tools": [ { "type": "web_search" } ],
+    });
+
+    let response = send_with_retry("Grok search", retry_attempts, || {
+        with_standard_request_timeout(
+            state
+                .http
+                .post(url.clone())
+                .bearer_auth(api_key)
+                .json(&body),
+        )
+        .send()
+    })
+    .await?;
+
+    let raw = response
+        .text()
+        .await
+        .map_err(|err| format!("Grok search read body: {err}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
+        format!(
+            "Grok search parse JSON: {} (body: {})",
+            err,
+            raw.chars().take(500).collect::<String>()
+        )
+    })?;
+
+    let (answer, citations) = parse_grok_response(&value);
+    if answer.is_empty() && citations.is_empty() {
+        return Err(format!(
+            "Grok search returned no answer (body: {})",
+            raw.chars().take(300).collect::<String>()
+        ));
+    }
+
+    let mut results: Vec<WebSearchResult> = Vec::new();
+    if !answer.is_empty() {
+        results.push(WebSearchResult {
+            title: "Grok answer".to_string(),
+            url: citations.first().cloned().unwrap_or_else(|| "https://x.ai".to_string()),
+            content: answer,
+            published_date: None,
+            score: None,
+        });
+    }
+    let max_results = config.max_results.clamp(1, 10) as usize;
+    for citation in citations.into_iter().take(max_results) {
+        results.push(WebSearchResult {
+            title: citation.clone(),
+            url: citation,
+            content: String::new(),
+            published_date: None,
+            score: None,
+        });
+    }
+    Ok(results)
+}
+
+/// 从 xAI Responses API（或退化的 chat completions）返回体里尽力提取「答案文本」和
+/// 「引用 URL 列表」。字段形态随版本变化，故做多路径兜底：
+/// - 答案：`output_text` → `output[].content[].text`（type=output_text）→ `choices[0].message.content`
+/// - 引用：顶层 `citations` 数组 → `output[].content[].annotations[].url`
+fn parse_grok_response(value: &serde_json::Value) -> (String, Vec<String>) {
+    let mut answer_parts: Vec<String> = Vec::new();
+    let mut citations: Vec<String> = Vec::new();
+
+    let mut push_citation = |url: &str| {
+        let url = url.trim();
+        if !url.is_empty() && !citations.iter().any(|c| c == url) {
+            citations.push(url.to_string());
+        }
+    };
+
+    // 顶层便捷字段
+    if let Some(text) = value.get("output_text").and_then(|v| v.as_str()) {
+        if !text.trim().is_empty() {
+            answer_parts.push(text.trim().to_string());
+        }
+    }
+    if let Some(list) = value.get("citations").and_then(|v| v.as_array()) {
+        for item in list {
+            if let Some(url) = item.as_str() {
+                push_citation(url);
+            } else if let Some(url) = item.get("url").and_then(|v| v.as_str()) {
+                push_citation(url);
+            }
+        }
+    }
+
+    // Responses API：output[].content[]
+    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
+        for item in output {
+            let Some(content) = item.get("content").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for chunk in content {
+                if let Some(text) = chunk.get("text").and_then(|v| v.as_str()) {
+                    if !text.trim().is_empty() {
+                        answer_parts.push(text.trim().to_string());
+                    }
+                }
+                if let Some(annotations) = chunk.get("annotations").and_then(|v| v.as_array()) {
+                    for annotation in annotations {
+                        if let Some(url) = annotation.get("url").and_then(|v| v.as_str()) {
+                            push_citation(url);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 退化：chat completions 形态
+    if answer_parts.is_empty() {
+        if let Some(text) = value
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|v| v.as_str())
+        {
+            if !text.trim().is_empty() {
+                answer_parts.push(text.trim().to_string());
+            }
+        }
+    }
+
+    (answer_parts.join("\n\n"), citations)
+}
+
 /// Render web search results into the textual context block injected into the
 /// model conversation: a two-line header, then per result a `[N] Title` line, a
 /// `URL: …` line, and optional `Published:` / `Score:` / `Snippet:` lines.
@@ -375,8 +619,8 @@ pub fn format_web_context(results: &[WebSearchResult]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_web_context, parse_exa_mcp_results, ExaSearchResponse, TavilySearchResponse,
-        WebSearchResult,
+        format_web_context, parse_exa_mcp_results, parse_grok_response, ExaSearchResponse,
+        OllamaSearchResponse, TavilySearchResponse, WebSearchResult,
     };
 
     #[test]
@@ -465,5 +709,56 @@ mod tests {
     #[test]
     fn exa_mcp_empty_content_yields_no_results() {
         assert!(parse_exa_mcp_results("   ", 5).is_empty());
+    }
+
+    #[test]
+    fn ollama_response_deserializes_results() {
+        let raw = r#"{
+            "results": [
+                { "title": "Ollama", "url": "https://ollama.com/", "content": "Cloud models..." },
+                { "title": "No URL", "url": "", "content": "skip me" }
+            ]
+        }"#;
+        let parsed: OllamaSearchResponse = serde_json::from_str(raw).expect("ollama json");
+        assert_eq!(parsed.results.len(), 2);
+        assert_eq!(parsed.results[0].title, "Ollama");
+        assert_eq!(parsed.results[0].url, "https://ollama.com/");
+    }
+
+    #[test]
+    fn grok_parses_responses_api_output_and_annotations() {
+        let raw = r#"{
+            "output": [
+                {
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Grok found the answer.",
+                            "annotations": [
+                                { "type": "url_citation", "url": "https://example.com/a" },
+                                { "type": "url_citation", "url": "https://example.com/b" }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }"#;
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let (answer, citations) = parse_grok_response(&value);
+        assert_eq!(answer, "Grok found the answer.");
+        assert_eq!(citations, vec!["https://example.com/a", "https://example.com/b"]);
+    }
+
+    #[test]
+    fn grok_falls_back_to_chat_completions_and_top_level_citations() {
+        let raw = r#"{
+            "choices": [ { "message": { "content": "Fallback answer." } } ],
+            "citations": ["https://x.ai/post", "https://x.ai/post"]
+        }"#;
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let (answer, citations) = parse_grok_response(&value);
+        assert_eq!(answer, "Fallback answer.");
+        // 去重：重复 URL 只保留一条
+        assert_eq!(citations, vec!["https://x.ai/post"]);
     }
 }

@@ -438,6 +438,7 @@ pub fn run() {
             lens_commands::explain_read_image,
             commands::fetch_models,
             commands::test_provider_connection,
+            commands::test_web_search,
             commands::get_permission_status,
             commands::open_permission_settings,
             lens_commands::lens_request,

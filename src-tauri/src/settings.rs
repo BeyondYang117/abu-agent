@@ -281,6 +281,8 @@ pub enum WebSearchProvider {
     Tavily,
     Exa,
     ExaMcp,
+    Ollama,
+    Grok,
     /// 前端可能列出尚未接入后端的占位服务商；持久化时兜底为未知，避免旧值导致整份设置解析失败。
     #[serde(other)]
     Unknown,
@@ -310,6 +312,16 @@ pub struct LensWebSearchConfig {
     pub exa_api_key: String,
     #[serde(default = "default_exa_mcp_url")]
     pub exa_mcp_url: String,
+    #[serde(default)]
+    pub ollama_api_key: String,
+    #[serde(default)]
+    pub grok_api_key: String,
+    #[serde(default = "default_grok_model")]
+    pub grok_model: String,
+    #[serde(default = "default_grok_base_url")]
+    pub grok_base_url: String,
+    #[serde(default = "default_grok_system_prompt")]
+    pub grok_system_prompt: String,
     #[serde(default = "default_web_search_max_results")]
     pub max_results: u8,
     #[serde(default = "default_web_search_depth")]
@@ -324,6 +336,11 @@ impl Default for LensWebSearchConfig {
             tavily_api_key: String::new(),
             exa_api_key: String::new(),
             exa_mcp_url: default_exa_mcp_url(),
+            ollama_api_key: String::new(),
+            grok_api_key: String::new(),
+            grok_model: default_grok_model(),
+            grok_base_url: default_grok_base_url(),
+            grok_system_prompt: default_grok_system_prompt(),
             max_results: default_web_search_max_results(),
             search_depth: default_web_search_depth(),
         }
@@ -332,6 +349,19 @@ impl Default for LensWebSearchConfig {
 
 fn default_exa_mcp_url() -> String {
     "https://mcp.exa.ai/mcp".to_string()
+}
+
+fn default_grok_model() -> String {
+    "grok-4-1-fast-non-reasoning".to_string()
+}
+
+fn default_grok_base_url() -> String {
+    "https://api.x.ai/v1".to_string()
+}
+
+pub fn default_grok_system_prompt() -> String {
+    "You are a helpful search assistant. Search the web to find accurate and up-to-date information for the user's query. Provide a comprehensive answer with citations."
+        .to_string()
 }
 
 fn default_web_search_max_results() -> u8 {
@@ -1710,6 +1740,29 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     settings.lens.web_search.tavily_api_key =
         settings.lens.web_search.tavily_api_key.trim().to_string();
     settings.lens.web_search.exa_api_key = settings.lens.web_search.exa_api_key.trim().to_string();
+    settings.lens.web_search.ollama_api_key =
+        settings.lens.web_search.ollama_api_key.trim().to_string();
+    settings.lens.web_search.grok_api_key =
+        settings.lens.web_search.grok_api_key.trim().to_string();
+    settings.lens.web_search.grok_model = {
+        let trimmed = settings.lens.web_search.grok_model.trim();
+        if trimmed.is_empty() {
+            default_grok_model()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    settings.lens.web_search.grok_base_url = {
+        let trimmed = settings.lens.web_search.grok_base_url.trim();
+        if trimmed.is_empty() {
+            default_grok_base_url()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    if settings.lens.web_search.grok_system_prompt.trim().is_empty() {
+        settings.lens.web_search.grok_system_prompt = default_grok_system_prompt();
+    }
     settings.lens.web_search.exa_mcp_url = {
         let trimmed = settings.lens.web_search.exa_mcp_url.trim();
         if trimmed.is_empty() {

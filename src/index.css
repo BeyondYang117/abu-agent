@@ -1651,6 +1651,7 @@ body {
 }
 
 .kv-scroll > .kb-panel-root,
+.kv-scroll > .websearch-panel-root,
 .kv-scroll > .kv-providers-root {
   flex: 1 1 auto;
   min-height: 100%;
@@ -1658,6 +1659,7 @@ body {
 }
 
 .kv-scroll:has(> .kb-panel-root),
+.kv-scroll:has(> .websearch-panel-root),
 .kv-scroll:has(> .kv-providers-root) {
   display: flex;
   flex-direction: column;
