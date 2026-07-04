@@ -29,6 +29,20 @@ const { _meta: _, ...dbEntries } = raw
 const db = dbEntries as unknown as Record<string, DbEntry>
 const dbKeys = Object.keys(db)
 
+// 版本分隔符归一化：数据库键用点号（`claude-sonnet-4.6`、`gpt-5.5`），但很多 provider
+// 返回的模型 ID 用连字符（`claude-sonnet-4-6`、`claude-opus-4-8`）。若不归一化，
+// `claude-sonnet-4-6` 精确匹配不到 `claude-sonnet-4.6`，会前缀退化到旧的 `claude-sonnet-4`
+// → 显示成 "Claude Sonnet 4"（错）。统一把 `.` 视作 `-` 后再比对。
+const normalizeSep = (value: string): string => value.replace(/\./g, '-')
+// 归一化键 → 原始键（首个占位；当前库无仅靠 `.`/`-` 区分的重复键）。
+const normalizedExact = new Map<string, string>()
+const normalizedEntries = dbKeys.map((orig) => {
+  const norm = normalizeSep(orig)
+  if (!normalizedExact.has(norm)) normalizedExact.set(norm, orig)
+  return { orig, norm }
+})
+
+
 /**
  * 从内置数据库匹配模型信息
  *
@@ -54,22 +68,38 @@ export function matchModel(modelName: string): ModelInfo | null {
     return toModelInfo(db[stripped])
   }
 
-  const candidates = name === stripped ? [stripped] : [name, stripped]
-
-  // 2. 前缀匹配（最长 key 优先）
-  const prefixMatches = dbKeys
-    .filter(key => candidates.some(candidate => candidate.startsWith(key) && key.length < candidate.length))
-    .sort((a, b) => b.length - a.length)
-  if (prefixMatches.length > 0) {
-    return toModelInfo(db[prefixMatches[0]])
+  // 1b. 分隔符归一化后的精确匹配（`claude-sonnet-4-6` ↔ `claude-sonnet-4.6`）。
+  //     必须在前缀匹配之前，否则会退化到旧的大版本条目。
+  const normName = normalizeSep(name)
+  const normStripped = normalizeSep(stripped)
+  const exactNorm = normalizedExact.get(normName) ?? normalizedExact.get(normStripped)
+  if (exactNorm) {
+    return toModelInfo(db[exactNorm])
   }
 
-  // 3. 包含匹配（最长 key 优先）
-  const containsMatches = dbKeys
-    .filter(key => candidates.some(candidate => candidate.includes(key) && key !== candidate))
-    .sort((a, b) => b.length - a.length)
+  // 归一化候选，供前缀 / 包含匹配复用。
+  const normCandidates = normName === normStripped ? [normStripped] : [normName, normStripped]
+
+  // 2. 前缀匹配（归一化后最长 key 优先）
+  const prefixMatches = normalizedEntries
+    .filter((entry) =>
+      normCandidates.some(
+        (candidate) => candidate.startsWith(entry.norm) && entry.norm.length < candidate.length,
+      ),
+    )
+    .sort((a, b) => b.norm.length - a.norm.length)
+  if (prefixMatches.length > 0) {
+    return toModelInfo(db[prefixMatches[0].orig])
+  }
+
+  // 3. 包含匹配（归一化后最长 key 优先）
+  const containsMatches = normalizedEntries
+    .filter((entry) =>
+      normCandidates.some((candidate) => candidate.includes(entry.norm) && entry.norm !== candidate),
+    )
+    .sort((a, b) => b.norm.length - a.norm.length)
   if (containsMatches.length > 0) {
-    return toModelInfo(db[containsMatches[0]])
+    return toModelInfo(db[containsMatches[0].orig])
   }
 
   const imageGenerationFallback = matchKnownImageGenerationModel(stripped)

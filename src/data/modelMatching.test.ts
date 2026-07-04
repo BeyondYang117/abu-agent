@@ -24,6 +24,24 @@ describe('matchModel', () => {
     expect(matchModel('totally-unknown-model-xyz-9999')).toBeNull()
   })
 
+  it('matches dash-versioned ids against dot-keyed db entries', () => {
+    // Provider ids use dashes (claude-sonnet-4-6); db keys use dots (claude-sonnet-4.6).
+    // Without separator normalization these fall back to the older major-version entry.
+    expect(matchModel('claude-sonnet-4-6')?.displayName).toBe('Claude Sonnet 4.6')
+    expect(matchModel('claude-opus-4-8')?.displayName).toBe('Claude Opus 4.8')
+    expect(matchModel('claude-opus-4-7')?.displayName).toBe('Claude Opus 4.7')
+    expect(matchModel('claude-haiku-4-5')?.displayName).toBe('Claude Haiku 4.5')
+  })
+
+  it('still resolves the bare major-version model to its own entry', () => {
+    expect(matchModel('claude-sonnet-4')?.displayName).toBe('Claude Sonnet 4')
+    expect(matchModel('claude-opus-4')?.displayName).toBe('Claude Opus 4')
+  })
+
+  it('matches dated dash-versioned ids by longest normalized prefix', () => {
+    expect(matchModel('claude-opus-4-8-20260101')?.displayName).toBe('Claude Opus 4.8')
+  })
+
   it('recognizes image generation model naming patterns', () => {
     const info = matchModel('dall-e-3')
     expect(info?.capabilities?.imageGeneration).toBe(true)
