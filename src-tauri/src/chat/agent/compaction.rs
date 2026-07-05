@@ -858,14 +858,24 @@ fn serialize_chat_messages_for_summary(messages: &[&ChatMessage]) -> String {
         .join("\n\n")
 }
 
+/// `compact_with_summary_model` 的三态返回，区分**取消**与**失败**：取消是用户主动行为，
+/// 不该被 anti-thrashing 计为「压缩未解决」（缺陷 5.4）。
+enum CompactAttempt {
+    Summary(String),
+    /// 进行中被取消（仅 `cancel` future 触发时可达；force/落盘路径 cancel=None 时不可达）。
+    Cancelled,
+    /// 请求错误 / 空摘要 / 质量兜底拒绝——真正的失败。
+    Failed,
+}
+
 /// 统一摘要调用核心（落盘 / L2 / 手动三处共用）：
 /// 1. 把序列化后的旧段头尾裁剪到摘要**输入**预算（`window * SUMMARY_INPUT_BUDGET_RATIO`），
 ///    保证摘要请求自身绝不超窗（R1/R2）；`window == 0` 用兜底常量。
 /// 2. 拼 Claude 9 段 prompt + anchored `<previous-summary>` + `focus`。
 /// 3. **流式**调用压缩模型（`call_chat_completion_message_streamed`），抽 `<summary>` 正文。
-/// 4. 质量兜底：空 / 过短 / 相对旧 summary 显著劣化 → 返回 None，**不覆盖**旧 summary。
+/// 4. 质量兜底：空 / 过短 / 相对旧 summary 显著劣化 → `Failed`，**不覆盖**旧 summary。
 ///
-/// 返回 summary 文本（已 trim）；失败 / 取消 / 质量不达标返回 None（调用方据此降级）。
+/// 返回 `Summary(text)`（已 trim）/ `Cancelled` / `Failed`（调用方据此降级）。
 #[allow(clippy::too_many_arguments)]
 async fn compact_with_summary_model(
     state: &AppState,
@@ -880,7 +890,7 @@ async fn compact_with_summary_model(
     conversation_id: &str,
     message_id: &str,
     cancel: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>>,
-) -> Option<String> {
+) -> CompactAttempt {
     // 摘要**输入**预算（R1）：window * ratio，未知窗口用兜底常量。
     let summary_input_budget = if window == 0 {
         SUMMARY_INPUT_BUDGET_FALLBACK_TOKENS
@@ -927,7 +937,8 @@ async fn compact_with_summary_model(
                 result = call => result,
                 _ = cancel => {
                     // 取消进行中：放弃压缩，让后续 planning 自己检测取消并正常收尾。
-                    return None;
+                    // 区别于失败——不计入 anti-thrashing 未解决轮数。
+                    return CompactAttempt::Cancelled;
                 }
             }
         }
@@ -938,30 +949,30 @@ async fn compact_with_summary_model(
         Ok(message) => super::stop::assistant_content_from_api_message(&message),
         Err(err) => {
             eprintln!("Chat context compaction failed: {err}; keeping raw view");
-            return None;
+            return CompactAttempt::Failed;
         }
     };
     let text = extract_summary_text(&raw);
     let trimmed = text.trim();
     if trimmed.is_empty() {
         eprintln!("Chat context compaction returned empty summary; keeping raw view");
-        return None;
+        return CompactAttempt::Failed;
     }
     // 质量兜底（修复「收到 ✅」）：过短 / 相对旧 summary 显著劣化 → 拒绝覆盖。
     match summary_quality_guard(trimmed, previous_summary) {
-        SummaryQuality::Ok => Some(trimmed.to_string()),
+        SummaryQuality::Ok => CompactAttempt::Summary(trimmed.to_string()),
         SummaryQuality::Truncated => {
             eprintln!(
                 "Chat context compaction summary truncated (<analysis> without <summary>); rejecting"
             );
-            None
+            CompactAttempt::Failed
         }
         SummaryQuality::TooShort => {
             eprintln!(
                 "Chat context compaction summary too short ({} chars < {MIN_SUMMARY_CHARS}); rejecting",
                 trimmed.chars().count()
             );
-            None
+            CompactAttempt::Failed
         }
         SummaryQuality::Degraded => {
             eprintln!(
@@ -969,7 +980,7 @@ async fn compact_with_summary_model(
                 trimmed.chars().count(),
                 previous_summary.map(|p| p.trim().chars().count()).unwrap_or(0)
             );
-            None
+            CompactAttempt::Failed
         }
     }
 }
@@ -1035,11 +1046,11 @@ async fn summarize_history(
     message_id: &str,
     focus: Option<&str>,
     cancel: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>>,
-) -> Option<(Vec<Value>, String)> {
+) -> CompactOutcome {
     let (system_prefix, old_segment, recent) = select_recent_by_tokens(messages, keep_tokens);
     if old_segment.is_empty() {
         // 没有可摘要的旧段（全在受保护近期窗口里）——压缩无能为力。
-        return None;
+        return CompactOutcome::Failed;
     }
 
     // anchored 链式摘要（R8）：若历史含上一份摘要（old_segment 锚点 或 system 前缀注入），
@@ -1090,12 +1101,19 @@ async fn summarize_history(
     .await;
 
     match summary_text {
-        Some(text) => Some((
-            replace_with_summary(system_prefix, &text, recent),
-            text,
-        )),
-        None => None,
+        CompactAttempt::Summary(text) => {
+            CompactOutcome::Compacted(replace_with_summary(system_prefix, &text, recent), text)
+        }
+        CompactAttempt::Cancelled => CompactOutcome::Cancelled,
+        CompactAttempt::Failed => CompactOutcome::Failed,
     }
+}
+
+/// `summarize_history` 的三态返回：成功（压缩后视图 + 摘要正文）/ 取消 / 失败。
+enum CompactOutcome {
+    Compacted(Vec<Value>, String),
+    Cancelled,
+    Failed,
 }
 
 /// 循环内上下文治理入口。返回本步应发送的消息视图：
@@ -1182,7 +1200,7 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     .await;
 
     match compacted {
-        Some((compacted, summary_text)) => {
+        CompactOutcome::Compacted(compacted, summary_text) => {
             let after = estimate_messages_tokens(&compacted);
             eprintln!("Chat context compaction: est {estimated} -> {after} tokens");
             state.runtime_messages = compacted.clone();
@@ -1245,7 +1263,18 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
             }
             compacted
         }
-        None => {
+        CompactOutcome::Cancelled => {
+            // 用户主动取消进行中的 run：不计入 anti-thrashing（取消 ≠ 压缩无能为力），
+            // 让后续 planning 自己检测取消并正常收尾。仍发终止事件让前端"压缩中"归位。
+            env.host.emit_compaction_status(
+                &config.conversation_id,
+                "failed",
+                Some("agent_loop"),
+                None,
+            );
+            state.runtime_messages.clone()
+        }
+        CompactOutcome::Failed => {
             // Gap 2: 需要压缩（超预算）但压缩没能减小上下文（摘要调用失败/为空/过短/无旧段）——
             // 计为一次「未解决」。连续达到 COMPACTION_THRASH_LIMIT 次时，规划循环会据此优雅收尾，
             // 而不是反复触发压缩并失败 6+ 次后才报错。
@@ -1280,7 +1309,7 @@ pub(crate) async fn force_compact(
     focus: Option<&str>,
 ) -> Option<Vec<Value>> {
     let window = context_window_for_model(Some(provider), model).0;
-    summarize_history(
+    match summarize_history(
         state,
         provider,
         model,
@@ -1295,7 +1324,11 @@ pub(crate) async fn force_compact(
         None,
     )
     .await
-    .map(|(messages, _summary)| messages)
+    {
+        // 强制压缩不接取消（cancel=None）→ Cancelled 不可达，与 Failed 同样降级为 None。
+        CompactOutcome::Compacted(messages, _summary) => Some(messages),
+        CompactOutcome::Cancelled | CompactOutcome::Failed => None,
+    }
 }
 
 /// 手动压缩的保底切分（R4）：token 尾窗覆盖全部消息（无旧段）时，`/compact` 不该直接报
@@ -1490,7 +1523,7 @@ async fn compact_conversation_inner(
         .map(|s| s.content.clone());
     let serialized_head = serialize_chat_messages_for_summary(&old_segment);
     let message_id = source_until_message_id.clone();
-    let summary_text = compact_with_summary_model(
+    let summary_text = match compact_with_summary_model(
         state,
         &provider,
         &model,
@@ -1509,7 +1542,15 @@ async fn compact_conversation_inner(
         None,
     )
     .await
-    .ok_or_else(|| "Compression model returned an overly short or empty summary".to_string())?;
+    {
+        // 落盘/手动路径 cancel=None → Cancelled 不可达；与 Failed 同样报错、不覆盖旧 summary。
+        CompactAttempt::Summary(text) => text,
+        CompactAttempt::Cancelled | CompactAttempt::Failed => {
+            return Err(
+                "Compression model returned an overly short or empty summary".to_string(),
+            )
+        }
+    };
 
     let created_at = chrono::Local::now().timestamp();
     let token_estimate_before = previous_summary
