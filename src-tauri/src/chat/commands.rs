@@ -2296,7 +2296,14 @@ async fn complete_assistant_reply_inner(
     }
     // L2 压缩对齐落盘路径：run 结束时把 L2 产出的 summary 写回 context_state.summary +
     // compression_count（不再只 push boundary）。质量兜底已在 compaction 核心拦截，此处直接采用。
-    if let Some(summary) = result.compaction_summary.clone() {
+    if let Some(mut summary) = result.compaction_summary.clone() {
+        // L2 产出的 summary.source_message_ids 为空（运行时侧拿不到完整 UI id 列表）——
+        // 在此按 source_until_message_id 从 conversation 累积（含旧 summary 覆盖范围），
+        // 与落盘路径 compact_conversation_inner 口径一致。必须在替换 summary **之前**读旧 S1。
+        summary.source_message_ids = crate::chat::agent::compaction::accumulate_source_ids(
+            conversation,
+            &summary.source_until_message_id,
+        );
         conversation.context_state.last_compressed_at = Some(summary.created_at);
         conversation.context_state.compressed_message_count = summary.source_message_ids.len();
         conversation.context_state.compression_count = conversation
@@ -3625,7 +3632,11 @@ fn summary_boundary_index(conversation: &Conversation) -> Option<usize> {
 fn summary_message(summary: &ConversationContextSummary) -> Value {
     serde_json::json!({
         "role": "system",
-        "content": format!("Previous conversation summary:\n{}", summary.content.trim()),
+        "content": format!(
+            "{}\n{}",
+            crate::chat::agent::compaction::PERSISTED_SUMMARY_PREFIX,
+            summary.content.trim()
+        ),
     })
 }
 
@@ -3647,27 +3658,9 @@ fn mark_summary_stale_if_needed(conversation: &mut Conversation, changed_index: 
 }
 
 fn count_tokens_in_value(value: &Value) -> usize {
-    match value {
-        Value::String(text) => agent_prepare::estimate_tokens(text),
-        Value::Array(items) => items.iter().map(count_tokens_in_value).sum(),
-        Value::Object(map) => {
-            if let Some(kind) = map.get("type").and_then(|value| value.as_str()) {
-                match kind {
-                    "image_url" | "input_image" | "image" => return 0,
-                    "text" | "input_text" => {
-                        return map.get("text").map(count_tokens_in_value).unwrap_or(0);
-                    }
-                    _ => {}
-                }
-            }
-            map.iter()
-                .map(|(key, value)| {
-                    agent_prepare::estimate_tokens(key) + count_tokens_in_value(value)
-                })
-                .sum()
-        }
-        _ => agent_prepare::estimate_tokens(&value.to_string()),
-    }
+    // 口径统一：委托压缩侧共用的 estimate_value_tokens（图片部件记 0，文本按文本，
+    // 对象递归）。曾经两处各写一份，压缩侧漏了图片归零导致 base64 打爆估算。
+    agent_prepare::estimate_value_tokens(value)
 }
 
 fn ceil_div_u32(value: u32, divisor: u32) -> usize {
@@ -4618,7 +4611,11 @@ fn has_inline_code_request_intent(text: &str, normalized: &str) -> bool {
 /// - `conversation.group_selections[group_id]` 指定的 message_id；
 /// - 无记录则取该组在 `messages` 中**顺序第一条** assistant。
 /// 其余答案仅保留展示、排除出发给模型的历史（R6）。非多答消息（无 group_id）一律保留。
-fn group_answer_excluded_from_context(conversation: &Conversation, message: &ChatMessage) -> bool {
+/// `pub(crate)`：落盘压缩（compaction.rs）复用同一谓词，保证摘要输入与 replay 视图口径一致。
+pub(crate) fn group_answer_excluded_from_context(
+    conversation: &Conversation,
+    message: &ChatMessage,
+) -> bool {
     let Some(group_id) = message.group_id.as_deref() else {
         return false;
     };

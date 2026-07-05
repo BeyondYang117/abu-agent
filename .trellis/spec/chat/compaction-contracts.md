@@ -85,3 +85,46 @@ old_segment.iter().rev()
     .filter_map(|m| m.get(UI_MESSAGE_ID_KEY).and_then(Value::as_str))
     .find(|id| !ids_in_recent.contains(id))
 ```
+
+---
+
+## Scenario: 链式摘要合并、估算口径、多答排除（07-06-compaction-correctness-fixes）
+
+> 2026-07-06 补。相关代码：`compaction.rs`、`commands.rs`（`summary_message` / `count_tokens_in_value` / `build_chat_api_messages` / L2 写回块）、`prepare.rs`（`estimate_value_tokens`）。
+
+### 1. 注入摘要识别（防跨轮丢上下文，硬约束）
+
+`build_chat_api_messages` 把落盘 `context_state.summary` 注入为一条 **system** 消息，前缀 `PERSISTED_SUMMARY_PREFIX`（`"Previous conversation summary:"`）。该前缀是 `compaction::PERSISTED_SUMMARY_PREFIX` 常量，**生成方 `commands.rs::summary_message` 与识别方 `compaction::extract_previous_summary` 共用**——禁止任一侧硬编码字符串（格式漂移会让 L2 认不出旧摘要，进而整体覆盖、静默丢早期上下文）。
+
+`extract_previous_summary(system_prefix, old_segment)` 识别两种上一份摘要，**锚点优先**：
+- 锚点摘要：old_segment 内 user + `SUMMARY_MARKER_PREFIX`（同 run 内更晚的 L2 产物）；
+- 注入摘要：system 前缀内 system + `PERSISTED_SUMMARY_PREFIX`（跨轮的落盘 summary）。
+
+识别到的旧摘要作为 `previous_summary` 走链式合并；注入摘要额外从压缩后视图的 system 前缀剔除（`is_injected_summary`），锚点摘要及其配对 ack（`SUMMARY_ACK_TEXT`，`is_summary_ack`）从摘要输入 head 剔除。
+
+### 2. source_message_ids 累积（两路径同口径）
+
+`accumulate_source_ids(conversation, until_id)` = 旧未过期 summary 的 ids ∪ 旧 boundary 之后至 `until_id`（含）的**全部**原始消息 id（含多答排除臂）。落盘路径 `compact_conversation_inner` 与 **L2 run 结束写回**（commands.rs）都调用它——L2 产出的 summary `source_message_ids` 初始为空，写回时**必须在替换 summary 之前**用该 helper 填充，否则 `compressed_message_count` 归零且下一轮无法定位覆盖范围。
+
+### 3. token 估算口径（防 base64 打爆 / preview 低估）
+
+- `prepare::estimate_value_tokens` 是唯一多模态估算口径：**图片部件记 0**（按 provider tile 计费，非 base64 体积）、文本按文本、对象递归。`commands.rs::count_tokens_in_value` 委托它。
+- `compaction::estimate_message_tokens` 对非字符串 content 走 `estimate_value_tokens`（不再 `to_string()` 整体估算），并计入 `reasoning_content`。
+- `compaction::estimate_chat_message_tokens` 优先按展开形态（`model_messages` → `api_messages`）估算，分支顺序与 `build_chat_api_messages` 一致；无展开数据才回退 `result_preview` 口径。
+- `serialize_message` 多模态 user：文本全文 + 图片占位 `[image attachment omitted]`，绝不含 `;base64,`。
+
+### 4. 多答排除臂过滤（落盘路径）
+
+落盘 old_segment 的 token 切分与序列化都跳过 `commands::group_answer_excluded_from_context`（pub(crate)，与 `build_chat_api_messages` 同谓词）为 true 的消息——经 `context_included_indices` + `token_split_over_indices` / `manual_fallback_split_over_indices`（升序原始下标，boundary 映射回原始下标）。被排除臂**内容不进摘要**，但其 id **仍计入** source_message_ids（被 boundary 覆盖、不再 replay）。L2 路径不受影响（runtime 天然已排除）。
+
+### 5. 取消 ≠ 失败
+
+`compact_with_summary_model` 返回 `CompactAttempt { Summary | Cancelled | Failed }`；`summarize_history` 透传 `CompactOutcome`。`maybe_compact_send_view` 的 `Cancelled` 分支**不递增** `compaction_unresolved_rounds`（用户主动取消非压缩无能为力），但仍发 `failed` 终止事件（UI 归位，不新增 phase 值）。`force_compact` / `compact_conversation_inner`（cancel=None）下 `Cancelled` 不可达。
+
+### 6. Bad（禁止）
+
+- `summary_message` 或 `extract_previous_summary` 任一侧硬编码 `"Previous conversation summary:"` 而非引用常量。
+- L2 写回直接搬运 summary（`source_message_ids` 留空）而不累积。
+- 压缩估算对多模态 content 走 `to_string()`（base64 打爆）或对工具消息只算 `result_preview`（低估真实 replay）。
+- 落盘 old_segment 用连续 `messages[start..=split]` 而不过滤多答排除臂。
+
