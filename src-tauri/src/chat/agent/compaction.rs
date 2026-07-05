@@ -749,33 +749,49 @@ fn estimate_chat_message_tokens(message: &ChatMessage) -> usize {
 /// 返回 old_segment 末尾下标（含）；越界或无旧段返回 None。
 ///
 /// 与 L2 `select_recent_by_tokens` 同语义：不切断单条消息；越预算的那条整体归入旧段。
+/// 内部委托 `token_split_over_indices`——落盘路径过滤多答排除臂后走同一切分核心。
+/// 非过滤（连续区间）调用保留给直接单测 / commands.rs 测试用。
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn token_split_chat_messages(
     messages: &[ChatMessage],
     summary_start: usize,
     keep_tokens: usize,
 ) -> Option<usize> {
-    let len = messages.len();
-    if summary_start >= len {
+    if summary_start >= messages.len() {
         return None;
     }
+    let indices: Vec<usize> = (summary_start..messages.len()).collect();
+    token_split_over_indices(messages, &indices, keep_tokens)
+}
+
+/// token 切分核心：在**升序原始下标序列** `indices`（已按 summary_start 过滤、可选再排除
+/// 多答臂）上，从尾部往前累积整条消息 token 到 ~`keep_tokens`。返回 old_segment 末尾的
+/// **原始下标**（含）；全部落入近期窗口 / 空序列返回 None。
+/// 落盘 `compact_conversation_inner` 与 `has_compressible_old_segment` 共用，防止口径分叉。
+fn token_split_over_indices(
+    messages: &[ChatMessage],
+    indices: &[usize],
+    keep_tokens: usize,
+) -> Option<usize> {
+    let n = indices.len();
     let mut total = 0usize;
-    let mut split = len; // recent 起始（含）；split-1 = old_segment 末尾
-    let mut idx = len;
-    while idx > summary_start {
-        idx -= 1;
-        let next = total + estimate_chat_message_tokens(&messages[idx]);
-        if next > keep_tokens && idx + 1 < len {
-            split = idx + 1;
+    let mut split = n; // recent 起始（indices 内位置）；split-1 = old_segment 末尾
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        let next = total + estimate_chat_message_tokens(&messages[indices[i]]);
+        if next > keep_tokens && i + 1 < n {
+            split = i + 1;
             break;
         }
         total = next;
-        split = idx;
+        split = i;
     }
-    if split <= summary_start {
+    if split == 0 {
         // 整段都进了近期窗口——没有可摘要旧段。
         return None;
     }
-    Some(split - 1)
+    Some(indices[split - 1])
 }
 
 /// 把 UI `ChatMessage` 序列化成喂给摘要模型的角色标注文本。对齐 L2 `serialize_message`：
@@ -832,10 +848,11 @@ fn capitalize_role(role: &str) -> &'static str {
 }
 
 /// 把旧段 `ChatMessage` 序列化成角色标注文本（每条一段，空行分隔）。
-fn serialize_chat_messages_for_summary(messages: &[ChatMessage]) -> String {
+/// 取 `&[&ChatMessage]`：落盘 old_segment 过滤多答排除臂后是非连续引用集合。
+fn serialize_chat_messages_for_summary(messages: &[&ChatMessage]) -> String {
     messages
         .iter()
-        .map(serialize_chat_message_for_summary)
+        .map(|m| serialize_chat_message_for_summary(m))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -1286,27 +1303,56 @@ pub(crate) async fn force_compact(
 /// 且 `summary_start..len` 区间 UI 消息数 > 4 时生效：保留最后一条 user 及其后消息为近期窗口，
 /// 其余进 old_segment；返回 old_segment 末尾下标。区间太短或末尾无可切点 → None（保持原报错）。
 /// auto / agent_loop 触发条件不受影响（它们要超 90% 窗口才会走到这里）。
+/// 内部委托 `manual_fallback_split_over_indices`——落盘路径过滤多答排除臂后走同一逻辑。
+/// 非过滤（连续区间）调用保留给直接单测用。
+#[cfg_attr(not(test), allow(dead_code))]
 fn manual_fallback_split(
     messages: &[ChatMessage],
     summary_start: usize,
     trigger: &str,
 ) -> Option<usize> {
+    if summary_start >= messages.len() {
+        return None;
+    }
+    let indices: Vec<usize> = (summary_start..messages.len()).collect();
+    manual_fallback_split_over_indices(messages, &indices, trigger)
+}
+
+/// `manual_fallback_split` 的 index-based 核心：在升序原始下标序列 `indices` 上找最后一条
+/// user，其之前的那条 included 消息为 old_segment 末尾。indices 数 ≤ 4 或 user 在首位 → None。
+fn manual_fallback_split_over_indices(
+    messages: &[ChatMessage],
+    indices: &[usize],
+    trigger: &str,
+) -> Option<usize> {
     if trigger != "manual" {
         return None;
     }
-    let len = messages.len();
-    if len.saturating_sub(summary_start) <= 4 {
+    if indices.len() <= 4 {
         return None;
     }
-    let last_user = messages[summary_start..]
+    let last_user_pos = indices
         .iter()
-        .rposition(|m| m.role == "user")
-        .map(|offset| summary_start + offset)?;
-    // 最后一条 user 之前必须还有可摘要内容。
-    if last_user <= summary_start {
+        .rposition(|&idx| messages[idx].role == "user")?;
+    // 最后一条 user 之前必须还有可摘要内容（不在 included 首位）。
+    if last_user_pos == 0 {
         return None;
     }
-    Some(last_user - 1)
+    Some(indices[last_user_pos - 1])
+}
+
+/// 落盘路径「参与压缩」的原始下标（升序）：`summary_start` 之后、且**未被多答组排除**
+/// （`group_answer_excluded_from_context`，与 build_chat_api_messages 同谓词）的消息。
+/// 排除臂不进 replay，也不该进摘要输入 / token 预算。
+fn context_included_indices(conversation: &Conversation, summary_start: usize) -> Vec<usize> {
+    (summary_start..conversation.messages.len())
+        .filter(|&idx| {
+            !crate::chat::commands::group_answer_excluded_from_context(
+                conversation,
+                &conversation.messages[idx],
+            )
+        })
+        .collect()
 }
 
 /// 累积 `source_message_ids`：上一份未过期 summary 的 ids ∪ 其 boundary 之后至 `until_id`
@@ -1395,10 +1441,19 @@ async fn compact_conversation_inner(
         .map(|idx| idx + 1)
         .unwrap_or(0);
 
-    let split = token_split_chat_messages(&conversation.messages, summary_start, RECENT_KEEP_TOKENS)
-        .or_else(|| manual_fallback_split(&conversation.messages, summary_start, trigger))
+    // 参与压缩的消息：summary_start 之后、且**未被多答组排除**的原始下标（与
+    // build_chat_api_messages 同谓词——排除臂不进 replay，也不该进摘要输入/token 预算）。
+    let included = context_included_indices(conversation, summary_start);
+    let split = token_split_over_indices(&conversation.messages, &included, RECENT_KEEP_TOKENS)
+        .or_else(|| manual_fallback_split_over_indices(&conversation.messages, &included, trigger))
         .ok_or_else(|| "没有足够的旧消息可以压缩".to_string())?;
-    let old_segment = &conversation.messages[summary_start..=split];
+    // old_segment = included 中原始下标 ≤ split 的消息（过滤后可能非连续）。
+    let old_segment: Vec<&ChatMessage> = included
+        .iter()
+        .copied()
+        .take_while(|&idx| idx <= split)
+        .map(|idx| &conversation.messages[idx])
+        .collect();
     if old_segment.is_empty() {
         return Err("没有足够的旧消息可以压缩".to_string());
     }
@@ -1433,7 +1488,7 @@ async fn compact_conversation_inner(
         .as_ref()
         .filter(|s| !s.stale)
         .map(|s| s.content.clone());
-    let serialized_head = serialize_chat_messages_for_summary(old_segment);
+    let serialized_head = serialize_chat_messages_for_summary(&old_segment);
     let message_id = source_until_message_id.clone();
     let summary_text = compact_with_summary_model(
         state,
@@ -1563,7 +1618,9 @@ pub(crate) fn has_compressible_old_segment(conversation: &Conversation) -> bool 
         })
         .map(|idx| idx + 1)
         .unwrap_or(0);
-    token_split_chat_messages(&conversation.messages, summary_start, RECENT_KEEP_TOKENS).is_some()
+    // 与 compact_conversation_inner 同口径：过滤多答排除臂后再判断是否还有可摘要旧段。
+    let included = context_included_indices(conversation, summary_start);
+    token_split_over_indices(&conversation.messages, &included, RECENT_KEEP_TOKENS).is_some()
 }
 
 fn format_chat_missing_api_key_error(provider_name: &str) -> String {
@@ -2293,6 +2350,85 @@ mod tests {
         let conversation = test_conversation(messages);
         // 无旧 summary → 从头累积到 until_id。
         assert_eq!(accumulate_source_ids(&conversation, "b"), vec!["a", "b"]);
+    }
+
+    /// 构造带一个多答组（选中臂 A、排除臂 B）的会话，供批次 C 排除测试复用。
+    fn conversation_with_excluded_arm() -> Conversation {
+        let mut arm_a = chat_msg("a_sel", "assistant", "SELECTED_ARM_ANSWER");
+        arm_a.group_id = Some("g1".to_string());
+        let mut arm_b = chat_msg("b_excl", "assistant", "EXCLUDED_ARM_ANSWER");
+        arm_b.group_id = Some("g1".to_string());
+        let messages = vec![
+            chat_msg("u1", "user", "question one"),
+            arm_a,
+            arm_b,
+            chat_msg("u2", "user", "question two"),
+            chat_msg("a2", "assistant", "second answer"),
+        ];
+        let mut conversation = test_conversation(messages);
+        conversation
+            .group_selections
+            .insert("g1".to_string(), "a_sel".to_string());
+        conversation
+    }
+
+    #[test]
+    fn persisted_compaction_excludes_unselected_group_arms() {
+        // 缺陷 3 / AC3.1：排除臂 B 不进 included、摘要序列化含 A 不含 B。
+        let conversation = conversation_with_excluded_arm();
+        let included = context_included_indices(&conversation, 0);
+        assert!(included.contains(&1), "selected arm A kept");
+        assert!(!included.contains(&2), "excluded arm B dropped");
+        assert_eq!(included, vec![0, 1, 3, 4]);
+
+        let old: Vec<&ChatMessage> = included
+            .iter()
+            .map(|&i| &conversation.messages[i])
+            .collect();
+        let serialized = serialize_chat_messages_for_summary(&old);
+        assert!(serialized.contains("SELECTED_ARM_ANSWER"));
+        assert!(!serialized.contains("EXCLUDED_ARM_ANSWER"));
+    }
+
+    #[test]
+    fn source_ids_include_excluded_arms() {
+        // 缺陷 3 / R3.2：被排除臂 id 仍计入 source_message_ids（被 boundary 覆盖、不再 replay）。
+        let conversation = conversation_with_excluded_arm();
+        let ids = accumulate_source_ids(&conversation, "a2");
+        assert!(ids.contains(&"b_excl".to_string()), "excluded arm id covered");
+        assert_eq!(ids, vec!["u1", "a_sel", "b_excl", "u2", "a2"]);
+    }
+
+    #[test]
+    fn context_included_indices_keeps_all_without_groups() {
+        // AC3.3：无多答组 → 全量下标，行为不变。
+        let messages: Vec<ChatMessage> = (0..4)
+            .map(|i| chat_msg(&format!("m{i}"), if i % 2 == 0 { "user" } else { "assistant" }, "x"))
+            .collect();
+        let conversation = test_conversation(messages);
+        assert_eq!(context_included_indices(&conversation, 0), vec![0, 1, 2, 3]);
+        assert_eq!(context_included_indices(&conversation, 2), vec![2, 3]);
+    }
+
+    #[test]
+    fn token_split_over_indices_matches_prefiltered_sequence() {
+        // AC3.2：over_indices(included) 的 boundary == 「先物理滤除排除臂、连续切分」的
+        // boundary（映射回原始下标）。构造大消息使切分真正发生，index 3 为排除臂。
+        let big = "a".repeat(20_000); // ~5004 tok/条
+        let messages: Vec<ChatMessage> = (0..6)
+            .map(|i| chat_msg(&format!("m{i}"), if i % 2 == 0 { "user" } else { "assistant" }, &big))
+            .collect();
+        // included 跳过 index 3。
+        let included = vec![0usize, 1, 2, 4, 5];
+        let via_indices =
+            token_split_over_indices(&messages, &included, RECENT_KEEP_TOKENS).expect("split");
+
+        // 参照：物理滤除 index 3 后连续切分，boundary 位置映射回原始下标。
+        let filtered: Vec<ChatMessage> = included.iter().map(|&i| messages[i].clone()).collect();
+        let pos = token_split_chat_messages(&filtered, 0, RECENT_KEEP_TOKENS).expect("split");
+        assert_eq!(via_indices, included[pos], "boundary maps back to original index");
+        // 排除臂 (index 3) 绝不会成为 boundary。
+        assert_ne!(via_indices, 3);
     }
 
     #[test]

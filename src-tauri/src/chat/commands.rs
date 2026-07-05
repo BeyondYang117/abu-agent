@@ -4611,7 +4611,11 @@ fn has_inline_code_request_intent(text: &str, normalized: &str) -> bool {
 /// - `conversation.group_selections[group_id]` 指定的 message_id；
 /// - 无记录则取该组在 `messages` 中**顺序第一条** assistant。
 /// 其余答案仅保留展示、排除出发给模型的历史（R6）。非多答消息（无 group_id）一律保留。
-fn group_answer_excluded_from_context(conversation: &Conversation, message: &ChatMessage) -> bool {
+/// `pub(crate)`：落盘压缩（compaction.rs）复用同一谓词，保证摘要输入与 replay 视图口径一致。
+pub(crate) fn group_answer_excluded_from_context(
+    conversation: &Conversation,
+    message: &ChatMessage,
+) -> bool {
     let Some(group_id) = message.group_id.as_deref() else {
         return false;
     };
