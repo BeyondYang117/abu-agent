@@ -207,7 +207,7 @@ fn normalize_tool(name: &str) -> ToolKind {
         "write" | "write_file" | "edit" | "edit_file" => ToolKind::Mutation,
         "bash" | "run_command" => ToolKind::Bash,
         "web_search" => ToolKind::WebSearch,
-        "skill_activate" => ToolKind::SkillActivate,
+        "skill" | "skill_activate" => ToolKind::SkillActivate,
         _ => ToolKind::Other,
     }
 }
@@ -900,9 +900,9 @@ mod tests {
 
     #[test]
     fn skill_activate_card_is_compact_not_a_body_dump() {
-        // Regression: the skill_activate result is the full SKILL.md body (model-facing).
+        // Regression: the skill activation result is the full SKILL.md body (model-facing).
         // The card must NOT dump it — just a one-line confirmation naming the skill.
-        let mut c = card("skill_activate", ToolCallStatus::Success);
+        let mut c = card("skill", ToolCallStatus::Success);
         c.summary = "frontend-design".to_string();
         c.detail = Some(
             "<skill_content name=\"frontend-design\"> This skill guides creation of \
@@ -916,7 +916,6 @@ mod tests {
         let text = strip_ansi(&lines.join("\n"));
 
         // Header names the skill; body is the single confirmation line.
-        assert!(text.contains("skill_activate"), "{text}");
         assert!(text.contains("loaded skill: frontend-design"), "{text}");
         // The full body must be gone.
         assert!(!text.contains("skill_content"), "raw skill body leaked: {text}");

@@ -501,7 +501,6 @@ export type ChatToolsConfig = {
   skillScanPaths: string[]
   skillAutoMatch?: boolean
   skillFallbackMode?: 'progressive' | 'skill_md_only' | 'legacy_full_body' | string
-  skillScriptAllowlist?: string[]
   /** Skill ids turned off in Settings; omitted ids are enabled. */
   disabledSkillIds?: string[]
   maxToolRounds: number | null
@@ -1045,9 +1044,6 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     skillScanPaths: Array.isArray(current.skillScanPaths) ? current.skillScanPaths : [],
     skillAutoMatch: current.skillAutoMatch ?? true,
     skillFallbackMode: current.skillFallbackMode || 'progressive',
-    skillScriptAllowlist: Array.isArray(current.skillScriptAllowlist) && current.skillScriptAllowlist.length > 0
-      ? current.skillScriptAllowlist
-      : ['python3', 'bash', 'sh', 'node'],
     disabledSkillIds: Array.isArray(current.disabledSkillIds) ? current.disabledSkillIds : [],
     maxToolRounds: normalizeMaxToolRounds(current.maxToolRounds),
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,

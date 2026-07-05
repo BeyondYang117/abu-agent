@@ -248,8 +248,9 @@ pub fn resolve_provider_model(
 /// `skill_registry` is the same registry that drives the per-turn skill tool
 /// definitions (built in [`TurnAssembly::resolve`]). When it is non-empty we
 /// append the GUI's skill catalog (`crate::skills::format_catalog`) so the model
-/// is actually told which skills exist and when to `skill_activate` them — without
-/// it the activation tools are advertised but the model is blind to the catalog.
+/// is actually told which skills exist and when to activate them with the `skill`
+/// tool — without it the activation tool is advertised but the model is blind to
+/// the catalog.
 pub fn build_system_prompt(cwd: &std::path::Path, skill_registry: &SkillRegistry) -> String {
     let now = chrono::Local::now();
     // Auto-load the project's own instruction files (.kivio/, root AGENTS.md /
@@ -280,7 +281,7 @@ pub fn build_system_prompt(cwd: &std::path::Path, skill_registry: &SkillRegistry
     // is already filtered to enabled skills in `build_skill_registry`, so the
     // enabled-filter closure is always-true; `active_skill_id` = None (nothing
     // pre-activated); `tools_available` = true (the CLI runs tool-capable models
-    // and advertises the skill_activate trio). Placed after the project context,
+    // and advertises the skill tool). Placed after the project context,
     // before the date/cwd footer, in a clearly delimited section.
     let skill_block = {
         let catalog = crate::skills::format_catalog(skill_registry, None, true, |_| true);
@@ -854,10 +855,10 @@ mod tests {
         };
 
         let prompt = build_system_prompt(std::path::Path::new("/tmp/project"), &registry);
-        // The catalog names the skill and instructs the model to skill_activate.
+        // The catalog names the skill and instructs the model to call the skill tool.
         assert!(prompt.contains("<skills>"));
         assert!(prompt.contains("pdf-wizard"));
-        assert!(prompt.contains("skill_activate"));
+        assert!(prompt.contains("call the skill tool"));
         // Catalog sits before the date/cwd footer.
         let pos_catalog = prompt.find("<skills>").unwrap();
         let pos_cwd = prompt.find("Current working directory").unwrap();

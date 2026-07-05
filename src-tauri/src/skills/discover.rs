@@ -162,7 +162,7 @@ fn build_registry_inner(
 
 /// Headless registry builder (no `AppHandle`): discovers user-dir + bundled +
 /// `extra_paths` skills exactly like [`build_registry`], indexing skill files so
-/// `skill_read_file` / `skill_run_script` resources are listed. Used by the
+/// the activated skill's `<skill_resources>` list is populated. Used by the
 /// `kivio-code` CLI.
 pub fn build_registry_headless(extra_paths: &[String]) -> SkillRegistry {
     build_registry_from_roots(scan_root_entries_headless(extra_paths), true)

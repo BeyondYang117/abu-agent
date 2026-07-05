@@ -773,15 +773,6 @@ fn default_skill_fallback_mode() -> String {
     "progressive".to_string()
 }
 
-fn default_skill_script_allowlist() -> Vec<String> {
-    vec![
-        "python3".to_string(),
-        "bash".to_string(),
-        "sh".to_string(),
-        "node".to_string(),
-    ]
-}
-
 pub const CHAT_TOOL_MIN_TIMEOUT_MS: u64 = 1_000;
 pub const CHAT_TOOL_MAX_TIMEOUT_MS: u64 = 300_000;
 pub const CHAT_TOOL_DEFAULT_ROUNDS: u32 = 20;
@@ -796,7 +787,6 @@ pub const DEFAULT_MAX_TOOL_OUTPUT_CHARS: usize = 24_000;
 /// Orchestrate 模式下的最低工具轮次预算：编排者主动 fan-out 子 agent + 先规划再分派，
 /// 单条用户消息内可能需要更多轮次，因此抬到 max(用户配置, 此值)，但不放开为无限。
 pub const ORCHESTRATE_MIN_TOOL_ROUNDS: u32 = 40;
-pub const SKILL_SCRIPT_MIN_TIMEOUT_MS: u64 = 120_000;
 /// MCP 持久连接空闲超时下限：太小会让长连接频繁回收失去意义。
 pub const MCP_IDLE_TIMEOUT_MIN_MS: u64 = 60_000;
 /// MCP 持久连接空闲超时上限：避免死连接长期占用子进程。
@@ -850,8 +840,6 @@ pub struct ChatToolsConfig {
     pub skill_auto_match: bool,
     #[serde(default = "default_skill_fallback_mode")]
     pub skill_fallback_mode: String,
-    #[serde(default = "default_skill_script_allowlist")]
-    pub skill_script_allowlist: Vec<String>,
     /// Skill ids the user turned off in Settings. Omitted ids are enabled.
     #[serde(default)]
     pub disabled_skill_ids: Vec<String>,
@@ -884,7 +872,6 @@ impl Default for ChatToolsConfig {
             skill_scan_paths: Vec::new(),
             skill_auto_match: default_skill_auto_match(),
             skill_fallback_mode: default_skill_fallback_mode(),
-            skill_script_allowlist: default_skill_script_allowlist(),
             disabled_skill_ids: Vec::new(),
             max_tool_rounds: default_chat_max_tool_rounds(),
             tool_timeout_ms: default_chat_tool_timeout_ms(),
@@ -1897,16 +1884,6 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         "progressive" | "skill_md_only" | "legacy_full_body"
     ) {
         settings.chat_tools.skill_fallback_mode = default_skill_fallback_mode();
-    }
-    settings.chat_tools.skill_script_allowlist = settings
-        .chat_tools
-        .skill_script_allowlist
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect();
-    if settings.chat_tools.skill_script_allowlist.is_empty() {
-        settings.chat_tools.skill_script_allowlist = default_skill_script_allowlist();
     }
     settings.chat_tools.disabled_skill_ids = settings
         .chat_tools

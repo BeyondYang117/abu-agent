@@ -309,7 +309,6 @@ function defaultChatTools(): ChatToolsConfig {
     skillScanPaths: [],
     skillAutoMatch: true,
     skillFallbackMode: 'progressive',
-    skillScriptAllowlist: ['python3', 'bash', 'sh', 'node'],
     disabledSkillIds: [],
     maxToolRounds: CHAT_TOOL_DEFAULT_ROUNDS,
     toolTimeoutMs: 60_000,
@@ -3880,16 +3879,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         { value: 'skill_md_only', label: lang === 'zh' ? '仅 SKILL.md' : 'SKILL.md only' },
                         { value: 'legacy_full_body', label: lang === 'zh' ? '旧版全量注入' : 'Legacy full body' },
                       ]}
-                    />
-                  </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '脚本解释器白名单' : 'Script interpreter allowlist'} stack>
-                    <Input
-                      mono
-                      value={(chatTools.skillScriptAllowlist || []).join(', ')}
-                      onChange={(value) => updateChatTools({
-                        skillScriptAllowlist: value.split(',').map((item) => item.trim()).filter(Boolean),
-                      })}
-                      placeholder="python3, bash, sh, node"
                     />
                   </SettingRow>
                   {skillError && <div className="kv-inline-error">{skillError}</div>}

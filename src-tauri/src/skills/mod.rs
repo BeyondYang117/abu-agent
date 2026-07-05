@@ -11,8 +11,7 @@ pub use discover::{
 };
 pub use parse::parse_skill_markdown;
 pub use runtime::{
-    activate_skill, extract_relative_path, extract_script_args, extract_skill_name, lookup_skill,
-    read_skill_file, run_skill_script, substitute_arguments, SkillRunCache,
+    activate_skill, extract_skill_name, lookup_skill, substitute_arguments, SkillRunCache,
 };
 pub use types::{
     slugify, SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,

@@ -40,6 +40,7 @@ const LEGACY_TOOL_ALIASES: &[(&str, &str)] = &[
     ("find", "glob"),                  // find 改名 glob
     ("list_background", "bash_output"), // list_background 并入 bash_output（无 job_id=列表）
     ("todo_update", "todo_write"),     // todo_update 并入 todo_write（整表替换）
+    ("skill_activate", "skill"),       // skill_activate 改名 skill（合并 read_file/run_script 后）
 ];
 
 /// 旧工具名规整为现工具名（无命中原样返回）。
@@ -293,8 +294,8 @@ pub fn native_enter_plan_mode_tool() -> ChatToolDefinition {
 pub fn native_skill_activate_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "skill__activate".to_string(),
-        name: "skill_activate".to_string(),
-        description: "Activate an Agent Skill by name. Always call this first when a task matches a skill. Loads SKILL.md instructions and lists bundled scripts and reference files.".to_string(),
+        name: "skill".to_string(),
+        description: "Load a specialized skill when the task at hand matches one of the skills listed in the system prompt. Injects the skill's instructions and resources into the current conversation — the output may contain detailed workflow guidance plus references to scripts and files in the skill directory (read them with `read`, run scripts with `run_python` or `run_command`). The skill name must match one listed in available_skills.".to_string(),
         source: "skill".to_string(),
         server_id: None,
         server_name: Some("Skill".to_string()),
@@ -314,77 +315,8 @@ pub fn native_skill_activate_tool() -> ChatToolDefinition {
     }
 }
 
-pub fn native_skill_read_file_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "skill__read_file".to_string(),
-        name: "skill_read_file".to_string(),
-        description: "Read a file from a skill directory (references/, secrets/, etc.) using a path relative to the skill root. Call skill_activate first.".to_string(),
-        source: "skill".to_string(),
-        server_id: None,
-        server_name: Some("Skill".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Skill name"
-                },
-                "relative_path": {
-                    "type": "string",
-                    "description": "Path relative to the skill root, e.g. references/guide.md"
-                }
-            },
-            "required": ["name", "relative_path"]
-        }),
-        sensitive: false,
-        annotations: None,
-        output_schema: None,
-    }
-}
-
-pub fn native_skill_run_script_tool() -> ChatToolDefinition {
-    ChatToolDefinition {
-        id: "skill__run_script".to_string(),
-        name: "skill_run_script".to_string(),
-        description: "Execute a bundled script under scripts/ (e.g. scripts/tavily_cli.py). Pass CLI args via args. Use this instead of describing commands when a skill provides scripts.".to_string(),
-        source: "skill".to_string(),
-        server_id: None,
-        server_name: Some("Skill".to_string()),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Skill name"
-                },
-                "relative_path": {
-                    "type": "string",
-                    "description": "Script path relative to the skill root, must start with scripts/"
-                },
-                "args": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Optional script arguments passed after the script path"
-                },
-                "timeout_ms": {
-                    "type": "integer",
-                    "description": "Timeout in ms (optional, max 300000)"
-                }
-            },
-            "required": ["name", "relative_path"]
-        }),
-        sensitive: false,
-        annotations: None,
-        output_schema: None,
-    }
-}
-
 pub fn native_skill_tools() -> Vec<ChatToolDefinition> {
-    vec![
-        native_skill_activate_tool(),
-        native_skill_read_file_tool(),
-        native_skill_run_script_tool(),
-    ]
+    vec![native_skill_activate_tool()]
 }
 
 pub fn native_read_file_tool() -> ChatToolDefinition {
@@ -549,7 +481,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "bash".to_string(),
-        description: "Run a host shell command (build, test, etc.). In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. Do not use `cd path && command` when the path contains spaces—pass `cwd` and run only the remaining command. Do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev servers such as `npm run dev`, `npm run tauri dev`, and `vite` are started in the background automatically and return immediately with a pid. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use this to run Skill scripts; use skill_run_script for bundled Skill scripts. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
+        description: "Run a host shell command (build, test, etc.). In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. Do not use `cd path && command` when the path contains spaces—pass `cwd` and run only the remaining command. Do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev servers such as `npm run dev`, `npm run tauri dev`, and `vite` are started in the background automatically and return immediately with a pid. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Do not use pip to bypass run_python sandbox failures; host Python package installs require an explicit user request and allow_host_python_package_install=true.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -941,23 +873,26 @@ mod tests {
 
     #[test]
     fn skill_and_native_tools_use_prompt_facing_names() {
-        assert_eq!(
-            native_skill_activate_tool().openai_tool_name(),
-            "skill_activate"
-        );
-        assert_eq!(
-            native_skill_read_file_tool().openai_tool_name(),
-            "skill_read_file"
-        );
+        assert_eq!(native_skill_activate_tool().openai_tool_name(), "skill");
         // 保留名规避：native web_search 在 wire/prompt 上声明为别名 search_web。
         assert_eq!(native_web_search_tool().openai_tool_name(), "search_web");
     }
 
     #[test]
+    fn skill_activate_legacy_name_maps_to_skill() {
+        assert_eq!(canonical_tool_name("skill_activate"), "skill");
+    }
+
+    #[test]
+    fn native_skill_tools_expose_single_tool() {
+        let tools = native_skill_tools();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "skill");
+    }
+
+    #[test]
     fn builtin_skill_tools_are_not_marked_sensitive() {
         assert!(!native_skill_activate_tool().sensitive);
-        assert!(!native_skill_read_file_tool().sensitive);
-        assert!(!native_skill_run_script_tool().sensitive);
     }
 
     #[test]

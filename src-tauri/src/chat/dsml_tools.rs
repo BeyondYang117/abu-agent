@@ -167,32 +167,28 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = concat!(
-        "<|DSML|tool_calls><|DSML|invoke name=\"skill_run_script\">",
-        "<|DSML|parameter name=\"args\" string=\"false\">",
-        r#"["call","tavily_search"]"#,
+        "<|DSML|tool_calls><|DSML|invoke name=\"run_python\">",
+        "<|DSML|parameter name=\"files\" string=\"false\">",
+        r#"["a.pdf","b.pdf"]"#,
         "</|DSML|parameter>",
-        "<|DSML|parameter name=\"name\" string=\"true\">tavily-multi-key</|DSML|parameter>",
-        "<|DSML|parameter name=\"relative_path\" string=\"true\">scripts/tavily_cli.py</|DSML|parameter>",
+        "<|DSML|parameter name=\"code\" string=\"true\">print(1)</|DSML|parameter>",
         "</|DSML|invoke></|DSML|tool_calls>",
     );
 
     #[test]
-    fn extracts_skill_run_script_from_dsml() {
+    fn extracts_multi_param_tool_from_dsml() {
         let calls = extract_dsml_tool_calls(SAMPLE);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "skill_run_script");
+        assert_eq!(calls[0].name, "run_python");
         assert_eq!(
-            calls[0].arguments.get("name").and_then(|v| v.as_str()),
-            Some("tavily-multi-key")
+            calls[0].arguments.get("code").and_then(|v| v.as_str()),
+            Some("print(1)")
         );
-        assert_eq!(
-            calls[0]
-                .arguments
-                .get("relative_path")
-                .and_then(|v| v.as_str()),
-            Some("scripts/tavily_cli.py")
-        );
-        assert!(calls[0].arguments.get("args").is_some());
+        assert!(calls[0]
+            .arguments
+            .get("files")
+            .and_then(|v| v.as_array())
+            .is_some());
     }
 
     #[test]
@@ -205,12 +201,12 @@ mod tests {
     #[test]
     fn extracts_fullwidth_dsml_delimiters() {
         const FULLWIDTH: &str = concat!(
-            "<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name=\"skill_activate\">",
-            "<｜｜DSML｜｜parameter name=\"name\" string=\"true\">tavily-multi-key</｜｜DSML｜｜parameter>",
+            "<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name=\"skill\">",
+            "<｜｜DSML｜｜parameter name=\"name\" string=\"true\">pdf</｜｜DSML｜｜parameter>",
             "</｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>",
         );
         let calls = extract_dsml_tool_calls(FULLWIDTH);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "skill_activate");
+        assert_eq!(calls[0].name, "skill");
     }
 }

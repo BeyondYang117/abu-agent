@@ -477,7 +477,7 @@ fn attachment_processing_hint(attachment: &Attachment) -> String {
 
     if let Some(skill) = attachment_skill_for_name(&attachment.name) {
         format!(
-            "推荐复用现成 `{skill}` Skill：需要读取或分析该文件时，先调用 skill_activate(name=\"{skill}\")，再按该 Skill 的 SKILL.md / reference / scripts 流程处理安全副本路径。"
+            "推荐复用现成 `{skill}` Skill：需要读取或分析该文件时，先调用 skill(name=\"{skill}\")，再按该 Skill 的 SKILL.md / reference / scripts 流程处理安全副本路径。"
         )
     } else {
         "此文件已保存为 Kivio 安全副本；仅在有可用读取工具或对应 Skill 时处理正文。".to_string()
@@ -647,7 +647,7 @@ mod tests {
 
         assert!(content.contains("report.PDF"));
         assert!(content.contains("PDF"));
-        assert!(content.contains("skill_activate(name=\"pdf\")"));
+        assert!(content.contains("skill(name=\"pdf\")"));
         assert!(content.contains("Kivio 安全副本路径"));
         assert!(content.contains("不要仅凭文件名臆测内容"));
     }

@@ -64,7 +64,7 @@ pub fn match_tool_call<'a>(
         return Some(exact);
     }
     // 旧名归一化：工具被移除/合并/改名后（find→glob、ls→read、list_background→bash_output、
-    // todo_update→todo_write），模型仍可能按旧名出牌。规整到现名后精确再比一次。
+    // todo_update→todo_write、skill_activate→skill），模型仍可能按旧名出牌。规整到现名后精确再比一次。
     let canonical = crate::mcp::types::canonical_tool_name(function_name);
     if canonical != function_name {
         if let Some(hit) = tools
@@ -570,12 +570,6 @@ fn effective_tool_timeout_ms(
     let default_timeout_ms = settings.chat_tools.tool_timeout_ms;
     if tool.source == "mixer" && tool.name == "mixer_generate_image" {
         return default_timeout_ms.max(crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS);
-    }
-    if tool.source == "skill" && tool.name == "skill_run_script" {
-        return crate::mcp::registry::effective_skill_script_timeout_ms(
-            default_timeout_ms,
-            arguments.get("timeout_ms").and_then(|value| value.as_u64()),
-        );
     }
     if tool.source == "native" && matches!(tool.name.as_str(), "bash" | "run_python") {
         return arguments
@@ -1127,6 +1121,8 @@ mod tests {
     #[test]
     fn native_skill_tools_match_by_openai_name() {
         let tool = native_skill_activate_tool();
+        // 现名 skill 精确命中，旧名 skill_activate 经 canonical alias 归一化命中。
+        assert!(match_tool_call(std::slice::from_ref(&tool), "skill").is_some());
         assert!(match_tool_call(&[tool], "skill_activate").is_some());
     }
 
@@ -1167,32 +1163,6 @@ mod tests {
     #[test]
     fn truncate_tool_content_for_model_keeps_short_output_unchanged() {
         assert_eq!(truncate_tool_content_for_model("abc", 3), "abc");
-    }
-
-    #[test]
-    fn skill_run_script_timeout_uses_minimum_even_when_model_requests_less() {
-        let mut settings = Settings::default();
-        settings.chat_tools.tool_timeout_ms = 60_000;
-        let tool = crate::mcp::types::native_skill_run_script_tool();
-        let arguments = serde_json::json!({ "timeout_ms": 60_000 });
-
-        assert_eq!(
-            effective_tool_timeout_ms(&settings, &tool, &arguments),
-            120_000
-        );
-    }
-
-    #[test]
-    fn skill_run_script_timeout_clamps_large_model_requests() {
-        let mut settings = Settings::default();
-        settings.chat_tools.tool_timeout_ms = 60_000;
-        let tool = crate::mcp::types::native_skill_run_script_tool();
-        let arguments = serde_json::json!({ "timeout_ms": 500_000 });
-
-        assert_eq!(
-            effective_tool_timeout_ms(&settings, &tool, &arguments),
-            300_000
-        );
     }
 
     #[test]
@@ -1242,22 +1212,13 @@ mod tests {
     }
 
     #[test]
-    fn five_minute_tool_timeout_applies_to_bash_and_skill_script() {
+    fn five_minute_tool_timeout_applies_to_bash() {
         let mut settings = Settings::default();
         settings.chat_tools.tool_timeout_ms = 300_000;
         let bash = crate::mcp::types::native_run_command_tool();
-        let skill = crate::mcp::types::native_skill_run_script_tool();
 
         assert_eq!(
             effective_tool_timeout_ms(&settings, &bash, &serde_json::json!({})),
-            300_000
-        );
-        assert_eq!(
-            effective_tool_timeout_ms(
-                &settings,
-                &skill,
-                &serde_json::json!({ "timeout_ms": 60_000 })
-            ),
             300_000
         );
     }

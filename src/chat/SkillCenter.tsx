@@ -41,7 +41,6 @@ function defaultChatTools(): ChatToolsConfig {
     skillScanPaths: [],
     skillAutoMatch: true,
     skillFallbackMode: 'progressive',
-    skillScriptAllowlist: ['python3', 'bash', 'sh', 'node'],
     disabledSkillIds: [],
     maxToolRounds: 20,
     toolTimeoutMs: 60_000,
@@ -501,7 +500,7 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                   />
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="min-w-0">
                   <div className="min-w-0">
                     <div className="mb-1.5 text-[13px] font-medium text-neutral-800 dark:text-neutral-100">
                       无 Tools 降级模式
@@ -514,29 +513,6 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                         { value: 'skill_md_only', label: '仅 SKILL.md' },
                         { value: 'legacy_full_body', label: '旧版全量注入' },
                       ]}
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="mb-1.5 text-[13px] font-medium text-neutral-800 dark:text-neutral-100">
-                      脚本解释器白名单
-                    </div>
-                    <input
-                      type="text"
-                      value={(chatTools.skillScriptAllowlist || []).join(', ')}
-                      onChange={(event) =>
-                        persistChatTools(
-                          {
-                            skillScriptAllowlist: event.target.value
-                              .split(',')
-                              .map((item) => item.trim())
-                              .filter(Boolean),
-                          },
-                          true,
-                        )
-                      }
-                      placeholder="python3, bash, sh, node"
-                      className="h-9 w-full rounded-md border border-neutral-200 bg-white px-2.5 font-mono text-[12.5px] text-neutral-800 outline-none focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-                      data-tauri-drag-region="false"
                     />
                   </div>
                 </div>

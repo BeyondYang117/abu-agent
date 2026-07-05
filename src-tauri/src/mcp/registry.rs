@@ -11,10 +11,7 @@ use crate::{
         resolve_tool_read_path, resolve_tool_write_path, FileMutationResult, NativeToolWorkspace,
         ReadFileResult,
     },
-    settings::{
-        ChatMcpServer, WebSearchProvider, CHAT_TOOL_MAX_TIMEOUT_MS, CHAT_TOOL_MIN_TIMEOUT_MS,
-        SKILL_SCRIPT_MIN_TIMEOUT_MS,
-    },
+    settings::{ChatMcpServer, WebSearchProvider},
     state::AppState,
 };
 
@@ -123,17 +120,6 @@ fn collect_python_input_files(
         });
     }
     Ok(payloads)
-}
-
-pub(crate) fn effective_skill_script_timeout_ms(
-    default_timeout_ms: u64,
-    requested_timeout_ms: Option<u64>,
-) -> u64 {
-    let base_timeout_ms = default_timeout_ms.max(SKILL_SCRIPT_MIN_TIMEOUT_MS);
-    requested_timeout_ms
-        .unwrap_or(base_timeout_ms)
-        .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS)
-        .max(base_timeout_ms)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -569,7 +555,7 @@ async fn call_skill_tool(
     }
 
     let content = match tool.name.as_str() {
-        "skill_activate" => {
+        "skill" => {
             if let Some(cache) = skill_cache.as_deref_mut() {
                 // T3: a model-activated skill narrows the tool set on later rounds.
                 cache.record_activated_allowed_tools(&record.allowed_tools);
@@ -577,30 +563,6 @@ async fn call_skill_tool(
             } else {
                 crate::skills::activate_skill(&record)
             }
-        }
-        "skill_read_file" => {
-            let relative_path = crate::skills::extract_relative_path(&arguments)?;
-            if let Some(cache) = skill_cache.as_deref_mut() {
-                cache.read_file_with_cache(&record, &relative_path)?
-            } else {
-                crate::skills::read_skill_file(&record, &relative_path)?
-            }
-        }
-        "skill_run_script" => {
-            let relative_path = crate::skills::extract_relative_path(&arguments)?;
-            let args = crate::skills::extract_script_args(&arguments);
-            let timeout_ms = effective_skill_script_timeout_ms(
-                settings.chat_tools.tool_timeout_ms,
-                arguments.get("timeout_ms").and_then(|value| value.as_u64()),
-            );
-            crate::skills::run_skill_script(
-                &record,
-                &relative_path,
-                &args,
-                timeout_ms,
-                &settings.chat_tools.skill_script_allowlist,
-            )
-            .await?
         }
         other => return Err(format!("Unknown skill tool: {other}")),
     };

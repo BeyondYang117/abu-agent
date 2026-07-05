@@ -173,10 +173,8 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
 }
 
 pub fn is_native_skill_tool_name(name: &str) -> bool {
-    matches!(
-        name,
-        "skill_activate" | "skill_read_file" | "skill_run_script"
-    )
+    // 兼容旧名 skill_activate（现规整为 skill）。
+    matches!(name, "skill" | "skill_activate")
 }
 
 pub fn is_kivio_builtin_tool(tool: &ChatToolDefinition) -> bool {
@@ -606,7 +604,7 @@ pub fn build_chat_system_prompt_with_segments(
         let mut skill_prompt = format!("User pinned skill for this message: {skill_id}");
         if tools_available {
             skill_prompt.push_str(
-                ". Activate it with skill_activate to load its full instructions for this message.",
+                ". Activate it with the skill tool to load its full instructions for this message.",
             );
         } else if matches!(fallback, "skill_md_only" | "legacy_full_body") {
             skill_prompt.push_str(". Follow the Active Skill instructions below.");
@@ -629,7 +627,7 @@ pub fn build_chat_system_prompt_with_segments(
                 &mut segments,
                 "skills",
                 "Skills",
-                "当任务匹配某个 Skill 的描述时，主动用 skill_activate 激活它——无需用户点名，描述对得上就激活。激活后会加载该 Skill 的完整步骤指令，效果明显优于自行发挥。只跳过描述明显与当前任务无关的 Skill。",
+                "当任务匹配某个 Skill 的描述时，主动用 skill 工具激活它——无需用户点名，描述对得上就激活。激活后会加载该 Skill 的完整步骤指令，效果明显优于自行发挥。只跳过描述明显与当前任务无关的 Skill。",
             );
         } else {
             append_context_segment(
@@ -637,7 +635,7 @@ pub fn build_chat_system_prompt_with_segments(
                 &mut segments,
                 "skills",
                 "Skills",
-                "When the task matches a skill's description, call skill_activate for it proactively — you don't need the user to name it; a description match is enough. Activating loads that skill's full step-by-step instructions, which beat improvising. Only skip a skill whose description clearly doesn't fit the current task.",
+                "When the task matches a skill's description, call the skill tool for it proactively — you don't need the user to name it; a description match is enough. Activating loads that skill's full step-by-step instructions, which beat improvising. Only skip a skill whose description clearly doesn't fit the current task.",
             );
         }
     }
@@ -874,7 +872,7 @@ fn native_tools_prompt(
 - 用户明确要求保存/修改/删除本地文件或给出目标路径时才动文件：小改用 edit，新建或整文件覆盖用 write。只要求“生成代码块”时直接在回答里输出，不调用 write。写入成功后简短说明路径即可，不要复述文件内容。\n\
 - 写入/编辑类工具和 bash 可能需要用户确认；memory_read（按需读 L2，L1 已注入）、memory_search（按关键词检索 L2，找不准标题时优先用它）和 memory_modify 无需确认。\n\
 - 运行环境：{os_name}，bash 经 {shell_name} 执行；命令语法须匹配该 shell（Windows 是 PowerShell：用全名 cmdlet 如 `Get-ChildItem`/`Get-Content`、环境变量写 `$env:VAR`、多条命令用 `;` 串联，别用已废弃的 `wmic`，也别对整盘做 `-Recurse` 递归扫描；Unix 用 `$VAR`、`ls`、`/`）。每次 bash 都是全新进程，cwd 不跨调用保留——切目录用 `cwd` 参数，别靠上一条 `cd`。要跑多行或带引号的代码，先用 write 写成脚本再执行，或用 run_python，别塞进 `python -c \"...\"` 这类内联命令（内联引号在各 shell 下都脆弱）。工具返回硬性拒绝时换策略，别把同一动作换几种写法反复试；失败命令不要原样重跑；别为一次性探测或清理往项目里扔临时脚本。\n\
-- bash 在宿主 shell 从项目根目录执行，非零退出码即失败；含空格的路径必须用 `cwd` 参数，禁止 `cd 路径 && 命令`；不要同时传 `cwd` 又在 command 里写 `cd ... &&`。`npm run dev` / `tauri dev` / `vite` 等长驻 dev 命令会自动后台启动并立刻返回 pid，不要重复启动。破坏性、联网、改环境的命令先说明并等确认。Skill 脚本走 skill_run_script；不要用 pip 装宿主包绕过沙盒。\n\
+- bash 在宿主 shell 从项目根目录执行，非零退出码即失败；含空格的路径必须用 `cwd` 参数，禁止 `cd 路径 && 命令`；不要同时传 `cwd` 又在 command 里写 `cd ... &&`。`npm run dev` / `tauri dev` / `vite` 等长驻 dev 命令会自动后台启动并立刻返回 pid，不要重复启动。破坏性、联网、改环境的命令先说明并等确认。Skill 附带的脚本用 run_python(沙箱)或 run_command(宿主)执行；不要用 pip 装宿主包绕过沙盒。\n\
 - run_python 在 Pyodide 沙盒运行，用于数据运算、分析、文档处理、图表，以及需要 Python 库才能产出的文件（带格式 XLSX、PDF、渲染图）；不要用它生成或打印代码答案，也不要仅为把已有内容写成文件而调用它（那用 write 写到交付目录）。代码直接写在回答里。无宿主文件系统访问；files 挂载本地文件后用 KIVIO_INPUT_FILES[n] 路径，numpy、pandas、matplotlib、pillow、openpyxl、pypdf 可直接 import。产物保存为相对路径文件名（如 report.xlsx、chart.png、summary.csv），应用会自动捕获并显示文件卡片；不要 print base64。\n\
 - {zh_live_access_hint}"
         ) + &generated_file_hint + image_generation_hint + code_discipline
@@ -900,7 +898,7 @@ fn native_tools_prompt(
 - Touch files only when the user explicitly asks to save/modify/delete local files or gives a target path: edit for small edits, write for new files or whole-file overwrites. If asked for a code block without saving, answer inline. After a write, state the path briefly; do not repeat the file content.\n\
 - Write/edit tools and bash may need user approval; memory_read (L2 on demand; L1 is auto-injected), memory_search (keyword search over L2; prefer it when you are unsure of the exact heading), and memory_modify do not.\n\
 - Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax (Windows is PowerShell: use full cmdlet names like `Get-ChildItem`/`Get-Content`, environment variables as `$env:VAR`, chain commands with `;`, do NOT use the removed `wmic`, and do NOT `-Recurse` the whole drive; Unix: `$VAR`, `ls`, `/`). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
-- bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Skill scripts go through skill_run_script; never use host pip to bypass the run_python sandbox.\n\
+- bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_python (sandbox) or run_command (host); never use host pip to bypass the run_python sandbox.\n\
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {en_live_access_hint}"
@@ -950,8 +948,8 @@ mod tests {
 
     #[test]
     fn is_native_skill_tool_name_matches_runtime_tools() {
-        assert!(is_native_skill_tool_name("skill_activate"));
-        assert!(is_native_skill_tool_name("skill_run_script"));
+        assert!(is_native_skill_tool_name("skill"));
+        assert!(is_native_skill_tool_name("skill_activate")); // 旧名兼容
         assert!(!is_native_skill_tool_name("web_search"));
     }
 
@@ -967,10 +965,10 @@ mod tests {
         // Allow only web_fetch among non-builtin/skill tools.
         retain_tools_for_allowed(&mut tools, &["web_fetch".to_string()]);
 
-        // skill_activate (skill runtime) and run_python / web_fetch (Kivio
+        // skill (skill runtime) and run_python / web_fetch (Kivio
         // built-ins) are always kept; the MCP "search" tool is dropped because
         // it is not skill/builtin and not in the allowed list.
-        assert!(tools.iter().any(|tool| tool.name == "skill_activate"));
+        assert!(tools.iter().any(|tool| tool.name == "skill"));
         assert!(tools.iter().any(|tool| tool.name == "run_python"));
         assert!(tools.iter().any(|tool| tool.name == "web_fetch"));
         assert!(!tools.iter().any(|tool| tool.name == "search"));
@@ -1193,7 +1191,7 @@ mod tests {
         apply_assistant_mcp_restrictions(&mut tools, Some(&assistant));
 
         // 原生工具保留,只有 allow-list 内的 MCP 工具保留。
-        assert!(tools.iter().any(|t| t.name == "skill_activate"));
+        assert!(tools.iter().any(|t| t.name == "skill"));
         assert!(tools.iter().any(|t| t.name == "web_fetch"));
         assert_eq!(tools.iter().filter(|t| t.source == "mcp").count(), 1);
         assert!(tools

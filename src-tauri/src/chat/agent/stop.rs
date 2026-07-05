@@ -200,7 +200,7 @@ mod tests {
     fn detects_dsml_tool_calls_before_natural_stop() {
         let message = serde_json::json!({
             "role": "assistant",
-            "content": "<|DSML|tool_calls><|DSML|invoke name=\"skill_activate\"><|DSML|parameter name=\"name\">doc</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>"
+            "content": "<|DSML|tool_calls><|DSML|invoke name=\"skill\"><|DSML|parameter name=\"name\">doc</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>"
         });
 
         assert_eq!(extract_tool_calls(&message).len(), 1);
@@ -265,9 +265,8 @@ mod tests {
     #[test]
     fn extract_tool_calls_parses_dsml_when_api_tool_calls_missing() {
         const SAMPLE: &str = concat!(
-            "<|DSML|tool_calls><|DSML|invoke name=\"skill_run_script\">",
-            "<|DSML|parameter name=\"name\" string=\"true\">tavily-multi-key</|DSML|parameter>",
-            "<|DSML|parameter name=\"relative_path\" string=\"true\">scripts/tavily_cli.py</|DSML|parameter>",
+            "<|DSML|tool_calls><|DSML|invoke name=\"skill\">",
+            "<|DSML|parameter name=\"name\" string=\"true\">pdf</|DSML|parameter>",
             "</|DSML|invoke></|DSML|tool_calls>",
         );
         let message = serde_json::json!({
@@ -278,13 +277,13 @@ mod tests {
         let calls = extract_tool_calls(&message);
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].function_name, "skill_run_script");
+        assert_eq!(calls[0].function_name, "skill");
         assert_eq!(
             calls[0]
                 .arguments
                 .get("name")
                 .and_then(|value| value.as_str()),
-            Some("tavily-multi-key")
+            Some("pdf")
         );
     }
 

@@ -178,9 +178,8 @@ function toolGlyph(toolCall: ToolCallRecord): LucideIcon | ComponentType<{ size?
       return WebSearchIcon
     case 'web_fetch':
       return Download
+    case 'skill':
     case 'skill_activate':
-    case 'skill_read_file':
-    case 'skill_run_script':
       return ScrollText
     case 'todo_write':
     case 'todo_update':
@@ -793,22 +792,8 @@ function getDuration(toolCall: ToolCallRecord): number | undefined {
 
 function getToolName(toolCall: ToolCallRecord): string {
   const raw = toolRawName(toolCall) || 'Tool'
-  const args = parsedArguments(toolCall)
-  const relativePath = typeof args?.relative_path === 'string'
-    ? args.relative_path
-    : typeof args?.relativePath === 'string'
-      ? args.relativePath
-      : ''
 
-  if (raw === 'skill_activate') return 'Activate skill'
-  if (raw === 'skill_read_file') return 'Read skill'
-  if (
-    raw === 'skill_run_script' &&
-    (relativePath.endsWith('pdf_text_digest.py') || relativePath.endsWith('pdf_extract_digest.py'))
-  ) {
-    return 'Digest PDF'
-  }
-  if (raw === 'skill_run_script') return 'Run skill'
+  if (raw === 'skill' || raw === 'skill_activate') return 'Activate skill'
   // 全英文、原形动词（不加 -ed）：直接用工具本名的动词形式，如 Read / Run / Grep / Glob。
   // 目标（文件名 + 行号 / 命令 / pattern）由 getToolTarget 追加。
   switch (raw) {
@@ -1014,15 +999,6 @@ function getArgumentPreview(toolCall: ToolCallRecord): string {
 
 function getResultPreview(toolCall: ToolCallRecord): string {
   const rawName = toolRawName(toolCall)
-  const args = parsedArguments(toolCall)
-  const relativePath = typeof args?.relative_path === 'string'
-    ? args.relative_path
-    : typeof args?.relativePath === 'string'
-      ? args.relativePath
-      : ''
-  if (rawName === 'skill_run_script' && relativePath.endsWith('pdf_extract_digest.py')) {
-    return '已提取 PDF 文本并生成摘要上下文'
-  }
   if (rawName === 'todo_write' || rawName === 'todo_update') {
     if (normalizeToolCallStatus(toolCall.status) !== 'completed') return ''
     const counts = formatTodoCounts(structuredTodoState(toolCall)?.items)

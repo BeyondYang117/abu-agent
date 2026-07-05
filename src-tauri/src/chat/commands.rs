@@ -4425,7 +4425,7 @@ fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
     if tool.source == "mcp" {
         return tool.is_read_only_tool();
     }
-    tool.source == "skill" && matches!(tool.name.as_str(), "skill_activate" | "skill_read_file")
+    tool.source == "skill" && tool.name == "skill"
 }
 
 fn apply_inline_code_request_tool_filter(
@@ -6630,8 +6630,6 @@ mod tests {
             crate::mcp::types::native_memory_modify_tool(),
             crate::mcp::types::mixer_generate_image_tool(),
             crate::mcp::types::native_skill_activate_tool(),
-            crate::mcp::types::native_skill_read_file_tool(),
-            crate::mcp::types::native_skill_run_script_tool(),
             crate::chat::ask_user::ask_user_tool(),
             crate::chat::todo::todo_write_tool(),
             readonly_mcp_tool,
@@ -6650,8 +6648,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"memory_read".to_string()));
-        assert!(names.contains(&"skill_activate".to_string()));
-        assert!(names.contains(&"skill_read_file".to_string()));
+        assert!(names.contains(&"skill".to_string()));
         assert!(names.contains(&"ask_user".to_string()));
         assert!(names.contains(&"todo_write".to_string()));
         assert!(names.contains(&"mcp__docs__search".to_string()));
@@ -6660,14 +6657,12 @@ mod tests {
         assert!(!names.contains(&"run_python".to_string()));
         assert!(!names.contains(&"memory_modify".to_string()));
         assert!(!names.contains(&"mixer_generate_image".to_string()));
-        assert!(!names.contains(&"skill_run_script".to_string()));
         assert!(!names.contains(&"mcp__fs__write".to_string()));
         assert!(blocked_names.contains(&"write".to_string()));
         assert!(blocked_names.contains(&"bash".to_string()));
         assert!(blocked_names.contains(&"run_python".to_string()));
         assert!(blocked_names.contains(&"memory_modify".to_string()));
         assert!(blocked_names.contains(&"mixer_generate_image".to_string()));
-        assert!(blocked_names.contains(&"skill_run_script".to_string()));
         assert!(blocked_names.contains(&"mcp__fs__write".to_string()));
     }
 

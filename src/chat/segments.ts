@@ -148,9 +148,8 @@ function categorizeTool(toolCall: ToolCallRecord): ToolGroupCategory {
       return 'memory'
     case 'agent':
       return 'subAgent'
+    case 'skill':
     case 'skill_activate':
-    case 'skill_read_file':
-    case 'skill_run_script':
       return 'skill'
     case 'mixer_vision':
     case 'mixer_generate_image':

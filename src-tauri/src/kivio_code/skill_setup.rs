@@ -13,12 +13,11 @@
 //! - Settings gating: skills disabled in Settings (`disabled_skill_ids`) are
 //!   dropped from the registry, exactly like the GUI's available-skills catalog
 //!   (`chat::commands` filters with `is_skill_enabled`).
-//! - Activation tools: when the registry is non-empty AND the skill runtime is
+//! - Activation tool: when the registry is non-empty AND the skill runtime is
 //!   enabled in Settings (`native_tools.skill_runtime`, gated by
-//!   `mcp::registry::skill_runtime_tools_enabled`), expose the same
-//!   `skill_activate` / `skill_read_file` / `skill_run_script` tools the GUI's
-//!   `mcp::registry::list_skill_tool_defs` adds, so the agent loop can advertise
-//!   and activate skills mid-run.
+//!   `mcp::registry::skill_runtime_tools_enabled`), expose the same `skill`
+//!   tool the GUI's `mcp::registry::list_skill_tool_defs` adds, so the agent
+//!   loop can advertise and activate skills mid-run.
 use crate::mcp::types::native_skill_tools;
 use crate::mcp::ChatToolDefinition;
 use crate::settings::{is_skill_enabled, Settings};
@@ -104,16 +103,16 @@ fn build_skill_registry_with(settings: &Settings, cwd: &Path, read_claude: bool)
     registry
 }
 
-/// Extra tool definitions to expose when skills are available: the
-/// `skill_activate` / `skill_read_file` / `skill_run_script` trio. Returns empty
-/// when the registry has no skills (nothing to activate) — matching the GUI,
-/// which only advertises the catalog when skills exist.
+/// Extra tool definitions to expose when skills are available: the single
+/// `skill` activation tool. Returns empty when the registry has no skills
+/// (nothing to activate) — matching the GUI, which only advertises the catalog
+/// when skills exist.
 ///
 /// NOTE: unlike the GUI we do not gate on `native_tools.skill_runtime` here. The
 /// headless CLI has no Settings UI to flip that flag and ships with the runtime
 /// off by default; gating on it would make a user's freshly-dropped skill silently
 /// non-activatable. Presence of at least one discovered+enabled skill is the
-/// signal that the model should be offered the activation tools.
+/// signal that the model should be offered the activation tool.
 pub fn skill_tool_definitions(registry: &SkillRegistry) -> Vec<ChatToolDefinition> {
     if registry.records.is_empty() {
         return Vec::new();
@@ -291,10 +290,8 @@ mod tests {
 
         let defs = skill_tool_definitions(&registry);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"skill_activate"));
-        assert!(names.contains(&"skill_read_file"));
-        assert!(names.contains(&"skill_run_script"));
-        // All carry the "skill" source the loop matches on for skill dispatch.
+        assert_eq!(names, vec!["skill"]);
+        // Carries the "skill" source the loop matches on for skill dispatch.
         assert!(defs.iter().all(|d| d.source == "skill"));
 
         let _ = fs::remove_dir_all(&scan_dir);

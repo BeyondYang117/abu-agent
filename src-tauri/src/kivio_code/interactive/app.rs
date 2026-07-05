@@ -1575,11 +1575,9 @@ fn tool_phase_label(tool_name: &str, arguments: &str) -> String {
             let host = str_arg("url").and_then(|u| host_of(&u));
             with_target("fetching", host)
         }
-        "skill_activate" => {
+        "skill" | "skill_activate" => {
             with_target("activating skill", str_arg("name").or_else(|| str_arg("skill")))
         }
-        "skill_read_file" => "reading skill file".to_string(),
-        "skill_run_script" => "running skill script".to_string(),
         other => format!("running {other}"),
     };
     clip(&label, 40)
@@ -1607,8 +1605,8 @@ fn summarize_arguments(tool_name: &str, arguments: &str) -> String {
         Some(obj) => obj,
         None => return String::new(),
     };
-    // skill_activate 用 name/skill 作为代表(直接显示技能名,不加 key= 前缀)。
-    if tool_name == "skill_activate" {
+    // skill 工具用 name/skill 作为代表(直接显示技能名,不加 key= 前缀)。
+    if tool_name == "skill" || tool_name == "skill_activate" {
         if let Some(name) = obj
             .get("name")
             .or_else(|| obj.get("skill"))

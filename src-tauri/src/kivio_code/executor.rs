@@ -24,9 +24,7 @@ use std::sync::Arc;
 use crate::chat::agent::execute::{ToolExecutionContext, ToolExecutor, ToolExecutorFuture};
 use crate::kivio_code::mcp_setup;
 use crate::mcp::native_registry::text_tool_result;
-use crate::mcp::registry::{
-    effective_skill_script_timeout_ms, file_mutation_tool_result, read_file_tool_result,
-};
+use crate::mcp::registry::{file_mutation_tool_result, read_file_tool_result};
 use crate::mcp::types::McpToolCallResult;
 use crate::mcp::ChatToolDefinition;
 use crate::native_tools::{
@@ -65,12 +63,11 @@ pub struct CliToolExecutor {
     /// [`mcp_setup::dispatch_mcp_tool`] before erroring.
     state: Arc<AppState>,
     /// Pre-built skill registry (discovered once when the `TurnAssembly` was
-    /// resolved). Skill tools (`skill_activate` / `skill_read_file` /
-    /// `skill_run_script`) resolve their `SkillRecord` from here, so skill
-    /// dispatch never needs an `AppHandle` (the GUI's `registry_for` does).
+    /// resolved). The `skill` runtime tool resolves its `SkillRecord` from here,
+    /// so skill dispatch never needs an `AppHandle` (the GUI's `registry_for` does).
     skill_registry: SkillRegistry,
-    /// Effective chat-tools config: supplies the skill-enabled gate, the
-    /// `skill_run_script` interpreter allowlist, and the base tool timeout.
+    /// Effective chat-tools config: supplies the skill-enabled gate and the base
+    /// tool timeout.
     chat_tools: ChatToolsConfig,
 }
 
@@ -244,13 +241,13 @@ impl ToolExecutor for CliToolExecutor {
 }
 
 impl CliToolExecutor {
-    /// Dispatch a skill tool (`skill_activate` / `skill_read_file` /
-    /// `skill_run_script`). Mirrors `mcp::registry::call_skill_tool`, but
-    /// resolves the `SkillRecord` from the pre-built `skill_registry` (so no
-    /// `AppHandle` is required) and uses the `skill_cache` exactly as the GUI
-    /// does: `skill_activate` records the activated skill's `allowed_tools` so
-    /// the loop re-permits them on the next planning round (mid-run activation),
-    /// and read/activate results are de-duplicated through the cache when present.
+    /// Dispatch the skill runtime tool (`skill`). Mirrors
+    /// `mcp::registry::call_skill_tool`, but resolves the `SkillRecord` from the
+    /// pre-built `skill_registry` (so no `AppHandle` is required) and uses the
+    /// `skill_cache` exactly as the GUI does: activation records the activated
+    /// skill's `allowed_tools` so the loop re-permits them on the next planning
+    /// round (mid-run activation), and results are de-duplicated through the
+    /// cache when present.
     async fn dispatch_skill(
         &self,
         tool: &ChatToolDefinition,
@@ -294,7 +291,7 @@ impl CliToolExecutor {
         }
 
         let content = match tool.name.as_str() {
-            "skill_activate" => {
+            "skill" => {
                 if let Some(cache) = skill_cache.as_deref_mut() {
                     // T3: a model-activated skill narrows the tool set on later
                     // rounds — record its allowed_tools before activating.
@@ -303,30 +300,6 @@ impl CliToolExecutor {
                 } else {
                     skills::activate_skill(&record)
                 }
-            }
-            "skill_read_file" => {
-                let relative_path = skills::extract_relative_path(&arguments)?;
-                if let Some(cache) = skill_cache.as_deref_mut() {
-                    cache.read_file_with_cache(&record, &relative_path)?
-                } else {
-                    skills::read_skill_file(&record, &relative_path)?
-                }
-            }
-            "skill_run_script" => {
-                let relative_path = skills::extract_relative_path(&arguments)?;
-                let args = skills::extract_script_args(&arguments);
-                let timeout_ms = effective_skill_script_timeout_ms(
-                    self.chat_tools.tool_timeout_ms,
-                    arguments.get("timeout_ms").and_then(|value| value.as_u64()),
-                );
-                skills::run_skill_script(
-                    &record,
-                    &relative_path,
-                    &args,
-                    timeout_ms,
-                    &self.chat_tools.skill_script_allowlist,
-                )
-                .await?
             }
             other => return Err(format!("Unknown skill tool: {other}")),
         };
@@ -682,12 +655,12 @@ mod tests {
         let result = executor
             .call(
                 &ctx(),
-                &skill_tool("skill_activate"),
+                &skill_tool("skill"),
                 serde_json::json!({ "name": "demo-skill" }),
                 Some(&mut cache),
             )
             .await
-            .expect("skill_activate ok");
+            .expect("skill activate ok");
 
         assert!(!result.is_error);
         // Activation returns the skill instructions / body.
@@ -704,7 +677,7 @@ mod tests {
         let again = executor
             .call(
                 &ctx(),
-                &skill_tool("skill_activate"),
+                &skill_tool("skill"),
                 serde_json::json!({ "name": "demo-skill" }),
                 Some(&mut cache),
             )
@@ -723,7 +696,7 @@ mod tests {
         let result = executor
             .call(
                 &ctx(),
-                &skill_tool("skill_activate"),
+                &skill_tool("skill"),
                 serde_json::json!({ "name": "no-such-skill" }),
                 Some(&mut cache),
             )
@@ -731,27 +704,6 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Skill not found"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn skill_read_file_reads_skill_resource() {
-        let (dir, executor) = skill_workspace();
-        let mut cache = skills::SkillRunCache::default();
-
-        let result = executor
-            .call(
-                &ctx(),
-                &skill_tool("skill_read_file"),
-                serde_json::json!({ "name": "demo-skill", "relative_path": "references/guide.md" }),
-                Some(&mut cache),
-            )
-            .await
-            .expect("skill_read_file ok");
-
-        assert!(!result.is_error);
-        assert!(result.content.contains("GUIDE CONTENTS"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
