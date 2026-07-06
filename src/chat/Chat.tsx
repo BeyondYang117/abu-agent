@@ -3350,13 +3350,9 @@ export default function Chat({ onSettingsChange }: ChatProps) {
           </div>
         ) : (
           <div className="chat-main-pane relative flex min-w-0 flex-1 flex-col">
-            {imageViewerItem ? (
-              <ChatImageViewer
-                item={imageViewerItem}
-                onClose={() => setImageViewerItem(null)}
-              />
-            ) : (
-              <>
+            {/* 图片查看器为浮层(见下方 overlay),不替换主面板 —— 否则会卸载 InputBar,
+                丢掉待发送附件 / 草稿。here 起正常内容,始终挂载。 */}
+            <>
                 <header
               className={`chat-titlebar-row ${chatTitlebarRowClass} min-w-0 gap-2 ${
                 sidebarCollapsed && usesNativeTitlebar
@@ -3605,6 +3601,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                   )}
                 </div>
               </>
+            {imageViewerItem && (
+              <div className="absolute inset-0 z-40 flex flex-col">
+                <ChatImageViewer
+                  item={imageViewerItem}
+                  onClose={() => setImageViewerItem(null)}
+                />
+              </div>
             )}
           </div>
         )}

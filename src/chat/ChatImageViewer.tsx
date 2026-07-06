@@ -43,10 +43,14 @@ export function ChatImageViewer({ item, onClose }: ChatImageViewerProps) {
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-[#f6f6f4] dark:bg-[#181818]" aria-label="图片查看">
-      <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-neutral-200/80 bg-white/90 px-4 backdrop-blur dark:border-neutral-800 dark:bg-[#202020]/92">
+      <div
+        className="flex h-[52px] shrink-0 items-center gap-2 border-b border-neutral-200/80 bg-white/90 px-4 backdrop-blur dark:border-neutral-800 dark:bg-[#202020]/92"
+        data-tauri-drag-region
+      >
         <button
           type="button"
           onClick={onClose}
+          data-tauri-drag-region="false"
           className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
           title="返回对话"
           aria-label="返回对话"
@@ -64,7 +68,10 @@ export function ChatImageViewer({ item, onClose }: ChatImageViewerProps) {
             Esc 返回对话
           </div>
         </div>
-        <div className="flex items-center gap-1 rounded-full border border-neutral-200 bg-neutral-50 p-1 dark:border-neutral-700 dark:bg-neutral-900">
+        <div
+          className="flex items-center gap-1 rounded-full border border-neutral-200 bg-neutral-50 p-1 dark:border-neutral-700 dark:bg-neutral-900"
+          data-tauri-drag-region="false"
+        >
           <button
             type="button"
             onClick={() => setZoom((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))))}

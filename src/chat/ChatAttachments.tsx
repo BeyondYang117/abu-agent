@@ -49,18 +49,18 @@ function ImagePreview({
   const isComposer = variant === 'composer'
   const loadingClass =
     isComposer
-      ? 'kv-skeleton h-20 w-28 rounded-xl'
+      ? 'kv-skeleton h-16 w-16 rounded-lg'
       : 'kv-skeleton min-h-[72px] min-w-[120px] rounded-xl'
 
   return (
-    <div className={isComposer ? 'relative h-20 w-28 overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-800' : 'relative inline-block max-w-full'}>
+    <div className={isComposer ? 'relative h-16 w-16 overflow-hidden rounded-lg bg-neutral-100 dark:bg-neutral-800' : 'relative inline-block max-w-full'}>
       {loading && <div className={loadingClass} aria-hidden="true" />}
       {!loading && src && (
         <button
           type="button"
           className={
             isComposer
-              ? 'chat-motion-fade block h-full w-full cursor-zoom-in rounded-xl p-0'
+              ? 'chat-motion-fade block h-full w-full cursor-zoom-in rounded-lg p-0'
               : 'chat-motion-fade block max-w-full cursor-zoom-in rounded-xl p-0 text-left'
           }
           onClick={() => onPreview?.(src, attachment.name)}
@@ -72,7 +72,7 @@ function ImagePreview({
             alt=""
             className={
               isComposer
-                ? 'h-full w-full rounded-xl object-contain'
+                ? 'h-full w-full rounded-lg object-cover'
                 : 'block max-h-72 max-w-[min(100%,420px)] rounded-xl object-contain'
             }
             loading="lazy"
@@ -192,7 +192,7 @@ export function ChatAttachments({
                 key={attachment.id}
                 className={
                   variant === 'composer'
-                    ? `${baseMotion} relative h-20 w-28 shrink-0`
+                    ? `${baseMotion} group relative h-16 w-16 shrink-0`
                     : `${baseMotion} relative`
                 }
                 onAnimationEnd={
@@ -215,7 +215,7 @@ export function ChatAttachments({
                     onClick={() => beginRemove(attachment.id)}
                     className={
                       variant === 'composer'
-                        ? 'absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-950/90 text-white shadow-sm transition-colors hover:bg-neutral-800'
+                        ? 'absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-950/90 text-white opacity-0 shadow-sm transition-opacity duration-150 hover:bg-neutral-800 focus-visible:opacity-100 group-hover:opacity-100'
                         : 'absolute right-2 top-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm hover:bg-black/65'
                     }
                     title="移除图片"
