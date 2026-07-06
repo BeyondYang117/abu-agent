@@ -35,7 +35,7 @@ Kivio Chat 已完成 **Model 层** 的 Provider 抽象（`chat/model`：`Languag
 这带来：
 
 1. **可维护性**：难以单独为 tool loop 写 characterization tests；新增能力（并行 tool、上下文压缩）易引入回归。
-2. **概念不一致**：团队内部缺少与行业惯例对齐的词汇（Step、stopWhen、prepareStep），与 [Vercel AI SDK Agents / Loop Control](https://ai-sdk.dev/docs/agents/loop-control) 对照时沟通成本高。
+2. **概念不一致**：团队内部缺少标准化的循环控制词汇（Step、stopWhen、prepareStep），沟通与协作成本高。
 3. **扩展性**：暂缓「连接器」类产品时，仍需稳定的 **ToolExecutor** 边界，避免未来 MCP/连接器接入时重写循环。
 
 本 PRD 定义 **Chat Agent Runtime** 的标准化目标、架构与分阶段交付，**不引入** npm `ai` / Vercel AI SDK 运行时依赖，采用 AI SDK 文档认可的 **Manual Loop Control**（Rust 侧外置工具执行）。
@@ -49,7 +49,7 @@ Kivio Chat 已完成 **Model 层** 的 Provider 抽象（`chat/model`：`Languag
 | ID | 目标 | 说明 |
 |----|------|------|
 | G1 | **编排可模块化** | Agent 循环迁入 `chat/agent/`，`commands.rs` 变薄 |
-| G2 | **语义可对照** | 内部 API 对齐 AI SDK：`Step`、`stopWhen`、`prepareStep`、`onStepFinish` |
+| G2 | **语义清晰** | 内部 API 采用标准循环控制术语：`Step`、`stopWhen`、`prepareStep`、`onStepFinish` |
 | G3 | **行为零回归（Phase B）** | 用户可见流式、工具卡片、审批、持久化格式不变 |
 | G4 | **工具边界清晰** | `ToolExecutor` trait；native/skill/mcp 实现可插拔 |
 | G5 | **可测可回归** | Agent loop 具备 Rust 单测 + 发版冒烟场景清单 |
@@ -85,7 +85,7 @@ Kivio Chat 已完成 **Model 层** 的 Provider 抽象（`chat/model`：`Languag
 ## 3. 设计原则
 
 1. **Manual Loop（外置工具执行）**  
-   模型只产出 `tool_calls`；执行、审批、超时在 Rust `ToolExecutor` 完成。不对齐 `@composio/vercel` 的「工具内置 `execute` + SDK 自动循环」。
+   模型只产出 `tool_calls`；执行、审批、超时在 Rust `ToolExecutor` 完成。不采用「工具内置 `execute` + SDK 自动循环」的模式。
 
 2. **Provider 与 Agent 分离**  
    Runtime 只通过 `LanguageModelProvider::generate/stream` 调模型；禁止在 Agent 模块内拼装 OpenAI `choices` 或 Anthropic `content` 块。
@@ -144,7 +144,7 @@ flowchart TB
 | # | 差距 | 影响 |
 |---|------|------|
 | 1 | 无 `chat/agent` 模块 | 循环与 context 压缩、附件逻辑耦合，难测 |
-| 2 | 无 `AgentStep` / `AgentRun` 类型 | 无法表达 `steps[]`、与 AI SDK `onStepFinish` 对齐 |
+| 2 | 无 `AgentStep` / `AgentRun` 类型 | 无法表达 `steps[]` 与 `onStepFinish` 语义 |
 | 3 | `prepareStep` 逻辑分散 | Skill/Assistant/降级/轮次上限 system 散落 |
 | 4 | Planning / Synthesis 双入口 | 需 `AgentPhase` + §6.1 状态机文档化 |
 | 5 | 同 step 多 tool 串行 | 延迟高于同 step 并行 execute |
@@ -253,7 +253,7 @@ sequenceDiagram
 | **ToolBatch** | 单个 ModelStep 内 0..n 个 `tool_call` 的执行（含审批、超时） |
 | **AgentStepResult** | 一个 `step_number` 的完整记录 = ModelStep + ToolBatch + 合并后的 `response_messages` |
 | **AgentPhase::ToolLoop** | 请求带 `tools`；流式 `PlanningNoDoneUntilNoTools` |
-| **AgentPhase::Synthesis** | 请求 **无** `tools`；流式 `SynthesisAlwaysDone`；在日志/metrics 中单独标记 phase，但 **`step_number` 仍递增**（对齐 AI SDK `prepareStep(stepNumber)`） |
+| **AgentPhase::Synthesis** | 请求 **无** `tools`；流式 `SynthesisAlwaysDone`；在日志/metrics 中单独标记 phase，但 **`step_number` 仍递增**（`prepareStep(stepNumber)` 的步号递增语义） |
 | **AgentPhase::Plain** | `active_tools` 为空且未启用 tool loop（等同现网跳过 `if !tools.is_empty()`） |
 | **AgentStopReason::Natural** | 经 `extract_tool_calls` **与** `pending_tool_calls_from_dsml` 均为空；结束 ToolLoop，若有可见 assistant 文本则 **不再** 发起 Synthesis |
 | **AgentStopReason::StepLimit** | ToolLoop 轮次用尽且未 Natural；注入 system 后进入 Synthesis |
@@ -265,7 +265,7 @@ sequenceDiagram
 | **AgentHost** | 注入的 emit/审批/cancel 能力，替代 agent 对 commands 的直接依赖 |
 | **response_messages** | 本 step 写入 transcript 的增量（assistant + tool） |
 
-### 6.1 Agent 运行状态机（与现网对齐）
+### 6.1 Agent 运行状态机（与现网一致）
 
 ```mermaid
 stateDiagram-v2
