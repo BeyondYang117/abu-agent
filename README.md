@@ -168,17 +168,16 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 
 Kivio checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.7.5
+## What's New — v2.7.6
 
-- **Multi-model parallel answers** — ask once, compare models side by side; independent streaming, per-column errors, pick the answer to continue from.
-- **Context compaction rework** — unified pipeline with a microcompact tier, compaction timeline UI, and accuracy-decay hints.
-- **First-run wizard** — step-by-step setup, localized from the system language, inline API-key links.
-- **Native Gemini adapter** — `generateContent` as a peer of the OpenAI and Anthropic protocols.
-- **Web search settings** — new two-pane panel (Exa MCP / Ollama / Grok added) with in-panel testing.
-- **Lens replace translation** — translations overlaid in place on the original text via RapidOCR.
-- **Chat** — edit a sent message and regenerate from it; Diagram skill with streaming Mermaid; Cursor-style tool rows.
-- **Request debug panel** — recent provider calls with masked secrets, copy-as-cURL.
-- Plus 10 verified correctness fixes from a pre-release review.
+- **Conversation branching** — fork a new conversation from any message; the source stays untouched and attachments are copied.
+- **Accurate context metering** — context usage is now anchored to real provider-reported token counts (aligned with pi), with a conservative floor so it never under-reports.
+- **Model favorites** — star models to pin them at the top of the selector.
+- **Windows: fnm / nvm node support** — Kivio loads your PowerShell profile PATH at startup, so node and CLIs installed via fnm or nvm are found without manual env injection.
+- **Windows: `run_command` via PowerShell** — shell commands run through PowerShell (pwsh → powershell) with correct quoting and UTF-8 output.
+- **Obsidian connector** — built-in Obsidian skills (markdown / bases / canvas / CLI), gated until you configure a vault.
+- **Leaner system prompt** — aligned with opencode: more concise with clearer work discipline, applied across chat and sub-agents.
+- **Reliability** — conversation index self-heal (no more lost history when starting a new chat), image preview keeps composer attachments, streaming tool-call id fix (SenseNova), auto-retry when an endpoint rejects the cache key, and a GitHub update-check fallback.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -375,19 +374,18 @@ Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是�
 
 Kivio 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.7.5
+## 新版本 —— v2.7.6
 
-- **多模型并行回答** —— 一次提问并排对比多个模型；独立流式、按列隔离错误、点选答案继续。
-- **上下文压缩重构** —— 统一管线 + microcompact 微压缩层、压缩时间线 UI、准确度衰减提示。
-- **首次引导** —— 分步设置，按系统语言本地化，内嵌 API Key 申请链接。
-- **Gemini 原生适配器** —— `generateContent` 与 OpenAI / Anthropic 协议平级接入。
-- **联网搜索设置** —— 全新两栏面板（新增 Exa MCP / Ollama / Grok），支持面板内测试。
-- **Lens 替换翻译** —— RapidOCR 定位原文，译文原位覆盖。
-- **Chat** —— 可编辑已发送消息并从该处重新生成；Diagram 技能 + Mermaid 流式渲染；Cursor 风格工具行。
-- **请求调试面板** —— 最近的服务商调用记录，密钥掩码、可复制为 cURL。
-- 另含发版前审查核实修复的 10 项正确性问题。
+- **对话分支** —— 从任意消息分叉出新对话;源对话保持不变,附件自动拷贝。
+- **上下文计量校准** —— 上下文用量以服务商返回的真实 token 数为锚点(对齐 pi),并设保守下限,绝不少报。
+- **模型收藏** —— 收藏模型,置顶到选择器最上方,快速切换。
+- **Windows:支持 fnm / nvm 的 node** —— 启动时读取 PowerShell profile 的 PATH,fnm/nvm 安装的 node 与各类 CLI 无需手动注入环境即可识别。
+- **Windows:`run_command` 改走 PowerShell** —— 命令经 PowerShell(pwsh → powershell)执行,参数引用正确、输出 UTF-8。
+- **Obsidian 连接器** —— 内置 Obsidian 技能(markdown / bases / canvas / CLI),配置 vault 后才对模型开放。
+- **系统提示词精简** —— 对齐 opencode:更精简、工作纪律更清晰,作用于 Chat 与子代理。
+- **稳定性** —— 对话索引自愈(新建对话不再丢历史)、图片预览后输入框附件不丢、流式工具调用 id 修复(商汤)、端点拒绝缓存键时自动重试、GitHub 更新检查回退。
 
-完整历史：[GitHub Releases](https://github.com/abu/kivio/releases)。
+完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
 ## 开发
 
