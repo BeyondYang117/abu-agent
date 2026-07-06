@@ -1,24 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, computeMetrics, computeSelectBar, cubicBezier } from './layout'
+import { clamp, computeMetrics, computeSelectBar } from './layout'
 
 describe('clamp', () => {
   it('clamps values within bounds', () => {
     expect(clamp(5, 0, 10)).toBe(5)
     expect(clamp(-1, 0, 10)).toBe(0)
     expect(clamp(99, 0, 10)).toBe(10)
-  })
-})
-
-describe('cubicBezier', () => {
-  it('returns boundary values at t=0 and t=1', () => {
-    expect(cubicBezier(0, 0.4, 0, 0.2, 1)).toBe(0)
-    expect(cubicBezier(1, 0.4, 0, 0.2, 1)).toBe(1)
-  })
-
-  it('returns eased progress between 0 and 1 for interior t', () => {
-    const value = cubicBezier(0.5, 0.4, 0, 0.2, 1)
-    expect(value).toBeGreaterThan(0)
-    expect(value).toBeLessThan(1)
   })
 })
 

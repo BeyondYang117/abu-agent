@@ -4,20 +4,12 @@ import { prefersReducedMotion } from './utils'
 interface TypewriterTextProps {
   text: string
   active?: boolean
-  resetKey?: string | null
-  className?: string
-  charDelayMs?: number
-  startDelayMs?: number
 }
 
-export function TypewriterText({
-  text,
-  active = true,
-  resetKey = null,
-  className,
-  charDelayMs = 42,
-  startDelayMs = 120,
-}: TypewriterTextProps) {
+const CHAR_DELAY_MS = 42
+const START_DELAY_MS = 120
+
+export function TypewriterText({ text, active = true }: TypewriterTextProps) {
   const [displayed, setDisplayed] = useState('')
   const [done, setDone] = useState(false)
 
@@ -44,23 +36,23 @@ export function TypewriterText({
       setDisplayed(text.slice(0, index))
       if (index < text.length) {
         const ch = text[index - 1]
-        const pause = ch === ' ' || ch === '—' || ch === '?' || ch === '.' ? charDelayMs + 80 : charDelayMs
+        const pause = ch === ' ' || ch === '—' || ch === '?' || ch === '.' ? CHAR_DELAY_MS + 80 : CHAR_DELAY_MS
         charTimer = setTimeout(typeNext, pause)
       } else {
         setDone(true)
       }
     }
 
-    const startTimer = setTimeout(typeNext, startDelayMs)
+    const startTimer = setTimeout(typeNext, START_DELAY_MS)
 
     return () => {
       clearTimeout(startTimer)
       clearTimeout(charTimer)
     }
-  }, [text, active, resetKey, charDelayMs, startDelayMs])
+  }, [text, active])
 
   return (
-    <span className={className}>
+    <span>
       {displayed}
       {active && !done && (
         <span className="chat-typewriter-cursor" aria-hidden="true">

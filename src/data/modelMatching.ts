@@ -148,16 +148,6 @@ export function resolveModelInfo(
   }
 }
 
-/**
- * 判断模型是否有任何已知信息（数据库匹配或用户覆盖）
- */
-export function hasModelInfo(
-  modelName: string,
-  overrides?: Record<string, ModelInfo>,
-): boolean {
-  return !!(matchModel(modelName) || overrides?.[modelName])
-}
-
 function toModelInfo(entry: DbEntry): ModelInfo {
   return {
     displayName: entry.displayName,

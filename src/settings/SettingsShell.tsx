@@ -25,6 +25,13 @@ import {
   type SkillMeta,
   type SkillDetail,
 } from '../api/tauri'
+import {
+  getSettingsCached,
+  importSettingsCached,
+  peekSettings,
+  refreshSettings,
+  saveSettingsCached,
+} from '../api/settingsCache'
 import { i18n } from './i18n'
 import {
   GeneralIcon, TranslateIcon, ScreenshotIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
@@ -313,7 +320,6 @@ function defaultChatTools(): ChatToolsConfig {
     maxToolRounds: CHAT_TOOL_DEFAULT_ROUNDS,
     toolTimeoutMs: 60_000,
     mcpIdleTimeoutMs: 600_000,
-    maxToolOutputChars: null,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
     subAgentConcurrency: 12,
     requestDebugEnabled: false,
@@ -439,8 +445,8 @@ function SkillListSection({
 }) {
   const enabledCount = skills.filter((skill) => !disabledSkillIds.includes(skill.id)).length
   return (
-    <div className="w-full max-w-[680px] space-y-2 py-2">
-      <div className="flex items-center justify-between px-1">
+    <div className="w-full space-y-2 py-2">
+      <div className="flex items-center justify-between px-0.5">
         <div className="text-[12px] font-semibold text-neutral-800 dark:text-neutral-100">{title}</div>
         <span className="kv-tag ok">{enabledCount} / {skills.length}</span>
       </div>
@@ -647,6 +653,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [reloadKey, setReloadKey] = useState(0)
   const saveSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const readyEmittedRef = useRef(false)
+  // 镜像当前草稿的序列化快照，供后台 SWR 校准回调判断“用户是否已改动”而无需闭包捕获最新 state。
+  const currentSettingsSnapshotRef = useRef('')
 
   const lang = settings?.settingsLanguage || 'zh'
   const t = i18n[lang]
@@ -656,6 +664,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const skillRuntimeEnabled = hasEnabledSkillRuntime(chatTools.nativeTools)
   // 判断是否有未保存的更改
   const hasUnsavedChanges = settings ? stableStringify(settings) !== initialSettingsSnapshot : false
+  // 同步当前草稿快照到 ref（SWR 校准回调据此判断草稿是否 pristine）。
+  useEffect(() => {
+    currentSettingsSnapshotRef.current = settings ? stableStringify(settings) : ''
+  }, [settings])
 
   // 客户端热键冲突检测:在保存前发现"两个启用功能用了同一个组合"。
   // OS 层面的冲突(Spotlight 占用 Cmd+Space 等)仍需保存后从后端拿到结果。
@@ -721,25 +733,52 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   useEffect(() => {
     let active = true
     readyEmittedRef.current = false
-    setLoading(true)
     setLoadError('')
-    api.getSettings()
-      .then((data: SettingsData) => {
-        if (!active) return
-        setSettings(data)
-        setInitialSettingsSnapshot(stableStringify(data))
-        setChatSystemPromptInteracted(false)
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (!active) return
-        console.error('Failed to load settings:', err)
-        // 不合成默认值：避免用户在错误状态下 Save 把磁盘真实数据覆盖掉
-        // 渲染分支会根据 loadError 显示重试 UI
-        const message = err instanceof Error ? err.message : String(err)
-        setLoadError(message || 'Unknown error')
-        setLoading(false)
-      })
+
+    // stale-while-revalidate：有缓存则首帧直接渲染缓存数据（不显示 loading 转圈），
+    // 再后台校准；仅当用户尚未改动草稿时才应用校准后的新值，避免覆盖正在编辑的内容。
+    const cached = peekSettings()
+    if (cached) {
+      const cachedSnapshot = stableStringify(cached)
+      // 立即种入草稿快照 ref，避免后台校准回调在 sync effect 提交前读到初始空值而误判“已改动”。
+      currentSettingsSnapshotRef.current = cachedSnapshot
+      setSettings(cached)
+      setInitialSettingsSnapshot(cachedSnapshot)
+      setChatSystemPromptInteracted(false)
+      setLoading(false)
+      void refreshSettings()
+        .then((fresh) => {
+          if (!active) return
+          const freshSnapshot = stableStringify(fresh)
+          if (freshSnapshot === cachedSnapshot) return // 磁盘无变化
+          // 用户已改动草稿（当前快照 ≠ 加载时的缓存快照）→ 保留草稿，不覆盖
+          if (currentSettingsSnapshotRef.current !== cachedSnapshot) return
+          setSettings(fresh)
+          setInitialSettingsSnapshot(freshSnapshot)
+        })
+        .catch(() => {
+          // 校准失败静默：保留已渲染的缓存数据
+        })
+    } else {
+      setLoading(true)
+      getSettingsCached()
+        .then((data: SettingsData) => {
+          if (!active) return
+          setSettings(data)
+          setInitialSettingsSnapshot(stableStringify(data))
+          setChatSystemPromptInteracted(false)
+          setLoading(false)
+        })
+        .catch((err) => {
+          if (!active) return
+          console.error('Failed to load settings:', err)
+          // 不合成默认值：避免用户在错误状态下 Save 把磁盘真实数据覆盖掉
+          // 渲染分支会根据 loadError 显示重试 UI
+          const message = err instanceof Error ? err.message : String(err)
+          setLoadError(message || 'Unknown error')
+          setLoading(false)
+        })
+    }
     api.getAppVersion()
       .then((ver: string) => {
         if (active) setAppVersion(ver)
@@ -760,13 +799,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
   }, [reloadKey])
 
+  // 首屏内容就绪信号：settings 数据就绪或错误态就绪时触发一次。用于让宿主（Chat→App）
+  // 把窗口 show 推迟到设置页可渲染之后，避免“窗口已弹出但在转圈”。传了 onReady 就触发，
+  // 不再限定 standalone（旧独立设置窗时代的遗留条件）。
   useEffect(() => {
-    if (variant !== 'standalone') return
+    if (!onReady) return
     if (!loading && !readyEmittedRef.current && (settings || loadError)) {
       readyEmittedRef.current = true
-      onReady?.()
+      onReady()
     }
-  }, [loadError, loading, onReady, settings, variant])
+  }, [loadError, loading, onReady, settings])
 
   /**
    * 刷新权限状态（macOS）
@@ -968,7 +1010,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         clearTimeout(saveSuccessTimerRef.current)
         saveSuccessTimerRef.current = null
       }
-      const savedSettings = await api.saveSettings(settings)
+      const savedSettings = await saveSettingsCached(settings)
       setSettings(savedSettings)
       setInitialSettingsSnapshot(stableStringify(savedSettings))
       onSettingsChange()
@@ -1218,7 +1260,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     try {
       const selected = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
       if (!selected || typeof selected !== 'string') return
-      const imported = await api.importSettings(selected)
+      const imported = await importSettingsCached(selected)
       setSettings(imported)
       setBackupStatus({ kind: 'ok', msg: lang === 'zh' ? '设置已导入并生效。' : 'Settings imported and applied.' })
     } catch (err) {
@@ -1229,7 +1271,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const handleRestartOnboarding = useCallback(async () => {
     if (!settings) return
     try {
-      const saved = await api.saveSettings({
+      const saved = await saveSettingsCached({
         ...settings,
         onboardingStatus: 'pending',
       })

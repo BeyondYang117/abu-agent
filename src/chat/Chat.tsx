@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { GitBranch, Wrench, X } from 'lucide-react'
 import { Sidebar, type ExtensionsNavItem } from './Sidebar'
 import { ChatImageViewer } from './ChatImageViewer'
@@ -55,6 +55,7 @@ import {
   type ChatToolProgressPayload,
   type ChatUserPromptPayload,
 } from '../api/tauri'
+import { getSettingsCached, refreshSettings, saveSettingsCached } from '../api/settingsCache'
 import { OnboardingShell } from '../onboarding/OnboardingShell'
 import type { SettingsShellHandle, SettingsTab } from '../settings/SettingsShell'
 import type { Lang } from '../settings/i18n'
@@ -63,7 +64,6 @@ import {
   CHAT_MIN_SIZE_COLLAPSED,
   CHAT_MIN_SIZE_EXPANDED,
   forgetRememberedChatRoute,
-  getChatPlatformWindowSize,
   getRememberedChatSidebarCollapsed,
   isChatOnboardingPath,
   rememberChatSidebarCollapsed,
@@ -106,7 +106,12 @@ const AssistantCenter = lazy(() => import('./AssistantCenter').then((module) => 
   default: module.AssistantCenter,
 })))
 
-const SettingsShell = lazy(() => import('../settings/SettingsShell').then((module) => ({
+// 共享 import thunk：lazy 与空闲预取复用同一次动态 import（模块缓存保证只加载一次）。
+// SettingsShell 依赖图很大（Markdown/KaTeX、各设置面板），dev 下首次点开设置要现场编译
+// 数百个模块而转圈数秒；挂载后空闲预取把这段成本移到用户点击之前。
+const importSettingsShell = () => import('../settings/SettingsShell')
+
+const SettingsShell = lazy(() => importSettingsShell().then((module) => ({
   default: module.SettingsShell,
 })))
 
@@ -138,6 +143,12 @@ type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'onboardi
 
 interface ChatProps {
   onSettingsChange: () => void
+  /**
+   * 首屏内容就绪回调（一次性）。宿主（App）据此把窗口 show 从“App 挂载即弹出”推迟到
+   * “Chat 首屏可渲染”，避免窗口弹出后仍在转圈。初始视图为设置页时，就绪信号来自
+   * SettingsShell 的 onReady；其余视图挂载后即视为骨架就绪。
+   */
+  onContentReady?: () => void
 }
 
 function hashPath(): string {
@@ -590,7 +601,7 @@ type SendMessageOptions = {
   conversationOverride?: Conversation | null
 }
 
-export default function Chat({ onSettingsChange }: ChatProps) {
+export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [chatView, setChatView] = useState<ChatView>(() => {
     const path = hashPath()
     if (isChatOnboardingRoute(path)) return 'onboarding'
@@ -599,6 +610,19 @@ export default function Chat({ onSettingsChange }: ChatProps) {
     if (isChatSkillCenterPath(path)) return 'skill'
     return 'conversation'
   })
+  // 首屏就绪只发一次。初始视图是设置页则等 SettingsShell.onReady；否则挂载后即发。
+  const contentReadyEmittedRef = useRef(false)
+  const emitContentReady = useCallback(() => {
+    if (contentReadyEmittedRef.current) return
+    contentReadyEmittedRef.current = true
+    onContentReady?.()
+  }, [onContentReady])
+  const initialViewIsSettingsRef = useRef(chatView === 'settings')
+  useLayoutEffect(() => {
+    // 初始设置页把就绪信号委托给 SettingsShell.onReady（数据就绪才可渲染）；
+    // 其余初始视图（会话/助手/技能/引导）挂载即有骨架，直接发信号。
+    if (!initialViewIsSettingsRef.current) emitContentReady()
+  }, [emitContentReady])
   const [currentConversation, setCurrentConversation] = useState<Awaited<
     ReturnType<typeof chatApi.getConversation>
   > | null>(null)
@@ -1018,7 +1042,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       return
     }
     try {
-      const settings = await api.getSettings()
+      const settings = await getSettingsCached()
       const chatTools = settings.chatTools
       setMcpServers(chatTools?.servers ?? [])
       setApprovalPolicy(chatTools?.approvalPolicy || 'readonly_auto_sensitive_confirm')
@@ -1078,8 +1102,11 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   const handleApprovalPolicyChange = useCallback(async (nextApprovalPolicy: string) => {
     setApprovalPolicy(nextApprovalPolicy)
     try {
-      const settings = await api.getSettings()
-      await api.saveSettings({
+      // 读-改-写：必须现读后端最新态（refreshSettings），不能用缓存快照。否则若后端 OAuth
+      // 令牌刷新（mcp/manager.rs persist_refreshed_server）已改写 servers[].auth 而缓存未失效，
+      // 这次整体保存会把刷新后的 token 覆盖回旧值。
+      const settings = await refreshSettings()
+      await saveSettingsCached({
         ...settings,
         chatTools: {
           ...settings.chatTools,
@@ -1095,13 +1122,15 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const handleToggleMcpServer = useCallback(async (serverId: string) => {
     try {
-      const settings = await api.getSettings()
+      // 读-改-写：现读后端最新态，避免用缓存快照 map servers[] 时把后端刚 OAuth 刷新的
+      // token 覆盖回旧值（见 handleApprovalPolicyChange 注释）。
+      const settings = await refreshSettings()
       const servers = (settings.chatTools?.servers ?? []).map((server) =>
         server.id === serverId ? { ...server, enabled: !server.enabled } : server,
       )
       // 乐观更新本地列表（开关即时反馈），保存后由 refreshToolIndicator 校正。
       setMcpServers(servers)
-      await api.saveSettings({
+      await saveSettingsCached({
         ...settings,
         chatTools: { ...settings.chatTools, servers },
       })
@@ -1194,7 +1223,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
 
   const loadDefaultModel = useCallback(async () => {
     try {
-      const settings = await api.getSettings()
+      const settings = await getSettingsCached()
       setUiLang((settings.settingsLanguage as Lang) || 'zh')
       const chatDefault = settings.defaultModels.chat
       if (chatDefault.providerId) {
@@ -1247,6 +1276,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
       void refreshToolIndicator()
     }, 1500)
   }, [refreshToolIndicator])
+
+  // 空闲预取设置页 chunk，避免首次点开设置时才触发 lazy import 而长时间转圈。
+  useEffect(() => {
+    return scheduleIdleTask(() => {
+      void importSettingsShell()
+    }, 2500)
+  }, [])
 
   const openEmbeddedSettings = useCallback((tab: SettingsTab = 'chat') => {
     setSettingsInitialTab(tab)
@@ -2083,7 +2119,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   useEffect(() => {
     if (!isTauriRuntime()) return
     let cancelled = false
-    void api.getSettings().then((settings) => {
+    void getSettingsCached().then((settings) => {
       if (cancelled) return
       if (settings.onboardingStatus === 'pending' && !isChatOnboardingRoute(hashPath())) {
         syncOnboardingRoute()
@@ -3191,14 +3227,13 @@ export default function Chat({ onSettingsChange }: ChatProps) {
   }, [setSidebarCollapsedPersisted])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+    if (!isTauriRuntime()) return
     let cancelled = false
 
     void (async () => {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       const { LogicalSize } = await import('@tauri-apps/api/dpi')
-      const baseMin = sidebarCollapsed ? CHAT_MIN_SIZE_COLLAPSED : CHAT_MIN_SIZE_EXPANDED
-      const min = getChatPlatformWindowSize(baseMin)
+      const min = sidebarCollapsed ? CHAT_MIN_SIZE_COLLAPSED : CHAT_MIN_SIZE_EXPANDED
       const win = getCurrentWindow()
       await win.setMinSize(new LogicalSize(min.width, min.height))
       if (cancelled) return
@@ -3323,6 +3358,7 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                 reserveTrafficLightSpace={sidebarCollapsed && usesNativeTitlebar}
                 onClose={handleSettingsClose}
                 onSettingsChange={handleSettingsChange}
+                onReady={emitContentReady}
               />
             </Suspense>
           </div>
@@ -3446,8 +3482,8 @@ export default function Chat({ onSettingsChange }: ChatProps) {
                         `Start in “${selectedProject.name}”`
                       ) : (
                         <TypewriterText
+                          key={emptyHeroGreeting.key}
                           text={emptyHeroGreeting.text}
-                          resetKey={emptyHeroGreeting.key}
                           active={showEmptyHero}
                         />
                       )}

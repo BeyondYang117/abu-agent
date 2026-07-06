@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasModelInfo, matchModel, resolveModelInfo } from './modelMatching'
+import { matchModel, resolveModelInfo } from './modelMatching'
 
 describe('matchModel', () => {
   it('returns null for blank model names', () => {
@@ -68,14 +68,6 @@ describe('resolveModelInfo', () => {
     })
     expect(resolved.displayName).toBe('Local')
     expect(resolved.contextWindow).toBe(8192)
-  })
-})
-
-describe('hasModelInfo', () => {
-  it('returns true when database or overrides provide info', () => {
-    expect(hasModelInfo('gpt-4o')).toBe(true)
-    expect(hasModelInfo('unknown', { unknown: { displayName: 'X' } })).toBe(true)
-    expect(hasModelInfo('unknown')).toBe(false)
   })
 })
 

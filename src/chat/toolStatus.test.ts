@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isToolCallErrorStatus, normalizeToolCallStatus } from './toolStatus'
+import { normalizeToolCallStatus } from './toolStatus'
 
 describe('normalizeToolCallStatus', () => {
   it('maps running aliases to running', () => {
@@ -29,18 +29,5 @@ describe('normalizeToolCallStatus', () => {
     expect(normalizeToolCallStatus(undefined)).toBe('pending')
     expect(normalizeToolCallStatus('queued')).toBe('pending')
     expect(normalizeToolCallStatus('unknown')).toBe('pending')
-  })
-})
-
-describe('isToolCallErrorStatus', () => {
-  it('returns true only for error statuses', () => {
-    expect(isToolCallErrorStatus('error')).toBe(true)
-    expect(isToolCallErrorStatus('failed')).toBe(true)
-  })
-
-  it('does not treat success as error (regression: tool UI red preview)', () => {
-    expect(isToolCallErrorStatus('success')).toBe(false)
-    expect(isToolCallErrorStatus('completed')).toBe(false)
-    expect(isToolCallErrorStatus('running')).toBe(false)
   })
 })

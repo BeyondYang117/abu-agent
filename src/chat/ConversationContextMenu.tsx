@@ -10,7 +10,6 @@ export interface ConversationMenuAnchor {
 
 interface ConversationContextMenuProps {
   anchor: ConversationMenuAnchor
-  conversationTitle: string
   conversationFolder?: string
   conversationProjectId?: string | null
   conversationSetId?: string | null

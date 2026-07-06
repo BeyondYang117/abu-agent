@@ -2,8 +2,7 @@
 // 后端命令在 src-tauri/src/chat/knowledge_base/。
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-
-const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+import { isTauriRuntime } from '../api/tauri'
 
 export interface KnowledgeLibrary {
   id: string
@@ -41,7 +40,7 @@ export interface KbIndexEvent {
 }
 
 export async function kbListLibraries(): Promise<KnowledgeLibrary[]> {
-  if (!isTauri()) return []
+  if (!isTauriRuntime()) return []
   return invoke<KnowledgeLibrary[]>('kb_list_libraries')
 }
 
@@ -62,7 +61,7 @@ export async function kbDeleteLibrary(kbId: string): Promise<void> {
 }
 
 export async function kbListDocuments(kbId: string): Promise<KnowledgeDocument[]> {
-  if (!isTauri()) return []
+  if (!isTauriRuntime()) return []
   return invoke<KnowledgeDocument[]>('kb_list_documents', { kbId })
 }
 
@@ -94,6 +93,6 @@ export async function kbUpdateEmbedding(
 }
 
 export async function onKbIndex(handler: (ev: KbIndexEvent) => void): Promise<UnlistenFn> {
-  if (!isTauri()) return () => {}
+  if (!isTauriRuntime()) return () => {}
   return listen<KbIndexEvent>('kb-index', (event) => handler(event.payload))
 }

@@ -19,13 +19,23 @@ import { ProjectContextMenu } from './ProjectContextMenu'
 import { ProjectDialog } from './ProjectDialog'
 import { SetContextMenu } from './SetContextMenu'
 import { SetDialog } from './SetDialog'
-import { api } from '../api/tauri'
+import { getSettingsCached } from '../api/settingsCache'
+import { IconButton } from '../components/Button'
 import { chatApi } from './api'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { chatTitlebarMacInsetClass, chatTitlebarRowClass, isMac } from './platform'
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
-import { hasChatDisplayName, resolveChatUserProfile, type ChatUserProfile } from './userProfile'
+import type { ChatUserProfile } from './types'
 import { UserAvatar } from './UserAvatar'
+
+function resolveChatUserProfile(
+  chat?: { userDisplayName?: string; userAvatar?: string } | null,
+): ChatUserProfile {
+  return {
+    displayName: chat?.userDisplayName?.trim() || '',
+    avatarUrl: chat?.userAvatar?.trim() || '',
+  }
+}
 
 const modLabel = isMac ? '⌘' : 'Ctrl'
 
@@ -124,7 +134,7 @@ function SidebarUserFooter({
       <div className="flex items-center gap-2 px-2 py-1.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <UserAvatar profile={profile} size={28} />
-          {hasChatDisplayName(profile) && (
+          {profile.displayName.length > 0 && (
             <span
               className="min-w-0 truncate text-[13px] text-neutral-700 dark:text-neutral-300"
               title={profile.displayName}
@@ -446,7 +456,7 @@ export const Sidebar = memo(function Sidebar({
 
   useEffect(() => {
     let cancelled = false
-    void api.getSettings().then((settings) => {
+    void getSettingsCached().then((settings) => {
       if (!cancelled) setUserProfile(resolveChatUserProfile(settings.chat))
     }).catch((err) => {
       console.error('Failed to load chat user profile:', err)
@@ -918,36 +928,30 @@ export const Sidebar = memo(function Sidebar({
               <div className="flex shrink-0 items-center gap-1">
                 {activeTab === 'conversations' && (
                   <>
-                    <button
+                    <IconButton
                       ref={sectionMenuButtonRef}
-                      type="button"
+                      size="sm"
                       onClick={openSectionMenu}
-                      className={`rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
-                        sectionMenuAnchor
-                          ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200'
-                          : ''
-                      }`}
-                      aria-label="对话列表操作"
+                      className={sectionMenuAnchor ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200' : ''}
+                      label="对话列表操作"
                       aria-haspopup="menu"
                       aria-expanded={sectionMenuAnchor !== null}
                     >
                       <MoreHorizontal size={15} />
-                    </button>
-                    <button
-                      type="button"
+                    </IconButton>
+                    <IconButton
+                      size="sm"
                       onClick={onNewConversation}
-                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                      aria-label="新建聊天"
-                      title="新建聊天"
+                      label="新建聊天"
                     >
                       <SquarePen size={15} strokeWidth={1.75} />
-                    </button>
+                    </IconButton>
                   </>
                 )}
                 {activeTab === 'sets' && (
                   <>
-                    <button
-                      type="button"
+                    <IconButton
+                      size="sm"
                       onClick={() => {
                         setCollapsedSetIds((previous) => {
                           const next = new Set(previous)
@@ -959,27 +963,23 @@ export const Sidebar = memo(function Sidebar({
                           return next
                         })
                       }}
-                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                      title={allVisibleSetsCollapsed ? '展开全部集' : '折叠全部集'}
-                      aria-label={allVisibleSetsCollapsed ? '展开全部集' : '折叠全部集'}
+                      label={allVisibleSetsCollapsed ? '展开全部集' : '折叠全部集'}
                     >
                       <MoreHorizontal size={15} />
-                    </button>
-                    <button
-                      type="button"
+                    </IconButton>
+                    <IconButton
+                      size="sm"
                       onClick={openCreateSetDialog}
-                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                      title="新建集"
-                      aria-label="新建集"
+                      label="新建集"
                     >
                       <Plus size={15} strokeWidth={2} />
-                    </button>
+                    </IconButton>
                   </>
                 )}
                 {activeTab === 'projects' && (
                   <>
-                    <button
-                      type="button"
+                    <IconButton
+                      size="sm"
                       onClick={() => {
                         setCollapsedProjectIds((previous) => {
                           const next = new Set(previous)
@@ -991,21 +991,18 @@ export const Sidebar = memo(function Sidebar({
                           return next
                         })
                       }}
-                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                      title={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
-                      aria-label={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
+                      label={allVisibleProjectsCollapsed ? '展开全部项目' : '折叠全部项目'}
                     >
                       <MoreHorizontal size={15} />
-                    </button>
-                    <button
-                      type="button"
+                    </IconButton>
+                    <IconButton
+                      size="sm"
                       onClick={openCreateProjectDialog}
-                      className="rounded-md p-0.5 text-neutral-400 transition-colors hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
+                      label="新建项目"
                       title={`新建项目 (${modLabel}P)`}
-                      aria-label="新建项目"
                     >
                       <FolderPlus size={15} strokeWidth={1.75} />
-                    </button>
+                    </IconButton>
                   </>
                 )}
               </div>
@@ -1067,23 +1064,23 @@ export const Sidebar = memo(function Sidebar({
                             />
                             <span className="min-w-0 truncate">{project.name}</span>
                           </button>
-                          <button
-                            type="button"
+                          <IconButton
+                            size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
                               openProjectMenu(project.id, e.currentTarget)
                             }}
-                            className={`shrink-0 rounded-md p-0.5 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                            className={`shrink-0 transition-opacity ${
                               projectMenuState?.projectId === project.id
                                 ? 'opacity-100'
                                 : 'opacity-0 group-hover:opacity-100'
                             }`}
-                            aria-label="项目操作"
+                            label="项目操作"
                           >
                             <MoreHorizontal size={15} />
-                          </button>
-                          <button
-                            type="button"
+                          </IconButton>
+                          <IconButton
+                            size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
                               setCollapsedProjectIds((previous) => {
@@ -1093,12 +1090,11 @@ export const Sidebar = memo(function Sidebar({
                               })
                               onSelectProject(project)
                             }}
-                            className="mr-1 shrink-0 rounded-md p-0.5 text-neutral-400 opacity-0 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                            aria-label="新建聊天"
-                            title="新建聊天"
+                            className="mr-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                            label="新建聊天"
                           >
                             <SquarePen size={15} strokeWidth={1.75} />
-                          </button>
+                          </IconButton>
                         </div>
 
                       {!collapsedProject && previewConversations.length > 0 && (
@@ -1208,21 +1204,21 @@ export const Sidebar = memo(function Sidebar({
                               />
                               <span className="min-w-0 truncate">{set.name}</span>
                             </button>
-                            <button
-                              type="button"
+                            <IconButton
+                              size="sm"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 openSetMenu(set.id, e.currentTarget)
                               }}
-                              className={`shrink-0 rounded-md p-0.5 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                              className={`shrink-0 transition-opacity ${
                                 setMenuState?.setId === set.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                               }`}
-                              aria-label="集操作"
+                              label="集操作"
                             >
                               <MoreHorizontal size={15} />
-                            </button>
-                            <button
-                              type="button"
+                            </IconButton>
+                            <IconButton
+                              size="sm"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 setCollapsedSetIds((previous) => {
@@ -1232,12 +1228,11 @@ export const Sidebar = memo(function Sidebar({
                                 })
                                 onSelectSet(set)
                               }}
-                              className="mr-1 shrink-0 rounded-md p-0.5 text-neutral-400 opacity-0 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 group-hover:opacity-100 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200"
-                              aria-label="在此集新建聊天"
-                              title="在此集新建聊天"
+                              className="mr-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                              label="在此集新建聊天"
                             >
                               <SquarePen size={15} strokeWidth={1.75} />
-                            </button>
+                            </IconButton>
                           </div>
 
                           {!collapsedSet && previewConversations.length > 0 && (

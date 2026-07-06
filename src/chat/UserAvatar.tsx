@@ -1,4 +1,4 @@
-import type { ChatUserProfile } from './userProfile'
+import type { ChatUserProfile } from './types'
 
 const APP_ICON_SRC = '/icon.png'
 

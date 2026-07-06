@@ -1,7 +1,8 @@
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { Settings as SettingsIcon, Cpu } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
-import { api } from './api/tauri'
+import { api, isTauriRuntime } from './api/tauri'
+import { getSettingsCached } from './api/settingsCache'
 import { i18n, type Lang } from './settings/i18n'
 import { useWindowInteractionFocus } from './utils/windowFocus'
 import { ChatWindowHost } from './chat/ChatWindowHost'
@@ -22,10 +23,6 @@ import './index.css'
 
 const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
-
-function isTauriRuntime(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-}
 
 /**
  * 翻译器主组件
@@ -244,7 +241,7 @@ function App() {
 
   // 应用主题设置
   const applyTheme = async () => {
-    const settings = await api.getSettings()
+    const settings = await getSettingsCached()
     const nextMode = (settings.theme || 'system') as 'system' | 'light' | 'dark'
     setThemeMode(nextMode)
     const isDark = nextMode === 'dark' || (nextMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -355,11 +352,43 @@ function App() {
     }
   }, [persistChatWindowGeometry])
 
+  // 首次创建 chat 窗口时后端保持 hidden，把 show 交给前端；此处再把 show 从“App 挂载即弹出”
+  // 推迟到“Chat 首屏内容就绪”（onContentReady → revealChatWindowNow），避免窗口弹出后还在转圈。
+  const revealedRef = useRef(false)
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const revealChatWindowNow = useCallback(() => {
+    if (revealedRef.current) return
+    revealedRef.current = true
+    if (revealTimerRef.current !== undefined) {
+      clearTimeout(revealTimerRef.current)
+      revealTimerRef.current = undefined
+    }
+    void revealChatWindow()
+  }, [revealChatWindow])
+
   useLayoutEffect(() => {
     if (mode !== 'chat') return
     if (!isTauriRuntime()) return
-    void revealChatWindow()
-  }, [mode, revealChatWindow])
+    // 不变量：chat 是专用窗口，其 hash 恒为 #chat（含子路由），mode 一旦为 'chat' 便不再变。
+    // 本兜底据此成立——若未来 chat 窗允许 mode 离开 'chat'，cleanup 会清掉未触发的兜底 timer
+    // 而新分支早退，可能导致窗口永久 hidden；届时需改为窗口存活期内独立保证 reveal。
+    // 已 reveal 过（防御性：正常不会二次进入）→ 直接校正一次几何/可见性。
+    if (revealedRef.current) {
+      void revealChatWindow()
+      return
+    }
+    // 兜底：内容就绪信号 3s 内未到达（chunk 加载失败 / 组件抛错被 ErrorBoundary 接住 / 信号丢失）
+    // 也强制 show，绝不让窗口永久 hidden。
+    revealTimerRef.current = setTimeout(() => {
+      revealChatWindowNow()
+    }, 3000)
+    return () => {
+      if (revealTimerRef.current !== undefined) {
+        clearTimeout(revealTimerRef.current)
+        revealTimerRef.current = undefined
+      }
+    }
+  }, [mode, revealChatWindow, revealChatWindowNow])
 
   useEffect(() => {
     if (mode !== 'chat') return
@@ -452,7 +481,7 @@ function App() {
           }
         >
           <ChatErrorBoundary>
-            <Chat onSettingsChange={applyTheme} />
+            <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>

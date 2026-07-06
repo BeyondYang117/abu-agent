@@ -1,4 +1,4 @@
-/** Built-in agent tool-approval policies. Shared by InputBar + PermissionPicker (kept in its
+/** Built-in agent tool-approval policies. Used by PermissionPicker (kept in its
  *  own module so component files only export components — react-refresh lint). */
 export const APPROVAL_POLICY_OPTIONS = [
   {
@@ -20,10 +20,3 @@ export const APPROVAL_POLICY_OPTIONS = [
     description: '工具调用自动放行',
   },
 ]
-
-export function approvalPolicyOption(policy?: string) {
-  return (
-    APPROVAL_POLICY_OPTIONS.find((option) => option.value === policy)
-    ?? APPROVAL_POLICY_OPTIONS[1]
-  )
-}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, ExternalLink, X, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, ExternalLink, X } from 'lucide-react'
 import { formatHotkey, getPlatform, type SelectOption } from './utils'
 
 const MENU_GAP = 6
@@ -185,13 +185,12 @@ export function Select({ value, onChange, options, className = '' }: {
 /**
  * 文本输入 — 默认 sans，需要等宽时调用方自行加 font-mono
  */
-export function Input({ value, onChange, type = 'text', placeholder = '', className = '', list, mono = false, ...props }: {
+export function Input({ value, onChange, type = 'text', placeholder = '', className = '', mono = false, ...props }: {
   value: string
   onChange: (v: string) => void
   type?: string
   placeholder?: string
   className?: string
-  list?: string
   /** 启用 font-mono（仅 baseUrl/apiKey/model 名等代码型字段使用） */
   mono?: boolean
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>) {
@@ -201,7 +200,6 @@ export function Input({ value, onChange, type = 'text', placeholder = '', classN
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      list={list}
       className={`kv-input w-full ${mono ? 'mono' : ''} ${className}`}
       data-tauri-drag-region="false"
       {...props}
@@ -426,37 +424,3 @@ export function HotkeyInput({
   )
 }
 
-/**
- * 区块标题 — 小号灰 uppercase + 左侧 brand 细色条
- * 让标题谦逊，把视觉重心交给卡片本身
- */
-export function SectionTitle({ children, icon: Icon }: { children: ReactNode; icon?: LucideIcon }) {
-  return (
-    <div className="kv-group-title flex items-center gap-1.5">
-      {Icon && <Icon size={12} className="text-neutral-500 dark:text-neutral-400" />}
-      <span>{children}</span>
-    </div>
-  )
-}
-
-/**
- * 分段控制器标签按钮（轻量样式）
- */
-export function TabButton({ active, onClick, label }: {
-  active: boolean
-  onClick: () => void
-  label: string
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-1 px-3 py-1.5 rounded-md text-[12px] font-medium transition-all duration-200 ${active
-        ? 'bg-white dark:bg-neutral-700 text-neutral-900 dark:text-white shadow-sm'
-        : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-300'
-        }`}
-      data-tauri-drag-region="false"
-    >
-      {label}
-    </button>
-  )
-}

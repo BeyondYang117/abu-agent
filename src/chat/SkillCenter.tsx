@@ -24,8 +24,10 @@ import {
   type SkillDetail,
   type SkillMeta,
 } from '../api/tauri'
+import { getSettingsCached, refreshSettings, saveSettingsCached } from '../api/settingsCache'
 import { usesNativeTitlebar } from './platform'
 import { Select } from '../settings/components'
+import { Button, IconButton } from '../components/Button'
 
 interface SkillCenterProps {
   /** 返回对话视图 */
@@ -45,7 +47,6 @@ function defaultChatTools(): ChatToolsConfig {
     maxToolRounds: 20,
     toolTimeoutMs: 60_000,
     mcpIdleTimeoutMs: 600_000,
-    maxToolOutputChars: null,
     approvalPolicy: 'readonly_auto_sensitive_confirm',
     nativeTools: defaultNativeTools(),
   }
@@ -234,7 +235,7 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
     let cancelled = false
     void (async () => {
       try {
-        const loaded = await api.getSettings()
+        const loaded = await getSettingsCached()
         if (cancelled) return
         settingsRef.current = loaded
         setSettings(loaded)
@@ -251,7 +252,18 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
 
   const flushSave = useCallback(async (next: Settings) => {
     try {
-      const saved = await api.saveSettings(next)
+      // 整体保存前现读后端最新态，仅把 servers 取自 fresh：servers[].auth/headers 会被后端
+      // OAuth 刷新独立改写（mcp/manager.rs），若用本地快照整体保存会覆盖回旧 token。
+      // 其余 chatTools 字段（技能开关/扫描路径等）是本任务编辑值，仍以本地 next 为准。
+      const fresh = await refreshSettings()
+      const merged: Settings = {
+        ...next,
+        chatTools: {
+          ...(next.chatTools ?? defaultChatTools()),
+          servers: fresh.chatTools?.servers ?? next.chatTools?.servers ?? [],
+        },
+      }
+      const saved = await saveSettingsCached(merged)
       settingsRef.current = saved
       onSkillsChanged?.()
     } catch (err) {
@@ -366,9 +378,6 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
     [skills, normalizedQuery],
   )
 
-  const headerActionClass =
-    'grid size-9 shrink-0 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 disabled:opacity-50 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100'
-
   return (
     <div className="assistant-center-root flex h-full min-h-0 flex-col text-neutral-900 dark:text-neutral-100">
       {/* 顶栏：与聊天主区同底色、无分隔；可拖拽，右侧避开窗口按钮 */}
@@ -378,15 +387,16 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
         }`}
         data-tauri-drag-region
       >
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0"
           onClick={onClose}
-          className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-neutral-600 transition-colors hover:bg-black/[0.06] hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100"
           data-tauri-drag-region="false"
         >
           <ArrowLeft size={15} />
           返回聊天
-        </button>
+        </Button>
         <div className="h-full min-w-5 flex-1" data-tauri-drag-region />
       </div>
 
@@ -403,47 +413,39 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                 管理内置与用户技能。启用后可在聊天中按需调用。
               </p>
               <div className="flex shrink-0 items-center gap-0.5">
-                <button
-                  type="button"
+                <IconButton
+                  size="lg"
+                  label="导入文件夹"
                   onClick={() => void handleImportSkill()}
-                  className={headerActionClass}
-                  title="导入文件夹"
-                  aria-label="导入文件夹"
                   data-tauri-drag-region="false"
                 >
                   <FolderOpen size={17} />
-                </button>
-                <button
-                  type="button"
+                </IconButton>
+                <IconButton
+                  size="lg"
+                  label="导入 zip"
                   onClick={() => void handleImportSkillZip()}
-                  className={headerActionClass}
-                  title="导入 zip"
-                  aria-label="导入 zip"
                   data-tauri-drag-region="false"
                 >
                   <Download size={17} />
-                </button>
-                <button
-                  type="button"
+                </IconButton>
+                <IconButton
+                  size="lg"
+                  label="打开 Skill 文件夹"
                   onClick={() => void handleOpenSkillFolder()}
-                  className={headerActionClass}
-                  title="打开 Skill 文件夹"
-                  aria-label="打开 Skill 文件夹"
                   data-tauri-drag-region="false"
                 >
                   <ExternalLink size={17} />
-                </button>
-                <button
-                  type="button"
+                </IconButton>
+                <IconButton
+                  size="lg"
+                  label="刷新列表"
                   onClick={() => void refreshChatSkills()}
                   disabled={skillsLoading}
-                  className={headerActionClass}
-                  title="刷新列表"
-                  aria-label="刷新列表"
                   data-tauri-drag-region="false"
                 >
                   <RefreshCw size={17} className={skillsLoading ? 'animate-spin' : ''} />
-                </button>
+                </IconButton>
               </div>
             </div>
           </div>
@@ -534,24 +536,22 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                           className="h-9 w-full rounded-md border border-neutral-200 bg-white px-2.5 font-mono text-[12.5px] text-neutral-800 outline-none focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
                           data-tauri-drag-region="false"
                         />
-                        <button
-                          type="button"
-                          className="grid size-9 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30 dark:hover:text-red-300"
+                        <IconButton
+                          size="lg"
+                          variant="danger"
+                          label="移除路径"
                           onClick={() => {
                             const next = chatTools.skillScanPaths.filter((_, i) => i !== index)
                             persistChatTools({ skillScanPaths: next })
                             void refreshChatSkills(next)
                           }}
                           data-tauri-drag-region="false"
-                          aria-label="移除路径"
                         >
                           <Trash2 size={14} />
-                        </button>
+                        </IconButton>
                       </div>
                     ))}
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 text-[12.5px] font-medium text-neutral-600 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                    <Button
                       onClick={async () => {
                         const selected = await open({ directory: true, multiple: false })
                         if (typeof selected === 'string') {
@@ -564,7 +564,7 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                     >
                       <Plus size={13} />
                       添加扫描路径
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -628,15 +628,14 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                   {selectedSkillPreview.description}
                 </p>
               </div>
-              <button
-                type="button"
-                className="grid size-7 shrink-0 place-items-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+              <IconButton
+                size="sm"
+                label="关闭"
                 onClick={() => setSelectedSkillPreview(null)}
                 data-tauri-drag-region="false"
-                aria-label="关闭"
               >
                 <X size={14} />
-              </button>
+              </IconButton>
             </div>
             {selectedSkillPreview.recommendedTools.length > 0 && (
               <div className="flex flex-wrap gap-1.5">

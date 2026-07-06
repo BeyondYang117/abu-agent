@@ -1,9 +1,7 @@
 import { useCallback } from 'react'
 import { Minus, Square, X } from 'lucide-react'
 import { api } from '../api/tauri'
-
-const isMac =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)
+import { isMac } from './platform'
 
 type TrafficButton = 'close' | 'minimize' | 'maximize'
 

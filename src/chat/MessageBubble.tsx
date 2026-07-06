@@ -25,6 +25,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { Button, IconButton } from '../components/Button'
 import { copyToClipboard } from '../utils/clipboard'
 import { AssistantMessageMeta } from './AssistantMessageMeta'
 import { ChatAttachments } from './ChatAttachments'
@@ -32,7 +33,7 @@ import { ChatDotGridBackground } from './ChatDotGridBackground'
 import { ChatMarkdown } from './ChatMarkdown'
 import { GeneratedFileArtifacts } from './GeneratedFileArtifacts'
 import { isExecutableAgentPlanText } from './agentPlan'
-import { isImageArtifact } from './artifacts'
+import { artifactDataUrl, isImageArtifact } from './artifacts'
 import { loadArtifactDataUrl } from './attachmentPreview'
 import { openChatImageViewer } from './imageViewer'
 import { ReasoningBlock } from './ReasoningBlock'
@@ -68,10 +69,6 @@ interface MessageBubbleProps {
   onDeleteMessage?: (messageId: string) => Promise<void>
   agentPlanOverride?: AgentPlanState | null
   onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
-}
-
-function artifactDataUrl(artifact: ChatToolArtifact): string {
-  return artifact.dataUrl ?? artifact.data_url ?? ''
 }
 
 function markdownImageSources(content: string): Set<string> {
@@ -228,17 +225,17 @@ function AgentPlanAction({
       <ListChecks size={14} strokeWidth={2} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
       <span className="min-w-0 flex-1 truncate">{approved ? '已按这条计划执行' : '计划草案'}</span>
       {!approved && onExecute && (
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          size="sm"
           onClick={() => void onExecute(messageId)}
           disabled={disabled}
-          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-neutral-900 px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-500"
           title="执行这条计划"
           aria-label="执行这条计划"
         >
           <Play size={12} strokeWidth={2.2} fill="currentColor" />
           执行这条计划
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -696,9 +693,6 @@ function MessageBubbleComponent({
     window.setTimeout(() => setCopied(false), 2000)
   }
 
-  const bubbleActionBtn =
-    'rounded p-1 text-neutral-400 transition duration-[var(--kv-dur-instant)] hover:bg-neutral-100 hover:text-neutral-600 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-neutral-800 dark:hover:text-neutral-300'
-
   if (isUser) {
     const hasText = message.content.trim().length > 0
     const canEditUser = Boolean(onRegenerateMessage)
@@ -750,27 +744,25 @@ function MessageBubbleComponent({
                 className="w-full resize-y rounded-[20px] border border-neutral-200/90 bg-neutral-50 px-4 py-2.5 text-[15px] leading-relaxed text-neutral-900 outline-none focus:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-neutral-500"
               />
               <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   onClick={() => {
                     setDraft(message.content)
                     setIsEditing(false)
                   }}
-                  className="rounded-lg px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800"
                 >
                   取消
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="primary"
                   // 编辑中若本会话起了新 run（如输入栏又发了一条），回调被 MessageList 收走
                   // （canEditUser 变 false）→ 禁用保存避免静默 no-op；取消仍可退出。
                   disabled={!draft.trim() || !canEditUser}
                   onClick={handleEditAndRegenerate}
-                  className="rounded-lg bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
                   title="替换这条提问，并丢弃其后的回复重新生成"
                 >
                   保存并重新生成
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
@@ -784,47 +776,40 @@ function MessageBubbleComponent({
           )}
           {hasText && !isEditing && (
             <div className="flex items-center gap-0.5 pr-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
-              <button
-                type="button"
+              <IconButton
+                size="sm"
                 onClick={() => void handleCopy()}
-                className={bubbleActionBtn}
-                title={copied ? '已复制' : '复制'}
-                aria-label={copied ? '已复制' : '复制'}
+                label={copied ? '已复制' : '复制'}
               >
                 {copied ? <Check size={14} strokeWidth={2} className="chat-motion-pop" /> : <Copy size={14} strokeWidth={2} />}
-              </button>
+              </IconButton>
               {canEditUser && (
-                <button
-                  type="button"
+                <IconButton
+                  size="sm"
                   onClick={() => setIsEditing(true)}
-                  className={bubbleActionBtn}
-                  title="编辑并重新生成"
-                  aria-label="编辑并重新生成"
+                  label="编辑并重新生成"
                 >
                   <Pencil size={14} strokeWidth={2} />
-                </button>
+                </IconButton>
               )}
               {onForkMessage && (
-                <button
-                  type="button"
+                <IconButton
+                  size="sm"
                   onClick={() => void onForkMessage(message.id)}
-                  className={bubbleActionBtn}
+                  label="建分支"
                   title="从这里建分支（复制到新对话）"
-                  aria-label="建分支"
                 >
                   <GitBranch size={14} strokeWidth={2} />
-                </button>
+                </IconButton>
               )}
               {onDeleteMessage && (
-                <button
-                  type="button"
+                <IconButton
+                  size="sm"
                   onClick={() => void onDeleteMessage(message.id)}
-                  className={bubbleActionBtn}
-                  title="删除"
-                  aria-label="删除"
+                  label="删除"
                 >
                   <Trash2 size={14} strokeWidth={2} />
-                </button>
+                </IconButton>
               )}
             </div>
           )}
@@ -915,25 +900,23 @@ function MessageBubbleComponent({
               className="w-full resize-y rounded-xl border border-neutral-200/90 bg-white px-3 py-2.5 text-[15px] leading-relaxed text-neutral-900 outline-none focus:border-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-neutral-500"
             />
             <div className="flex items-center gap-2">
-              <button
-                type="button"
+              <Button
+                variant="primary"
                 disabled={saving || !draft.trim()}
                 onClick={() => void handleSaveEdit()}
-                className="rounded-lg bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-neutral-100 dark:text-neutral-900"
               >
                 {saving ? '保存中…' : '保存'}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="ghost"
                 disabled={saving}
                 onClick={() => {
                   setDraft(message.content)
                   setIsEditing(false)
                 }}
-                className="rounded-lg px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800"
               >
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         ) : isDirectImageGenerationPending ? (

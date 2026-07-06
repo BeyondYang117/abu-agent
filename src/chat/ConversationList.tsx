@@ -32,7 +32,6 @@ interface ConversationListProps {
   projects: ChatProject[]
   sets: ChatSet[]
   compact?: boolean
-  emptyLabel?: string
   indent?: boolean
   showAssistantName?: boolean
   // 「最近」平铺列表用：在每条对话右侧显示其所属「集 / 项目」标签（与搜索弹层一致）。
@@ -52,7 +51,6 @@ export const ConversationList = memo(function ConversationList({
   projects,
   sets,
   compact = false,
-  emptyLabel = '暂无对话',
   indent = false,
   showAssistantName = true,
   showFolderLabel = false,
@@ -105,11 +103,7 @@ export const ConversationList = memo(function ConversationList({
   }
 
   if (conversations.length === 0) {
-    return (
-      <div className="px-3 py-10 text-center text-[13px] text-neutral-400 dark:text-neutral-500">
-        {emptyLabel}
-      </div>
-    )
+    return null
   }
 
   return (
@@ -235,7 +229,6 @@ export const ConversationList = memo(function ConversationList({
       {menuState && menuConversation && (
         <ConversationContextMenu
           anchor={menuState.anchor}
-          conversationTitle={menuConversation.title}
           conversationFolder={menuConversation.folder}
           conversationProjectId={menuConversation.project_id ?? menuConversation.projectId ?? null}
           conversationSetId={menuConversation.set_id ?? menuConversation.setId ?? null}

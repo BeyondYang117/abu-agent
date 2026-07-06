@@ -526,7 +526,7 @@ export interface ConversationListItem {
   forkedFrom?: ForkOrigin | null
 }
 
-export interface ConversationGroup {
-  title: string
-  conversations: ConversationListItem[]
+export type ChatUserProfile = {
+  displayName: string
+  avatarUrl: string
 }

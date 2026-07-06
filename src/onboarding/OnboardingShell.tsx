@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
-import { api, type Settings } from '../api/tauri'
+import { type Settings } from '../api/tauri'
+import { getSettingsCached, saveSettingsCached } from '../api/settingsCache'
 import { i18n, type Lang } from '../settings/i18n'
 import { usesNativeTitlebar } from '../chat/platform'
 import { ONBOARDING_STEPS, type OnboardingStepId } from './types'
@@ -43,7 +44,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setLoading(true)
     setLoadError(null)
     try {
-      const loaded = await api.getSettings()
+      const loaded = await getSettingsCached()
       // 首次运行按系统语言自动设定界面语言（欢迎页起即本地化）；但若用户此前已选过语言
       // （如重跑引导的老用户），沿用其选择，不要用系统 locale 覆盖。
       setSettings({
@@ -87,7 +88,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setSaving(true)
     setSaveError(null)
     try {
-      const saved = await api.saveSettings({
+      const saved = await saveSettingsCached({
         ...settings,
         onboardingStatus: status,
       })
@@ -113,8 +114,8 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const handleSkipAfterLoadFailure = useCallback(async () => {
     setSaving(true)
     try {
-      const loaded = await api.getSettings()
-      await api.saveSettings({ ...loaded, onboardingStatus: 'skipped' })
+      const loaded = await getSettingsCached()
+      await saveSettingsCached({ ...loaded, onboardingStatus: 'skipped' })
       onSettingsChange?.()
     } catch (err) {
       console.error('Failed to skip onboarding after load error:', err)
@@ -190,7 +191,6 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
   const stepLabels: Record<OnboardingStepId, string> = {
     welcome: t.onboardingStepWelcome,
-    language: t.onboardingWelcomeStepLanguage,
     provider: t.onboardingWelcomeStepProvider,
     webSearch: t.onboardingWelcomeStepWebSearch,
     hotkey: t.onboardingWelcomeStepHotkey,

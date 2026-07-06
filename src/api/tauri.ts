@@ -9,7 +9,8 @@ import { normalizeThemeColorId } from '../themeColors'
 
 // ========== 类型定义 ==========
 
-const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+/** 是否运行在 Tauri 运行时(而非纯浏览器/SSR) */
+export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 export type LensWebSearchResult = {
   title: string
@@ -507,7 +508,6 @@ export type ChatToolsConfig = {
   toolTimeoutMs: number
   /** MCP 持久连接空闲超时（ms）：会话空闲超过此值后被回收，下次调用透明重连。 */
   mcpIdleTimeoutMs?: number
-  maxToolOutputChars: number | null
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
   /** 同一时刻最多并行运行的子 agent 数（后端钳制 1..64，默认 12）。 */
   subAgentConcurrency?: number
@@ -1048,7 +1048,6 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     maxToolRounds: normalizeMaxToolRounds(current.maxToolRounds),
     toolTimeoutMs: current.toolTimeoutMs ?? 60_000,
     mcpIdleTimeoutMs: current.mcpIdleTimeoutMs ?? 600_000,
-    maxToolOutputChars: null,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     subAgentConcurrency: Math.min(64, Math.max(1, Math.round(current.subAgentConcurrency ?? 12))),
     requestDebugEnabled: current.requestDebugEnabled ?? false,

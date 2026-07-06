@@ -1,6 +1,5 @@
 export type OnboardingStepId =
   | 'welcome'
-  | 'language'
   | 'provider'
   | 'webSearch'
   | 'hotkey'

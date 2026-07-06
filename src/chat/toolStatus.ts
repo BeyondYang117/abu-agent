@@ -25,7 +25,3 @@ export function normalizeToolCallStatus(status?: string): ToolCallStatus {
       return 'pending'
   }
 }
-
-export function isToolCallErrorStatus(status?: string): boolean {
-  return normalizeToolCallStatus(status) === 'error'
-}

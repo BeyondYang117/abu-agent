@@ -10,10 +10,12 @@ import katexCss from 'katex/dist/katex.min.css?inline'
 import { normalizeMarkdownForRender } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
 import type { ChatToolArtifact } from './types'
+import { artifactDataUrl } from './artifacts'
 import type { KbHitView } from './knowledgeBaseHits'
 import { remarkCitations } from './citations'
 import { api } from '../api/tauri'
 import { copyToClipboard } from '../utils/clipboard'
+import { IconButton } from '../components/Button'
 
 interface ChatMarkdownProps {
   content: string
@@ -347,15 +349,14 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
         <figcaption className="text-[13px] font-semibold leading-5 text-neutral-800 dark:text-neutral-100">
           {codeLanguageLabel(language)}
         </figcaption>
-        <button
-          type="button"
+        <IconButton
+          size="sm"
+          className="-mr-1 ml-auto"
           onClick={() => void handleCopy()}
-          className="-mr-1 ml-auto rounded-md p-1.5 text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-          title={copied ? '已复制' : '复制代码'}
-          aria-label={copied ? '已复制' : '复制代码'}
+          label={copied ? '已复制' : '复制代码'}
         >
           {copied ? <Check size={17} strokeWidth={2.2} className="chat-motion-pop" /> : <Copy size={17} strokeWidth={2.2} />}
-        </button>
+        </IconButton>
       </div>
       <pre className="custom-scrollbar m-0 max-w-full overflow-x-auto bg-transparent px-4 pb-4 pt-2 text-[13px] leading-6 text-neutral-900 dark:text-neutral-100">
         <code className="font-mono">{highlighted}</code>
@@ -471,15 +472,14 @@ function MermaidBlock({ code }: { code: string }) {
           Mermaid
         </figcaption>
         {!error && (
-          <button
-            type="button"
+          <IconButton
+            size="sm"
+            className="-mr-1 ml-auto"
             onClick={() => setView((current) => (current === 'diagram' ? 'source' : 'diagram'))}
-            className="-mr-1 ml-auto rounded-md p-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-            title={view === 'diagram' ? '查看源码' : '查看图表'}
-            aria-label={view === 'diagram' ? '查看源码' : '查看图表'}
+            label={view === 'diagram' ? '查看源码' : '查看图表'}
           >
             {view === 'diagram' ? <Code2 size={15} strokeWidth={2} /> : <Eye size={15} strokeWidth={2} />}
-          </button>
+          </IconButton>
         )}
       </div>
       {view === 'source' ? (
@@ -556,24 +556,16 @@ function HtmlCodePreview({ html }: { html: string }) {
       ) : null}
       {view === 'source' ? <CodeBlock code={html} language="html" /> : null}
       <div className="-mt-1 mb-2 flex justify-end gap-0.5">
-        <button
-          type="button"
+        <IconButton
+          size="sm"
           onClick={() => setView((current) => (current === 'preview' ? 'source' : 'preview'))}
-          className="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-          title={view === 'preview' ? '查看源码' : '查看预览'}
-          aria-label={view === 'preview' ? '查看源码' : '查看预览'}
+          label={view === 'preview' ? '查看源码' : '查看预览'}
         >
           {view === 'preview' ? <Code2 size={14} strokeWidth={2} /> : <Eye size={14} strokeWidth={2} />}
-        </button>
-        <button
-          type="button"
-          onClick={openInBrowser}
-          className="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-          title="在浏览器打开"
-          aria-label="在浏览器打开"
-        >
+        </IconButton>
+        <IconButton size="sm" onClick={openInBrowser} label="在浏览器打开">
           <ExternalLink size={14} strokeWidth={2} />
-        </button>
+        </IconButton>
       </div>
     </>
   )
@@ -683,10 +675,6 @@ function CitationChip({ n, hit }: { n: number; hit?: KbHitView }) {
       )}
     </span>
   )
-}
-
-function artifactDataUrl(artifact: ChatToolArtifact): string {
-  return artifact.dataUrl ?? artifact.data_url ?? ''
 }
 
 function safeDecodeURIComponent(value: string): string {

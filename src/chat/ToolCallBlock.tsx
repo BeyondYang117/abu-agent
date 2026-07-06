@@ -34,43 +34,15 @@ import type { LucideIcon } from 'lucide-react'
 import type { AgentTodoItem, AgentTodoState, AgentTodoStatus, ToolCallRecord, ToolCallStatus } from './types'
 import { normalizeToolCallStatus } from './toolStatus'
 import { formatToolResultPreview } from './toolResultPreview'
+import { toolRecordRawName as toolRawName } from './segments'
 import { knowledgeSearchHits, type KbHitView } from './knowledgeBaseHits'
 import { AskUserBlock } from './AskUserBlock'
 import { ChatMarkdown } from './ChatMarkdown'
 import { WebSearchIcon } from '../settings/NavIcons'
 
-export interface ToolCallBlockLabels {
-  pending: string
-  running: string
-  success: string
-  completed: string
-  error: string
-  skipped: string
-  cancelled: string
-  arguments: string
-  result: string
-  source: string
-  tool: string
-}
-
 export interface ToolCallBlockProps {
   toolCall: ToolCallRecord
   defaultOpen?: boolean
-  labels?: Partial<ToolCallBlockLabels>
-}
-
-const defaultLabels: ToolCallBlockLabels = {
-  pending: '准备调用',
-  running: '调用中',
-  success: '已完成',
-  completed: '已完成',
-  error: '调用失败',
-  skipped: '已跳过',
-  cancelled: '已取消',
-  arguments: '参数',
-  result: '结果',
-  source: '来源',
-  tool: '工具',
 }
 
 interface FileMutationFile {
@@ -130,10 +102,6 @@ function parsedArguments(toolCall: ToolCallRecord): Record<string, unknown> | nu
   } catch {
     return null
   }
-}
-
-function toolRawName(toolCall: ToolCallRecord): string {
-  return toolCall.tool_name || toolCall.toolName || toolCall.name || ''
 }
 
 function toolGlyph(toolCall: ToolCallRecord): LucideIcon | ComponentType<{ size?: number; strokeWidth?: number; className?: string }> {
@@ -1159,9 +1127,7 @@ function ToolTypeIcon({ toolCall, status }: { toolCall: ToolCallRecord; status: 
 function DefaultToolCallBlock({
   toolCall,
   defaultOpen = false,
-  labels,
 }: ToolCallBlockProps) {
-  const mergedLabels = { ...defaultLabels, ...labels }
   const status = normalizeToolCallStatus(toolCall.status)
   const [open, setOpen] = useState(defaultOpen)
 
@@ -1202,7 +1168,7 @@ function DefaultToolCallBlock({
             status === 'running' ? ' chat-motion-tool-shimmer' : ''
           }`}
         >
-          {toolName || mergedLabels.tool}
+          {toolName || '工具'}
         </span>
         {target && (
           <span className="min-w-0 truncate text-neutral-400 dark:text-neutral-500">
@@ -1224,7 +1190,7 @@ function DefaultToolCallBlock({
             {argumentPreview && (
               <div>
                 <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                  {mergedLabels.arguments}
+                  {'参数'}
                 </div>
                 <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
                   {argumentPreview}
@@ -1234,7 +1200,7 @@ function DefaultToolCallBlock({
             {open && resultPreview && !knowledgeHits && (
               <div>
                 <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                  {mergedLabels.result}
+                  {'结果'}
                 </div>
                 <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
                   {resultPreview}

@@ -1,4 +1,5 @@
 import type { Window } from '@tauri-apps/api/window'
+import { isWindows } from './platform'
 
 export const CHAT_DEFAULT_SIZE = { width: 1280, height: 800 }
 /** 侧栏收起时可缩到的最小尺寸 */
@@ -6,11 +7,6 @@ export const CHAT_MIN_SIZE_COLLAPSED = { width: 400, height: 400 }
 /** 侧栏展开时整窗最小尺寸（240px 侧栏 + 主内容区） */
 export const CHAT_MIN_SIZE_EXPANDED = { width: 640, height: 400 }
 export const CHAT_MIN_SIZE = CHAT_MIN_SIZE_COLLAPSED
-export function getChatPlatformWindowSize(
-  size: { width: number; height: number },
-): { width: number; height: number } {
-  return size
-}
 
 export type ChatWindowGeometry = {
   width: number
@@ -26,10 +22,6 @@ const CHAT_WINDOW_GEOMETRY_KEY = 'kivio-chat-window-geometry'
 const CHAT_WINDOW_SIZE_KEY = 'kivio-chat-window-size'
 const WINDOWS_MINIMIZED_POSITION_SENTINEL = -10000
 const MIN_VISIBLE_GEOMETRY_EDGE = 80
-
-function isWindowsRuntime(): boolean {
-  return typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
-}
 
 export function hashPath(): string {
   return window.location.hash.replace('#', '').split('?')[0]
@@ -114,7 +106,7 @@ function normalizeChatWindowGeometry(
   if (!Number.isFinite(width) || !Number.isFinite(height)) return null
   const x = Number(parsed.x)
   const y = Number(parsed.y)
-  const min = getChatPlatformWindowSize(CHAT_MIN_SIZE)
+  const min = CHAT_MIN_SIZE
   const next: ChatWindowGeometry = {
     width: Math.max(min.width, Math.round(width)),
     height: Math.max(min.height, Math.round(height)),
@@ -200,12 +192,7 @@ export function getRememberedChatGeometry(): ChatWindowGeometry {
   } catch {
     // fall through
   }
-  return getChatPlatformWindowSize(CHAT_DEFAULT_SIZE)
-}
-
-export function getRememberedChatSize(): { width: number; height: number } {
-  const { width, height } = getRememberedChatGeometry()
-  return { width, height }
+  return CHAT_DEFAULT_SIZE
 }
 
 export function rememberChatGeometry(geometry: ChatWindowGeometry) {
@@ -225,8 +212,8 @@ export async function restoreChatWindowGeometry(win: Window): Promise<void> {
 
   const { LogicalPosition, LogicalSize } = await import('@tauri-apps/api/window')
   const geo = getRememberedChatGeometry()
-  const canRestorePosition = !isWindowsRuntime() || await isChatGeometryOnAnyMonitor(geo)
-  if (isWindowsRuntime() && !canRestorePosition) {
+  const canRestorePosition = !isWindows || await isChatGeometryOnAnyMonitor(geo)
+  if (isWindows && !canRestorePosition) {
     forgetRememberedChatGeometry()
   }
 
@@ -239,7 +226,7 @@ export async function restoreChatWindowGeometry(win: Window): Promise<void> {
 }
 
 export async function isChatWindowPlacementVisible(win: Window): Promise<boolean> {
-  if (!isWindowsRuntime()) return true
+  if (!isWindows) return true
 
   const geometry = await snapshotChatWindowGeometry(win)
   if (!geometry || !geometryHasPosition(geometry)) return false
@@ -248,7 +235,7 @@ export async function isChatWindowPlacementVisible(win: Window): Promise<boolean
 
 export async function snapshotChatWindowGeometry(win: Window): Promise<ChatWindowGeometry | null> {
   try {
-    if (isWindowsRuntime()) {
+    if (isWindows) {
       const [visible, minimized] = await Promise.all([win.isVisible(), win.isMinimized()])
       if (!visible || minimized) return null
     }
@@ -263,7 +250,7 @@ export async function snapshotChatWindowGeometry(win: Window): Promise<ChatWindo
       x: logicalPosition.x,
       y: logicalPosition.y,
     })
-    if (geometry && isWindowsRuntime() && !await isChatGeometryOnAnyMonitor(geometry)) return null
+    if (geometry && isWindows && !await isChatGeometryOnAnyMonitor(geometry)) return null
     return geometry
   } catch {
     return null
