@@ -20,6 +20,14 @@
 //!   rebooted don't see this — "works on my machine".) [`enrich_path_windows`]
 //!   reads the **current** `Path` straight from the registry (user + system
 //!   hives), expands `%VAR%` references, and merges in common install dirs.
+//!   The registry, though, can't cover version managers like **fnm / nvm** that
+//!   inject a *per-shell* directory into `PATH` from the user's PowerShell
+//!   profile (fnm runs `fnm env | Invoke-Expression`, prepending a
+//!   `%LOCALAPPDATA%\fnm_multishells\<pid>_<ts>` dir that never lands in the
+//!   registry). So Windows adds a second source symmetric to macOS's
+//!   login-shell probe: it runs the user's PowerShell **with** their profile and
+//!   reads the live `$env:PATH`, merging those additions in (best-effort, hard
+//!   timeout, silent fallback to registry-only on any failure).
 //!
 //! Both run once at the very start of app startup, before any window creation
 //! or CLI probing. Because every downstream subprocess (detection,
@@ -44,6 +52,43 @@ fn push_unique(seg: &str, seen: &mut HashSet<String>, out: &mut Vec<String>, key
     }
     if seen.insert(key(seg)) {
         out.push(seg.to_string());
+    }
+}
+
+/// Spawn `cmd` (already configured with stdio + `NoConsoleWindow` by the
+/// caller), wait for it to finish on a helper thread, and return its stdout as
+/// a lossy `String` if it exits successfully within `timeout`. Returns `None`
+/// on spawn error, non-zero exit, I/O error, or timeout — so callers fall back
+/// to their defaults. Never panics, never blocks past `timeout`. Output
+/// post-processing (trim / empty / validity checks) is left to the caller.
+///
+/// On timeout the helper thread is detached: we've moved the child into it and
+/// can't easily kill it after the fact, but the shells we run just print their
+/// `PATH` and exit; a pathologically slow rc/profile is reaped by the OS when
+/// the orphaned thread eventually closes its pipe. Startup proceeds with the
+/// caller's defaults regardless. Shared by the macOS login-shell probe and the
+/// Windows profile probe so their timeout semantics can't drift apart.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn capture_stdout_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    let child = cmd.spawn().ok()?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let out = child.wait_with_output();
+        let _ = tx.send(out);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) if output.status.success() => {
+            let _ = handle.join();
+            Some(String::from_utf8_lossy(&output.stdout).to_string())
+        }
+        // Non-zero exit, I/O error, or timeout: detach the helper thread (see
+        // the doc comment) and bail so the caller uses its defaults.
+        _ => None,
     }
 }
 
@@ -137,45 +182,119 @@ fn login_shell_path() -> Option<String> {
 
     // Spawn the login+interactive shell so it sources the rc files that set
     // PATH (e.g. ~/.zshrc), then echo the resulting PATH on a single line.
-    let child = Command::new(&shell)
-        .args(["-l", "-i", "-c", "echo \"$PATH\""])
+    let mut cmd = Command::new(&shell);
+    cmd.args(["-l", "-i", "-c", "echo \"$PATH\""])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .no_console_window()
-        .spawn()
-        .ok()?;
+        .no_console_window();
 
-    // Enforce the timeout on a helper thread: if the shell hangs (slow rc),
+    // Enforce the timeout via the shared helper: if the shell hangs (slow rc),
     // give up rather than blocking startup.
-    let (tx, rx) = std::sync::mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let out = child.wait_with_output();
-        let _ = tx.send(out);
-    });
-
-    match rx.recv_timeout(LOGIN_SHELL_TIMEOUT) {
-        Ok(Ok(output)) if output.status.success() => {
-            let _ = handle.join();
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if path.is_empty() {
-                None
-            } else {
-                Some(path)
-            }
-        }
-        // Non-zero exit, I/O error, or timeout: detach the helper thread and
-        // bail. We can't easily kill the child after moving it into the thread,
-        // but it will exit on its own (echo is instant; the worst case is a
-        // hung rc that the OS reaps when the orphaned thread's child closes its
-        // pipe). Startup proceeds with the defaults regardless.
-        _ => None,
+    let path = capture_stdout_with_timeout(cmd, LOGIN_SHELL_TIMEOUT)?;
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
     }
 }
 
 // ---------------------------------------------------------------------------
 // Windows
 // ---------------------------------------------------------------------------
+
+/// Hard timeout for running the user's PowerShell profile to read `$env:PATH`.
+/// Symmetric with macOS's [`LOGIN_SHELL_TIMEOUT`]: PowerShell 5.1 cold-start +
+/// an fnm profile is typically well under this; if the user's profile is slow
+/// we give up and fall back to registry + common-dir defaults.
+#[cfg(target_os = "windows")]
+const PROFILE_SHELL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Pick the PowerShell executable for the profile probe: prefer `pwsh`
+/// (PowerShell 7+) when discoverable on the *current* process `PATH`, else fall
+/// back to Windows PowerShell (`powershell`, 5.1). This must run after the
+/// phase-1 registry merge so a freshly-installed pwsh is visible. Mirrors
+/// `native_tools::shell::pwsh_on_path`, but implemented locally (no shared
+/// `OnceLock`) so it re-evaluates the freshly-merged `PATH` rather than
+/// fossilising an early-startup answer. The choice matters because the two
+/// shells load different profile files — picking the wrong one reads the wrong
+/// (or no) user config.
+#[cfg(target_os = "windows")]
+fn profile_shell_exe() -> &'static str {
+    let has_pwsh = std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| dir.join("pwsh.exe").is_file())
+    });
+    if has_pwsh {
+        "pwsh"
+    } else {
+        "powershell"
+    }
+}
+
+/// Run the user's PowerShell **with** their profile and read the resulting
+/// `$env:PATH`. This is the only way to pick up version-manager dirs (fnm/nvm)
+/// injected per-shell from the profile — they never appear in the registry.
+///
+/// Deliberately omits `-NoProfile` (loading the profile is the whole point),
+/// unlike `native_tools::shell` which keeps `-NoProfile` for fast, deterministic
+/// tool execution. Sets stdout to UTF-8 first (PS 5.1 defaults to the OEM code
+/// page, mangling non-ASCII dir names; pwsh is already UTF-8 so it's a no-op).
+/// stdin/stderr are nulled so profile banners/warnings don't pollute the result,
+/// and `NoConsoleWindow` prevents a console flash. Returns `None` on any
+/// failure/timeout so the caller keeps the registry-only PATH.
+#[cfg(target_os = "windows")]
+fn profile_shell_path() -> Option<String> {
+    use crate::proc::NoConsoleWindow;
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new(profile_shell_exe());
+    cmd.args([
+        "-NoLogo",
+        "-NonInteractive",
+        "-Command",
+        "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}; $env:PATH",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .no_console_window();
+
+    let out = capture_stdout_with_timeout(cmd, PROFILE_SHELL_TIMEOUT)?;
+    parse_profile_path_output(&out)
+}
+
+/// Extract the `PATH` from the profile probe's stdout. Takes the last non-empty
+/// line (a profile may print banners/output before `$env:PATH` — the PATH is the
+/// last thing echoed) and validates it *looks* like a PATH: it must contain a
+/// `;` separator or be a single drive-rooted path (`X:\...`). This rejects
+/// stray profile chatter mistakenly captured as the last line. Returns `None`
+/// if nothing valid is found. Pure — unit-testable on all platforms.
+#[cfg(any(target_os = "windows", test))]
+fn parse_profile_path_output(output: &str) -> Option<String> {
+    let candidate = output
+        .lines()
+        .map(str::trim)
+        .rev()
+        .find(|line| !line.is_empty())?;
+
+    // Legitimacy check: a real PATH has at least one ';' separator, or is a
+    // single drive-rooted path (matches `^[A-Za-z]:\`).
+    let looks_like_path = candidate.contains(';') || is_drive_rooted(candidate);
+    if looks_like_path {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+/// Whether `s` begins with a Windows drive-root prefix (`X:\`). Used to accept a
+/// single-entry PATH that has no `;` separator.
+#[cfg(any(target_os = "windows", test))]
+fn is_drive_rooted(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+}
 
 /// Read the *current* user + system `PATH` from the registry, expand `%VAR%`
 /// references, merge with the (possibly stale) process `PATH` and common CLI
@@ -187,6 +306,22 @@ fn login_shell_path() -> Option<String> {
 /// Reading the registry gives us the *current* value. Read-only (never writes
 /// the registry), never panics, never blocks; on any failure it still merges
 /// in the common-directory defaults.
+///
+/// The registry, however, can't cover version managers like **fnm / nvm** that
+/// inject a *per-shell* directory into `PATH` from the user's PowerShell
+/// profile (fnm's `fnm env | Invoke-Expression` prepends
+/// `%LOCALAPPDATA%\fnm_multishells\<pid>_<ts>`, which never touches the
+/// registry). So this runs in two phases:
+///
+/// 1. Merge registry + defaults into the process `PATH` and set it. This also
+///    makes a freshly-installed `pwsh` (typically under
+///    `%ProgramFiles%\PowerShell\7`, absent from a stale `PATH`) discoverable
+///    by the probe below.
+/// 2. Run the user's PowerShell **with** their profile to read the live
+///    `$env:PATH`, then merge those additions in. Best-effort with a hard
+///    timeout: on no-profile / profile error / missing PowerShell / empty
+///    output / timeout it silently keeps the phase-1 result, so behaviour is
+///    identical to the registry-only path.
 #[cfg(target_os = "windows")]
 pub fn enrich_path_windows() {
     let current = std::env::var("PATH").unwrap_or_default();
@@ -194,35 +329,60 @@ pub fn enrich_path_windows() {
     let user = read_registry_path(false).map(|p| expand_env_vars(&p));
     let defaults = common_dirs_windows();
 
+    // ① Registry + defaults → process PATH. Must land before the probe so the
+    // probe can locate pwsh even when the process PATH was a stale snapshot.
     let merged = merge_paths_windows(
         &current,
         system.as_deref(),
         user.as_deref(),
+        None,
         &defaults,
     );
     if !merged.is_empty() {
-        std::env::set_var("PATH", merged);
+        std::env::set_var("PATH", &merged);
+    }
+
+    // ② Profile probe → merge live $env:PATH additions. On any failure/timeout
+    // `profile_shell_path` returns None and we leave the phase-1 PATH untouched
+    // (behaviour identical to the pre-profile version). The phase-1 result is
+    // the `current` here, so version-manager dirs the registry can't see get
+    // folded in; defaults are already present from phase 1.
+    if let Some(profile) = profile_shell_path() {
+        let remerged = merge_paths_windows(&merged, None, None, Some(&profile), &[]);
+        if !remerged.is_empty() {
+            std::env::set_var("PATH", remerged);
+        }
     }
 }
 
-/// Merge the process `PATH` with the system + user registry `PATH` values and
-/// the fallback `defaults` into a single `;`-joined string, deduplicated and
-/// order-preserving. Windows path comparison is case-insensitive, so dedup
-/// folds case (the first-seen spelling is kept). Pure — no env/registry access
-/// — so it is unit-testable without mutating shared state.
+/// Merge the process `PATH` with the system + user registry `PATH` values, the
+/// (optional) PowerShell-profile `PATH`, and the fallback `defaults` into a
+/// single `;`-joined string, deduplicated and order-preserving. Windows path
+/// comparison is case-insensitive, so dedup folds case (the first-seen spelling
+/// is kept). Pure — no env/registry access — so it is unit-testable without
+/// mutating shared state.
 ///
 /// Order: process `PATH` first (preserves current resolution order), then
-/// system, then user, then common-dir defaults.
+/// system, then user, then profile, then common-dir defaults. A dir already
+/// present from an earlier source (e.g. a system node install) therefore wins
+/// over a later profile source (e.g. fnm's node) — a documented tradeoff that
+/// mirrors the macOS branch's `current`-first ordering.
 #[cfg(any(target_os = "windows", test))]
 fn merge_paths_windows(
     current: &str,
     system: Option<&str>,
     user: Option<&str>,
+    profile: Option<&str>,
     defaults: &[String],
 ) -> String {
     let mut seen: HashSet<String> = HashSet::new();
     let mut merged: Vec<String> = Vec::new();
-    for source in [current, system.unwrap_or(""), user.unwrap_or("")] {
+    for source in [
+        current,
+        system.unwrap_or(""),
+        user.unwrap_or(""),
+        profile.unwrap_or(""),
+    ] {
         for seg in source.split(';') {
             push_unique(seg, &mut seen, &mut merged, |s| s.to_ascii_lowercase());
         }
@@ -299,8 +459,47 @@ fn common_dirs_windows() -> Vec<String> {
     push(appdata.clone(), "npm");
     push(userprofile.clone(), ".cargo\\bin");
     push(userprofile.clone(), ".bun\\bin");
-    push(userprofile, "scoop\\shims");
-    push(localappdata, "Microsoft\\WinGet\\Links");
+    push(userprofile.clone(), "scoop\\shims");
+    push(localappdata.clone(), "Microsoft\\WinGet\\Links");
+
+    // --- Version-manager stable dirs (second line of defense for the profile
+    // probe: used when the probe times out or PowerShell is unavailable). fnm's
+    // *active* dir is per-shell (fnm_multishells\<pid>_<ts>) and thus not
+    // knowable here, but the `default` alias and nvm's symlink are stable.
+    //
+    // nvm-windows: NVM_SYMLINK is the fixed path of the active node install.
+    if let Ok(symlink) = std::env::var("NVM_SYMLINK") {
+        let symlink = symlink.trim();
+        if !symlink.is_empty() {
+            dirs.push(symlink.to_string());
+        }
+    }
+    // fnm: the `default` alias is a stable dir. Prefer FNM_DIR; else probe the
+    // default roots (%LOCALAPPDATA%\fnm and %USERPROFILE%\.fnm). The node binary
+    // may sit directly in `aliases\default` or under an `installation\` subdir
+    // depending on fnm version, so push both candidates — nonexistent dirs are
+    // harmless in PATH.
+    let fnm_roots: Vec<String> = if let Ok(fnm_dir) = std::env::var("FNM_DIR") {
+        vec![fnm_dir]
+    } else {
+        let mut roots = Vec::new();
+        if let Some(local) = localappdata.as_deref() {
+            roots.push(format!("{}\\fnm", local.trim_end_matches('\\')));
+        }
+        if let Some(profile) = userprofile.as_deref() {
+            roots.push(format!("{}\\.fnm", profile.trim_end_matches('\\')));
+        }
+        roots
+    };
+    for root in fnm_roots {
+        let root = root.trim().trim_end_matches('\\');
+        if root.is_empty() {
+            continue;
+        }
+        dirs.push(format!("{}\\aliases\\default", root));
+        dirs.push(format!("{}\\aliases\\default\\installation", root));
+    }
+
     dirs
 }
 
@@ -489,7 +688,7 @@ mod tests {
         let user = "C:\\Users\\tester\\AppData\\Roaming\\npm";
         let defaults = vec!["C:\\Users\\tester\\.cargo\\bin".to_string()];
 
-        let result = merge_paths_windows(current, Some(system), Some(user), &defaults);
+        let result = merge_paths_windows(current, Some(system), Some(user), None, &defaults);
         let segs: Vec<&str> = result.split(';').collect();
 
         // Process PATH preserved and first.
@@ -514,7 +713,7 @@ mod tests {
     fn merge_windows_dedups_case_insensitively() {
         let current = "C:\\Windows\\System32";
         let user = "c:\\windows\\system32"; // same dir, different case
-        let result = merge_paths_windows(current, None, Some(user), &[]);
+        let result = merge_paths_windows(current, None, Some(user), None, &[]);
         assert_eq!(result, "C:\\Windows\\System32");
     }
 
@@ -522,8 +721,104 @@ mod tests {
     #[test]
     fn merge_windows_drops_empty_segments() {
         let current = "C:\\a;;C:\\b;";
-        let result = merge_paths_windows(current, None, None, &[]);
+        let result = merge_paths_windows(current, None, None, None, &[]);
         assert_eq!(result, "C:\\a;C:\\b");
+    }
+
+    /// The profile PATH is merged after user (registry) but before defaults, and
+    /// overlap with earlier sources is deduped case-insensitively.
+    #[test]
+    fn merge_windows_includes_profile_source() {
+        let current = "C:\\Windows\\system32";
+        let user = "C:\\Users\\tester\\AppData\\Roaming\\npm";
+        // fnm's per-shell dir plus an overlap with current (different case).
+        let profile = "C:\\Users\\tester\\AppData\\Local\\fnm_multishells\\123_456;c:\\windows\\system32";
+        let defaults = vec!["C:\\Users\\tester\\.cargo\\bin".to_string()];
+
+        let result = merge_paths_windows(current, None, Some(user), Some(profile), &defaults);
+        let segs: Vec<&str> = result.split(';').collect();
+
+        // Order: current, then user, then profile-only entry, then default last.
+        assert_eq!(segs[0], "C:\\Windows\\system32");
+        assert_eq!(segs[1], "C:\\Users\\tester\\AppData\\Roaming\\npm");
+        assert_eq!(segs[2], "C:\\Users\\tester\\AppData\\Local\\fnm_multishells\\123_456");
+        assert_eq!(segs.last(), Some(&"C:\\Users\\tester\\.cargo\\bin"));
+        // system32 not duplicated despite the case-different profile entry.
+        assert_eq!(
+            segs.iter()
+                .filter(|s| s.eq_ignore_ascii_case("C:\\Windows\\system32"))
+                .count(),
+            1
+        );
+    }
+
+    /// `profile = None` reproduces the pre-profile behaviour exactly (registry +
+    /// defaults only).
+    #[test]
+    fn merge_windows_profile_none_matches_registry_only() {
+        let current = "C:\\Windows\\system32";
+        let system = "C:\\Program Files\\Git\\cmd";
+        let user = "C:\\Users\\tester\\AppData\\Roaming\\npm";
+        let defaults = vec!["C:\\Users\\tester\\.cargo\\bin".to_string()];
+
+        let with_none =
+            merge_paths_windows(current, Some(system), Some(user), None, &defaults);
+        let with_empty =
+            merge_paths_windows(current, Some(system), Some(user), Some(""), &defaults);
+        assert_eq!(with_none, with_empty);
+        assert_eq!(
+            with_none,
+            "C:\\Windows\\system32;C:\\Program Files\\Git\\cmd;C:\\Users\\tester\\AppData\\Roaming\\npm;C:\\Users\\tester\\.cargo\\bin"
+        );
+    }
+
+    // ----- parse_profile_path_output (pure; compiled & tested on all OSes) -----
+
+    #[test]
+    fn parse_profile_path_accepts_normal_path() {
+        let out = "C:\\Windows\\system32;C:\\Users\\tester\\AppData\\Roaming\\npm\n";
+        assert_eq!(
+            parse_profile_path_output(out),
+            Some("C:\\Windows\\system32;C:\\Users\\tester\\AppData\\Roaming\\npm".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_profile_path_takes_last_line_after_banner() {
+        // A profile may print greetings before the PATH is echoed on the last line.
+        let out = "Loading fnm...\nWelcome back!\nC:\\a;C:\\b\n\n";
+        assert_eq!(parse_profile_path_output(out), Some("C:\\a;C:\\b".to_string()));
+    }
+
+    #[test]
+    fn parse_profile_path_accepts_single_drive_rooted() {
+        // A single-entry PATH has no ';' but is drive-rooted.
+        assert_eq!(
+            parse_profile_path_output("C:\\Program Files\\nodejs\n"),
+            Some("C:\\Program Files\\nodejs".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_profile_path_rejects_plain_text() {
+        // Profile chatter with no ';' and not drive-rooted must be rejected.
+        assert_eq!(parse_profile_path_output("fnm is ready\n"), None);
+    }
+
+    #[test]
+    fn parse_profile_path_rejects_empty() {
+        assert_eq!(parse_profile_path_output(""), None);
+        assert_eq!(parse_profile_path_output("\n\n  \n"), None);
+    }
+
+    #[test]
+    fn is_drive_rooted_matches_prefix() {
+        assert!(is_drive_rooted("C:\\Users"));
+        assert!(is_drive_rooted("d:\\x"));
+        assert!(!is_drive_rooted("C:/Users")); // forward slash not a Windows root
+        assert!(!is_drive_rooted("\\\\server\\share")); // UNC, no drive letter
+        assert!(!is_drive_rooted("relative\\path"));
+        assert!(!is_drive_rooted("C:"));
     }
 
     #[test]

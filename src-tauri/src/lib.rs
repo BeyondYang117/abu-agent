@@ -108,8 +108,9 @@ pub fn run() {
     // builds can't find user-installed CLIs. Enrich the process PATH once,
     // before any window creation or CLI probing. macOS: login-shell PATH is not
     // inherited from Finder/Dock. Windows: explorer's PATH is a stale login-time
-    // snapshot, so read the current value from the registry. No-op on Linux.
-    // See `path_env` module docs.
+    // snapshot, so read the current value from the registry, then also run the
+    // user's PowerShell profile to pick up version-manager dirs (fnm/nvm) that
+    // never touch the registry. No-op on Linux. See `path_env` module docs.
     #[cfg(target_os = "macos")]
     path_env::enrich_path_macos();
     #[cfg(target_os = "windows")]
