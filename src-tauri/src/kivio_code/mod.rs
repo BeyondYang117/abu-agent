@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::chat::agent::{run_agent_loop, AgentRunConfig, AgentRunEntry};
+use crate::chat::agent::{run_agent_loop, AgentRunConfig};
 use crate::mcp::types::{
     native_edit_file_tool, native_enter_plan_mode_tool, native_glob_files_tool,
     native_list_dir_tool, native_read_file_tool, native_run_command_tool, native_search_files_tool,
@@ -538,21 +538,7 @@ impl TurnAssembly {
         // limit (plan investigation is intentionally unbounded by hard round caps).
         let effective_chat_tools = self.effective_chat_tools.clone();
 
-        // 主模型支持视觉时，调用方已把图片 inline 进某条 user 消息（content 数组里含 image_url）。
-        // 据此设 has_image，让系统提示按「带图」措辞（不影响图片本身的传递）。
-        let has_image = runtime_messages.iter().any(|message| {
-            message
-                .get("content")
-                .and_then(Value::as_array)
-                .is_some_and(|parts| {
-                    parts.iter().any(|part| {
-                        part.get("type").and_then(Value::as_str) == Some("image_url")
-                    })
-                })
-        });
-
         AgentRunConfig {
-            entry: AgentRunEntry::Send,
             state,
             tool_conversation_id: conversation_id.clone(),
             conversation_id,
@@ -568,17 +554,12 @@ impl TurnAssembly {
             settings: self.settings.clone(),
             effective_chat_tools,
             language: self.language.clone(),
-            has_image,
             thinking_enabled: self.thinking_enabled,
             thinking_level: None,
             stream_enabled: self.stream_enabled,
             max_output_tokens: self.max_output_tokens,
             retry_attempts: self.retry_attempts,
-            skill_registry: self.skill_registry.clone(),
-            active_skill_id: None,
-            active_skill_detail: None,
             assistant_snapshot: None,
-            custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: self.system_prompt.clone(),
             initial_anchor_total_tokens: None,
             initial_anchor_trailing_estimate: 0,

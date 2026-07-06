@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
-use crate::external_agents::types::{PromptInputFormat, RuntimeAgentDef, UnifiedAgentEvent};
+use crate::external_agents::types::{PromptInputFormat, RuntimeAgentDef};
 use crate::proc::NoConsoleWindow;
 
 pub struct SpawnedAgent {
@@ -182,12 +182,6 @@ where
 
 pub fn parse_json_line(line: &str) -> Option<serde_json::Value> {
     serde_json::from_str(line.trim()).ok()
-}
-
-pub fn emit_from_value(value: &serde_json::Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
-    if let Some(event) = crate::external_agents::stream::map_json_value(value) {
-        sink(event);
-    }
 }
 
 #[cfg(test)]

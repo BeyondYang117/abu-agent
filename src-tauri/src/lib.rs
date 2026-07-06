@@ -34,14 +34,7 @@ pub mod windows;
 #[cfg(target_os = "windows")]
 pub mod windows_ocr;
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicU64},
-        Mutex, RwLock,
-    },
-    time::Duration,
-};
+use std::time::Duration;
 
 use tauri::{Emitter, Manager, State};
 #[cfg(target_os = "macos")]
@@ -139,7 +132,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -252,46 +244,14 @@ pub fn run() {
                 std::env::temp_dir().join("kivio-usage")
             });
 
-            app.manage(AppState {
-                settings: RwLock::new(settings),
-                explain_images: Mutex::new(HashMap::new()),
-                current_explain_image_id: Mutex::new(None),
-                lens_busy: AtomicBool::new(false),
-                prev_frontmost_pid_lens: AtomicI32::new(0),
-                prev_frontmost_pid_main: AtomicI32::new(0),
-                explain_stream_generation: AtomicU64::new(0),
-                chat_stream_generations: Mutex::new(HashMap::new()),
-                chat_active_generations: Mutex::new(HashMap::new()),
-                chat_active_replies: Mutex::new(HashMap::new()),
-                pending_chat_tool_approvals: Mutex::new(HashMap::new()),
-                chat_session_consent: Mutex::new(HashSet::new()),
-                pending_chat_session_consents: Mutex::new(HashMap::new()),
-                chat_consent_prompt_lock: tokio::sync::Mutex::new(()),
-                pending_chat_user_prompts: Mutex::new(HashMap::new()),
-                pending_python_runs: Mutex::new(HashMap::new()),
-                chat_create_conversation_lock: Mutex::new(()),
-                chat_tool_list_cache: Mutex::new(HashMap::new()),
-                external_slash_commands_cache: Mutex::new(HashMap::new()),
-            external_agent_models_cache: Mutex::new(HashMap::new()),
-                external_detected_agents_cache: Mutex::new(None),
-                external_live_sessions: Mutex::new(HashMap::new()),
-                pending_chat_external_sends: Mutex::new(Vec::new()),
-                pending_selection: Mutex::new(None),
-                lens_freeze_frame_image_id: Mutex::new(None),
-                lens_pending_reset: Mutex::new(None),
-                key_cooldowns: Mutex::new(HashMap::new()),
-                active_key_idx: Mutex::new(HashMap::new()),
-                prompt_cache_key_unsupported: Mutex::new(HashSet::new()),
-                mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),
+            app.manage(AppState::base(
+                settings,
                 usage_dir,
-                http: build_http_client(),
+                build_http_client(),
                 #[cfg(target_os = "macos")]
-                macos_ocr: macos_ocr::MacOcrClient::new(&app.handle()),
-                rapidocr: rapidocr::RapidOcrClient::new(&app.handle(), build_http_client()),
-                sub_agents: chat::sub_agent::SubAgentManager::default(),
-                background_commands: std::sync::Arc::new(Mutex::new(HashMap::new())),
-                request_debug: Mutex::new(std::collections::VecDeque::new()),
-            });
+                macos_ocr::MacOcrClient::new(&app.handle()),
+                rapidocr::RapidOcrClient::new(&app.handle(), build_http_client()),
+            ));
 
             // Apply the stored sub-agent concurrency cap (default sizes the gate
             // to DEFAULT_SUB_AGENT_CONCURRENCY; reconcile to the user's setting).
@@ -444,10 +404,6 @@ pub fn run() {
             commands::test_web_search,
             commands::get_permission_status,
             commands::open_permission_settings,
-            lens_commands::lens_request,
-            lens_commands::lens_request_translate,
-            lens_commands::lens_request_translate_text,
-            lens_commands::lens_request_replace,
             lens_commands::lens_list_windows,
             lens_commands::lens_capture_window,
             lens_commands::lens_capture_region,

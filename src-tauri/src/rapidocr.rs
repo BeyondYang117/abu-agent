@@ -283,13 +283,10 @@ impl RapidOcrClient {
         }
     }
 
-    /// OCR 主入口。文件不齐 → `rapidocr_models_missing` 错误码,前端渲染下载提示。
-    /// 首次调用走 OnceCell init:ort::init_from 加载 dylib + 构建 pipeline(~1-3s)。
-    /// 后续调用直接复用 pipeline,~200-500ms/张。
-    pub async fn ocr_image(
-        self: &Arc<Self>,
-        image_path: &std::path::Path,
-    ) -> Result<String, String> {
+    /// 解析模型目录 + 校验文件齐全 + 惰性初始化并复用 OAROCR pipeline。
+    /// `ocr_image` / `ocr_image_lines` 共用：文件不齐 → `rapidocr_models_missing`；
+    /// 首次走 OnceCell init（ort::init_from 加载 dylib + 构建 pipeline，~1-3s），后续复用。
+    async fn pipeline(&self) -> Result<Arc<OAROCR>, String> {
         let dir = self.model_dir()?;
         if !download_files()
             .iter()
@@ -316,9 +313,19 @@ impl RapidOcrClient {
                 Ok::<_, String>(Arc::new(p))
             })
             .await?;
+        Ok(pipeline.clone())
+    }
+
+    /// OCR 主入口。文件不齐 → `rapidocr_models_missing` 错误码,前端渲染下载提示。
+    /// 首次调用走 OnceCell init:ort::init_from 加载 dylib + 构建 pipeline(~1-3s)。
+    /// 后续调用直接复用 pipeline,~200-500ms/张。
+    pub async fn ocr_image(
+        self: &Arc<Self>,
+        image_path: &std::path::Path,
+    ) -> Result<String, String> {
+        let pipeline = self.pipeline().await?;
 
         // oar-ocr 同步 API,spawn_blocking 避免阻塞 tokio 调度器。
-        let pipeline = pipeline.clone();
         let path = image_path.to_owned();
         let text = tokio::task::spawn_blocking(move || -> Result<String, String> {
             let img = oar_ocr::utils::load_image(&path).map_err(|e| format!("load_image: {e}"))?;
@@ -338,33 +345,8 @@ impl RapidOcrClient {
         self: &Arc<Self>,
         image_path: &std::path::Path,
     ) -> Result<Vec<RapidOcrLine>, String> {
-        let dir = self.model_dir()?;
-        if !download_files()
-            .iter()
-            .all(|file| file_is_ready(&dir.join(file.name)))
-        {
-            return Err("rapidocr_models_missing".into());
-        }
+        let pipeline = self.pipeline().await?;
 
-        let pipeline = self
-            .pipeline
-            .get_or_try_init(|| async {
-                prepare_onnxruntime_dll_dir(&dir)?;
-                ort::init_from(dir.join(DYLIB_NAME))
-                    .map_err(|e| format!("ort init_from failed: {e}"))?
-                    .commit();
-                let p = OAROCRBuilder::new(
-                    dir.join("det.onnx").to_string_lossy().into_owned(),
-                    dir.join("rec.onnx").to_string_lossy().into_owned(),
-                    dir.join("keys.txt").to_string_lossy().into_owned(),
-                )
-                .build()
-                .map_err(|e| format!("OAROCRBuilder failed: {e}"))?;
-                Ok::<_, String>(Arc::new(p))
-            })
-            .await?;
-
-        let pipeline = pipeline.clone();
         let path = image_path.to_owned();
         let lines = tokio::task::spawn_blocking(move || -> Result<Vec<RapidOcrLine>, String> {
             let img = oar_ocr::utils::load_image(&path).map_err(|e| format!("load_image: {e}"))?;

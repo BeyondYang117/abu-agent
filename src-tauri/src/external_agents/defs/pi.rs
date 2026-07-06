@@ -78,7 +78,6 @@ mod tests {
     fn pi_build_args_rpc_mode_and_thinking() {
         let args = build_pi_args(
             &RuntimeContext {
-                cwd: Some("/proj".to_string()),
                 extra_allowed_dirs: vec!["/skills".to_string()],
                 resume_session_id: None,
                 new_session_id: None,

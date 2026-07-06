@@ -242,11 +242,6 @@ pub async fn run_codex_app_server_session(
     let chosen_model = model.filter(|m| !m.is_empty() && *m != "default");
     let chosen_effort = reasoning.filter(|r| !r.is_empty() && *r != "default");
 
-    sink(UnifiedAgentEvent::Status {
-        label: "initializing".to_string(),
-        model: chosen_model.map(str::to_string),
-    });
-
     write_rpc(
         &mut stdin,
         1,
@@ -362,10 +357,6 @@ pub async fn run_codex_app_server_session(
                 turn_params["model"] = json!(model);
             }
             write_rpc(&mut stdin, turn_start_id, "turn/start", turn_params).await?;
-            sink(UnifiedAgentEvent::Status {
-                label: "running".to_string(),
-                model: None,
-            });
             continue;
         }
         if id == Some(turn_start_id) {
@@ -387,9 +378,6 @@ pub async fn run_codex_app_server_session(
         }
     }
 
-    let _ = sink(UnifiedAgentEvent::TurnEnd {
-        stop_reason: "completed".to_string(),
-    });
     Ok(())
 }
 
@@ -513,12 +501,6 @@ impl CodexAppServerSession {
             turn_params["model"] = json!(m);
         }
         write_rpc(&mut self.stdin, turn_id, "turn/start", turn_params).await?;
-        let _ = events
-            .send(UnifiedAgentEvent::Status {
-                label: "running".to_string(),
-                model: chosen_model.map(str::to_string),
-            })
-            .await;
 
         loop {
             match control.try_recv() {
@@ -985,15 +967,12 @@ mod tests {
 
     fn event_variant(event: &UnifiedAgentEvent) -> &'static str {
         match event {
-            UnifiedAgentEvent::Status { .. } => "Status",
             UnifiedAgentEvent::TextDelta { .. } => "TextDelta",
             UnifiedAgentEvent::ThinkingDelta { .. } => "ThinkingDelta",
             UnifiedAgentEvent::ToolUse { .. } => "ToolUse",
             UnifiedAgentEvent::ToolResult { .. } => "ToolResult",
             UnifiedAgentEvent::Usage { .. } => "Usage",
-            UnifiedAgentEvent::TurnEnd { .. } => "TurnEnd",
             UnifiedAgentEvent::Error { .. } => "Error",
-            UnifiedAgentEvent::Raw { .. } => "Raw",
             UnifiedAgentEvent::SlashCommands { .. } => "SlashCommands",
         }
     }

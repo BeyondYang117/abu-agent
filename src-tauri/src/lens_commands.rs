@@ -578,24 +578,21 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
 }
 
 /// 默认入口：lens 模式（commit 后进 ready 悬浮栏）
-#[tauri::command]
+/// 注：仅由 shortcuts.rs 的热键处理器作为普通 Rust fn 调用；前端从不 invoke，故无 `#[tauri::command]`。
 pub(crate) fn lens_request(app: AppHandle) -> Result<(), String> {
     lens_request_internal(&app, "chat")
 }
 
 /// 截图翻译入口：lens webview 进入 select 态，截完做 OCR + 翻译并弹结果浮卡
-#[tauri::command]
 pub(crate) fn lens_request_translate(app: AppHandle) -> Result<(), String> {
     lens_request_internal(&app, "translate")
 }
 
-#[tauri::command]
 pub(crate) fn lens_request_translate_text(app: AppHandle) -> Result<(), String> {
     lens_request_internal(&app, "translateText")
 }
 
 /// 替换翻译入口：截完后 RapidOCR + 批量翻译，Canvas 原位覆盖译文。
-#[tauri::command]
 pub(crate) fn lens_request_replace(app: AppHandle) -> Result<(), String> {
     lens_request_internal(&app, "replace")
 }

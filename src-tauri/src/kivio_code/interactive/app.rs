@@ -295,11 +295,6 @@ impl App {
         }
     }
 
-    /// loader 帧间隔（事件循环用它决定 tick 节奏）。
-    pub fn loader_interval(&self) -> std::time::Duration {
-        self.loader.interval()
-    }
-
     pub fn set_kitty_active(&mut self, active: bool) {
         self.kitty_active = active;
         self.editor.set_kitty_active(active);

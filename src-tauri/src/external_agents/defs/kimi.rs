@@ -61,7 +61,6 @@ mod tests {
     fn kimi_build_args_puts_prompt_in_argv() {
         let args = build_kimi_args(
             &RuntimeContext {
-                cwd: None,
                 extra_allowed_dirs: vec![],
                 resume_session_id: None,
                 new_session_id: None,

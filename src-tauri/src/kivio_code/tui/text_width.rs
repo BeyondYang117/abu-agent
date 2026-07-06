@@ -87,26 +87,6 @@ fn extract_ansi_code_chars(chars: &[char], pos: usize) -> Option<AnsiCode> {
     }
 }
 
-/// 从字符串 `s` 的字节位置 `byte_pos` 提取一个 ANSI 序列（公开 API，按字节定位）。
-///
-/// 注意：`length` 字段返回的是 **字符数**，与 `code.chars().count()` 一致；若需字节长度用
-/// `code.len()`。内部渲染逻辑统一用 char 切片，避免多字节边界问题。
-pub fn extract_ansi_code(s: &str, byte_pos: usize) -> Option<AnsiCode> {
-    let chars: Vec<char> = s.chars().collect();
-    // 把 byte_pos 映射到 char 索引
-    let mut char_pos = 0usize;
-    let mut acc = 0usize;
-    for (i, c) in s.chars().enumerate() {
-        if acc >= byte_pos {
-            char_pos = i;
-            break;
-        }
-        acc += c.len_utf8();
-        char_pos = i + 1;
-    }
-    extract_ansi_code_chars(&chars, char_pos)
-}
-
 /// 计算字符串的可见终端列宽（跳过 ANSI/OSC/APC，tab=3）。
 pub fn visible_width(s: &str) -> usize {
     if s.is_empty() {
@@ -854,82 +834,14 @@ pub fn slice_by_column(line: &str, start_col: usize, length: usize, strict: bool
     slice_with_width(line, start_col, length, strict).0
 }
 
-/// 一次扫描提取 before / after 两段（overlay 横向拼接用）。after 继承 overlay 之前的样式。
-pub fn extract_segments(
-    line: &str,
-    before_end: usize,
-    after_start: usize,
-    after_len: usize,
-    strict_after: bool,
-) -> (String, usize, String, usize) {
-    let chars: Vec<char> = line.chars().collect();
-    let mut before = String::new();
-    let mut before_width = 0usize;
-    let mut after = String::new();
-    let mut after_width = 0usize;
-    let mut current_col = 0usize;
-    let mut i = 0;
-    let mut pending_before = String::new();
-    let mut after_started = false;
-    let after_end = after_start + after_len;
-    let mut tracker = AnsiCodeTracker::new();
-
-    while i < chars.len() {
-        if let Some(ansi) = extract_ansi_code_chars(&chars, i) {
-            tracker.process(&ansi.code);
-            if current_col < before_end {
-                pending_before.push_str(&ansi.code);
-            } else if current_col >= after_start && current_col < after_end && after_started {
-                after.push_str(&ansi.code);
-            }
-            i += ansi.length;
-            continue;
-        }
-        let mut end = i;
-        while end < chars.len() && extract_ansi_code_chars(&chars, end).is_none() {
-            end += 1;
-        }
-        let chunk: String = chars[i..end].iter().collect();
-        let mut broke = false;
-        for g in chunk.graphemes(true) {
-            let w = grapheme_width(g);
-            if current_col < before_end && current_col + w <= before_end {
-                if !pending_before.is_empty() {
-                    before.push_str(&pending_before);
-                    pending_before.clear();
-                }
-                before.push_str(g);
-                before_width += w;
-            } else if current_col >= after_start && current_col < after_end {
-                let fits = !strict_after || current_col + w <= after_end;
-                if fits {
-                    if !after_started {
-                        after.push_str(&tracker.active_codes());
-                        after_started = true;
-                    }
-                    after.push_str(g);
-                    after_width += w;
-                }
-            }
-            current_col += w;
-            let done = if after_len == 0 { current_col >= before_end } else { current_col >= after_end };
-            if done {
-                broke = true;
-                break;
-            }
-        }
-        i = end;
-        let done = if after_len == 0 { current_col >= before_end } else { current_col >= after_end };
-        if broke || done {
-            break;
-        }
-    }
-    (before, before_width, after, after_width)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn extract_ansi_code(s: &str, char_pos: usize) -> Option<AnsiCode> {
+        let chars: Vec<char> = s.chars().collect();
+        extract_ansi_code_chars(&chars, char_pos)
+    }
 
     #[test]
     fn visible_width_ascii() {
@@ -1102,15 +1014,5 @@ mod tests {
         assert_eq!(r, "\u{0e4d}\u{0e32}");
         // unaffected text untouched
         assert_eq!(normalize_terminal_output("abc"), "abc");
-    }
-
-    #[test]
-    fn extract_segments_splices() {
-        // before [0,2), after starts at 4
-        let (before, bw, after, aw) = extract_segments("abcdefgh", 2, 4, 2, true);
-        assert_eq!(before, "ab");
-        assert_eq!(bw, 2);
-        assert_eq!(after, "ef");
-        assert_eq!(aw, 2);
     }
 }

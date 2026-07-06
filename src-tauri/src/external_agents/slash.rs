@@ -142,6 +142,20 @@ pub async fn list_external_cli_slash_commands(
         return Ok((true, cached, None));
     }
 
+    // ClaudeInit / Acp / PiRpc all probe with an identical fresh runtime context + empty build
+    // options; only the resolved binary + discovery call differ per arm.
+    let runtime_ctx = RuntimeContext {
+        extra_allowed_dirs: Vec::new(),
+        resume_session_id: None,
+        new_session_id: Some(Uuid::new_v4().to_string()),
+        include_partial_messages: false,
+    };
+    let build_options = RuntimeBuildOptions {
+        model: None,
+        reasoning: None,
+        sandbox: None,
+    };
+
     let commands = match def.slash_strategy {
         SlashStrategy::ClaudeInit => {
             let detected = detect_single_agent(def).await;
@@ -154,18 +168,6 @@ pub async fn list_external_cli_slash_commands(
             let resolved_bin = resolve_binary(def)
                 .await
                 .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
-            let runtime_ctx = RuntimeContext {
-                cwd: Some(cwd.clone()),
-                extra_allowed_dirs: Vec::new(),
-                resume_session_id: None,
-                new_session_id: Some(Uuid::new_v4().to_string()),
-                include_partial_messages: false,
-            };
-            let build_options = RuntimeBuildOptions {
-                model: None,
-                reasoning: None,
-                sandbox: None,
-            };
             let args = (def.build_args)(&runtime_ctx, &build_options, None);
             probe_claude_slash_commands(&resolved_bin, Path::new(&cwd), &args).await?
         }
@@ -180,18 +182,6 @@ pub async fn list_external_cli_slash_commands(
             let resolved_bin = resolve_binary(def)
                 .await
                 .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
-            let runtime_ctx = RuntimeContext {
-                cwd: Some(cwd.clone()),
-                extra_allowed_dirs: Vec::new(),
-                resume_session_id: None,
-                new_session_id: Some(Uuid::new_v4().to_string()),
-                include_partial_messages: false,
-            };
-            let build_options = RuntimeBuildOptions {
-                model: None,
-                reasoning: None,
-                sandbox: None,
-            };
             let args = (def.build_args)(&runtime_ctx, &build_options, None);
             let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
             detect_acp_commands(&resolved_bin, &args_ref, Path::new(&cwd), 10)
@@ -214,18 +204,6 @@ pub async fn list_external_cli_slash_commands(
             let resolved_bin = resolve_binary(def)
                 .await
                 .ok_or_else(|| format!("无法定位 {} 可执行文件", def.bin))?;
-            let runtime_ctx = RuntimeContext {
-                cwd: Some(cwd.clone()),
-                extra_allowed_dirs: Vec::new(),
-                resume_session_id: None,
-                new_session_id: Some(Uuid::new_v4().to_string()),
-                include_partial_messages: false,
-            };
-            let build_options = RuntimeBuildOptions {
-                model: None,
-                reasoning: None,
-                sandbox: None,
-            };
             let args = (def.build_args)(&runtime_ctx, &build_options, None);
             let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
             crate::external_agents::session::pi_rpc::detect_pi_commands(
@@ -260,9 +238,9 @@ pub async fn list_external_cli_slash_commands(
 fn resolve_slash_cwd(app: &AppHandle, conversation_id: Option<&str>) -> Result<String, String> {
     if let Some(conversation_id) = conversation_id.filter(|id| !id.trim().is_empty()) {
         let conversation = load_conversation(app, conversation_id)?;
-        let workspace =
+        let workspace_cwd =
             resolve_effective_cwd(app, conversation_id, conversation.project_id.as_deref())?;
-        Ok(workspace.cwd.to_string_lossy().into_owned())
+        Ok(workspace_cwd.to_string_lossy().into_owned())
     } else {
         Ok(std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())

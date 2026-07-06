@@ -19,28 +19,6 @@ const REASONING: &[(&str, &str)] = &[
     ("xhigh", "XHigh"),
 ];
 
-fn codex_needs_danger_full_access() -> bool {
-    if std::env::var("KIVIO_CODEX_SANDBOX")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-        == Some("danger-full-access")
-    {
-        return true;
-    }
-    if cfg!(target_os = "windows") {
-        return true;
-    }
-    std::env::var("WSL_DISTRO_NAME")
-        .ok()
-        .is_some_and(|v| !v.trim().is_empty())
-}
-
-#[allow(dead_code)]
-fn _codex_sandbox_hint() -> bool {
-    codex_needs_danger_full_access()
-}
-
 pub fn build_codex_args(
     _ctx: &RuntimeContext,
     _options: &RuntimeBuildOptions,
@@ -84,7 +62,6 @@ mod tests {
     fn codex_build_args_uses_app_server() {
         let args = build_codex_args(
             &RuntimeContext {
-                cwd: Some("/tmp/p".to_string()),
                 extra_allowed_dirs: vec![],
                 resume_session_id: None,
                 new_session_id: None,

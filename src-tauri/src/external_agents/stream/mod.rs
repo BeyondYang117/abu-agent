@@ -15,10 +15,12 @@ pub fn create_stream_handler(
             StreamHandler::Claude(claude::ClaudeStreamState::default())
         }
         StreamFormat::JsonEventStream => StreamHandler::Json(json_events::JsonEventStreamState::new(
-            parser.unwrap_or(JsonEventParser::Codex),
+            parser.unwrap_or(JsonEventParser::Kimi),
         )),
+        // PiRpc / AcpJsonRpc / CodexAppServer are driven by dedicated session runners in run.rs and
+        // never reach this factory.
         StreamFormat::PiRpc | StreamFormat::AcpJsonRpc | StreamFormat::CodexAppServer => {
-            StreamHandler::Json(json_events::JsonEventStreamState::new(JsonEventParser::Codex))
+            unreachable!("{format:?} uses a dedicated session runner, not create_stream_handler")
         }
     }
 }
@@ -32,25 +34,13 @@ impl StreamHandler {
     pub fn handle_line(&mut self, line: &str, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
         let value = match serde_json::from_str::<Value>(line.trim()) {
             Ok(v) => v,
-            Err(_) => {
-                sink(UnifiedAgentEvent::Raw {
-                    line: line.to_string(),
-                });
-                return;
-            }
+            Err(_) => return,
         };
         match self {
             StreamHandler::Claude(state) => state.handle_value(&value, sink),
             StreamHandler::Json(state) => state.handle_value(&value, sink),
         }
     }
-}
-
-pub fn map_json_value(value: &Value) -> Option<UnifiedAgentEvent> {
-    let mut out = None;
-    let mut sink = |event: UnifiedAgentEvent| out = Some(event);
-    claude::ClaudeStreamState::default().handle_value(value, &mut sink);
-    out
 }
 
 pub fn usage_from_numbers(input: u64, output: u64) -> ModelUsage {

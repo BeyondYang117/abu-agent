@@ -1784,7 +1784,6 @@ mod tests {
             tool_records,
             segments: Vec::new(),
             api_messages,
-            steps: Vec::new(),
             stream_outcome: "completed".to_string(),
             usage: None,
             last_step_usage: None,

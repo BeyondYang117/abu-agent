@@ -5,8 +5,7 @@
 //!
 //! 覆盖：word-wrap 布局（`word_wrap_line` → [`TextChunk`]）、视觉行映射 + 垂直光标（sticky 首选列）、
 //! 字符/词/行首尾/页/jump-to-char 移动、kill-ring、undo（词输入合并）、prompt 历史、bracketed paste
-//! +大粘贴 marker（原子分段）、上下边框 + 滚动指示、聚焦时反显假光标 + [`CURSOR_MARKER`]、
-//! 可选 autocomplete provider 下拉。
+//! +大粘贴 marker（原子分段）、上下边框 + 滚动指示、聚焦时反显假光标 + [`CURSOR_MARKER`]。
 //!
 //! **wrapping + 光标如何对齐**：`word_wrap_line` 把一条逻辑行切成若干 `TextChunk{text,start,end}`
 //! （字节区间），在空白后 / CJK 相邻处断行，长 token 强断。`layout_text` 把每条逻辑行展开成
@@ -17,7 +16,6 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::super::autocomplete::AutocompleteProvider;
 use super::super::keybindings::KeybindingsManager;
 use super::super::keys::{decode_printable_key, matches_key};
 use super::super::kill_ring::KillRing;
@@ -25,7 +23,7 @@ use super::super::render::{Component, CURSOR_MARKER};
 use super::super::text_width::{truncate_to_width, visible_width};
 use super::super::undo_stack::UndoStack;
 use super::super::word_navigation::{find_word_backward, find_word_forward, IsAtomic};
-use super::select_list::{SelectItem, SelectList, SelectListLayoutOptions, SelectListTheme};
+use super::select_list::SelectListTheme;
 use super::ColorFn;
 
 // =============================================================================
@@ -220,7 +218,6 @@ pub struct Editor {
     state: EditorState,
     pub focused: bool,
     border_color: ColorFn,
-    select_list_theme: Option<SelectListTheme>,
     padding_x: usize,
     last_width: usize,
     scroll_offset: usize,
@@ -245,13 +242,6 @@ pub struct Editor {
     kb: KeybindingsManager,
     kitty_active: bool,
 
-    // autocomplete
-    autocomplete_provider: Option<Box<dyn AutocompleteProvider + Send>>,
-    autocomplete_list: Option<SelectList>,
-    autocomplete_active: bool,
-    autocomplete_prefix: String,
-    autocomplete_max_visible: usize,
-
     pub disable_submit: bool,
     pub on_submit: Option<Box<dyn FnMut(String) + Send>>,
     pub on_change: Option<Box<dyn FnMut(String) + Send>>,
@@ -263,7 +253,6 @@ impl Editor {
             state: EditorState { lines: vec![String::new()], cursor_line: 0, cursor_col: 0 },
             focused: false,
             border_color: theme.border_color,
-            select_list_theme: Some(theme.select_list),
             padding_x: 0,
             last_width: 80,
             scroll_offset: 0,
@@ -283,11 +272,6 @@ impl Editor {
             undo_stack: UndoStack::new(),
             kb: KeybindingsManager::with_defaults(),
             kitty_active: false,
-            autocomplete_provider: None,
-            autocomplete_list: None,
-            autocomplete_active: false,
-            autocomplete_prefix: String::new(),
-            autocomplete_max_visible: 5,
             disable_submit: false,
             on_submit: None,
             on_change: None,
@@ -305,15 +289,6 @@ impl Editor {
 
     pub fn set_padding_x(&mut self, padding: usize) {
         self.padding_x = padding;
-    }
-
-    pub fn set_autocomplete_provider(&mut self, provider: Box<dyn AutocompleteProvider + Send>) {
-        self.cancel_autocomplete();
-        self.autocomplete_provider = Some(provider);
-    }
-
-    pub fn set_autocomplete_max_visible(&mut self, max_visible: usize) {
-        self.autocomplete_max_visible = max_visible.clamp(3, 20);
     }
 
     pub fn get_text(&self) -> String {
@@ -450,7 +425,6 @@ impl Editor {
     }
 
     pub fn set_text(&mut self, text: &str) {
-        self.cancel_autocomplete();
         self.last_action = None;
         self.exit_history_browsing();
         let normalized = Self::normalize_text(text);
@@ -501,44 +475,9 @@ impl Editor {
         self.preferred_visual_col = None;
         self.snapped_from_cursor_col = None;
         self.fire_change();
-
-        // autocomplete trigger（仅 slash 命令在首行）
-        if self.autocomplete_active {
-            self.update_autocomplete();
-        } else if ch == "/" && self.is_at_start_of_message() {
-            self.try_trigger_autocomplete();
-        } else if ch.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) {
-            let before = self.text_before_cursor();
-            if self.is_in_slash_command_context(&before) {
-                self.try_trigger_autocomplete();
-            }
-        }
-    }
-
-    fn text_before_cursor(&self) -> String {
-        let line = &self.state.lines[self.state.cursor_line];
-        line[..self.state.cursor_col].to_string()
-    }
-
-    fn is_slash_menu_allowed(&self) -> bool {
-        self.state.cursor_line == 0
-    }
-
-    fn is_at_start_of_message(&self) -> bool {
-        if !self.is_slash_menu_allowed() {
-            return false;
-        }
-        let before = self.text_before_cursor();
-        let t = before.trim();
-        t.is_empty() || t == "/"
-    }
-
-    fn is_in_slash_command_context(&self, before: &str) -> bool {
-        self.is_slash_menu_allowed() && before.trim_start().starts_with('/')
     }
 
     fn add_new_line(&mut self) {
-        self.cancel_autocomplete();
         self.exit_history_browsing();
         self.last_action = None;
         self.push_undo();
@@ -553,7 +492,6 @@ impl Editor {
     }
 
     fn submit_value(&mut self) {
-        self.cancel_autocomplete();
         let result = self.expand_paste_markers(&self.state.lines.join("\n")).trim().to_string();
         self.state = EditorState { lines: vec![String::new()], cursor_line: 0, cursor_col: 0 };
         self.pastes.clear();
@@ -609,14 +547,6 @@ impl Editor {
             self.set_cursor_col(prev.len());
         }
         self.fire_change();
-        if self.autocomplete_active {
-            self.update_autocomplete();
-        } else {
-            let before = self.text_before_cursor();
-            if self.is_in_slash_command_context(&before) {
-                self.try_trigger_autocomplete();
-            }
-        }
     }
 
     fn handle_forward_delete(&mut self) {
@@ -635,9 +565,6 @@ impl Editor {
             self.state.lines.remove(self.state.cursor_line + 1);
         }
         self.fire_change();
-        if self.autocomplete_active {
-            self.update_autocomplete();
-        }
     }
 
     fn delete_to_start_of_line(&mut self) {
@@ -1055,10 +982,6 @@ impl Editor {
                 self.set_cursor_col(len);
             }
         }
-
-        if self.autocomplete_active {
-            self.update_autocomplete();
-        }
     }
 
     fn page_scroll(&mut self, direction: i64) {
@@ -1102,7 +1025,6 @@ impl Editor {
 
     // ---- paste ----
     fn handle_paste(&mut self, pasted: &str) {
-        self.cancel_autocomplete();
         self.exit_history_browsing();
         self.last_action = None;
         self.push_undo();
@@ -1150,89 +1072,6 @@ impl Editor {
             self.set_cursor_col(col);
         }
         self.fire_change();
-    }
-
-    // ---- autocomplete ----
-    fn try_trigger_autocomplete(&mut self) {
-        let Some(provider) = self.autocomplete_provider.as_ref() else { return };
-        let suggestions = provider.get_suggestions(&self.state.lines, self.state.cursor_line, self.state.cursor_col);
-        if suggestions.items.is_empty() {
-            self.cancel_autocomplete();
-            return;
-        }
-        self.autocomplete_prefix = suggestions.prefix;
-        let items: Vec<SelectItem> = suggestions.items.into_iter().map(Into::into).collect();
-        if let Some(theme) = self.select_list_theme.take() {
-            let mut list = SelectList::new(items, self.autocomplete_max_visible, theme, SelectListLayoutOptions {
-                min_primary_column_width: Some(12),
-                max_primary_column_width: Some(32),
-            });
-            list.set_kitty_active(self.kitty_active);
-            self.autocomplete_list = Some(list);
-        } else if let Some(list) = self.autocomplete_list.as_mut() {
-            list.set_filtered_items(items);
-        }
-        self.autocomplete_active = true;
-    }
-
-    fn update_autocomplete(&mut self) {
-        let Some(provider) = self.autocomplete_provider.as_ref() else {
-            self.cancel_autocomplete();
-            return;
-        };
-        let suggestions = provider.get_suggestions(&self.state.lines, self.state.cursor_line, self.state.cursor_col);
-        if suggestions.items.is_empty() {
-            self.cancel_autocomplete();
-            return;
-        }
-        self.autocomplete_prefix = suggestions.prefix;
-        let items: Vec<SelectItem> = suggestions.items.into_iter().map(Into::into).collect();
-        if let Some(list) = self.autocomplete_list.as_mut() {
-            list.set_filtered_items(items);
-        }
-    }
-
-    fn cancel_autocomplete(&mut self) {
-        if !self.autocomplete_active {
-            return;
-        }
-        self.autocomplete_active = false;
-        // 把 theme 还回去以便复用
-        if let Some(list) = self.autocomplete_list.take() {
-            // SelectList 不暴露 theme 取回，这里重建一个 identity 不现实；改为保留 list 隐藏。
-            // 为简单起见保留 list（隐藏），下次 trigger 直接 set_filtered_items。
-            self.autocomplete_list = Some(list);
-        }
-    }
-
-    fn apply_autocomplete_selection(&mut self) -> bool {
-        let Some(selected) = self.autocomplete_list.as_ref().and_then(|l| l.get_selected_item()) else {
-            return false;
-        };
-        if self.autocomplete_provider.is_none() {
-            return false;
-        }
-        self.push_undo();
-        self.last_action = None;
-        let item = super::super::autocomplete::AutocompleteItem::new(
-            selected.value.clone(),
-            selected.label.clone(),
-            selected.description.clone(),
-        );
-        let provider = self.autocomplete_provider.as_ref().unwrap();
-        let (lines, line, col) = provider.apply_completion(
-            &self.state.lines,
-            self.state.cursor_line,
-            self.state.cursor_col,
-            &item,
-            &self.autocomplete_prefix,
-        );
-        self.state.lines = lines;
-        self.state.cursor_line = line;
-        self.set_cursor_col(col);
-        self.cancel_autocomplete();
-        self.fire_change();
-        true
     }
 
     fn layout_text(&self, content_width: usize) -> Vec<LayoutLine> {
@@ -1341,36 +1180,9 @@ impl Component for Editor {
             return;
         }
 
-        // autocomplete 模式
-        if self.autocomplete_active {
-            if self.matches(&data, "tui.select.cancel") {
-                self.cancel_autocomplete();
-                return;
-            }
-            if self.matches(&data, "tui.select.up") || self.matches(&data, "tui.select.down") {
-                if let Some(list) = self.autocomplete_list.as_mut() {
-                    list.handle_input(&data);
-                }
-                return;
-            }
-            if self.matches(&data, "tui.input.tab") {
-                self.apply_autocomplete_selection();
-                return;
-            }
-            if self.matches(&data, "tui.select.confirm") {
-                let was_slash = self.autocomplete_prefix.starts_with('/');
-                if self.apply_autocomplete_selection() {
-                    if was_slash {
-                        // fall through to submit
-                    } else {
-                        return;
-                    }
-                }
-            }
-        }
-
-        if self.matches(&data, "tui.input.tab") && !self.autocomplete_active {
-            self.try_trigger_autocomplete();
+        // Tab has no editor action (historically reserved for the now-removed
+        // slash-command autocomplete); swallow it so it never inserts a literal tab.
+        if self.matches(&data, "tui.input.tab") {
             return;
         }
 
@@ -1607,17 +1419,6 @@ impl Component for Editor {
             result.push(horizontal.repeat(width));
         }
 
-        // autocomplete dropdown
-        if self.autocomplete_active {
-            if let Some(list) = self.autocomplete_list.as_mut() {
-                for line in list.render(content_width as u16) {
-                    let lw = visible_width(&line);
-                    let lp = " ".repeat(content_width.saturating_sub(lw));
-                    result.push(format!("{left_padding}{line}{lp}{right_padding}"));
-                }
-            }
-        }
-
         result
     }
 }
@@ -1833,20 +1634,5 @@ mod tests {
         // editor text shows a marker, expanded text is the full paste
         assert!(e.get_text().contains("[paste #1 +"));
         assert!(e.get_expanded_text().contains("row19"));
-    }
-
-    #[test]
-    fn autocomplete_dropdown_shows() {
-        use super::super::super::autocomplete::{SlashCommand, StaticAutocompleteProvider};
-        let mut e = editor();
-        e.focused = true;
-        e.set_autocomplete_provider(Box::new(StaticAutocompleteProvider::new(vec![
-            SlashCommand::new("model", None),
-            SlashCommand::new("compact", None),
-        ])));
-        type_str(&mut e, "/mo");
-        let lines = e.render(60);
-        // dropdown line with /model should appear
-        assert!(lines.iter().any(|l| l.contains("/model")));
     }
 }

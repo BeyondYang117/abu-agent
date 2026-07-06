@@ -95,12 +95,11 @@ pub async fn run_external_cli_reply(
         format!("无法定位 {} 可执行文件", def.bin)
     })?;
 
-    let workspace = resolve_effective_cwd(
+    let cwd = resolve_effective_cwd(
         app,
         &conversation.id,
         conversation.project_id.as_deref(),
     )?;
-    let cwd = workspace.cwd.clone();
     let is_slash = is_cli_slash_input(latest_user_message);
 
     let skill_detail = if is_slash {
@@ -168,7 +167,6 @@ pub async fn run_external_cli_reply(
 
     let extra_dirs = extra_allowed_dirs_for_agent(def, &settings.chat_tools.skill_scan_paths);
     let runtime_ctx = RuntimeContext {
-        cwd: Some(cwd.to_string_lossy().into_owned()),
         extra_allowed_dirs: extra_dirs,
         resume_session_id: resume_ctx.resume_session_id.clone(),
         new_session_id: resume_ctx.new_session_id.clone(),
@@ -433,17 +431,22 @@ impl StreamSegmentTracker {
         self.active_reasoning_idx = None;
     }
 
-    fn append_text(
+    fn append(
         &mut self,
+        kind: ChatMessageSegmentKind,
         segments: &mut Vec<ChatMessageSegment>,
         segment_order: &mut u32,
         tool_calls_len: usize,
         delta: &str,
     ) -> ChatMessageSegment {
         let phase = text_phase_for_tool_count(tool_calls_len);
-        if let Some(idx) = self.active_text_idx {
+        let active = match kind {
+            ChatMessageSegmentKind::Reasoning => &mut self.active_reasoning_idx,
+            _ => &mut self.active_text_idx,
+        };
+        if let Some(idx) = *active {
             if let Some(segment) = segments.get_mut(idx) {
-                if segment.kind == ChatMessageSegmentKind::Text && segment.phase == phase {
+                if segment.kind == kind && segment.phase == phase {
                     let merged = format!("{}{}", segment.text.as_deref().unwrap_or(""), delta);
                     segment.text = Some(merged);
                     return segment.clone();
@@ -454,7 +457,7 @@ impl StreamSegmentTracker {
         *segment_order += 1;
         let segment = ChatMessageSegment {
             id: format!("seg_{}", Uuid::new_v4()),
-            kind: ChatMessageSegmentKind::Text,
+            kind,
             phase,
             order: *segment_order,
             step_number: None,
@@ -466,45 +469,7 @@ impl StreamSegmentTracker {
             text: Some(delta.to_string()),
             tool_call_id: None,
         };
-        self.active_text_idx = Some(segments.len());
-        segments.push(segment.clone());
-        segment
-    }
-
-    fn append_reasoning(
-        &mut self,
-        segments: &mut Vec<ChatMessageSegment>,
-        segment_order: &mut u32,
-        tool_calls_len: usize,
-        delta: &str,
-    ) -> ChatMessageSegment {
-        let phase = text_phase_for_tool_count(tool_calls_len);
-        if let Some(idx) = self.active_reasoning_idx {
-            if let Some(segment) = segments.get_mut(idx) {
-                if segment.kind == ChatMessageSegmentKind::Reasoning && segment.phase == phase {
-                    let merged = format!("{}{}", segment.text.as_deref().unwrap_or(""), delta);
-                    segment.text = Some(merged);
-                    return segment.clone();
-                }
-            }
-        }
-
-        *segment_order += 1;
-        let segment = ChatMessageSegment {
-            id: format!("seg_{}", Uuid::new_v4()),
-            kind: ChatMessageSegmentKind::Reasoning,
-            phase,
-            order: *segment_order,
-            step_number: None,
-            round: if tool_calls_len == 0 {
-                None
-            } else {
-                Some(1)
-            },
-            text: Some(delta.to_string()),
-            tool_call_id: None,
-        };
-        self.active_reasoning_idx = Some(segments.len());
+        *active = Some(segments.len());
         segments.push(segment.clone());
         segment
     }
@@ -764,7 +729,8 @@ fn apply_unified_event(
     match event {
         UnifiedAgentEvent::TextDelta { delta } => {
             content.push_str(&delta);
-            let segment = segment_tracker.append_text(
+            let segment = segment_tracker.append(
+                ChatMessageSegmentKind::Text,
                 segments,
                 segment_order,
                 tool_calls.len(),
@@ -782,7 +748,8 @@ fn apply_unified_event(
         }
         UnifiedAgentEvent::ThinkingDelta { delta } => {
             reasoning.push_str(&delta);
-            let segment = segment_tracker.append_reasoning(
+            let segment = segment_tracker.append(
+                ChatMessageSegmentKind::Reasoning,
                 segments,
                 segment_order,
                 tool_calls.len(),
@@ -880,8 +847,8 @@ mod tests {
         let mut order = 0u32;
         let mut tracker = StreamSegmentTracker::default();
 
-        let first = tracker.append_text(&mut segments, &mut order, 0, "你");
-        let second = tracker.append_text(&mut segments, &mut order, 0, "好");
+        let first = tracker.append(ChatMessageSegmentKind::Text, &mut segments, &mut order, 0, "你");
+        let second = tracker.append(ChatMessageSegmentKind::Text, &mut segments, &mut order, 0, "好");
 
         assert_eq!(segments.len(), 1);
         assert_eq!(first.id, second.id);
@@ -910,9 +877,9 @@ mod tests {
         let mut order = 0u32;
         let mut tracker = StreamSegmentTracker::default();
 
-        tracker.append_text(&mut segments, &mut order, 0, "before");
+        tracker.append(ChatMessageSegmentKind::Text, &mut segments, &mut order, 0, "before");
         tracker.reset_text();
-        let after = tracker.append_text(&mut segments, &mut order, 1, "after");
+        let after = tracker.append(ChatMessageSegmentKind::Text, &mut segments, &mut order, 1, "after");
 
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].text.as_deref(), Some("before"));

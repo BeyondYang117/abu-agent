@@ -16,10 +16,6 @@ pub enum StreamFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum JsonEventParser {
-    Codex,
-    CursorAgent,
-    OpenCode,
-    Gemini,
     Kimi,
 }
 
@@ -90,7 +86,6 @@ pub struct RuntimeBuildOptions {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeContext {
-    pub cwd: Option<String>,
     pub extra_allowed_dirs: Vec<String>,
     pub resume_session_id: Option<String>,
     pub new_session_id: Option<String>,
@@ -137,11 +132,6 @@ pub struct ExternalCliSlashCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UnifiedAgentEvent {
-    Status {
-        label: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        model: Option<String>,
-    },
     TextDelta {
         delta: String,
     },
@@ -161,16 +151,10 @@ pub enum UnifiedAgentEvent {
     Usage {
         usage: ModelUsage,
     },
-    TurnEnd {
-        stop_reason: String,
-    },
     Error {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<String>,
-    },
-    Raw {
-        line: String,
     },
     SlashCommands {
         commands: Vec<ExternalCliSlashCommand>,

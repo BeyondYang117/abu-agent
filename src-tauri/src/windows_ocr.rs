@@ -15,11 +15,6 @@ use ::windows::{
 
 #[cfg(target_os = "windows")]
 pub async fn ocr_image(image_path: &Path) -> Result<String, String> {
-    ocr_image_blocking(image_path)
-}
-
-#[cfg(target_os = "windows")]
-fn ocr_image_blocking(image_path: &Path) -> Result<String, String> {
     struct WinRtGuard(bool);
 
     impl Drop for WinRtGuard {

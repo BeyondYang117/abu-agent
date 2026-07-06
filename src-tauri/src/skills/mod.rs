@@ -194,18 +194,6 @@ pub fn read_skill_detail(
     })
 }
 
-pub fn read_skill_record(
-    app: &AppHandle,
-    extra_paths: &[String],
-    skill_id: &str,
-) -> Result<SkillRecord, String> {
-    let registry = build_registry(app, extra_paths)?;
-    registry
-        .find(skill_id)
-        .cloned()
-        .ok_or_else(|| format!("Skill not found: {skill_id}"))
-}
-
 fn import_skill_dir(source: &Path, skills_dir: &Path) -> Result<SkillMeta, String> {
     let skill_file = source.join("SKILL.md");
     if !skill_file.is_file() {

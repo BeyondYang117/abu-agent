@@ -5,8 +5,7 @@
 //! 序列三套，以及修饰位掩码、numpad 归一、shifted-letter identity、非拉丁布局 base-layout-key
 //! 匹配、ctrl-char 公式（`code & 0x1f`）等。
 //!
-//! 设计上避免 PI 的模块级全局可变状态：Kitty 协议是否激活作为显式参数 `kitty_active` 传入；
-//! 事件类型（press/repeat/release）由独立的 [`is_key_release`] / [`is_key_repeat`] 探测。
+//! 设计上避免 PI 的模块级全局可变状态：Kitty 协议是否激活作为显式参数 `kitty_active` 传入。
 
 // 修饰位掩码（与 Kitty 协议一致）
 const MOD_SHIFT: u32 = 1;
@@ -87,13 +86,6 @@ fn normalize_shifted_letter_identity(cp: i64, modifier: u32) -> i64 {
     cp
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyEventType {
-    Press,
-    Repeat,
-    Release,
-}
-
 struct ParsedKitty {
     codepoint: i64,
     base_layout_key: Option<i64>,
@@ -103,35 +95,6 @@ struct ParsedKitty {
 struct ParsedMok {
     codepoint: i64,
     modifier: u32,
-}
-
-/// 探测是否 Kitty 释放事件（含 `:3`）。粘贴内容不算。
-pub fn is_key_release(data: &str) -> bool {
-    if data.contains("\x1b[200~") {
-        return false;
-    }
-    const PATS: &[&str] = &[":3u", ":3~", ":3A", ":3B", ":3C", ":3D", ":3H", ":3F"];
-    PATS.iter().any(|p| data.contains(p))
-}
-
-/// 探测是否 Kitty 重复事件（含 `:2`）。
-pub fn is_key_repeat(data: &str) -> bool {
-    if data.contains("\x1b[200~") {
-        return false;
-    }
-    const PATS: &[&str] = &[":2u", ":2~", ":2A", ":2B", ":2C", ":2D", ":2H", ":2F"];
-    PATS.iter().any(|p| data.contains(p))
-}
-
-/// 探测最后事件类型（press/repeat/release）。
-pub fn event_type(data: &str) -> KeyEventType {
-    if is_key_release(data) {
-        KeyEventType::Release
-    } else if is_key_repeat(data) {
-        KeyEventType::Repeat
-    } else {
-        KeyEventType::Press
-    }
 }
 
 // ---- 手写的小型序列解析（替代 PI 的正则） ----
@@ -678,197 +641,8 @@ pub fn matches_key(data: &str, key_id: &str, kitty_active: bool) -> bool {
     false
 }
 
-fn format_key_name_with_modifiers(name: &str, modifier: u32) -> Option<String> {
-    let eff = modifier & !LOCK_MASK;
-    let supported = MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER;
-    if (eff & !supported) != 0 {
-        return None;
-    }
-    let mut mods: Vec<&str> = Vec::new();
-    if eff & MOD_SHIFT != 0 {
-        mods.push("shift");
-    }
-    if eff & MOD_CTRL != 0 {
-        mods.push("ctrl");
-    }
-    if eff & MOD_ALT != 0 {
-        mods.push("alt");
-    }
-    if eff & MOD_SUPER != 0 {
-        mods.push("super");
-    }
-    if mods.is_empty() {
-        Some(name.to_string())
-    } else {
-        Some(format!("{}+{}", mods.join("+"), name))
-    }
-}
-
-fn format_parsed_key(codepoint: i64, modifier: u32, base_layout_key: Option<i64>) -> Option<String> {
-    let normalized = normalize_kitty_functional(codepoint);
-    let identity = normalize_shifted_letter_identity(normalized, modifier);
-    let is_latin = (97..=122).contains(&identity);
-    let is_digit = (48..=57).contains(&identity);
-    let is_symbol = char::from_u32(identity as u32).map(is_symbol_key).unwrap_or(false);
-    let effective = if is_latin || is_digit || is_symbol {
-        identity
-    } else {
-        base_layout_key.unwrap_or(identity)
-    };
-
-    let name: Option<String> = if effective == CP_ESCAPE {
-        Some("escape".into())
-    } else if effective == CP_TAB {
-        Some("tab".into())
-    } else if effective == CP_ENTER || effective == CP_KP_ENTER {
-        Some("enter".into())
-    } else if effective == CP_SPACE {
-        Some("space".into())
-    } else if effective == CP_BACKSPACE {
-        Some("backspace".into())
-    } else if effective == FN_DELETE {
-        Some("delete".into())
-    } else if effective == FN_INSERT {
-        Some("insert".into())
-    } else if effective == FN_HOME {
-        Some("home".into())
-    } else if effective == FN_END {
-        Some("end".into())
-    } else if effective == FN_PAGE_UP {
-        Some("pageUp".into())
-    } else if effective == FN_PAGE_DOWN {
-        Some("pageDown".into())
-    } else if effective == ARROW_UP {
-        Some("up".into())
-    } else if effective == ARROW_DOWN {
-        Some("down".into())
-    } else if effective == ARROW_LEFT {
-        Some("left".into())
-    } else if effective == ARROW_RIGHT {
-        Some("right".into())
-    } else if (48..=57).contains(&effective) || (97..=122).contains(&effective) {
-        char::from_u32(effective as u32).map(|c| c.to_string())
-    } else if char::from_u32(effective as u32).map(is_symbol_key).unwrap_or(false) {
-        char::from_u32(effective as u32).map(|c| c.to_string())
-    } else {
-        None
-    };
-
-    format_key_name_with_modifiers(&name?, modifier)
-}
-
-/// 解析输入并返回按键标识（如 `"ctrl+c"`），无法识别时返回 None。
-pub fn parse_key(data: &str, kitty_active: bool) -> Option<String> {
-    if let Some(k) = parse_kitty_sequence(data) {
-        return format_parsed_key(k.codepoint, k.modifier, k.base_layout_key);
-    }
-    if let Some(m) = parse_mok(data) {
-        return format_parsed_key(m.codepoint, m.modifier, None);
-    }
-    if kitty_active && (data == "\x1b\r" || data == "\n") {
-        return Some("shift+enter".into());
-    }
-
-    // 一些固定 legacy 序列
-    let direct = match data {
-        "\x1bOA" => Some("up"),
-        "\x1bOB" => Some("down"),
-        "\x1bOC" => Some("right"),
-        "\x1bOD" => Some("left"),
-        "\x1bOH" => Some("home"),
-        "\x1bOF" => Some("end"),
-        "\x1b[Z" => Some("shift+tab"),
-        _ => None,
-    };
-    if let Some(d) = direct {
-        return Some(d.into());
-    }
-
-    if data == "\x1b" {
-        return Some("escape".into());
-    }
-    if data == "\x1c" {
-        return Some("ctrl+\\".into());
-    }
-    if data == "\x1d" {
-        return Some("ctrl+]".into());
-    }
-    if data == "\x1f" {
-        return Some("ctrl+-".into());
-    }
-    if data == "\t" {
-        return Some("tab".into());
-    }
-    if data == "\r" || (!kitty_active && data == "\n") || data == "\x1bOM" {
-        return Some("enter".into());
-    }
-    if data == "\x00" {
-        return Some("ctrl+space".into());
-    }
-    if data == " " {
-        return Some("space".into());
-    }
-    if data == "\x7f" {
-        return Some("backspace".into());
-    }
-    if !kitty_active && data == "\x1b\r" {
-        return Some("alt+enter".into());
-    }
-    if !kitty_active && data == "\x1b " {
-        return Some("alt+space".into());
-    }
-    if data == "\x1b\x7f" || data == "\x1b\x08" {
-        return Some("alt+backspace".into());
-    }
-    if !kitty_active && data == "\x1bB" {
-        return Some("alt+left".into());
-    }
-    if !kitty_active && data == "\x1bF" {
-        return Some("alt+right".into());
-    }
-    // ESC + 单字符（alt+letter/digit、ctrl+alt+letter）
-    if !kitty_active {
-        let chars: Vec<char> = data.chars().collect();
-        if chars.len() == 2 && chars[0] == '\x1b' {
-            let code = chars[1] as u32;
-            if (1..=26).contains(&code) {
-                let letter = char::from_u32(code + 96).unwrap();
-                return Some(format!("ctrl+alt+{letter}"));
-            }
-            if (97..=122).contains(&code) || (48..=57).contains(&code) {
-                return Some(format!("alt+{}", chars[1]));
-            }
-        }
-    }
-    match data {
-        "\x1b[A" => return Some("up".into()),
-        "\x1b[B" => return Some("down".into()),
-        "\x1b[C" => return Some("right".into()),
-        "\x1b[D" => return Some("left".into()),
-        "\x1b[H" => return Some("home".into()),
-        "\x1b[F" => return Some("end".into()),
-        "\x1b[3~" => return Some("delete".into()),
-        "\x1b[5~" => return Some("pageUp".into()),
-        "\x1b[6~" => return Some("pageDown".into()),
-        _ => {}
-    }
-
-    // raw Ctrl+letter / 可打印 ASCII
-    let chars: Vec<char> = data.chars().collect();
-    if chars.len() == 1 {
-        let code = chars[0] as u32;
-        if (1..=26).contains(&code) {
-            return Some(format!("ctrl+{}", char::from_u32(code + 96).unwrap()));
-        }
-        if (32..=126).contains(&code) {
-            return Some(data.to_string());
-        }
-    }
-    None
-}
-
 /// 把 Kitty CSI-u（仅 plain / shift 修饰）解码回可打印字符。Ctrl/Alt 等返回 None。
-pub fn decode_kitty_printable(data: &str) -> Option<char> {
+fn decode_kitty_printable(data: &str) -> Option<char> {
     let k = parse_kitty_sequence(data)?;
     // 只接受 plain / shift（外加 lock 位）
     let allowed = MOD_SHIFT | LOCK_MASK;
@@ -1010,30 +784,6 @@ mod tests {
         assert!(matches_key("\x1b[3~", "delete", false));
         assert!(matches_key("\x1b[5~", "pageUp", false));
         assert!(matches_key("\x1b[6~", "pageDown", false));
-    }
-
-    #[test]
-    fn parse_key_basics() {
-        assert_eq!(parse_key("\x03", false).as_deref(), Some("ctrl+c"));
-        assert_eq!(parse_key("\x1b[A", false).as_deref(), Some("up"));
-        assert_eq!(parse_key("\x1b", false).as_deref(), Some("escape"));
-        assert_eq!(parse_key("a", false).as_deref(), Some("a"));
-        assert_eq!(parse_key("\x1b[Z", false).as_deref(), Some("shift+tab"));
-    }
-
-    #[test]
-    fn parse_key_kitty() {
-        assert_eq!(parse_key("\x1b[99;5u", false).as_deref(), Some("ctrl+c"));
-        assert_eq!(parse_key("\x1b[13;2u", false).as_deref(), Some("shift+enter"));
-    }
-
-    #[test]
-    fn paste_event_detection() {
-        assert!(is_key_release("\x1b[97;1:3u"));
-        assert!(is_key_repeat("\x1b[97;1:2u"));
-        // paste content not treated as release
-        assert!(!is_key_release("\x1b[200~90:62:3F\x1b[201~"));
-        assert_eq!(event_type("\x1b[97u"), KeyEventType::Press);
     }
 
     #[test]

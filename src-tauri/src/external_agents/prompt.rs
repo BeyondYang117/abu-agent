@@ -4,7 +4,6 @@ use crate::external_agents::skill_stage::{with_skill_root_preamble, SKILLS_CWD_A
 pub struct ComposedExternalPrompt {
     pub full_prompt: String,
     pub instructions_block: String,
-    pub skip_transcript: bool,
 }
 
 pub fn is_cli_slash_input(content: &str) -> bool {
@@ -15,7 +14,6 @@ pub fn compose_external_prompt_passthrough(latest_user_message: &str) -> Compose
     ComposedExternalPrompt {
         full_prompt: latest_user_message.trim().to_string(),
         instructions_block: String::new(),
-        skip_transcript: true,
     }
 }
 
@@ -71,7 +69,6 @@ pub fn compose_external_prompt(
     ComposedExternalPrompt {
         full_prompt: full,
         instructions_block,
-        skip_transcript,
     }
 }
 
@@ -165,7 +162,6 @@ mod tests {
         let composed = compose_external_prompt_passthrough("  /model gpt-5  ");
         assert_eq!(composed.full_prompt, "/model gpt-5");
         assert!(composed.instructions_block.is_empty());
-        assert!(composed.skip_transcript);
         assert!(!composed.full_prompt.contains("# Instructions"));
     }
 }

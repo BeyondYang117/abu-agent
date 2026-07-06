@@ -140,20 +140,6 @@ mod tests {
     }
 }
 
-pub fn sessions_root(app: &AppHandle) -> Result<PathBuf, String> {
-    sessions_dir(app)
-}
-
-pub fn session_file_exists(app: &AppHandle, conversation_id: &str) -> bool {
-    session_path(app, conversation_id)
-        .ok()
-        .is_some_and(|p| p.is_file())
-}
-
-pub fn managed_session_path(_app: &AppHandle, _conversation_id: &str) -> Option<PathBuf> {
-    None
-}
-
 // ---------------------------------------------------------------------------------------------
 // Phase 2: persisted handle for a live rich-protocol session, so a conversation can RESUME its
 // native thread/session after an app restart. Stored separately from ExternalAgentSession (which

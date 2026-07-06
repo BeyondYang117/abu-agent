@@ -36,13 +36,6 @@ impl ClaudeStreamState {
                     if !commands.is_empty() {
                         sink(UnifiedAgentEvent::SlashCommands { commands });
                     }
-                    sink(UnifiedAgentEvent::Status {
-                        label: "initializing".to_string(),
-                        model: obj
-                            .get("model")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string),
-                    });
                 }
             }
             "stream_event" => {
@@ -146,13 +139,6 @@ impl ClaudeStreamState {
                     .unwrap_or(0);
                 sink(UnifiedAgentEvent::Usage {
                     usage: usage_from_numbers(input, output),
-                });
-                sink(UnifiedAgentEvent::TurnEnd {
-                    stop_reason: obj
-                        .get("subtype")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("completed")
-                        .to_string(),
                 });
             }
             "error" => {

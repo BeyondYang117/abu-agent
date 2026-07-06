@@ -553,20 +553,6 @@ pub fn list_sessions(cwd: &Path) -> Vec<SessionSummary> {
 
 /// List sessions across *all* cwd directories under the session root, most
 /// recent first.
-pub fn list_all_sessions() -> Vec<SessionSummary> {
-    let root = sessions_root();
-    let mut summaries = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                summaries.extend(read_summaries_in_dir(&entry.path()));
-            }
-        }
-    }
-    summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    summaries
-}
-
 fn read_summaries_in_dir(dir: &Path) -> Vec<SessionSummary> {
     let mut summaries = Vec::new();
     let entries = match std::fs::read_dir(dir) {

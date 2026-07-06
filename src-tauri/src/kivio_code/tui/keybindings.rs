@@ -1,7 +1,7 @@
 //! Keybindings —— PI `keybindings.ts` 端口。
 //!
-//! 把动作 id（如 `"tui.editor.cursorUp"`、`"tui.input.submit"`）映射到一组按键标识，合并默认表
-//! [`tui_keybindings`] 与用户覆盖，并检测用户绑定冲突。组件调用
+//! 把动作 id（如 `"tui.editor.cursorUp"`、`"tui.input.submit"`）映射到一组按键标识（默认表
+//! [`tui_keybindings`]）。组件调用
 //! `manager.matches(data, "tui.editor.deleteWordBackward", kitty_active)`。
 
 use std::collections::HashMap;
@@ -76,13 +76,6 @@ pub fn tui_keybindings() -> Vec<(&'static str, KeybindingDefinition)> {
     ]
 }
 
-/// 一处用户绑定冲突：同一按键被多个动作绑定。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeybindingConflict {
-    pub key: String,
-    pub keybindings: Vec<String>,
-}
-
 fn normalize_keys(keys: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
@@ -94,68 +87,19 @@ fn normalize_keys(keys: &[String]) -> Vec<String> {
     result
 }
 
-/// keybinding 管理器：合并默认 + 用户覆盖，提供 [`matches`](KeybindingsManager::matches)。
+/// keybinding 管理器：从默认表解析按键，提供 [`matches`](KeybindingsManager::matches)。
 pub struct KeybindingsManager {
-    definitions: Vec<(String, KeybindingDefinition)>,
-    user_bindings: HashMap<String, Vec<String>>,
     keys_by_id: HashMap<String, Vec<String>>,
-    conflicts: Vec<KeybindingConflict>,
 }
 
 impl KeybindingsManager {
-    /// 用给定定义表 + 用户覆盖构造。
-    pub fn new(
-        definitions: Vec<(&'static str, KeybindingDefinition)>,
-        user_bindings: HashMap<String, Vec<String>>,
-    ) -> Self {
-        let mut mgr = Self {
-            definitions: definitions.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
-            user_bindings,
-            keys_by_id: HashMap::new(),
-            conflicts: Vec::new(),
-        };
-        mgr.rebuild();
-        mgr
-    }
-
     /// 用默认表构造。
     pub fn with_defaults() -> Self {
-        Self::new(tui_keybindings(), HashMap::new())
-    }
-
-    fn rebuild(&mut self) {
-        self.keys_by_id.clear();
-        self.conflicts.clear();
-
-        let valid_ids: std::collections::HashSet<&str> =
-            self.definitions.iter().map(|(id, _)| id.as_str()).collect();
-
-        // 用户绑定冲突检测
-        let mut user_claims: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
-        for (binding, keys) in &self.user_bindings {
-            if !valid_ids.contains(binding.as_str()) {
-                continue;
-            }
-            for key in normalize_keys(keys) {
-                user_claims.entry(key).or_default().insert(binding.clone());
-            }
+        let mut keys_by_id = HashMap::new();
+        for (id, def) in tui_keybindings() {
+            keys_by_id.insert(id.to_string(), normalize_keys(&def.default_keys));
         }
-        for (key, bindings) in &user_claims {
-            if bindings.len() > 1 {
-                self.conflicts.push(KeybindingConflict {
-                    key: key.clone(),
-                    keybindings: bindings.iter().cloned().collect(),
-                });
-            }
-        }
-
-        for (id, def) in &self.definitions {
-            let keys = match self.user_bindings.get(id) {
-                Some(user_keys) => normalize_keys(user_keys),
-                None => normalize_keys(&def.default_keys),
-            };
-            self.keys_by_id.insert(id.clone(), keys);
-        }
+        Self { keys_by_id }
     }
 
     /// 输入 `data` 是否匹配动作 `keybinding`。
@@ -165,22 +109,6 @@ impl KeybindingsManager {
         } else {
             false
         }
-    }
-
-    /// 取某动作绑定的按键列表。
-    pub fn get_keys(&self, keybinding: &str) -> Vec<String> {
-        self.keys_by_id.get(keybinding).cloned().unwrap_or_default()
-    }
-
-    /// 当前用户绑定冲突列表。
-    pub fn conflicts(&self) -> &[KeybindingConflict] {
-        &self.conflicts
-    }
-
-    /// 替换用户绑定并重建。
-    pub fn set_user_bindings(&mut self, user_bindings: HashMap<String, Vec<String>>) {
-        self.user_bindings = user_bindings;
-        self.rebuild();
     }
 }
 
@@ -211,30 +139,5 @@ mod tests {
         // cursorLeft = left OR ctrl+b
         assert!(m.matches("\x1b[D", "tui.editor.cursorLeft", false));
         assert!(m.matches("\x02", "tui.editor.cursorLeft", false)); // ctrl+b
-    }
-
-    #[test]
-    fn user_override_replaces_defaults() {
-        let mut user = HashMap::new();
-        user.insert("tui.input.submit".to_string(), vec!["ctrl+s".to_string()]);
-        let m = KeybindingsManager::new(tui_keybindings(), user);
-        assert!(m.matches("\x13", "tui.input.submit", false)); // ctrl+s
-        assert!(!m.matches("\r", "tui.input.submit", false)); // enter no longer submits
-    }
-
-    #[test]
-    fn conflict_detection() {
-        let mut user = HashMap::new();
-        user.insert("tui.input.submit".to_string(), vec!["ctrl+x".to_string()]);
-        user.insert("tui.input.copy".to_string(), vec!["ctrl+x".to_string()]);
-        let m = KeybindingsManager::new(tui_keybindings(), user);
-        assert_eq!(m.conflicts().len(), 1);
-        assert_eq!(m.conflicts()[0].key, "ctrl+x");
-    }
-
-    #[test]
-    fn get_keys_returns_resolved() {
-        let m = KeybindingsManager::with_defaults();
-        assert_eq!(m.get_keys("tui.editor.cursorLeft"), vec!["left", "ctrl+b"]);
     }
 }

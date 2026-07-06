@@ -191,23 +191,6 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
     }
     let mut out = vec![default_model_option()];
     match agent_id {
-        "cursor-agent" => {
-            for line in trimmed.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                if line.eq_ignore_ascii_case("available models") || line.eq_ignore_ascii_case("models")
-                {
-                    continue;
-                }
-                let id = line.split_whitespace().next()?.to_string();
-                if id == "default" {
-                    continue;
-                }
-                out.push(RuntimeModelOption {
-                    id: id.clone(),
-                    label: id,
-                    context_window_tokens: None,
-                });
-            }
-        }
         "codex" => {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
                 if let Some(models) = value.get("models").and_then(|v| v.as_array()) {
@@ -222,17 +205,6 @@ fn parse_models_list(agent_id: &str, stdout: &str) -> Option<Vec<RuntimeModelOpt
                             context_window_tokens: None,
                         });
                     }
-                }
-            }
-        }
-        "opencode" => {
-            for line in trimmed.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                if line.contains('/') {
-                    out.push(RuntimeModelOption {
-                        id: line.to_string(),
-                        label: line.to_string(),
-                        context_window_tokens: None,
-                    });
                 }
             }
         }
@@ -268,23 +240,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_cursor_models_skips_header() {
+    fn parse_codex_json_models() {
         let models = parse_models_list(
-            "cursor-agent",
-            "Available models\nauto\nsonnet-4 - Sonnet 4",
+            "codex",
+            r#"{"models":[{"slug":"gpt-5.3-codex"},{"slug":"o3"}]}"#,
         )
         .unwrap();
-        assert!(models.iter().any(|m| m.id == "auto"));
-        assert!(models.iter().any(|m| m.id == "sonnet-4"));
-    }
-
-    #[test]
-    fn parse_opencode_line_models() {
-        let models = parse_models_list(
-            "opencode",
-            "anthropic/claude-sonnet-4-5\nopenai/gpt-5",
-        )
-        .unwrap();
-        assert!(models.iter().any(|m| m.id == "anthropic/claude-sonnet-4-5"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.3-codex"));
+        assert!(models.iter().any(|m| m.id == "o3"));
     }
 }

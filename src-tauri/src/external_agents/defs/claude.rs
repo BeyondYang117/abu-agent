@@ -101,7 +101,6 @@ mod tests {
     fn claude_build_args_includes_resume_and_add_dir() {
         let args = build_claude_args(
             &RuntimeContext {
-                cwd: Some("/tmp/w".to_string()),
                 extra_allowed_dirs: vec!["/skills".to_string()],
                 resume_session_id: Some("sess-1".to_string()),
                 new_session_id: None,
@@ -126,7 +125,6 @@ mod tests {
         let mk = |reasoning: Option<&str>| {
             build_claude_args(
                 &RuntimeContext {
-                    cwd: None,
                     extra_allowed_dirs: vec![],
                     resume_session_id: None,
                     new_session_id: None,
@@ -152,7 +150,6 @@ mod tests {
         let mk = |sandbox: Option<&str>| {
             build_claude_args(
                 &RuntimeContext {
-                    cwd: None,
                     extra_allowed_dirs: vec![],
                     resume_session_id: None,
                     new_session_id: None,

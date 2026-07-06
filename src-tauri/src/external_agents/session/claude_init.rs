@@ -139,7 +139,6 @@ pub async fn probe_claude_init(
 ) -> Option<ClaudeInitInfo> {
     let def = get_agent_def("claude")?;
     let runtime_ctx = RuntimeContext {
-        cwd: Some(cwd.to_string_lossy().into_owned()),
         extra_allowed_dirs: Vec::new(),
         resume_session_id: None,
         new_session_id: Some(Uuid::new_v4().to_string()),

@@ -685,14 +685,6 @@ pub async fn run_acp_session(
                     if apply_acp_session_update(update, &mut emitted_acp_tools, &mut sink) {
                         continue;
                     }
-                    if session_update != "agent_message_chunk"
-                        && session_update != "agent_thought_chunk"
-                    {
-                        sink(UnifiedAgentEvent::Status {
-                            label: session_update.to_string(),
-                            model: None,
-                        });
-                    }
                 }
                 continue;
             }
@@ -788,10 +780,6 @@ pub async fn run_acp_session(
             )
             .await?;
             next_id += 1;
-            sink(UnifiedAgentEvent::Status {
-                label: "waiting_for_first_output".to_string(),
-                model: None,
-            });
             continue;
         }
 
@@ -810,10 +798,6 @@ pub async fn run_acp_session(
             )
             .await?;
             next_id += 1;
-            sink(UnifiedAgentEvent::Status {
-                label: "waiting_for_first_output".to_string(),
-                model: None,
-            });
             continue;
         }
 
@@ -969,12 +953,6 @@ impl AcpSession {
             }),
         )
         .await?;
-        let _ = events
-            .send(UnifiedAgentEvent::Status {
-                label: "waiting_for_first_output".to_string(),
-                model: None,
-            })
-            .await;
 
         let mut emitted_text = String::new();
         let mut emitted_tools: HashSet<String> = HashSet::new();
@@ -1116,10 +1094,6 @@ fn acp_apply_turn_update(
     if apply_acp_session_update(update, emitted_tools, &mut |e| sink(e)) {
         return;
     }
-    sink(UnifiedAgentEvent::Status {
-        label: session_update.to_string(),
-        model: None,
-    });
 }
 
 /// Read ACP JSON-RPC lines until the response for `target_id`, auto-answering permission
@@ -1329,15 +1303,12 @@ mod tests {
 
     fn event_variant(event: &UnifiedAgentEvent) -> &'static str {
         match event {
-            UnifiedAgentEvent::Status { .. } => "Status",
             UnifiedAgentEvent::TextDelta { .. } => "TextDelta",
             UnifiedAgentEvent::ThinkingDelta { .. } => "ThinkingDelta",
             UnifiedAgentEvent::ToolUse { .. } => "ToolUse",
             UnifiedAgentEvent::ToolResult { .. } => "ToolResult",
             UnifiedAgentEvent::Usage { .. } => "Usage",
-            UnifiedAgentEvent::TurnEnd { .. } => "TurnEnd",
             UnifiedAgentEvent::Error { .. } => "Error",
-            UnifiedAgentEvent::Raw { .. } => "Raw",
             UnifiedAgentEvent::SlashCommands { .. } => "SlashCommands",
         }
     }

@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicU64},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
         Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
@@ -72,11 +72,12 @@ pub struct AppState {
     pub prev_frontmost_pid_main: AtomicI32,
     /// 流式取消代号：每开新的流就 +1，跑流的循环检测到代号变了就立即结束。
     pub explain_stream_generation: AtomicU64,
-    /// Chat 流式取消代号分配器，按 conversation_id 隔离，避免 Lens 与 Chat 互相取消。
-    /// 仅作**单调递增的 generation 号分配器**（never 重用），不再表达「活跃」语义。
+    /// Chat 流式取消代号分配器。仅作**单调递增的 generation 号分配器**（never 重用）：
+    /// 每条 run 取一个全局唯一号，不表达「活跃」语义。会话内唯一即够用（号只用于集合成员
+    /// 判定），故用一个进程级 `AtomicU64` 计数器即可，无需按 conversation_id 分桶。
     /// 「哪些 generation 当前有效」由 `chat_active_generations` 表达——这样同一会话可同时
     /// 有多条并发 run（多模型一问多答），开新 run 不再作废兄弟 run。
-    pub chat_stream_generations: Mutex<HashMap<String, u64>>,
+    pub chat_stream_generation: AtomicU64,
     /// 每个 conversation_id 当前**活跃**的 generation 集合。`next_chat_generation` 往里加，
     /// run 结束 `end_chat_generation` 移除，`cancel_chat_generation` 整会话清空（取消全部在跑 run）。
     /// 单 run 时集合恒为单元素，语义与旧「单 u64」等价。
@@ -195,14 +196,16 @@ fn set_cached<V>(cache: &Mutex<HashMap<String, (Instant, V)>>, key: String, valu
 }
 
 impl AppState {
-    /// Build a headless `AppState` for the `kivio-code` terminal agent — no
-    /// `AppHandle`, no Tauri runtime. Every field mirrors the live construction
-    /// in `lib.rs::run` (the `app.manage(AppState { .. })` block) except the two
-    /// OCR clients use their `headless()` constructors and `usage_dir` is passed
-    /// in. The agent loop only touches `settings`, the chat-generation maps,
-    /// session-consent set, `http`, and `usage_dir`; the rest are inert defaults
-    /// kept for struct completeness.
-    pub fn new_headless(settings: Settings, usage_dir: PathBuf) -> Self {
+    /// 集中构造点：`lib.rs::run` 的 `app.manage`、`new_headless`、以及测试用 `test_app_state`
+    /// 三处唯一的差异只有 `settings` / `usage_dir` / `http` 与两个 OCR 客户端；其余字段全是
+    /// 同样的空默认值。这里统一构造，三处只提供差异字段，避免同一份 ~40 行字面量重复三次。
+    pub(crate) fn base(
+        settings: Settings,
+        usage_dir: PathBuf,
+        http: Client,
+        #[cfg(target_os = "macos")] macos_ocr: std::sync::Arc<MacOcrClient>,
+        rapidocr: std::sync::Arc<RapidOcrClient>,
+    ) -> Self {
         AppState {
             settings: RwLock::new(settings),
             explain_images: Mutex::new(HashMap::new()),
@@ -211,7 +214,7 @@ impl AppState {
             prev_frontmost_pid_lens: AtomicI32::new(0),
             prev_frontmost_pid_main: AtomicI32::new(0),
             explain_stream_generation: AtomicU64::new(0),
-            chat_stream_generations: Mutex::new(HashMap::new()),
+            chat_stream_generation: AtomicU64::new(0),
             chat_active_generations: Mutex::new(HashMap::new()),
             chat_active_replies: Mutex::new(HashMap::new()),
             pending_chat_tool_approvals: Mutex::new(HashMap::new()),
@@ -235,14 +238,31 @@ impl AppState {
             prompt_cache_key_unsupported: Mutex::new(HashSet::new()),
             mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),
             usage_dir,
-            http: crate::api::build_http_client(),
+            http,
             #[cfg(target_os = "macos")]
-            macos_ocr: MacOcrClient::headless(),
-            rapidocr: RapidOcrClient::headless(crate::api::build_http_client()),
+            macos_ocr,
+            rapidocr,
             sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
             background_commands: Arc::new(Mutex::new(HashMap::new())),
             request_debug: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// Build a headless `AppState` for the `kivio-code` terminal agent — no
+    /// `AppHandle`, no Tauri runtime. Differs from the live construction in
+    /// `lib.rs::run` only in the two OCR clients (`headless()` constructors) and
+    /// `usage_dir` (passed in). The agent loop only touches `settings`, the
+    /// chat-generation state, session-consent set, `http`, and `usage_dir`; the
+    /// rest are inert defaults kept for struct completeness.
+    pub fn new_headless(settings: Settings, usage_dir: PathBuf) -> Self {
+        Self::base(
+            settings,
+            usage_dir,
+            crate::api::build_http_client(),
+            #[cfg(target_os = "macos")]
+            MacOcrClient::headless(),
+            RapidOcrClient::headless(crate::api::build_http_client()),
+        )
     }
     /// 安全读取设置（锁中毒时返回内部数据，不 panic）
     pub fn settings_read(&self) -> std::sync::RwLockReadGuard<'_, Settings> {
@@ -321,20 +341,10 @@ impl AppState {
     }
 
     /// 为某个 Chat conversation 开启一轮新的可取消运行，返回本轮 generation。
-    /// 分配一个该会话内从未用过的 generation 号（单调递增），并登记到活跃集合。
+    /// 分配一个进程内从未用过的 generation 号（全局单调递增），并登记到活跃集合。
     /// **不**作废同会话其它在跑 run —— 多模型一问多答时 N 条 run 各持自己的 generation 并存。
     pub fn next_chat_generation(&self, conversation_id: &str) -> u64 {
-        let mut generations = self
-            .chat_stream_generations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let next = generations
-            .get(conversation_id)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(1);
-        generations.insert(conversation_id.to_string(), next);
-        drop(generations);
+        let next = self.chat_stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.chat_active_generations
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -396,14 +406,11 @@ impl AppState {
             .unwrap_or(false)
     }
 
-    /// 对话被删除时清理其按 conversation_id 累积的运行态痕迹：stream 代际计数、活跃 generation
-    /// 集合与会话级工具同意标记。三者都严格按 conversation_id 取键，对话删除后再不会被
-    /// 引用，是最无歧义的有界清理点（不影响其它活跃对话）。
+    /// 对话被删除时清理其按 conversation_id 累积的运行态痕迹：活跃 generation 集合与
+    /// 会话级工具同意标记。两者都严格按 conversation_id 取键，对话删除后再不会被
+    /// 引用，是最无歧义的有界清理点（不影响其它活跃对话）。generation 号本身来自进程级
+    /// 全局计数器（不分桶），无需在此清理。
     pub fn forget_chat_conversation_runtime(&self, conversation_id: &str) {
-        self.chat_stream_generations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(conversation_id);
         self.chat_active_generations
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -747,46 +754,14 @@ impl AppState {
 /// 构造一个最小可用的 AppState 用于单测（cooldown / MCP 连接池等）。
 /// 不涉及网络，Client::new() 即可（不会发请求）。供 state / mcp::manager 测试复用。
 pub(crate) fn test_app_state() -> AppState {
-    AppState {
-        settings: RwLock::new(Settings::default()),
-        explain_images: Mutex::new(HashMap::new()),
-        current_explain_image_id: Mutex::new(None),
-        lens_busy: AtomicBool::new(false),
-        prev_frontmost_pid_lens: AtomicI32::new(0),
-        prev_frontmost_pid_main: AtomicI32::new(0),
-        explain_stream_generation: AtomicU64::new(0),
-        chat_stream_generations: Mutex::new(HashMap::new()),
-        chat_active_generations: Mutex::new(HashMap::new()),
-        chat_active_replies: Mutex::new(HashMap::new()),
-        pending_chat_tool_approvals: Mutex::new(HashMap::new()),
-        chat_session_consent: Mutex::new(HashSet::new()),
-        pending_chat_session_consents: Mutex::new(HashMap::new()),
-        chat_consent_prompt_lock: tokio::sync::Mutex::new(()),
-        pending_chat_user_prompts: Mutex::new(HashMap::new()),
-        pending_python_runs: Mutex::new(HashMap::new()),
-        chat_create_conversation_lock: Mutex::new(()),
-        chat_tool_list_cache: Mutex::new(HashMap::new()),
-        external_slash_commands_cache: Mutex::new(HashMap::new()),
-        external_agent_models_cache: Mutex::new(HashMap::new()),
-        external_detected_agents_cache: Mutex::new(None),
-        external_live_sessions: Mutex::new(HashMap::new()),
-        pending_chat_external_sends: Mutex::new(Vec::new()),
-        pending_selection: Mutex::new(None),
-        lens_freeze_frame_image_id: Mutex::new(None),
-        lens_pending_reset: Mutex::new(None),
-        key_cooldowns: Mutex::new(HashMap::new()),
-        active_key_idx: Mutex::new(HashMap::new()),
-        prompt_cache_key_unsupported: Mutex::new(HashSet::new()),
-        mcp_sessions: tokio::sync::Mutex::new(HashMap::new()),
-        usage_dir: std::env::temp_dir().join("kivio-test-usage"),
-        http: Client::new(),
+    AppState::base(
+        Settings::default(),
+        std::env::temp_dir().join("kivio-test-usage"),
+        Client::new(),
         #[cfg(target_os = "macos")]
-        macos_ocr: MacOcrClient::disabled(),
-        rapidocr: RapidOcrClient::disabled(),
-        sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
-        background_commands: Arc::new(Mutex::new(HashMap::new())),
-        request_debug: Mutex::new(VecDeque::new()),
-    }
+        MacOcrClient::disabled(),
+        RapidOcrClient::disabled(),
+    )
 }
 
 #[cfg(test)]

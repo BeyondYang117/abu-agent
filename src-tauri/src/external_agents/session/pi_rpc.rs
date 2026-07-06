@@ -156,19 +156,9 @@ pub fn map_pi_rpc_event(value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) 
     let kind = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
     match kind {
-        "agent_start" => {
-            sink(UnifiedAgentEvent::Status {
-                label: "working".to_string(),
-                model: None,
-            });
-        }
+        "agent_start" => {}
         "agent_end" => return PiRpcOutcome::AgentEnd,
-        "turn_start" => {
-            sink(UnifiedAgentEvent::Status {
-                label: "thinking".to_string(),
-                model: None,
-            });
-        }
+        "turn_start" => {}
         "turn_end" => {
             if let Some(message) = obj.get("message").and_then(|v| v.as_object()) {
                 if let Some(usage) = message.get("usage").and_then(|v| v.as_object()) {
@@ -284,18 +274,6 @@ pub fn map_pi_rpc_event(value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) 
                 code: None,
             });
         }
-        "compaction_start" => {
-            sink(UnifiedAgentEvent::Status {
-                label: "compacting".to_string(),
-                model: None,
-            });
-        }
-        "auto_retry_start" => {
-            sink(UnifiedAgentEvent::Status {
-                label: "retrying".to_string(),
-                model: None,
-            });
-        }
         _ => {}
     }
     PiRpcOutcome::Continue
@@ -359,7 +337,7 @@ async fn reply_extension_ui(
 pub async fn run_pi_rpc_session(
     child: &mut Child,
     prompt: &str,
-    model: Option<&str>,
+    _model: Option<&str>,
     mut sink: impl FnMut(UnifiedAgentEvent),
     cancel_check: impl Fn() -> bool,
 ) -> Result<(), String> {
@@ -371,18 +349,6 @@ pub async fn run_pi_rpc_session(
         .stdout
         .take()
         .ok_or_else(|| "stdout unavailable".to_string())?;
-
-    if let Some(model) = model.filter(|m| !m.is_empty() && *m != "default") {
-        sink(UnifiedAgentEvent::Status {
-            label: "initializing".to_string(),
-            model: Some(model.to_string()),
-        });
-    } else {
-        sink(UnifiedAgentEvent::Status {
-            label: "initializing".to_string(),
-            model: None,
-        });
-    }
 
     let prompt_line = {
         let payload = json!({ "id": 1, "type": "prompt", "message": prompt });

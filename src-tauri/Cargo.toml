@@ -34,7 +34,6 @@ serde_json = "1"
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-clipboard-manager = "2"
 tauri-plugin-store = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-autostart = "2"
@@ -98,7 +97,6 @@ sqlite-vec = "0.1"
 # 设置页面下载到 app data 目录的 dylib，安装包不带任何 ONNX Runtime 二进制。
 oar-ocr = { version = "0.6.3", default-features = false }
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
-ndarray = "0.17"
 
 # macOS 平台特有依赖（系统 API 调用）
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -124,8 +122,6 @@ libc = "0.2"
 xcap = "0.8"
 windows = { version = "0.61.3", features = [
   "Foundation",
-  "Foundation_Collections",
-  "Globalization",
   "Graphics_Imaging",
   "Media_Ocr",
   "Storage",
@@ -144,7 +140,6 @@ windows = { version = "0.61.3", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
-windows-future = "0.2.1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

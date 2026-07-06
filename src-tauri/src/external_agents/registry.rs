@@ -1,15 +1,15 @@
-use crate::external_agents::defs::{claude, codex, cursor, gemini, hermes, kimi, opencode, pi};
+use crate::external_agents::defs::{acp, claude, codex, kimi, pi};
 use crate::external_agents::types::RuntimeAgentDef;
 
 pub const AGENT_DEFS: &[RuntimeAgentDef] = &[
     claude::CLAUDE_AGENT_DEF,
     codex::CODEX_AGENT_DEF,
-    cursor::CURSOR_AGENT_DEF,
-    opencode::OPENCODE_AGENT_DEF,
-    gemini::GEMINI_AGENT_DEF,
+    acp::CURSOR_AGENT_DEF,
+    acp::OPENCODE_AGENT_DEF,
+    acp::GEMINI_AGENT_DEF,
     kimi::KIMI_AGENT_DEF,
     pi::PI_AGENT_DEF,
-    hermes::HERMES_AGENT_DEF,
+    acp::HERMES_AGENT_DEF,
 ];
 
 pub fn get_agent_def(id: &str) -> Option<&'static RuntimeAgentDef> {
