@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Kivio Docs</title>
+<meta name="description" content="Kivio documentation — install, configure, and master the open-source desktop agentic AI app." />
+<link rel="icon" type="image/png" href="../assets/favicon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Silkscreen:wght@400;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #0a0a0a;
+    --muted: #737373;
+    --faint: #a3a3a3;
+    --border: #e5e5e5;
+    --hover: #fafafa;
+    --sans: 'Geist', 'Noto Sans SC', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --pixel: 'Silkscreen', 'Geist Mono', monospace;
+    --topbar: 60px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 15px; line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: #0a0a0a; color: #fff; }
+  a { color: inherit; text-decoration: none; }
+
+  /* ============ topbar ============ */
+  .topbar {
+    position: fixed; inset: 0 0 auto 0; z-index: 40; height: var(--topbar);
+    background: rgba(255,255,255,0.86);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 20px; padding: 0 24px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-weight: 500; font-size: 14px; letter-spacing: 0.18em;
+  }
+  .brand img { width: 22px; height: 22px; border-radius: 5px; }
+  .brand .docs-tag {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em;
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; color: var(--muted);
+  }
+  .topbar .spacer { flex: 1; }
+  .top-link { font-size: 13.5px; color: var(--muted); transition: color 0.15s; }
+  .top-link:hover { color: var(--fg); }
+  .icon-link { display: inline-flex; color: var(--muted); transition: color 0.15s; }
+  .icon-link:hover { color: var(--fg); }
+  .icon-link svg { width: 17px; height: 17px; fill: currentColor; }
+  .menu-btn {
+    display: none; background: none; border: 1px solid var(--border); border-radius: 8px;
+    width: 34px; height: 34px; cursor: pointer; color: var(--fg);
+    font-family: var(--mono); font-size: 14px;
+  }
+
+  /* ============ layout ============ */
+  .shell {
+    display: grid; grid-template-columns: 212px minmax(0, 1fr) 190px;
+    max-width: 1280px; margin: 0 auto; padding-top: var(--topbar);
+  }
+
+  /* ---- sidebar ---- */
+  .side {
+    border-right: 1px solid var(--border);
+    padding: 24px 12px 48px 16px;
+    position: sticky; top: var(--topbar);
+    height: calc(100vh - var(--topbar));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .side .group { margin-bottom: 18px; }
+  .side .group-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--faint);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  }
+  .side .group-label::before { content: ''; width: 5px; height: 5px; background: var(--fg); flex: none; }
+  .side a.item {
+    display: block; font-size: 13px; color: var(--muted);
+    padding: 4px 9px; margin-left: -9px; border-radius: 6px;
+    transition: color 0.12s, background 0.12s;
+  }
+  .side a.item:hover { color: var(--fg); background: var(--hover); }
+  .side a.item.active { color: var(--fg); background: var(--hover); font-weight: 600; }
+
+  /* ---- article ---- */
+  .main { padding: 40px 44px 110px; min-width: 0; }
+  article { max-width: 680px; }
+  article.hidden { display: none; }
+  .crumb {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint); margin-bottom: 14px;
+  }
+  article h1 {
+    font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2;
+    margin-bottom: 10px;
+  }
+  article h1.pixel { font-family: var(--pixel); font-size: 2.6rem; letter-spacing: 0.02em; line-height: 1; }
+  .lead { font-size: 15.5px; color: var(--muted); margin-bottom: 36px; }
+  article h2 {
+    font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em;
+    margin: 44px 0 14px; padding-top: 18px; border-top: 1px solid var(--border);
+    scroll-margin-top: calc(var(--topbar) + 20px);
+  }
+  article h3 { font-size: 1rem; font-weight: 600; margin: 28px 0 10px; scroll-margin-top: calc(var(--topbar) + 20px); }
+  article p { margin-bottom: 14px; color: #333; }
+  article ul, article ol { margin: 0 0 14px 22px; color: #333; }
+  article li { margin-bottom: 5px; }
+  article code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--hover); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1.5px 6px;
+  }
+  article pre {
+    background: var(--hover); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin: 0 0 16px; overflow-x: auto;
+    font-family: var(--mono); font-size: 13px; line-height: 1.8;
+  }
+  article pre code { background: none; border: none; padding: 0; }
+  article blockquote {
+    border-left: 2px solid var(--fg); padding: 2px 0 2px 16px;
+    color: var(--muted); margin: 0 0 16px;
+  }
+  article table { border-collapse: collapse; width: 100%; margin: 0 0 16px; font-size: 13.5px; }
+  article th {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--faint); text-align: left; font-weight: 500;
+  }
+  article th, article td { border-bottom: 1px solid var(--border); padding: 9px 14px 9px 0; }
+  .todo {
+    border: 1px dashed var(--border); border-radius: 10px;
+    padding: 22px; margin: 0 0 16px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--faint);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .todo::before { content: ''; width: 6px; height: 6px; background: var(--faint); flex: none; }
+  .pager {
+    display: flex; justify-content: space-between; gap: 14px;
+    margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--border);
+  }
+  .pager a {
+    font-size: 13.5px; color: var(--muted); max-width: 46%;
+    transition: color 0.15s;
+  }
+  .pager a:hover { color: var(--fg); }
+  .pager .lab { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); display: block; margin-bottom: 3px; }
+  .pager .next { text-align: right; margin-left: auto; }
+
+  /* ---- toc ---- */
+  .toc {
+    padding: 44px 24px 60px 8px;
+    position: sticky; top: var(--topbar);
+    height: calc(100vh - var(--topbar));
+    overflow-y: auto; font-size: 12.5px;
+  }
+  .toc .toc-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--faint); margin-bottom: 12px;
+  }
+  .toc a {
+    display: block; color: var(--muted); padding: 3px 0 3px 12px;
+    border-left: 1px solid var(--border);
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .toc a:hover { color: var(--fg); }
+  .toc a.active { color: var(--fg); border-left-color: var(--fg); font-weight: 600; }
+
+  /* ============ responsive ============ */
+  @media (max-width: 1100px) { .shell { grid-template-columns: 212px minmax(0, 1fr); } .toc { display: none; } }
+  @media (max-width: 800px) {
+    .shell { grid-template-columns: 1fr; }
+    .menu-btn { display: grid; place-items: center; }
+    .side {
+      position: fixed; inset: var(--topbar) auto 0 0; width: 236px; z-index: 30;
+      background: var(--bg); border-right: 1px solid var(--border);
+      transform: translateX(-100%); transition: transform 0.25s ease;
+    }
+    .side.open { transform: none; box-shadow: 24px 0 60px rgba(0,0,0,0.08); }
+    .main { padding: 32px 24px 90px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <button class="menu-btn" id="menuBtn" aria-label="Menu">≡</button>
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="" />KIVIO<span class="docs-tag">DOCS</span></a>
+  <div class="spacer"></div>
+  <a class="top-link" href="../index.html">← 官网</a>
+  <a class="icon-link" href="https://github.com/abu/kivio" target="_blank" rel="noopener" aria-label="GitHub">
+    <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+  </a>
+</div>
+
+<div class="shell">
+
+  <!-- ================= SIDEBAR ================= -->
+  <nav class="side" id="sidebar">
+    <div class="group">
+      <div class="group-label">开始</div>
+      <a class="item" href="#/overview" data-page="overview">Kivio 是什么</a>
+      <a class="item" href="#/install" data-page="install">安装</a>
+      <a class="item" href="#/quickstart" data-page="quickstart">快速上手</a>
+    </div>
+    <div class="group">
+      <div class="group-label">智能体</div>
+      <a class="item" href="#/chat" data-page="chat">智能体对话</a>
+      <a class="item" href="#/tools" data-page="tools">内置工具</a>
+      <a class="item" href="#/mcp" data-page="mcp">MCP 服务器</a>
+      <a class="item" href="#/skills" data-page="skills">Skills</a>
+      <a class="item" href="#/subagents" data-page="subagents">子智能体</a>
+      <a class="item" href="#/knowledge" data-page="knowledge">知识库</a>
+      <a class="item" href="#/sandbox" data-page="sandbox">代码沙箱</a>
+    </div>
+    <div class="group">
+      <div class="group-label">屏幕工具</div>
+      <a class="item" href="#/translate" data-page="translate">划词翻译</a>
+      <a class="item" href="#/lens" data-page="lens">Lens 取景</a>
+      <a class="item" href="#/ocr" data-page="ocr">截图翻译与 OCR</a>
+    </div>
+    <div class="group">
+      <div class="group-label">配置</div>
+      <a class="item" href="#/providers" data-page="providers">模型服务商</a>
+      <a class="item" href="#/connectors" data-page="connectors">连接器</a>
+      <a class="item" href="#/hotkeys" data-page="hotkeys">快捷键</a>
+      <a class="item" href="#/settings" data-page="settings">设置项参考</a>
+    </div>
+    <div class="group">
+      <div class="group-label">更多</div>
+      <a class="item" href="#/faq" data-page="faq">常见问题</a>
+      <a class="item" href="#/changelog" data-page="changelog">更新日志</a>
+    </div>
+  </nav>
+
+  <!-- ================= MAIN ================= -->
+  <main class="main" id="main">
+
+    <article data-page="overview">
+      <div class="crumb">开始</div>
+      <h1 class="pixel">Kivio</h1>
+      <p class="lead">开源桌面 Agentic AI 应用 —— 智能体对话、划词翻译、屏幕取景问答，使用你自己的密钥，数据留在你自己的机器。</p>
+      <h2 id="overview-what">Kivio 是什么</h2>
+      <p>Kivio 是一款运行在 macOS 与 Windows 上的桌面应用，以一个完整的智能体内核为中心：规划 → 执行 → 综合的工具循环、并行子智能体、MCP、Skills、知识库检索，包在一个安静克制的图形界面里。</p>
+      <p>它始于一个更小的问题 —— 屏幕级的轻交互：全局热键划词翻译、截图 OCR 翻译、圈选屏幕直接提问。这些功能依然是 Kivio 的一部分，且不会消失；智能体内核是后来长出来的核心，但屏幕工具不会因此边缘化。</p>
+      <p>同一套智能体循环（<code>run_agent_loop</code>）目前只在应用内的 GUI 对话中运行；本文档只覆盖这一个界面，不涉及尚未对外发布的终端/CLI 形态。</p>
+      <h2 id="overview-philosophy">设计理念</h2>
+      <blockquote>你的密钥、你的数据、你的机器。</blockquote>
+      <ul>
+        <li><b>BYOK（自带密钥）</b> —— 没有账号体系、没有订阅墙。填入你自己的服务商 API Key，请求从你的机器直连服务商，中间没有 Kivio 的任何服务器。</li>
+        <li><b>本地优先</b> —— 设置、对话、知识库索引、用量统计全部落在本机应用数据目录；<code>settings.json</code> 明文保存 API Key（详见 <a href="#/settings">设置项参考</a>），没有云同步。</li>
+        <li><b>开源可审计</b> —— GPL-3.0 全量开源，Rust + React 代码逐行可读。</li>
+      </ul>
+      <h2 id="overview-capabilities">能力总览</h2>
+      <table>
+        <thead><tr><th>能力</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><a href="#/chat">智能体对话</a></td><td>规划 → 执行 → 综合的完整工具循环，支持 Act / Plan / Orchestrate 三种模式</td></tr>
+          <tr><td><a href="#/tools">内置工具</a></td><td>文件读写、Shell、网页抓取、Python 沙箱、记忆、待办清单</td></tr>
+          <tr><td><a href="#/mcp">MCP 服务器</a></td><td>接入任意 Model Context Protocol 工具服务器</td></tr>
+          <tr><td><a href="#/skills">Skills</a></td><td>Markdown 定义的可复用技能，运行中按需激活</td></tr>
+          <tr><td><a href="#/subagents">子智能体</a></td><td>一条消息并行派发多个专职人格</td></tr>
+          <tr><td><a href="#/knowledge">知识库</a></td><td>向量 + 全文混合检索 RAG，全部本地索引</td></tr>
+          <tr><td><a href="#/sandbox">代码沙箱</a></td><td>Pyodide 本地运行 Python，图表/文档产物自动交付</td></tr>
+          <tr><td><a href="#/translate">划词翻译</a></td><td>全局热键，流式翻译，提交即回填原应用</td></tr>
+          <tr><td><a href="#/lens">Lens 取景</a></td><td>圈选屏幕任意区域或窗口，直接进入视觉对话</td></tr>
+          <tr><td><a href="#/ocr">截图翻译与 OCR</a></td><td>Apple Vision / Windows OCR / 离线 RapidOCR 三引擎</td></tr>
+        </tbody>
+      </table>
+    </article>
+
+    <article data-page="install" class="hidden">
+      <div class="crumb">开始</div>
+      <h1>安装</h1>
+      <p class="lead">从 GitHub Releases 获取最新版本。</p>
+      <h2 id="install-mac">macOS</h2>
+      <p>下载 <code>.dmg</code>，拖入 Applications。系统要求 macOS 13 及以上（屏幕捕获基于 ScreenCaptureKit）。</p>
+      <pre><code># https://github.com/abu/kivio/releases/latest</code></pre>
+      <p>首次使用以下功能时，系统会请求相应的隐私权限：</p>
+      <table>
+        <thead><tr><th>权限</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>屏幕录制</td><td>Lens 取景、截图翻译捕获屏幕画面（ScreenCaptureKit）</td></tr>
+          <tr><td>辅助功能</td><td>划词翻译的自动粘贴回填（模拟 ⌘V）；Lens 读取当前选中文本作为上下文</td></tr>
+        </tbody>
+      </table>
+      <p>在「系统设置 → 隐私与安全性」中为 Kivio 打开对应开关即可，无需重启应用。</p>
+      <h2 id="install-win">Windows</h2>
+      <p>下载 MSI 或 NSIS 安装包并运行，支持 Windows 10/11 x64。手动启动默认打开设置页；勾选开机自启后，启动时会附带 <code>--from-autostart</code> 参数直接进入后台，不弹出设置窗口。</p>
+      <h2 id="install-update">更新</h2>
+      <p>应用启动时会静默检查一次 GitHub Releases 是否有新版本（<code>autoCheckUpdate</code>，默认开启）。检测到新版本仅弹出提示，<b>不会自动下载安装</b> —— 需要手动前往 Releases 页面下载新安装包完成更新。</p>
+    </article>
+
+    <article data-page="quickstart" class="hidden">
+      <div class="crumb">开始</div>
+      <h1>快速上手</h1>
+      <p class="lead">配好一把 API Key，几分钟跑通核心功能。</p>
+      <h2 id="qs-key">第一步 · 配置服务商</h2>
+      <p>打开设置 → 模型服务商，新增一个 Provider：可以从内置预设（DeepSeek、OpenRouter、SiliconFlow、智谱 GLM、Ollama Cloud）里选一个快速填好接口地址，也可以手动填写任意 OpenAI 兼容 / Anthropic / Gemini / Responses 协议的服务商。粘贴 API Key 后点「获取模型列表」，再从中勾选启用你要用的模型。详见 <a href="#/providers">模型服务商</a>。</p>
+      <h2 id="qs-chat">第二步 · 发起第一次对话</h2>
+      <p>打开 Kivio 的聊天窗口，在模型选择器里选中刚启用的模型，直接输入问题发送。默认是 <b>Act</b>（普通）模式，模型会按需自主调用文件、Shell、网页等内置工具完成任务。</p>
+      <h2 id="qs-screen">第三步 · 试试屏幕工具</h2>
+      <p>按下默认热键 <kbd>⌘/Ctrl+Alt+T</kbd> 唤出划词翻译窗口，或 <kbd>⌘/Ctrl+Shift+G</kbd> 唤出 Lens，圈选屏幕任意区域直接提问。完整热键表见 <a href="#/hotkeys">快捷键</a>。</p>
+    </article>
+
+    <article data-page="chat" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>智能体对话</h1>
+      <p class="lead">对话不止于回答 —— 智能体自主规划、调用工具、并行派发子智能体，全过程可见、可中断、可追溯。</p>
+      <h2 id="chat-loop">代理循环</h2>
+      <p>每一轮对话都会经过一个固定的循环（<code>run_agent_loop</code>）：</p>
+      <ol>
+        <li><b>准备</b> —— 组装系统提示（人格设定、已激活的 Skill、记忆、项目绑定），并根据当前模式（见下）决定这一轮可以使用哪些工具。</li>
+        <li><b>规划与执行</b> —— 模型请求调用工具，Kivio 执行后把结果喂回去，模型再判断是否需要继续调用。这个过程反复进行，直到模型不再请求工具，或触及轮次上限。</li>
+        <li><b>综合</b> —— 不再有工具调用后，模型做最后一次不带工具的调用，生成自然语言总结。若这一步失败，Kivio 会分级降级：重试 → 换一次干净的追问 → 直接从工具调用记录里拼装一份确定性总结 —— 保证这一轮不会白跑。</li>
+        <li><b>完成</b> —— 最终答案、推理过程、工具调用记录打包展示并保存。</li>
+      </ol>
+      <p>默认每轮对话最多 20 次工具调用（<code>maxToolRounds</code>，可在设置中调整为 1–100）；<b>编排者模式</b>会把这个下限提高到 40，因为编排需要额外的轮次来做规划、派发和汇总。</p>
+      <h3 id="chat-modes">三种模式</h3>
+      <table>
+        <thead><tr><th>模式</th><th>行为差异</th></tr></thead>
+        <tbody>
+          <tr><td><b>Act</b>（普通）</td><td>默认行为，无额外约束，所有已启用工具都可用。</td></tr>
+          <tr><td><b>Plan</b>（计划）</td><td>强制只读：只能研究/阅读/搜索，不能声称已编辑文件、执行命令；产出结构化的「## 发现」+「## 计划」回复，不直接动手实施。</td></tr>
+          <tr><td><b>Orchestrate</b>（编排者）</td><td>要求模型把可拆分的任务派发给子智能体（通过 <code>agent</code> 工具）而不是自己做；先写 <a href="#/tools">待办清单</a>，再逐项分配、并行派发、汇总结果。只有真正原子化的单步任务才允许直接执行。</td></tr>
+        </tbody>
+      </table>
+      <h2 id="chat-context">上下文管理</h2>
+      <p>Kivio 会在每次调用模型前估算即将发送的上下文大小；一旦超过该模型上下文窗口的 <b>90%</b>，就会自动压缩：</p>
+      <ul>
+        <li>对话尾部约 20,000 token 的「最近窗口」始终原样保留。</li>
+        <li>更早的内容优先做「微压缩」（把旧的工具调用结果替换成一句占位说明），如果这样就能压回预算内，不需要调用模型。</li>
+        <li>否则会调用模型生成一份结构化摘要（意图、关键技术点、涉及文件、报错与修复、待办事项等九个板块），如果对话里已有一份摘要，新摘要会在其基础上合并更新，而不是从头重写。</li>
+      </ul>
+      <p>压缩发生时，界面上会出现「正在压缩上下文…」的状态和一条分隔线，可以展开查看摘要内容；累计压缩 3 次以上会提示「这个对话已被压缩多次，准确性可能下降，建议开始新对话」。</p>
+      <p>点击 Stop 会立即中断当前生成 —— 已经产出的文本、工具调用结果会被保留在对话记录里，不会丢失这一轮已完成的工作；派生出的子智能体也会随之一起停止。</p>
+      <h2 id="chat-projects">对话与项目</h2>
+      <p>把一次对话绑定到某个本地文件夹（项目）后，文件工具里的相对路径会默认相对项目根目录解析，减少每次都要写绝对路径的麻烦；显式的绝对路径或 <code>~/</code> 路径依然可以访问项目之外的任意位置（见 <a href="#/tools">内置工具</a> 的安全边界说明）。</p>
+    </article>
+
+    <article data-page="tools" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>内置工具</h1>
+      <p class="lead">文件读写、Shell、网页抓取、Python 沙箱 —— 智能体开箱即用的原生工具集。</p>
+      <h2 id="tools-files">文件操作</h2>
+      <table>
+        <thead><tr><th>工具</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>read</code></td><td>读取文件（路径是目录则列出目录内容）；图片会被渲染/OCR；PDF/DOCX/XLSX 会被引导去用对应 Skill 读取，而不是读原始字节。支持 <code>offset</code>/<code>limit</code> 按行窗口读取大文件。</td></tr>
+          <tr><td><code>grep</code></td><td>内容搜索，支持字面量或正则、按内容/文件名/计数三种输出模式，遵循 <code>.gitignore</code>。</td></tr>
+          <tr><td><code>glob</code></td><td>按文件名模式查找文件，遵循 <code>.gitignore</code>。</td></tr>
+          <tr><td><code>write</code></td><td>创建或整体覆写一个文件（原子写入，保留原有的换行/BOM 风格）。</td></tr>
+          <tr><td><code>edit</code></td><td>对已有文件做一处或多处精确字符串替换；要求每处替换在文件里唯一匹配，找不到精确匹配时会尝试智能引号/破折号等模糊匹配兜底。</td></tr>
+        </tbody>
+      </table>
+      <h2 id="tools-shell">命令执行</h2>
+      <p><code>bash</code> 运行 Shell 命令（Windows 上走 PowerShell，其他平台 <code>sh -c</code>），支持 <code>background</code>、工作目录、超时（1 秒–5 分钟可调）。像 <code>npm run dev</code>、<code>vite</code>、<code>cargo watch</code> 这类开发服务器命令会被自动识别并转入后台运行，不需要手动加 <code>background:true</code>。</p>
+      <p>后台任务不会随本轮对话结束而被杀掉 —— 会一直跑到你用 <code>kill_background</code> 手动结束，或应用退出。用 <code>bash_output</code> 增量读取输出和状态；不带任务 ID 调用则列出当前所有后台任务。</p>
+      <h2 id="tools-web">网页抓取</h2>
+      <p><code>web_fetch</code> 抓取一个 URL 并转成可读文本，仅限 HTTPS；<code>web_search</code>（需配置搜索服务商 Key 才会出现）用于联网检索。</p>
+      <h2 id="tools-security">安全边界</h2>
+      <p>单次读取上限 2MB（<code>MAX_READ_FILE_BYTES</code>），超出且未指定行窗口会提示改用 <code>offset</code>/<code>limit</code>。</p>
+      <p>Kivio 对文件/Shell 工具采用「<b>无路径边界</b>」模型：<b>没有</b>针对 <code>.ssh</code>、<code>.gnupg</code>、系统钥匙串等目录的硬编码写入拦截，显式的绝对路径或 <code>~/</code> 路径可以读写磁盘上的任意位置，<code>..</code> 路径穿越也被允许。安全性由另一层机制保证：<code>read</code>/<code>grep</code>/<code>glob</code>/<code>write</code>/<code>edit</code>/<code>bash</code> 这一组工具需要在每个对话里获得一次性的「允许本对话读写文件与执行命令」授权，授权之后才能不受限地使用；此外部分高敏感的单次工具调用仍可能单独弹出一次性确认。项目对话里的相对路径默认解析到项目根目录，仅作为默认基准，不构成访问边界。</p>
+    </article>
+
+    <article data-page="mcp" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>MCP 服务器</h1>
+      <p class="lead">接入任意 Model Context Protocol 工具服务器，工具即插即用。</p>
+      <h2 id="mcp-add">添加服务器</h2>
+      <p>在设置里添加一个 MCP 服务器条目，支持两种连接方式：</p>
+      <ul>
+        <li><b>stdio</b>（默认）—— 本地长驻子进程，填写启动命令、参数、环境变量；启动一次后保持连接，不会每次调用都重新拉起。</li>
+        <li><b>streamable_http</b> —— 远程 HTTP MCP 服务器，填写 URL（及可选请求头）；也支持完整的 <b>OAuth 2.1</b> 授权流程（PKCE + 动态客户端注册 + 本地回调），点一下「连接」，浏览器里登录授权即可，无需手动粘贴 Token —— 这套机制也是 <a href="#/connectors">连接器</a> 里 Notion 等一键连接的底层实现。</li>
+      </ul>
+      <p>部分服务器会被打上「连接器」标记（如 Notion、GitHub），归到设置里的连接器页面单独管理，但本质上仍是同一套 MCP 服务器配置。</p>
+      <h2 id="mcp-manage">管理与调试</h2>
+      <p>MCP 服务器暴露的工具会动态并入模型可用的工具列表，与 Kivio 内置工具区别对待（内置工具走静态注册表，MCP 工具按服务器实时发现）。可以单独禁用某个服务器，或勾选只启用它提供的部分工具。</p>
+    </article>
+
+    <article data-page="skills" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>Skills</h1>
+      <p class="lead">用 Markdown 定义技能，运行中按需激活，可挂载可执行脚本。</p>
+      <h2 id="skills-builtin">内置技能</h2>
+      <table>
+        <thead><tr><th>技能</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>pdf</code></td><td>读取、提取、总结、分析 PDF 附件</td></tr>
+          <tr><td><code>docx</code></td><td>读取、总结、修订、分析 Word 文档</td></tr>
+          <tr><td><code>xlsx</code></td><td>读取、总结、计算、分析 Excel/CSV/TSV 表格</td></tr>
+          <tr><td><code>diagram</code></td><td>把架构图、流程图、时序图、ER 图渲染成 Mermaid 或 HTML 图，而不是纯文字描述</td></tr>
+          <tr><td><code>doc-coauthoring</code></td><td>三阶段引导式文档协作：收集上下文 → 打磨 → 读者视角测试</td></tr>
+          <tr><td><code>frontend-design</code></td><td>构建有辨识度的前端界面，避免千篇一律的「AI 味」设计</td></tr>
+          <tr><td><code>himalaya</code></td><td>通过 Himalaya CLI 收发/搜索/整理邮件（IMAP/SMTP）</td></tr>
+          <tr><td><code>mcp-builder</code></td><td>指导如何写一个高质量的 MCP 服务器</td></tr>
+          <tr><td><code>skill-creator</code></td><td>创建新技能、迭代优化已有技能、跑评测打分</td></tr>
+          <tr><td><code>json-canvas</code></td><td>创建/编辑 JSON Canvas（<code>.canvas</code>）文件</td></tr>
+          <tr><td><code>obsidian-*</code></td><td>与 Obsidian 笔记库交互：Markdown 写法、Bases 视图、CLI 操作（三个细分技能）</td></tr>
+        </tbody>
+      </table>
+      <h2 id="skills-custom">自定义技能</h2>
+      <p>一个 Skill 是一个包含 <code>SKILL.md</code> 的文件夹：YAML frontmatter（<code>name</code>、<code>description</code> 必填，可选 <code>allowed-tools</code>、<code>triggers</code> 斜杠命令别名、<code>arguments</code> 参数占位）加上 Markdown 正文。</p>
+      <p>三层扫描目录，后者覆盖前者（按 id 同名覆盖）：</p>
+      <ul>
+        <li><b>内置</b> —— 应用自带资源目录</li>
+        <li><b>用户</b> —— 应用数据目录下的 <code>skills/</code></li>
+        <li><b>外部</b> —— 设置里额外配置的扫描路径</li>
+      </ul>
+      <p>激活方式：模型觉得相关时自己调用 <code>skill</code> 工具按名激活，或用户输入 <code>/</code> 加技能名手动触发（若技能声明了 <code>triggers</code>）。技能的完整正文默认不会预先塞进系统提示里，只有被激活的那一刻才注入 —— 这样可以装很多技能而不占用上下文。一旦技能声明了工具白名单，本轮对话可用的工具集会收窄到「技能运行时工具 ∪ Kivio 内置工具 ∪ 该技能允许的工具」。</p>
+    </article>
+
+    <article data-page="subagents" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>子智能体</h1>
+      <p class="lead">一条消息派发多个专职人格，并发执行，结果内联返回。</p>
+      <h2 id="sub-personas">人格定义</h2>
+      <p>三层覆盖，后者按 id 覆盖前者：</p>
+      <table>
+        <thead><tr><th>类型</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>内置</b></td><td><code>general-purpose</code>（通用，无限制）、<code>researcher</code>（只读：读文件/搜索/网页）、<code>coder</code>（可读写编辑）、<code>reviewer</code>（只读，只产出评审意见不改代码）</td></tr>
+          <tr><td><b>用户</b></td><td>应用数据目录下的 <code>agents/*.md</code></td></tr>
+          <tr><td><b>项目</b></td><td>项目根目录下的 <code>.kivio/agents/*.md</code>，仅在对话绑定了项目时生效</td></tr>
+        </tbody>
+      </table>
+      <h2 id="sub-parallel">并行执行</h2>
+      <p>子智能体通过 <code>agent</code> 工具调用 —— <b>阻塞式、单结果返回</b>：每次调用都会等子智能体完整跑完，把最终结果整段返回给发起方，没有轮询或后台等待这类中间态。并行的方式是模型在<b>同一条消息里发出多个 <code>agent</code> 调用</b>，Kivio 会并发执行这些调用。</p>
+      <ul>
+        <li>全局最多同时跑 <b>12</b> 个子智能体（可在设置里调整为 1–64）。</li>
+        <li>单轮最多并发执行 <b>12</b> 个工具调用（含 <code>agent</code>）。</li>
+        <li>子智能体最多嵌套 <b>3</b> 层，超过会被拒绝派生新的子智能体。</li>
+        <li>子智能体不能触发需要用户确认的敏感操作（会被自动拒绝），也没有待办清单工具 —— 它是纯粹的执行者，只有发起方能读写待办清单。</li>
+      </ul>
+      <p>停止父对话会级联停止其下所有正在运行的子智能体；被取消的子智能体会明确标记为「已取消」而非「失败」，且不会重试。</p>
+    </article>
+
+    <article data-page="knowledge" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>知识库</h1>
+      <p class="lead">向量 + 全文混合检索，RRF 融合，可选重排 —— 全部本地索引。</p>
+      <h2 id="kb-create">创建与导入</h2>
+      <p>新建一个知识库时需要选定一个 Embedding 服务商 + 模型 —— 这个绑定是「一次性」的：库的向量维度由第一次真实调用的返回结果自动学习并固定下来。之后如果换一个 Embedding 模型，会清空重建整个索引（重新解析、重新向量化每一份文档），不是免费的操作，需要用户在弹窗里明确确认。</p>
+      <p>支持导入的格式：</p>
+      <ul>
+        <li><code>txt / md / csv / tsv</code> —— 直接读取</li>
+        <li><code>html</code> —— 复用网页抓取的正文提取逻辑</li>
+        <li><code>docx</code> / <code>xlsx</code> / <code>pdf</code>（仅文字层）—— 内置解析器，单文件上限 20MB</li>
+        <li>图片（<code>png/jpg/webp</code> 等）—— 按「文档处理」设置里选定的 OCR 引擎识别后入库；OCR 引擎设为「关闭」时会拒绝导入图片</li>
+      </ul>
+      <p>扫描版 PDF（没有文字层）目前<b>不支持</b>：选择「强制 OCR」策略也只会报错提示暂未启用，内置解析器只能读取 PDF 自带的文字层。</p>
+      <p>URL 导入会抓取网页正文并保存为一份 <code>.md</code> 快照（重新索引时不会再次联网抓取），按抓取内容的哈希去重 —— 重复导入同一篇未变化的网页是空操作。</p>
+      <h2 id="kb-retrieval">检索配置</h2>
+      <p>检索默认是<b>混合模式</b>：向量相似度和 FTS5 全文检索各自取一批候选，用 Reciprocal Rank Fusion（RRF）按排名融合打分，而不是简单加权分数。设置里可以：</p>
+      <ul>
+        <li>关闭「Hybrid 融合」—— 退化为纯向量检索。</li>
+        <li>调整「向量权重」与「关键词权重」的相对比例（开启混合时才生效）。</li>
+      </ul>
+      <p><b>重排（Rerank）</b>是可选的全局设置，对所有知识库统一生效：配置一个兼容 Cohere/Jina 重排接口的服务商 + 模型后，检索结果会先多召回一批候选送去重排服务打分再排序截断。不配置时这一步直接跳过；重排服务调用失败也不会导致检索失败，只是退回混合检索本身的排序。</p>
+      <h2 id="kb-cite">引用与溯源</h2>
+      <p>把一个或多个知识库「挂载」到某个对话（聊天输入框的图书图标），模型才会用 <code>knowledge_search</code> 工具检索它们 —— 未挂载任何库时不会去搜索全部知识库兜底，而是提示模型请用户先挂载。</p>
+      <p>回答中引用某个检索片段时，模型会在正文里标注 <code>[n]</code>；界面上这是一个可点击的小徽标，点开会弹出该片段的来源文档名、标题路径和原文片段。展开对应的检索工具调用卡片，还能看到这一轮全部命中的来源列表。</p>
+    </article>
+
+    <article data-page="sandbox" class="hidden">
+      <div class="crumb">智能体</div>
+      <h1>代码沙箱</h1>
+      <p class="lead">Pyodide 在本地 WebAssembly 里运行 Python —— 数据不出机器，断网也能算。</p>
+      <p>模型调用 <code>run_python</code> 工具执行代码，运行在一个<b>没有主机文件系统访问权限</b>的沙箱里 —— 不是在你的真实电脑上跑 Python，而是应用内置的一个虚拟环境，执行完全离线、随开随用。</p>
+      <h2 id="sandbox-packages">可用包</h2>
+      <p>以下包随应用打包，完全离线可用（无需联网）：</p>
+      <p><code>numpy</code> · <code>pandas</code> · <code>matplotlib</code> · <code>pillow</code> · <code>micropip</code> · <code>seaborn</code> · <code>openpyxl</code> · <code>xlrd</code> · <code>pypdf</code></p>
+      <p>图表和文本渲染内置了中文字体（Noto Sans CJK），中英文都能正常显示；沙箱字体不含 emoji/符号字形，这类字符会渲染成空方块。</p>
+      <p><code>scipy</code>、<code>sympy</code>、<code>scikit-learn</code>、<code>statsmodels</code> 等未预装的包，以及任何其他 PyPI 包，会在导入时自动尝试联网安装 —— 这部分<b>需要网络连接</b>，离线环境下会失败。</p>
+      <h2 id="sandbox-artifacts">产物导出</h2>
+      <p>没有单独的「导出」工具 —— 沙箱运行前后会自动扫描虚拟文件系统里新增/变化的文件（图片、表格、CSV、HTML、Markdown 等），把它们作为产物提取出来，写入这次对话专属的交付目录（<code>~/Kivio/outputs/&lt;对话ID&gt;/</code>），并在聊天界面里渲染成可下载的文件卡片。</p>
+      <p>每次对话最多累计 16 个交付文件，超出时按最旧优先淘汰；这些文件会一直保留，直到对话本身被删除。</p>
+    </article>
+
+    <article data-page="translate" class="hidden">
+      <div class="crumb">屏幕工具</div>
+      <h1>划词翻译</h1>
+      <p class="lead">全局热键唤出，流式出译文，提交即回填原应用。空闲仅 ~50MB。</p>
+      <h2 id="tr-usage">使用</h2>
+      <p>默认热键 <kbd>⌘/Ctrl+Alt+T</kbd>（<code>CommandOrControl+Alt+T</code>）在鼠标位置唤出一个极简翻译窗口；再按一次或按 <kbd>Esc</kbd> 关闭。输入停顿 600ms 后自动发起翻译请求，结果流式显示。</p>
+      <p>翻译结果上按 <kbd>Enter</kbd> 提交：译文会写入系统剪贴板，窗口立即销毁（不是隐藏，回收内存）；如果开启了「自动粘贴」，还会在 600ms 后模拟一次粘贴快捷键，把译文直接贴回你刚才所在的应用（macOS 需要辅助功能权限）。</p>
+      <h2 id="tr-prompt">自定义提示词</h2>
+      <p>设置里可以自定义翻译提示词模板，支持 <code>{lang}</code>（目标语言）和 <code>{text}</code>（待译文本）两个占位符；留空则使用内置默认模板 —— 要求完整直译、不改写不摘要、保留 LaTeX 公式、不加多余空行和评论。翻译单独使用「翻译」功能自己的服务商与模型设置，与聊天、Lens 等功能互不影响。</p>
+    </article>
+
+    <article data-page="lens" class="hidden">
+      <div class="crumb">屏幕工具</div>
+      <h1>Lens 取景</h1>
+      <p class="lead">圈选屏幕任意区域或窗口，画面直接进入视觉对话。</p>
+      <h2 id="lens-capture">窗口与区域捕获</h2>
+      <p>默认热键 <kbd>⌘/Ctrl+Shift+G</kbd> 唤出一个全屏透明取景层，支持两种捕获方式：</p>
+      <ul>
+        <li><b>悬停高亮</b> —— 鼠标移到某个应用窗口上会自动高亮整个窗口，松开鼠标（不拖拽）即捕获该窗口（macOS 支持窗口枚举；Windows 上以拖拽区域为主）。</li>
+        <li><b>拖拽圈选</b> —— 按住拖出一个矩形区域，松开即捕获该区域画面。</li>
+      </ul>
+      <p>捕获后会弹出一个贴着选区的聊天输入框，可以直接输入问题追问 —— 支持多轮对话。默认情况下 Lens 的回答会转入完整的聊天窗口展示，而不是停留在悬浮的小窗口里。</p>
+      <h2 id="lens-search">联网搜索</h2>
+      <p>Lens 可以在必要时自动联网搜索补充上下文（时效性信息、截图里不熟悉的名词/产品/地点等），支持 Tavily、Exa、Ollama、Grok 等搜索服务商 —— <b>这些 API Key 需要在 Lens 设置里单独配置</b>，与翻译/聊天用的模型服务商密钥完全独立。是否搜索由一次轻量的规划调用自动判断，纯粹的截图翻译/摘要类问题不会触发搜索。</p>
+      <p>Lens 使用自己的服务商与模型设置（留空则回退到「划词翻译」的服务商与模型）。</p>
+    </article>
+
+    <article data-page="ocr" class="hidden">
+      <div class="crumb">屏幕工具</div>
+      <h1>截图翻译与 OCR</h1>
+      <p class="lead">三种 OCR 引擎，任何环境可用。</p>
+      <h2 id="ocr-engines">引擎选择</h2>
+      <p>三个独立的截图翻译热键：<kbd>⌘/Ctrl+Shift+A</kbd>（截图翻译）、<kbd>⌘/Ctrl+Shift+T</kbd>（翻译当前选中文字）、<kbd>⌘/Ctrl+Shift+R</kbd>（原位替换翻译，直接把译文叠加在原文上方）。</p>
+      <table>
+        <thead><tr><th>引擎</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>直接视觉识别</b>（默认）</td><td>不做本地 OCR，截图直接交给一个支持视觉的模型，一次调用完成识别+翻译。任意平台可用，但需要一个视觉模型。</td></tr>
+          <tr><td><b>系统 OCR</b></td><td>macOS 用 Apple Vision（通过 <code>kivio-ocr-helper</code> Swift 常驻子进程）；Windows 用系统自带的 <code>Windows.Media.Ocr</code>。识别出文字后再交给文本模型翻译。</td></tr>
+          <tr><td><b>RapidOCR（离线）</b></td><td>跨平台的本地 ONNX 识别引擎，不依赖系统 OCR，也不需要联网即可识别（识别后的翻译步骤仍需要联网调用模型）。</td></tr>
+        </tbody>
+      </table>
+      <p>「原位替换翻译」这一功能固定使用 RapidOCR，与全局 OCR 引擎设置无关。</p>
+      <h2 id="ocr-offline">离线 OCR 安装</h2>
+      <p>RapidOCR 需要手动安装：设置里点击下载按钮，会拉取 ONNX Runtime 运行库和识别模型文件（检测模型约 5MB + 识别模型约 10MB），保存到应用数据目录下的 <code>rapidocr-models/</code>。这是<b>用户主动触发</b>的一次性下载，应用不会自动帮你装。</p>
+      <p>截图翻译支持流式输出：译文先逐字显示，翻译完成后再流式显示识别出的原文（小字灰色，作为参考）；也可以在设置里关掉「显示原文」，只看译文。</p>
+    </article>
+
+    <article data-page="providers" class="hidden">
+      <div class="crumb">配置</div>
+      <h1>模型服务商</h1>
+      <p class="lead">四种原生协议直连任意提供商；每家可配密钥池，限额自动轮换。</p>
+      <h2 id="pv-protocols">协议</h2>
+      <table>
+        <thead><tr><th>协议</th><th>适用</th><th>为什么需要原生协议</th></tr></thead>
+        <tbody>
+          <tr><td>OpenAI Chat Completions</td><td>绝大多数兼容服务商（默认）</td><td>业界事实标准，大多数第三方网关都照这个格式实现</td></tr>
+          <tr><td>Anthropic Messages</td><td>Claude 系列</td><td>Claude 原生的工具调用/思考块消息格式，OpenAI 兼容层无法完整表达</td></tr>
+          <tr><td>Gemini generateContent</td><td>Gemini 原生</td><td>Gemini 的 OpenAI 兼容端点会对不认识的字段（如 <code>tool_choice</code>）直接报 400，走原生协议才不会踩坑</td></tr>
+          <tr><td>OpenAI Responses</td><td>Responses / Codex 系模型</td><td>这类模型只在 Responses 协议的流式事件里输出工具调用参数，走 Chat Completions 会拿到空参数，工具调用直接失效</td></tr>
+        </tbody>
+      </table>
+      <p>内置了几个预设，仅预填名称和接口地址，模型列表仍需自己拉取并勾选启用：DeepSeek、OpenRouter、SiliconFlow、智谱 GLM、Ollama Cloud。也可以完全自定义任意服务商。</p>
+      <h2 id="pv-keys">密钥池与容灾</h2>
+      <p>每个服务商可以配置一组 API Key（数组），第一个是主 Key，其余是备用。触发规则：</p>
+      <ul>
+        <li><b>401 / 402 / 403</b>（密钥失效、欠费、无权限）—— 立即切换到下一把可用的 Key。</li>
+        <li><b>429</b>（限流）—— 先原地重试；同一把 Key 连续遇到两次 429，且存在其他没在冷却中的 Key 时才切换；如果没有备用 Key，就耐心重试而不是报错。</li>
+        <li>失效的 Key 会冷却 <b>60 秒</b>后才重新参与轮换；用成功了会立刻清除冷却状态。</li>
+        <li>5xx、超时、连接错误按普通网络问题重试，不会当成密钥问题去轮换。</li>
+      </ul>
+      <p>「测试连接」按钮<b>只测试第一把 Key</b> —— 这是刻意设计：保证你能清楚知道主配置本身是否正确，而不会因为某个备用 Key 恰好能用而掩盖真正的配置问题。</p>
+      <h2 id="pv-permodel">按功能分配模型</h2>
+      <p>划词翻译、截图翻译、Lens、聊天可以各自配置独立的服务商与模型：</p>
+      <ul>
+        <li><b>划词翻译</b> —— 独立设置，不受其他功能影响。</li>
+        <li><b>截图翻译</b> —— 独立设置。</li>
+        <li><b>Lens</b> —— 留空则回退到划词翻译的服务商/模型。</li>
+        <li><b>聊天</b> —— 每个对话可在 <code>ModelSelector</code> 里单独切换模型；未指定时按「默认模型 → Lens → 翻译」的顺序逐级回退到第一个已配置的选项。</li>
+      </ul>
+    </article>
+
+    <article data-page="connectors" class="hidden">
+      <div class="crumb">配置</div>
+      <h1>连接器</h1>
+      <p class="lead">Notion 等远程数据源一键连接，令牌本地保管。</p>
+      <h2 id="cn-oauth">OAuth 连接</h2>
+      <p>点击「连接」，系统默认浏览器打开对应服务的授权页面，登录并同意授权后自动跳回 —— 全程不需要手动复制粘贴任何 Token。内置目录里的 Notion 走这套流程；也支持连接任意实现了 OAuth 2.1 动态客户端注册的自定义远程 MCP 服务器，不限于预置列表。</p>
+      <p>Access Token 到期前会自动静默刷新，无需重新走一遍授权。授权信息（含 Token）保存在本地设置文件里。</p>
+      <h2 id="cn-local">本地连接器</h2>
+      <ul>
+        <li><b>Obsidian</b> —— 纯本地，读取 Obsidian 客户端自身记录的库列表，选定一个库路径即可；智能体通过普通文件工具读取笔记，不涉及 MCP 或 OAuth。</li>
+        <li><b>邮件（Himalaya）</b> —— 基于 Himalaya CLI（可一键自动安装），填入邮箱账号 + IMAP/SMTP 信息即可；智能体通过内置的邮件 Skill 驱动这个 CLI 收发邮件。</li>
+      </ul>
+    </article>
+
+    <article data-page="hotkeys" class="hidden">
+      <div class="crumb">配置</div>
+      <h1>快捷键</h1>
+      <p class="lead">所有入口都藏在全局热键之后 —— 唤起时才出现，用完即走。</p>
+      <h2 id="hk-defaults">默认热键</h2>
+      <table>
+        <thead><tr><th>功能</th><th>默认组合</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>划词翻译</td><td><code>⌘/Ctrl+Alt+T</code></td><td>打开/关闭悬浮翻译窗口</td></tr>
+          <tr><td>Lens 取景</td><td><code>⌘/Ctrl+Shift+G</code></td><td>打开/关闭 Lens 屏幕取景问答</td></tr>
+          <tr><td>截图翻译</td><td><code>⌘/Ctrl+Shift+A</code></td><td>截取一块屏幕区域并翻译</td></tr>
+          <tr><td>选中文字翻译</td><td><code>⌘/Ctrl+Shift+T</code></td><td>直接翻译当前选中的文字，不截图</td></tr>
+          <tr><td>原位替换翻译</td><td><code>⌘/Ctrl+Shift+R</code></td><td>圈选区域，译文直接叠加在原文位置上</td></tr>
+        </tbody>
+      </table>
+      <p>每一个都是「再按一次即关闭」的开关式热键，且都可以在设置里单独禁用。</p>
+      <h2 id="hk-custom">自定义</h2>
+      <p>设置面板里点击热键输入框，直接按下想要的组合键即可录制，无需手动输入字符串。修饰键的常见写法（<code>cmd</code>/<code>command</code>、<code>ctrl</code>/<code>control</code>、<code>opt</code>/<code>option</code>/<code>alt</code> 等）都会被自动规范化成统一形式，不用担心大小写或别名问题。</p>
+      <p>保存前会做重复检测，如果新组合和另一个已启用的热键冲突，会在输入框旁提示冲突对象。留空即可完全禁用某个热键。</p>
+      <p>如果某个热键被操作系统或其他应用占用导致注册失败，保存会安全回滚 —— 所有热键都恢复到修改前的可用状态，不会出现「部分生效」的中间态。</p>
+    </article>
+
+    <article data-page="settings" class="hidden">
+      <div class="crumb">配置</div>
+      <h1>设置项参考</h1>
+      <p class="lead">主要设置分组一览。</p>
+      <p>设置保存在应用数据目录下的 <code>settings.json</code>（明文 JSON，包含 API Key —— 详见 <a href="#/overview">设计理念</a> 的本地优先原则；v2.3 及更早版本使用系统密钥串存储，升级后会一次性迁移进这个文件）。</p>
+      <table>
+        <thead><tr><th>分组</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>providers</code></td><td>所有已配置的模型服务商（密钥池、接口地址、可用/已启用模型列表、协议格式）</td></tr>
+          <tr><td><code>translatorProviderId</code> / <code>translatorModel</code></td><td>划词翻译专用的服务商与模型，以及自定义提示词</td></tr>
+          <tr><td><code>defaultModels</code></td><td>聊天、视觉、标题摘要、上下文压缩、图像生成各自的默认模型覆盖</td></tr>
+          <tr><td><code>screenshotTranslation</code></td><td>截图翻译三个热键、OCR 引擎、提示词模板、流式与直译开关</td></tr>
+          <tr><td><code>lens</code></td><td>Lens 热键、服务商模型、联网搜索子配置（Tavily/Exa/Grok 等）</td></tr>
+          <tr><td><code>chat</code></td><td>聊天窗口行为：流式/思考开关、最大输出长度、自定义系统提示词</td></tr>
+          <tr><td><code>chatTools</code></td><td>MCP 服务器列表、Skills 扫描路径与开关、工具轮次/超时上限、审批策略、子智能体并发数</td></tr>
+          <tr><td><code>chatMemory</code></td><td>长期记忆功能开关</td></tr>
+          <tr><td><code>documentProcessing</code></td><td>知识库文档入库时的 OCR 引擎与 PDF 处理策略</td></tr>
+          <tr><td><code>knowledgeBase</code></td><td>混合检索权重、重排服务商配置</td></tr>
+          <tr><td><code>hotkey</code> 及各功能自己的热键字段</td><td>全局快捷键</td></tr>
+          <tr><td><code>theme</code> / <code>themeColor</code></td><td>外观主题与配色</td></tr>
+          <tr><td><code>autoCheckUpdate</code> / <code>launchAtStartup</code></td><td>更新检查与开机自启</td></tr>
+          <tr><td><code>obsidianVaultPath</code> / <code>emailAccounts</code></td><td>本地连接器配置</td></tr>
+        </tbody>
+      </table>
+    </article>
+
+    <article data-page="faq" class="hidden">
+      <div class="crumb">更多</div>
+      <h1>常见问题</h1>
+      <p class="lead">安装、密钥、网络等高频问题。</p>
+      <h2 id="faq-key">我的 API Key 存在哪里，安全吗？</h2>
+      <p>保存在本机的 <code>settings.json</code> 里，明文存储，不上传任何 Kivio 服务器 —— 因为压根没有 Kivio 服务器参与请求转发。安全边界是你的操作系统账户权限，不是加密存储。</p>
+      <h2 id="faq-nomodel">为什么某个功能提示「请先选择模型」？</h2>
+      <p>该功能引用的模型不在对应服务商的「已启用模型」列表里（可能是服务商被禁用、模型被移除，或从未配置过）。去设置里为该功能重新选一个已启用的模型即可。</p>
+      <h2 id="faq-hotkey-conflict">热键不生效/提示冲突怎么办？</h2>
+      <p>大概率是被系统或其他应用占用了同一个组合键。设置面板会明确提示是「与 Kivio 自己的其他热键冲突」还是「被外部程序占用」，换一个组合键即可。</p>
+      <h2 id="faq-offline">断网还能用哪些功能？</h2>
+      <p>代码沙箱（<code>run_python</code>）里预装的包（numpy/pandas/matplotlib 等）完全离线可用；但任何需要调用模型的功能（对话、翻译、知识库检索的 Embedding/生成步骤）都需要网络连接到你配置的服务商。</p>
+    </article>
+
+    <article data-page="changelog" class="hidden">
+      <div class="crumb">更多</div>
+      <h1>更新日志</h1>
+      <p class="lead">每个版本的变化。完整发布记录见 <a href="https://github.com/abu/kivio/releases" target="_blank" rel="noopener" style="border-bottom:1px solid var(--fg)">GitHub Releases ↗</a>。</p>
+      <div class="todo">TODO · 版本要点待补充</div>
+    </article>
+
+    <div class="pager" id="pager"></div>
+  </main>
+
+  <!-- ================= TOC ================= -->
+  <aside class="toc" id="toc">
+    <div class="toc-label">On this page</div>
+    <div id="tocList"></div>
+  </aside>
+
+</div>
+
+<script>
+/* ============ page routing (hash-based, #/page) ============ */
+const items = [...document.querySelectorAll('.side a.item')]
+const pages = items.map(a => a.getAttribute('data-page'))
+const articles = {}
+document.querySelectorAll('article[data-page]').forEach(a => { articles[a.getAttribute('data-page')] = a })
+
+function currentPage() {
+  const m = location.hash.match(/^#\/([a-z-]+)/)
+  return (m && pages.includes(m[1])) ? m[1] : 'overview'
+}
+
+function buildToc(page) {
+  const list = document.getElementById('tocList')
+  list.innerHTML = ''
+  articles[page].querySelectorAll('h2').forEach(h => {
+    const a = document.createElement('a')
+    a.href = '#/' + page + '/' + h.id
+    a.textContent = h.textContent
+    a.addEventListener('click', ev => {
+      ev.preventDefault()
+      h.scrollIntoView({ behavior: 'smooth' })
+      history.replaceState(null, '', '#/' + page + '/' + h.id)
+    })
+    list.appendChild(a)
+  })
+}
+
+function buildPager(page) {
+  const i = pages.indexOf(page)
+  const pager = document.getElementById('pager')
+  pager.innerHTML = ''
+  if (i > 0) {
+    const prev = document.createElement('a')
+    prev.href = '#/' + pages[i - 1]
+    prev.innerHTML = '<span class="lab">← 上一篇</span>' + items[i - 1].textContent
+    pager.appendChild(prev)
+  }
+  if (i < pages.length - 1) {
+    const next = document.createElement('a')
+    next.className = 'next'
+    next.href = '#/' + pages[i + 1]
+    next.innerHTML = '<span class="lab">下一篇 →</span>' + items[i + 1].textContent
+    pager.appendChild(next)
+  }
+}
+
+let tocObserver = null
+function watchHeadings(page) {
+  if (tocObserver) tocObserver.disconnect()
+  const links = [...document.querySelectorAll('#tocList a')]
+  const heads = [...articles[page].querySelectorAll('h2')]
+  if (!heads.length) return
+  tocObserver = new IntersectionObserver(es => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return
+      links.forEach(l => l.classList.toggle('active', l.getAttribute('href').endsWith('/' + e.target.id)))
+    })
+  }, { rootMargin: '-20% 0px -70% 0px' })
+  heads.forEach(h => tocObserver.observe(h))
+}
+
+function render() {
+  const page = currentPage()
+  Object.entries(articles).forEach(([k, el]) => el.classList.toggle('hidden', k !== page))
+  items.forEach(a => a.classList.toggle('active', a.getAttribute('data-page') === page))
+  buildToc(page)
+  buildPager(page)
+  watchHeadings(page)
+  // deep link to a heading: #/page/heading-id
+  const m = location.hash.match(/^#\/[a-z-]+\/([a-zA-Z0-9-]+)/)
+  if (m) {
+    const h = document.getElementById(m[1])
+    if (h) { requestAnimationFrame(() => h.scrollIntoView()) }
+  } else {
+    window.scrollTo(0, 0)
+  }
+  document.getElementById('sidebar').classList.remove('open')
+  const active = document.querySelector('.side a.item.active')
+  const title = active ? active.textContent : 'Kivio'
+  document.title = page === 'overview' ? 'Kivio Docs' : title + ' — Kivio Docs'
+}
+
+window.addEventListener('hashchange', render)
+render()
+
+/* ============ mobile sidebar ============ */
+document.getElementById('menuBtn').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('open')
+})
+</script>
+</body>
+</html>
