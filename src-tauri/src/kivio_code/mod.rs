@@ -580,6 +580,8 @@ impl TurnAssembly {
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: self.system_prompt.clone(),
+            initial_anchor_total_tokens: None,
+            initial_anchor_trailing_estimate: 0,
         }
     }
 }

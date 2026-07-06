@@ -148,6 +148,9 @@ export function ContextIndicator({
   const isExternalContext =
     usesExternalRuntime || contextSource === 'external_cli'
   const isCliReported = tokenCountSource === 'cli_reported'
+  // 内置路径把 provider 实报 usage 作锚点时的口径（对齐 CLI 的 cli_reported）：显示精确值、不带 `~`。
+  const isProviderReported = tokenCountSource === 'provider_reported'
+  const isReportedExact = isCliReported || isProviderReported
   const compressedMessageCount = valueFrom(
     contextState?.compressed_message_count,
     contextState?.compressedMessageCount,
@@ -176,10 +179,10 @@ export function ContextIndicator({
     [barSlices],
   )
   const fullness = fullnessLabel(usageRatio, isExternalContext, t)
-  const tokenLine = `${formatTokenTotal(estimatedInputTokens, isCliReported, approximatePrefix)} / ${windowLabel(contextWindowTokens, t)}`
+  const tokenLine = `${formatTokenTotal(estimatedInputTokens, isReportedExact, approximatePrefix)} / ${windowLabel(contextWindowTokens, t)}`
   const sourceLabel = isExternalContext
     ? (isCliReported ? t.contextSourceCliReported : t.contextSourceCliEstimated)
-    : t.contextSourceKivio
+    : (isProviderReported ? t.contextSourceProviderReported : t.contextSourceKivio)
   const ringDegrees = usageRatio == null ? 0 : Math.max(0, Math.min(1, usageRatio)) * 360
   const canCompress = Boolean(onCompress) && !compressing && !loading && messageCount > 2
   const compressLabel = isExternalContext

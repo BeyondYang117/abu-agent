@@ -754,7 +754,7 @@ fn estimate_model_messages_tokens(messages: &[ModelMessage]) -> usize {
 /// api_messages）估算——真实 replay 发给模型的是这些里的完整工具转录，而非截断的
 /// `result_preview`；分支顺序与 `build_chat_api_messages` 的展开路径同源对齐。
 /// 无展开数据时退回 content + reasoning + 工具入参 + 结果预览口径。
-fn estimate_chat_message_tokens(message: &ChatMessage) -> usize {
+pub(crate) fn estimate_chat_message_tokens(message: &ChatMessage) -> usize {
     if !message.model_messages.is_empty() {
         return estimate_model_messages_tokens(&message.model_messages);
     }
@@ -1170,8 +1170,41 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     if window == 0 {
         return state.runtime_messages.clone();
     }
+    // 真实用量锚点口径（对齐 pi/opencode 的 ground-truth 优先）：有锚点时用 provider 实报的
+    // 上次 prompt token 数 + 锚点响应起往后新增消息的字符估算；无锚点回落纯字符估算。
+    // 取 `max(纯估算)` 作保守下限，绝不因锚点偏小比现状更乐观。
     let budget = (window as f32 * AUTO_COMPACT_RATIO) as usize;
-    let estimated = estimate_messages_tokens(&state.runtime_messages);
+    // 纯字符估算 = 消息 + **工具 schema**（对齐 pi/footer 的兜底口径：pi 兜底含 system+每工具+消息；
+    // Kivio footer 也含 `estimate_tool_segments`）。工具定义随每次请求发送、provider 会计入，漏算会
+    // 让无锚点的首轮低估数千 token、压缩过晚——故这里补上（与 footer `count_tokens_in_value` 同口径，
+    // 都基于 `estimate_value_tokens(tool.to_openai_tool())`）。
+    let tool_schema_tokens: usize = state
+        .tools
+        .iter()
+        .map(|tool| estimate_value_tokens(&tool.to_openai_tool()))
+        .sum();
+    let estimate_full =
+        estimate_messages_tokens(&state.runtime_messages).saturating_add(tool_schema_tokens);
+    let (anchor_prompt, trailing) = if let Some(usage) = &state.last_step_usage {
+        // 本轮已发生过模型调用：锚点 = 上次调用 usage（含 output）；trailing = 那次**响应之后**新增。
+        let start = state
+            .runtime_len_at_last_call
+            .min(state.runtime_messages.len());
+        (
+            super::context_estimate::anchor_total_tokens(usage, &config.provider.api_format),
+            estimate_messages_tokens(&state.runtime_messages[start..]),
+        )
+    } else if state.initial_anchor_valid {
+        // 本轮尚未调用模型（首次压缩检查）：用上一轮落盘 usage 组成的 config 锚点。
+        (
+            config.initial_anchor_total_tokens,
+            config.initial_anchor_trailing_estimate,
+        )
+    } else {
+        (None, 0)
+    };
+    let (estimated, _anchored) =
+        super::context_estimate::effective_context_tokens(anchor_prompt, trailing, estimate_full);
     if estimated <= budget {
         // 未超预算：本步无需压缩。重置 anti-thrashing 计数（Gap 2）——上下文已回到预算内。
         state.compaction_unresolved_rounds = 0;
@@ -1201,6 +1234,9 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
         state.runtime_messages = degraded.clone();
         state.compacted = true;
         state.compaction_unresolved_rounds = 0;
+        // 压缩后消息序列已变，旧锚点失真——清空，回落纯估算直到下次模型调用产生新 usage。
+        state.last_step_usage = None;
+        state.initial_anchor_valid = false;
         env.host.emit_compaction_status(
             &config.conversation_id,
             "microcompacted",
@@ -1243,6 +1279,9 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
             eprintln!("Chat context compaction: est {estimated} -> {after} tokens");
             state.runtime_messages = compacted.clone();
             state.compacted = true;
+            // 压缩后消息序列已变，旧锚点失真——清空，回落纯估算直到下次模型调用产生新 usage。
+            state.last_step_usage = None;
+            state.initial_anchor_valid = false;
             if after <= budget {
                 state.compaction_unresolved_rounds = 0;
             } else {
@@ -1735,6 +1774,7 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,

@@ -310,6 +310,12 @@ pub struct ChatMessage {
     /// (planning/synthesis/compaction). None when the provider reports no usage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<crate::chat::model::ModelUsage>,
+    /// Provider-reported usage of the **last** model call of this reply (真实用量锚点)。
+    /// 与累计 `usage` 区分：累计是多步 prompt 之和、会虚高数倍，不能当锚点；锚点必须是单次调用
+    /// 的 usage，代表「本轮结束时整个对话 prompt 的真实大小」。下一轮 / footer 据此把上下文占用
+    /// 锚定到 provider 实报值（见 `chat/agent/context_estimate.rs`）。旧会话无字段 → None → 回落估算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_usage: Option<crate::chat::model::ModelUsage>,
     /// 多模型一问多答（任务 06-30）：同一条 user 消息 fan-out 出的 N 条 assistant 共享同一个
     /// group_id；单模型回答为 None（旧会话缺字段反序列化为 None，向后兼容）。
     #[serde(default, skip_serializing_if = "Option::is_none")]

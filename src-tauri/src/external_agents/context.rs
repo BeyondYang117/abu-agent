@@ -13,6 +13,9 @@ pub const CONTEXT_SOURCE_BUILTIN: &str = "kivio_builtin";
 pub const CONTEXT_SOURCE_EXTERNAL: &str = "external_cli";
 pub const TOKEN_COUNT_CLI: &str = "cli_reported";
 pub const TOKEN_COUNT_ESTIMATED: &str = "estimated";
+/// 内置路径把 provider 实报 `usage` 作为真实用量锚点时的口径标记（对齐 CLI 的 `cli_reported`）。
+/// 前端 ContextIndicator 据此把 footer 标为「模型实报」（精确值，不带 `~` 前缀）。
+pub const TOKEN_COUNT_PROVIDER_REPORTED: &str = "provider_reported";
 
 pub fn parse_context_window_label(label: &str) -> Option<u32> {
     let s = label.trim().to_ascii_uppercase();
@@ -299,6 +302,7 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,
@@ -324,6 +328,7 @@ mod tests {
                 output_tokens: Some(28),
                 ..Default::default()
             }),
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,

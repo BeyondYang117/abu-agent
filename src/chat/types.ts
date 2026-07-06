@@ -375,8 +375,8 @@ export interface ConversationContextState {
   warningMessage?: string | null
   context_source?: 'kivio_builtin' | 'external_cli' | string
   contextSource?: 'kivio_builtin' | 'external_cli' | string
-  token_count_source?: 'cli_reported' | 'estimated' | string
-  tokenCountSource?: 'cli_reported' | 'estimated' | string
+  token_count_source?: 'cli_reported' | 'estimated' | 'provider_reported' | string
+  tokenCountSource?: 'cli_reported' | 'estimated' | 'provider_reported' | string
   session_input_tokens?: number
   sessionInputTokens?: number
   session_output_tokens?: number

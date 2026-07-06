@@ -44,6 +44,10 @@ pub(crate) async fn run_tool_round(
     let assistant_message =
         assistant_api_message_for_tool_calls(&planned.message, &planned.tool_calls);
     state.runtime_messages.push(assistant_message);
+    // 真实用量锚点的 trailing 切点：本次规划响应刚 push 进 runtime，其后的工具结果即 trailing
+    // 增量（`runtime_messages[runtime_len_at_last_call..]`）。响应本身用锚点里的真实 output 计入，
+    // 故切点设在响应**之后**，避免与 output 双算（对齐 pi 的「anchor + 响应后消息估算」）。
+    state.runtime_len_at_last_call = state.runtime_messages.len();
     state
         .generated_api_messages
         .push(state.runtime_messages.last().cloned().unwrap_or(Value::Null));

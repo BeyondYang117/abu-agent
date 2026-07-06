@@ -69,6 +69,14 @@ pub struct AgentRunConfig<'a> {
     pub assistant_snapshot: Option<ChatAssistantSnapshot>,
     pub custom_system_prompt: String,
     pub provider_tools_fallback_system_prompt: String,
+    /// 真实用量锚点（来自会话最后一条带 `anchor_usage` 的 assistant 消息，由 commands.rs 解析）：
+    /// run 首次压缩检查前用它把上下文占用锚定到 provider 实报值。值为「上次 prompt + 该次响应」的
+    /// token **总数**（含 output，见 `context_estimate::anchor_total_tokens`）。`None` = 无可用锚点
+    /// （新对话 / 旧数据无 usage / 切换过 provider / 压缩边界之后），回落纯字符估算。
+    pub initial_anchor_total_tokens: Option<u64>,
+    /// 锚点响应**之后**（不含响应本身，响应用 output 计入锚点）新增消息的字符估算，由 commands.rs
+    /// 组装 runtime_messages 时算好。与 `initial_anchor_total_tokens` 配对：`effective = 锚点 + 该 trailing`。
+    pub initial_anchor_trailing_estimate: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +102,9 @@ pub struct AgentRunResult {
     /// 本轮全部模型调用（规划/合成/压缩摘要）累计的 provider 真实 usage；
     /// provider 不报告时为 None（前端回落到 chars 估算）。
     pub usage: Option<crate::chat::model::ModelUsage>,
+    /// 本轮**最后一次**模型调用的 usage（真实用量锚点，落盘到 `ChatMessage.anchor_usage`）。
+    /// 与累计 `usage` 区分——累计是多步之和会虚高，锚点须是单次调用值。None = provider 未报。
+    pub last_step_usage: Option<crate::chat::model::ModelUsage>,
     /// 本轮发生了上下文压缩（L2 摘要）时，这里携带压缩后的**完整历史**
     /// （system + 摘要 + 受保护尾段 + 本轮后续消息 + 最终 assistant 回答）。
     /// 跨轮调用方（kivio-code 交互模式）据此**替换**自己累积的 runtime_messages，

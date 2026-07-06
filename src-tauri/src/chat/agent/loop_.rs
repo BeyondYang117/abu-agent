@@ -71,6 +71,18 @@ pub(crate) struct RunState {
     pub(crate) applied_allowed_tools_len: usize,
     /// 本轮全部模型调用（规划/合成/压缩摘要）的 usage 累计；provider 不报则保持 None。
     pub(crate) usage: Option<crate::chat::model::ModelUsage>,
+    /// 本轮**最后一次**模型调用的 usage（真实用量锚点，与累计 `usage` 区分——累计是多步之和、
+    /// 会虚高数倍，不能当锚点）。`maybe_compact_send_view` 据此把上下文占用锚定到 provider
+    /// 实报值，只对锚点之后新增的消息做字符估算（对齐 pi/opencode 的 ground-truth 口径）。
+    /// 压缩发生后清空（消息序列已变，旧锚点失真），下次模型调用重新填充。
+    pub(crate) last_step_usage: Option<crate::chat::model::ModelUsage>,
+    /// 记录锚点**响应 push 之后** `runtime_messages` 的长度——`runtime_messages[该值..]` =
+    /// 锚点响应之后新增的消息（工具结果等），即 trailing 增量。在 `rounds.rs` push 完 assistant
+    /// 响应后设置（而非 merge_usage 时），使 trailing 严格「响应之后」、不与锚点 output 双算。
+    pub(crate) runtime_len_at_last_call: usize,
+    /// `config.initial_anchor_*`（来自上一轮落盘 usage）是否仍可用：run 首次压缩检查前为 true；
+    /// 一旦发生压缩即失效（回落纯估算，直到本轮模型调用产生新的 `last_step_usage`）。
+    pub(crate) initial_anchor_valid: bool,
     /// 本轮是否真正发生过 L2 压缩（摘要已写回 `runtime_messages`）。finalize 据此
     /// 把压缩后的完整历史回传到 `AgentRunResult.compacted_history`，让跨轮调用方
     /// 用压缩后的历史替换其累积副本（压缩真正跨轮生效，而非仅当轮发送视图瘦身）。
@@ -112,8 +124,15 @@ impl RunState {
     }
 
     /// 把单次模型调用的 usage 累加进本轮总账（None 入参不改变现状）。
+    /// 同时把这次调用记为**真实用量锚点**（`last_step_usage`）——累计 `usage` 是多步之和不能当
+    /// 锚点，锚点必须是单次调用的 usage。`runtime_len_at_last_call`（trailing 切点）不在这里设，
+    /// 而在 `rounds.rs` push 完该次响应后设——保证 trailing = 锚点响应**之后**新增（对齐 pi、避免
+    /// 与锚点里的 output 双算）。
+    /// 注：即便这次是 recovery（发送的是精简/压缩输入）导致锚点偏小，`effective_context_tokens`
+    /// 的 `max(纯估算)` 下限也会兜底，绝不会因锚点偏小而比现状更乐观。
     pub(crate) fn merge_usage(&mut self, next: Option<crate::chat::model::ModelUsage>) {
         let Some(next) = next else { return };
+        self.last_step_usage = Some(next.clone());
         let total = self.usage.get_or_insert_with(Default::default);
         let add = |slot: &mut Option<u64>, value: Option<u64>| {
             if let Some(value) = value {
@@ -157,6 +176,9 @@ pub async fn run_agent_loop(
         skill_cache: skills::SkillRunCache::default(),
         applied_allowed_tools_len: 0,
         usage: None,
+        last_step_usage: None,
+        runtime_len_at_last_call: 0,
+        initial_anchor_valid: true,
         compacted: false,
         compaction_unresolved_rounds: 0,
         pending_compaction_boundary: None,
@@ -265,6 +287,7 @@ pub async fn run_agent_loop(
 /// `compacted_history`，供跨轮调用方替换其累积历史（finalize 构造器们也不感知压缩）。
 fn attach_usage(mut result: AgentRunResult, state: &mut RunState) -> AgentRunResult {
     result.usage = state.usage.take();
+    result.last_step_usage = state.last_step_usage.take();
     if state.compacted {
         let mut history = std::mem::take(&mut state.runtime_messages);
         let final_message =

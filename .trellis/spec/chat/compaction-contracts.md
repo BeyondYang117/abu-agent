@@ -128,3 +128,73 @@ old_segment.iter().rev()
 - 压缩估算对多模态 content 走 `to_string()`（base64 打爆）或对工具消息只算 `result_preview`（低估真实 replay）。
 - 落盘 old_segment 用连续 `messages[start..=split]` 而不过滤多答排除臂。
 
+---
+
+## Scenario: 真实用量锚点回喂上下文计量（07-06-context-token-ground-truth）
+
+> 2026-07-06 补。相关代码：`chat/agent/context_estimate.rs`（新）、`compaction.rs::maybe_compact_send_view`、
+> `loop_.rs`（`RunState.last_step_usage`/`merge_usage`/`attach_usage`）、`commands.rs::resolve_usage_anchor` +
+> `compute_context_state` + `build_assistant_message`、`types.rs::ChatMessage.anchor_usage`、
+> `external_agents/context.rs::TOKEN_COUNT_PROVIDER_REPORTED`、`src/chat/ContextIndicator.tsx`。
+
+### 1. 口径（唯一，对齐 pi 源码）
+
+上下文占用 = **provider 实报锚点（整个 prompt + 该次响应）+ 锚点响应之后新增消息的字符估算**，
+逐字对齐 pi 的 `contextTokens = calculateContextTokens(lastUsage) + Σ estimate(其后消息)`。
+统一函数 `context_estimate::effective_context_tokens(anchor_total, trailing, estimate_full)`：
+
+- **保守下限（硬约束）**：返回 `max(anchor_total + trailing, estimate_full)`，且**仅当**锚点值 ≥ 纯估算时才
+  标记 `anchored=true`。锚点绝不能让 footer / 压缩触发比改动前的纯字符估算**更乐观**（锚点偏小 → 退回纯估算）。
+- 无锚点（新对话 / 旧数据无 usage / provider 切换 / 压缩后）→ `(estimate_full, false)`，行为 == 改动前。
+
+### 2. 锚点求和 = 「prompt + 响应」总数，按 provider 家族消歧（防双算，硬约束）
+
+`context_estimate::anchor_total_tokens(usage, api_format)`（对齐 pi `totalTokens || input+output+cacheRead+cacheWrite`）：
+- `anthropic_messages`：`input_tokens` 是**非缓存**部分 → 全量 = `input + output + cache_read + cache_creation`（四者不相交）。
+  **不**用 Kivio 的 `total_tokens`（对 Anthropic 只填 `input+output`、漏 cache）。
+- 其它（`openai_*` / responses）：优先 `total_tokens`（= prompt+completion，prompt 已含 cached，无双算）；
+  缺失则 `input(=prompt,含cached) + output`。**叠加 cached 就是双算**（opencode #4416 踩过）。
+  口径须与 `usage.rs::model_usage_from_{openai,anthropic}_value` 的映射一致。
+- **含 output**：锚点响应已成为下一次请求的历史，其 token 必须计入；trailing 只覆盖响应**之后**的消息（§3）。
+
+### 3. 锚点 = 单次调用 usage，不是累计；trailing 严格「响应之后」（硬约束）
+
+`ChatMessage.anchor_usage` / `RunState.last_step_usage` / `AgentRunResult.last_step_usage` 存**最后一次**模型调用的 usage，
+与累计字段 `ChatMessage.usage`（多步 prompt 之和、会虚高数倍）**必须分开**——累计值当锚点会严重高估。
+
+trailing 必须是锚点**响应之后**新增的消息（响应本身用真实 output 计入锚点 §2，不重复估，否则双算）：
+- **loop**：`merge_usage` 只记 `last_step_usage`；`runtime_len_at_last_call` 在 `rounds.rs` push 完该次规划**响应之后**才设，
+  使 `runtime_messages[start..]` = 响应之后的工具结果。
+- **footer**：`resolve_usage_anchor` 的 trailing 用 `messages[anchor_idx + 1 ..]`（排除锚点消息本身）。
+
+### 4. 锚点失效（R4，硬约束）
+
+`resolve_usage_anchor(conversation, provider)` 解析 footer/首轮 config 锚点，以下情形**必须**失效（回落纯估算）：
+- **provider 切换**：锚点消息 `provider_id`（多模型自带 / 单模型回退 `conversation.provider_id`）≠ 当前 provider（计数口径不可比）。
+- **压缩边界在锚点之后**：`max(compaction_boundaries.created_at) > 锚点消息.timestamp`。手动 `/compact` 后不产生新 assistant，
+  旧 assistant 的 `anchor_usage` 仍是**压缩前**的巨值——不失效会让 footer 虚高 + 下轮 `initial_anchor` 触发对已压缩对话的
+  二次压缩。run 内自动压缩不受影响（最终 assistant 的 `timestamp` 在 run 结束时置，≥ 边界时间）。
+`maybe_compact_send_view` 里压缩成功（micro/LLM 两分支）后必须 `last_step_usage=None` + `initial_anchor_valid=false`。
+
+### 5. 跨层口径标记
+
+内置路径锚定时 `context_state.token_count_source = TOKEN_COUNT_PROVIDER_REPORTED`（`"provider_reported"`，与外部 CLI 的
+`cli_reported` 并列，定义在 `external_agents::context`）+ 填 `session_input_tokens`。前端 `ContextIndicator` 据此显示**精确值**
+（不带 `~`）+「模型实报」标签；`types.ts` 的 `token_count_source` 联合类型须含该值。禁止两侧硬编码该字符串。
+
+### 6. 兜底估算（`estimate_full`）必须含工具 schema（对齐 pi / footer）
+
+无锚点时（首轮 / 刚压缩）用的纯字符估算 `estimate_full`，必须涵盖 **消息 + 工具 schema**（pi 兜底 = system + 每工具 + 消息；
+footer 也含 `estimate_tool_segments`）。工具定义随每次请求发送、provider 会计入——漏算会让首轮低估数千 token、压缩过晚。
+- **loop**：`maybe_compact_send_view` 的 `estimate_full = estimate_messages_tokens(runtime) + Σ estimate_value_tokens(tool.to_openai_tool())`。
+- **footer**：`compute_context_state` 的 segments 已含 `estimate_tool_segments`（同口径 `count_tokens_in_value(tool.to_openai_tool())`）。
+
+### 7. Bad（禁止）
+
+- 用累计 `ChatMessage.usage` 当锚点（多步虚高）。
+- 锚点 OpenAI 家族把 `input + cached` 相加、或不加 `output`（前者双算、后者漏响应）。
+- trailing 把锚点响应本身也估进去（响应已用真实 output 计入锚点 → 双算）。
+- `effective_context_tokens` 去掉 `max(estimate_full)` 下限（锚点偏小时比现状更乐观 → 压缩过晚超窗）。
+- `resolve_usage_anchor` 只查 provider 不查压缩边界（stale 锚点泄漏 → footer 虚高 + 已压缩对话被二次压缩）。
+- loop 的 `estimate_full` 漏算工具 schema（首轮低估、压缩过晚）。
+

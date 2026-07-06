@@ -581,6 +581,8 @@
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: String::new(),
+            initial_anchor_total_tokens: None,
+            initial_anchor_trailing_estimate: 0,
         }
     }
 
@@ -2016,6 +2018,107 @@
         assert_eq!(last["content"], "总结完成，工具输出已分析。");
     }
 
+    /// 真实用量锚点：即便**字符估算**远低于压缩阈值，只要上一轮 provider 实报 usage（config
+    /// 锚点）超过预算，run 首次规划前就应触发压缩。构造 window=40k（预算 ~34976）、history
+    /// 字符估算 ~25k（< 预算，纯估算不会压），但 initial_anchor_total_tokens=40k（> 预算）→
+    /// 首个请求必须是摘要（"tasked with summarizing conversations"）。
+    #[tokio::test]
+    async fn run_loop_usage_anchor_triggers_compaction_when_estimate_below_budget() {
+        let server = MockModelServer::start(vec![
+            // 1) 因锚点触发的 L2 摘要请求（流式）。
+            MockResponse::Sse(vec![
+                long_summary_sse("SUMMARY_MARKER: 早前轮次摘要。"),
+                "[DONE]".to_string(),
+            ]),
+            // 2) 压缩后的规划请求直接给最终答案（无工具）结束循环。
+            MockResponse::Sse(vec![
+                r#"{"choices":[{"delta":{"content":"已按锚点压缩后作答。"}}]}"#.to_string(),
+                "[DONE]".to_string(),
+            ]),
+        ]);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url, true);
+        config.provider.model_overrides.insert(
+            "test-model".to_string(),
+            crate::settings::ModelInfo {
+                context_window: Some(40_000),
+                ..Default::default()
+            },
+        );
+        // 5 条各 5000 token（20000 ASCII 字符）→ 估算 ~25000 < 预算 34976（纯估算不触发压缩），
+        // 但 keep 20000 只护住尾部 4 条，留 1 条旧段可摘要。
+        config.runtime_messages = vec![
+            serde_json::json!({ "role": "system", "content": "system prompt" }),
+        ];
+        for i in 0..5 {
+            config.runtime_messages.push(serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "a".repeat(20_000),
+            }));
+        }
+        // config 锚点：上一轮 provider 实报 prompt=40000（> 预算 34976）→ 触发压缩。
+        config.initial_anchor_total_tokens = Some(40_000);
+        config.initial_anchor_trailing_estimate = 0;
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("anchor-triggered compaction run completes");
+
+        assert_eq!(result.content, "已按锚点压缩后作答。");
+        let bodies = server.captured_bodies();
+        assert!(
+            bodies[0].contains("tasked with summarizing conversations"),
+            "usage anchor over budget must trigger compaction as the first request"
+        );
+    }
+
+    /// 对照组：同样的 ~25k 估算 history，但**没有** config 锚点 → 纯字符估算 < 预算 →
+    /// 首个请求应是普通规划（携带原始 history），而非摘要。证明锚点是触发压缩的必要条件。
+    #[tokio::test]
+    async fn run_loop_no_anchor_skips_compaction_when_estimate_below_budget() {
+        let server = MockModelServer::start(vec![
+            // 无压缩：首个请求即规划，直接给最终答案。
+            MockResponse::Sse(vec![
+                r#"{"choices":[{"delta":{"content":"无需压缩直接作答。"}}]}"#.to_string(),
+                "[DONE]".to_string(),
+            ]),
+        ]);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url, true);
+        config.provider.model_overrides.insert(
+            "test-model".to_string(),
+            crate::settings::ModelInfo {
+                context_window: Some(40_000),
+                ..Default::default()
+            },
+        );
+        config.runtime_messages = vec![
+            serde_json::json!({ "role": "system", "content": "system prompt" }),
+        ];
+        for i in 0..5 {
+            config.runtime_messages.push(serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": "a".repeat(20_000),
+            }));
+        }
+        // 无锚点（默认 None）。
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+
+        let result = run_agent_loop(config, &host, &executor)
+            .await
+            .expect("no-anchor run completes without compaction");
+
+        assert_eq!(result.content, "无需压缩直接作答。");
+        let bodies = server.captured_bodies();
+        assert!(
+            !bodies[0].contains("tasked with summarizing conversations"),
+            "without an anchor, an under-budget estimate must NOT trigger compaction"
+        );
+    }
+
     /// Crash-safety: after a tool round that returns `Continue` (more rounds
     /// allowed), the loop must checkpoint a partial-assistant snapshot carrying
     /// the round's tool work, so a mid-run crash before the final write keeps the
@@ -2615,6 +2718,9 @@
             skill_cache: skills::SkillRunCache::default(),
             applied_allowed_tools_len: 0,
             usage: None,
+            last_step_usage: None,
+            runtime_len_at_last_call: 0,
+            initial_anchor_valid: true,
             compacted: false,
             compaction_unresolved_rounds: 0,
             pending_compaction_boundary: None,

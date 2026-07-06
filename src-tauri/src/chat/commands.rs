@@ -552,6 +552,7 @@ pub(crate) fn chat_import_external_conversation(
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,
@@ -1291,6 +1292,7 @@ pub(crate) async fn chat_send_message(
         run_entry: None,
         stream_outcome: None,
         usage: None,
+        anchor_usage: None,
         group_id: group_id.clone(),
         provider_id: None,
         model: None,
@@ -2214,6 +2216,10 @@ async fn complete_assistant_reply_inner(
         &resolved_model,
         settings.chat.max_output_tokens,
     );
+    // 真实用量锚点：run 首次压缩检查前，用上一轮落盘 usage 把上下文占用锚定到 provider 实报值
+    // （对齐 pi/opencode 的 ground-truth 口径，避免字符估算低估导致压缩过晚/超窗）。
+    let (initial_anchor_total_tokens, initial_anchor_trailing_estimate) =
+        resolve_usage_anchor(conversation, Some(&provider));
     let result = crate::chat::agent::run_agent_loop(
         crate::chat::agent::AgentRunConfig {
             entry,
@@ -2244,6 +2250,8 @@ async fn complete_assistant_reply_inner(
             assistant_snapshot: conversation.assistant_snapshot.clone(),
             custom_system_prompt: settings.chat.system_prompt.clone(),
             provider_tools_fallback_system_prompt,
+            initial_anchor_total_tokens,
+            initial_anchor_trailing_estimate,
         },
         host,
         &executor,
@@ -2279,6 +2287,7 @@ async fn complete_assistant_reply_inner(
             Some(run_entry),
             Some(result.stream_outcome.as_str()),
             result.usage,
+            result.last_step_usage,
             message_plan,
             Some((
                 arm.group_id.clone(),
@@ -2335,6 +2344,7 @@ async fn complete_assistant_reply_inner(
         Some(run_entry),
         Some(result.stream_outcome.as_str()),
         result.usage,
+        result.last_step_usage,
         message_plan,
     )
     .await?;
@@ -2547,6 +2557,7 @@ async fn complete_direct_image_generation_reply(
                 Some("completed"),
                 None,
                 None,
+                None,
             )
             .await?;
             Ok(())
@@ -2713,6 +2724,7 @@ fn build_assistant_message(
     run_entry: Option<&str>,
     stream_outcome: Option<&str>,
     usage: Option<crate::chat::model::ModelUsage>,
+    anchor_usage: Option<crate::chat::model::ModelUsage>,
     agent_plan: Option<AgentPlanState>,
     group_meta: Option<AssistantGroupMeta>,
 ) -> ChatMessage {
@@ -2762,6 +2774,7 @@ fn build_assistant_message(
         run_entry: run_entry.map(str::to_string),
         stream_outcome: stream_outcome.map(str::to_string),
         usage,
+        anchor_usage,
         group_id,
         provider_id,
         model,
@@ -2793,6 +2806,7 @@ fn build_error_arm_message(
         Some("error"),
         None,
         None,
+        None,
         Some((group_id.to_string(), provider_id, model)),
     )
 }
@@ -2814,6 +2828,7 @@ pub(crate) async fn push_assistant_message(
     run_entry: Option<&str>,
     stream_outcome: Option<&str>,
     usage: Option<crate::chat::model::ModelUsage>,
+    anchor_usage: Option<crate::chat::model::ModelUsage>,
     agent_plan: Option<AgentPlanState>,
 ) -> Result<(), String> {
     let message = build_assistant_message(
@@ -2828,6 +2843,7 @@ pub(crate) async fn push_assistant_message(
         run_entry,
         stream_outcome,
         usage,
+        anchor_usage,
         agent_plan,
         // 单模型落盘路径不带 group 信息（行为不变）。
         None,
@@ -2948,6 +2964,7 @@ fn persist_partial_assistant_snapshot(
         run_entry: None,
         stream_outcome: Some("interrupted".to_string()),
         usage: None,
+        anchor_usage: None,
         group_id: None,
         provider_id: None,
         model: None,
@@ -4012,6 +4029,70 @@ fn auxiliary_vision_model_from_selection(
         })
 }
 
+/// 解析会话的真实用量锚点：从尾部找最近一条带 `anchor_usage` 且 provider 与当前一致的 assistant。
+/// 返回 `(anchor_total_tokens, trailing_estimate)`：
+/// - `anchor_total_tokens` = 该 assistant 上次调用「整个 prompt + 该次响应」的真实 token 总数
+///   （含 output，按 provider 家族消歧，见 `context_estimate::anchor_total_tokens`）；
+/// - `trailing_estimate` = 该 assistant **之后**（不含它本身，其 output 已计入锚点）到末尾所有消息的估算。
+///
+/// provider 与 `conversation.provider_id` 不一致（切换过供应商，计数口径不可比）、锚点消息之后发生过
+/// 压缩（消息序列已变，旧计数失真，R4）或无 usage → `(None, 0)`，调用方回落纯字符估算。
+/// 对齐 `context_estimate::effective_context_tokens` 的锚点口径。
+fn resolve_usage_anchor(
+    conversation: &Conversation,
+    provider: Option<&ModelProvider>,
+) -> (Option<u64>, usize) {
+    let Some(provider) = provider else {
+        return (None, 0);
+    };
+    let api_format = provider.api_format.as_str();
+    // 压缩边界失效（R4）：锚点消息生成后若发生过压缩（自动/手动），其记录的 token 数反映的是压缩前的
+    // 完整历史，与压缩后实际发送的 prompt 不再可比——锚点作废。取最晚一次压缩时刻，任何时间戳 ≤ 该时刻的
+    // assistant 锚点都视为失真（run 内自动压缩后仍会生成更晚的 assistant，其 anchor_usage 是压缩后调用
+    // 值、时间戳晚于边界，不受影响）。
+    let latest_compaction_at = conversation
+        .context_state
+        .compaction_boundaries
+        .iter()
+        .map(|b| b.created_at)
+        .max();
+    let anchor = conversation
+        .messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, message)| {
+            if message.role != "assistant" {
+                return None;
+            }
+            let usage = message.anchor_usage.as_ref()?;
+            // provider 切换后旧锚点作废：单模型回退会话级 provider_id；多模型每条自带 provider_id。
+            let msg_provider = message.provider_id.as_deref().unwrap_or(&conversation.provider_id);
+            if msg_provider != provider.id {
+                return None;
+            }
+            // 压缩后锚点失真（R4）：边界晚于锚点消息 → 作废（回落纯估算）。
+            if let Some(compacted_at) = latest_compaction_at {
+                if compacted_at > message.timestamp {
+                    return None;
+                }
+            }
+            crate::chat::agent::context_estimate::anchor_total_tokens(usage, api_format)
+                .map(|total| (idx, total))
+        });
+    match anchor {
+        Some((idx, total)) => {
+            // trailing = 锚点消息**之后**的消息（锚点消息本身的 output 已计入 total，故 idx+1..）。
+            let trailing = conversation.messages[idx + 1..]
+                .iter()
+                .map(crate::chat::agent::compaction::estimate_chat_message_tokens)
+                .sum();
+            (Some(total), trailing)
+        }
+        None => (None, 0),
+    }
+}
+
 async fn compute_context_state(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -4210,10 +4291,19 @@ async fn compute_context_state(
     }
 
     let segments = agent_prepare::merge_context_segments(segments);
-    let estimated_input_tokens = segments
+    let estimate_full = segments
         .iter()
         .map(|segment| segment.estimated_tokens)
         .sum::<usize>();
+    // 真实用量锚点（对齐 pi/opencode）：有锚点时 footer 显示 provider 实报值 + 锚点后新增估算，
+    // 否则回落纯字符估算。`effective_context_tokens` 取 `max(纯估算)` 作保守下限。
+    let (anchor_prompt, anchor_trailing) = resolve_usage_anchor(conversation, provider.as_ref());
+    let (estimated_input_tokens, anchored) =
+        crate::chat::agent::context_estimate::effective_context_tokens(
+            anchor_prompt,
+            anchor_trailing,
+            estimate_full,
+        );
     let (context_window_tokens, context_window_estimated) =
         context_window_for_model(provider.as_ref(), &conversation.model);
     let usage_ratio = if context_window_tokens == 0 {
@@ -4253,8 +4343,16 @@ async fn compute_context_state(
         compaction_boundaries: conversation.context_state.compaction_boundaries.clone(),
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
         context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
-        token_count_source: None,
-        session_input_tokens: None,
+        token_count_source: if anchored {
+            Some(crate::external_agents::context::TOKEN_COUNT_PROVIDER_REPORTED.to_string())
+        } else {
+            None
+        },
+        session_input_tokens: if anchored {
+            Some(estimated_input_tokens)
+        } else {
+            None
+        },
         session_output_tokens: None,
         external_agent_id: None,
         external_model: None,
@@ -5359,6 +5457,7 @@ pub(crate) async fn run_chat_probe(
         run_entry: None,
         stream_outcome: None,
         usage: None,
+        anchor_usage: None,
         group_id: None,
         provider_id: None,
         model: None,
@@ -7484,6 +7583,7 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,
@@ -7585,6 +7685,7 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,
@@ -7620,6 +7721,7 @@ mod tests {
             run_entry: None,
             stream_outcome: None,
             usage: None,
+            anchor_usage: None,
             group_id: None,
             provider_id: None,
             model: None,
@@ -8154,6 +8256,7 @@ mod tests {
                     run_entry: None,
                     stream_outcome: None,
                     usage: None,
+                    anchor_usage: None,
                     group_id: None,
                     provider_id: None,
                     model: None,
@@ -8199,6 +8302,7 @@ mod tests {
                     run_entry: None,
                     stream_outcome: None,
                     usage: None,
+                    anchor_usage: None,
                     group_id: None,
                     provider_id: None,
                     model: None,
@@ -8324,6 +8428,7 @@ mod tests {
                     run_entry: None,
                     stream_outcome: None,
                     usage: None,
+                    anchor_usage: None,
                     group_id: None,
                     provider_id: None,
                     model: None,
@@ -8470,6 +8575,92 @@ mod tests {
         settings
     }
 
+    /// 带 anchor_usage 的 assistant（openai_chat 口径：anchor_prompt = input_tokens）。
+    fn assistant_with_anchor(id: &str, ts: i64, input_tokens: u64) -> ChatMessage {
+        let mut m = test_chat_message(id, "assistant", "reply", ts);
+        m.provider_id = Some("openai".to_string());
+        m.anchor_usage = Some(crate::chat::model::ModelUsage {
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(100),
+            ..Default::default()
+        });
+        m
+    }
+
+    fn boundary_at(created_at: i64) -> CompactionBoundaryRecord {
+        CompactionBoundaryRecord {
+            id: "ctxbd_test".to_string(),
+            source_until_message_id: "u1".to_string(),
+            display_after_message_id: None,
+            token_estimate_before: 0,
+            token_estimate_after: 0,
+            summary_content: String::new(),
+            trigger: "manual".to_string(),
+            created_at,
+        }
+    }
+
+    #[test]
+    fn resolve_usage_anchor_reports_prompt_and_trailing() {
+        let conv = test_conversation_with_messages(vec![
+            test_chat_message("u1", "user", "hi", 1),
+            assistant_with_anchor("a1", 2, 100_000),
+            test_chat_message("u2", "user", "follow-up question here", 3),
+        ]);
+        let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+        let (total, trailing) = resolve_usage_anchor(&conv, Some(&provider));
+        // openai 无 total_tokens → input(100000) + output(100)。
+        assert_eq!(total, Some(100_100), "openai anchor = input + output");
+        // trailing = 锚点 assistant **之后** 的消息（新 user），> 0；锚点响应本身不算进 trailing。
+        assert!(trailing > 0);
+    }
+
+    #[test]
+    fn resolve_usage_anchor_none_without_usage() {
+        let conv = test_conversation_with_messages(vec![
+            test_chat_message("u1", "user", "hi", 1),
+            test_chat_message("a1", "assistant", "reply", 2),
+        ]);
+        let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+        assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
+    }
+
+    #[test]
+    fn resolve_usage_anchor_invalidated_on_provider_switch() {
+        let conv = test_conversation_with_messages(vec![
+            test_chat_message("u1", "user", "hi", 1),
+            assistant_with_anchor("a1", 2, 100_000),
+        ]);
+        // 会话切换到 anthropic：旧 openai 锚点计数口径不可比 → 作废。
+        let provider = test_provider("anthropic", "Anthropic", vec!["claude"]);
+        assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
+    }
+
+    #[test]
+    fn resolve_usage_anchor_invalidated_after_compaction() {
+        // 手动压缩发生在锚点消息之后（boundary.created_at=10 > anchor.ts=2）→ 锚点失真 → 作废（R4）。
+        let mut conv = test_conversation_with_messages(vec![
+            test_chat_message("u1", "user", "hi", 1),
+            assistant_with_anchor("a1", 2, 100_000),
+        ]);
+        conv.context_state.compaction_boundaries = vec![boundary_at(10)];
+        let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+        assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
+    }
+
+    #[test]
+    fn resolve_usage_anchor_kept_when_compaction_precedes_anchor() {
+        // run 内自动压缩：boundary.created_at=2 <= 压缩后生成的 assistant.ts=5 → 锚点仍有效。
+        let mut conv = test_conversation_with_messages(vec![
+            test_chat_message("u1", "user", "hi", 1),
+            assistant_with_anchor("a1", 5, 100_000),
+        ]);
+        conv.context_state.compaction_boundaries = vec![boundary_at(2)];
+        let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+        let (total, _) = resolve_usage_anchor(&conv, Some(&provider));
+        assert_eq!(total, Some(100_100)); // input(100000) + output(100)
+    }
+
     #[test]
     fn resolve_reply_arms_dedups_filters_and_caps() {
         let settings = test_settings_with_providers(&["openai", "anthropic"]);
@@ -8531,6 +8722,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(single.group_id.is_none());
         assert!(single.provider_id.is_none());
@@ -8547,6 +8739,7 @@ mod tests {
             None,
             Some("send"),
             Some("completed"),
+            None,
             None,
             None,
             Some((

@@ -711,6 +711,8 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: req.system_prompt.clone(),
+            initial_anchor_total_tokens: None,
+            initial_anchor_trailing_estimate: 0,
         };
 
         // No wall-clock cap: a sub-agent now runs to natural completion or until
@@ -1453,6 +1455,7 @@ mod tests {
             steps: Vec::new(),
             stream_outcome: String::new(),
             usage: None,
+            last_step_usage: None,
             compacted_history: None,
             compaction_boundary: None,
             compaction_summary: None,
@@ -1474,6 +1477,7 @@ mod tests {
             steps: Vec::new(),
             stream_outcome: "cancelled".to_string(),
             usage: None,
+            last_step_usage: None,
             compacted_history: None,
             compaction_boundary: None,
             compaction_summary: None,
@@ -1927,6 +1931,8 @@ mod tests {
             assistant_snapshot: None,
             custom_system_prompt: String::new(),
             provider_tools_fallback_system_prompt: String::new(),
+            initial_anchor_total_tokens: None,
+            initial_anchor_trailing_estimate: 0,
         }
     }
 

@@ -1787,6 +1787,7 @@ mod tests {
             steps: Vec::new(),
             stream_outcome: "completed".to_string(),
             usage: None,
+            last_step_usage: None,
             compacted_history: None,
             compaction_boundary: None,
             compaction_summary: None,
