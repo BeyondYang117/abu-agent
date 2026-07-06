@@ -19,7 +19,7 @@
 
   "gpt-5.5": {
     "displayName": "GPT-5.5",
-    "contextWindow": 1050000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
@@ -27,7 +27,7 @@
   },
   "gpt-5.5-pro": {
     "displayName": "GPT-5.5 Pro",
-    "contextWindow": 1050000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
@@ -35,7 +35,7 @@
   },
   "gpt-5.4": {
     "displayName": "GPT-5.4",
-    "contextWindow": 1050000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
@@ -43,7 +43,7 @@
   },
   "gpt-5.4-pro": {
     "displayName": "GPT-5.4 Pro",
-    "contextWindow": 1050000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
@@ -51,21 +51,21 @@
   },
   "gpt-5.4-mini": {
     "displayName": "GPT-5.4 Mini",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "pricing": { "input": 0.75, "output": 4.50, "cachedInput": 0.075 }
   },
   "gpt-5.4-nano": {
     "displayName": "GPT-5.4 Nano",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": false, "streaming": true, "webSearch": true },
     "pricing": { "input": 0.20, "output": 1.25, "cachedInput": 0.02 }
   },
   "gpt-5": {
     "displayName": "GPT-5",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
@@ -73,7 +73,7 @@
   },
   "gpt-5-pro": {
     "displayName": "GPT-5 Pro",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
@@ -81,21 +81,21 @@
   },
   "gpt-5-mini": {
     "displayName": "GPT-5 Mini",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
     "pricing": { "input": 0.25, "output": 2.00, "cachedInput": 0.025 }
   },
   "gpt-5-nano": {
     "displayName": "GPT-5 Nano",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": false, "streaming": true, "webSearch": true },
     "pricing": { "input": 0.05, "output": 0.40, "cachedInput": 0.005 }
   },
   "gpt-5-codex": {
     "displayName": "GPT-5 Codex",
-    "contextWindow": 400000,
+    "contextWindow": 256000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": false },
     "reasoningEfforts": ["low", "medium", "high", "xhigh"],
