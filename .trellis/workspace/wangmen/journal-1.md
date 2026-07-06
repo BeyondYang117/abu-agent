@@ -380,3 +380,37 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 上下文 token 计量:真实用量锚点回喂(对齐 pi)+ gpt-5.x 窗口修正
+
+**Date**: 2026-07-06
+**Task**: 上下文 token 计量:真实用量锚点回喂(对齐 pi)+ gpt-5.x 窗口修正
+**Branch**: `feat/context-token-ground-truth`
+
+### Summary
+
+诊断 84 万 tokens 对话在 planning 阶段任何 api 都 502:根因是模型库把 gpt-5.x 窗口标成 1.05M(实际中转 codex 256k),压缩阈值形同虚设。修正 gpt-5.x → 256k。并引入真实用量锚点(对齐 pi/opencode):footer 与自动压缩触发改用 provider 实报 usage 为主口径(anchor_total_tokens=totalTokens||家族和 含 output、按 provider 家族消歧防双算)+ 锚点响应之后消息估算,纯字符估算(补上工具 schema)仅作 max 下限兜底;provider 切换/压缩边界后锚点失效。GUI 实测确认锚点采用 Claude 实报值。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ea15877` | (see git log) |
+| `85a3056` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
