@@ -258,13 +258,27 @@ fn apply_cost(provider: &ModelProvider, record: &mut UsageRecord) {
     let output_price = pricing.output.unwrap_or(0.0);
     let cached_price = pricing.cached_input.unwrap_or(input_price);
     let input_tokens = record.input_tokens.unwrap_or(0);
-    let cached_tokens = record.cached_input_tokens.unwrap_or(0).min(input_tokens);
-    let uncached_input_tokens = input_tokens.saturating_sub(cached_tokens);
     let output_tokens = record.output_tokens.unwrap_or(0);
-    let cost = (uncached_input_tokens as f64 * input_price
-        + cached_tokens as f64 * cached_price
-        + output_tokens as f64 * output_price)
-        / 1_000_000.0;
+    // 缓存计价口径对齐 context_estimate::anchor_total_tokens（commit 85a3056）：
+    // Anthropic 的 input_tokens 是**非缓存**部分，cache_read/cache_creation 与其
+    // 不相交——input 全额按原价计，cache_read 按缓存价另加（cache_creation 无独立
+    // 价格字段，按原价近似）。OpenAI 系 cached 是 prompt_tokens 的子集，先扣再算。
+    let cost = if record.api_format == "anthropic_messages" {
+        let cache_read = record.cached_input_tokens.unwrap_or(0);
+        let cache_creation = record.cache_creation_input_tokens.unwrap_or(0);
+        (input_tokens as f64 * input_price
+            + cache_read as f64 * cached_price
+            + cache_creation as f64 * input_price
+            + output_tokens as f64 * output_price)
+            / 1_000_000.0
+    } else {
+        let cached_tokens = record.cached_input_tokens.unwrap_or(0).min(input_tokens);
+        let uncached_input_tokens = input_tokens.saturating_sub(cached_tokens);
+        (uncached_input_tokens as f64 * input_price
+            + cached_tokens as f64 * cached_price
+            + output_tokens as f64 * output_price)
+            / 1_000_000.0
+    };
     record.cost_usd = Some(cost);
     record.cost_source = source;
 }
@@ -462,7 +476,7 @@ fn summarize(records: &[UsageRecord]) -> UsageSummary {
             .saturating_add(record_total_tokens(record));
         summary.input_tokens = summary
             .input_tokens
-            .saturating_add(record.input_tokens.unwrap_or(0));
+            .saturating_add(record_effective_input_tokens(record));
         summary.output_tokens = summary
             .output_tokens
             .saturating_add(record.output_tokens.unwrap_or(0));
@@ -485,7 +499,29 @@ fn summarize(records: &[UsageRecord]) -> UsageSummary {
     summary
 }
 
+/// 统一「输入 tokens」口径（对齐 context_estimate::anchor_total_tokens，commit
+/// 85a3056）：Anthropic 的 input_tokens 是**非缓存**部分，全量输入 = input +
+/// cache_read + cache_creation（三者不相交）；OpenAI 系 input(=prompt_tokens)
+/// 已含 cached，直接用。聚合（summary/trend/分组）一律走这里，缓存命中率
+/// cached/input 才对两种口径同时成立。
+fn record_effective_input_tokens(record: &UsageRecord) -> u64 {
+    let input = record.input_tokens.unwrap_or(0);
+    if record.api_format == "anthropic_messages" {
+        input
+            .saturating_add(record.cached_input_tokens.unwrap_or(0))
+            .saturating_add(record.cache_creation_input_tokens.unwrap_or(0))
+    } else {
+        input
+    }
+}
+
 fn record_total_tokens(record: &UsageRecord) -> u64 {
+    // Anthropic：不能用落盘的 total_tokens（= input+output，漏 cache，见
+    // model_usage_from_anthropic_value）——显式加回缓存部分。
+    if record.api_format == "anthropic_messages" {
+        return record_effective_input_tokens(record)
+            .saturating_add(record.output_tokens.unwrap_or(0));
+    }
     record.total_tokens.unwrap_or_else(|| {
         record
             .input_tokens
@@ -531,7 +567,7 @@ fn build_trend(records: &[UsageRecord], range: &str) -> Vec<UsageTrendPoint> {
             .saturating_add(record_total_tokens(record));
         point.input_tokens = point
             .input_tokens
-            .saturating_add(record.input_tokens.unwrap_or(0));
+            .saturating_add(record_effective_input_tokens(record));
         point.output_tokens = point
             .output_tokens
             .saturating_add(record.output_tokens.unwrap_or(0));
@@ -631,7 +667,7 @@ impl UsageGroupStatsAccumulator {
         self.stats.input_tokens = self
             .stats
             .input_tokens
-            .saturating_add(record.input_tokens.unwrap_or(0));
+            .saturating_add(record_effective_input_tokens(record));
         self.stats.output_tokens = self
             .stats
             .output_tokens
@@ -834,6 +870,51 @@ mod tests {
         assert_eq!(filter_records(vec![record.clone()], &query).len(), 1);
         record.usage_source = "provider_reported".to_string();
         assert!(filter_records(vec![record], &query).is_empty());
+    }
+
+    fn base_record(api_format: &str) -> UsageRecord {
+        UsageRecord {
+            id: "usage_test".to_string(),
+            created_at: Local::now().timestamp(),
+            completed_at: Local::now().timestamp(),
+            duration_ms: 1,
+            source: "chat".to_string(),
+            operation: "plain".to_string(),
+            provider_id: "p".to_string(),
+            provider_name: "Provider".to_string(),
+            model: "model".to_string(),
+            api_format: api_format.to_string(),
+            status: "success".to_string(),
+            status_code: Some(200),
+            usage_source: "provider_reported".to_string(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            total_tokens: Some(1_100),
+            cached_input_tokens: Some(800),
+            cache_creation_input_tokens: Some(50),
+            reasoning_tokens: None,
+            cost_usd: None,
+            cost_source: "unavailable".to_string(),
+            conversation_id: None,
+            message_id: None,
+            error_kind: None,
+        }
+    }
+
+    /// 口径对齐 context_estimate::anchor_total_tokens（85a3056）：Anthropic 的
+    /// input 是非缓存部分，全量要显式加 cache_read + cache_creation；OpenAI 的
+    /// input 已含 cached，直接用。
+    #[test]
+    fn effective_input_and_total_disambiguate_by_api_format() {
+        let anthropic = base_record("anthropic_messages");
+        // 1000(非缓存) + 800(cache_read) + 50(cache_creation) = 1850
+        assert_eq!(record_effective_input_tokens(&anthropic), 1_850);
+        // 全量 = 1850 + 100(out)，不能用漏 cache 的落盘 total_tokens(1100)。
+        assert_eq!(record_total_tokens(&anthropic), 1_950);
+
+        let openai = base_record("openai_chat");
+        assert_eq!(record_effective_input_tokens(&openai), 1_000);
+        assert_eq!(record_total_tokens(&openai), 1_100); // 落盘 total 优先
     }
 
     #[test]

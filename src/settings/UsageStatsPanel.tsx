@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronLeft, ChevronRight, RefreshCw, Trash2 } from 'lucide-react'
 import {
   api,
@@ -135,33 +135,135 @@ function SummaryTile({ label, value, sub }: { label: string; value: string; sub?
   )
 }
 
+function formatPercent(value?: number | null) {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n) || n <= 0) return '0%'
+  return `${Math.round(n * 100)}%`
+}
+
+type TrendSeriesKey = 'inputTokens' | 'outputTokens' | 'cacheCreationInputTokens' | 'cachedInputTokens'
+
+const TREND_SERIES: {
+  key: TrendSeriesKey
+  labelZh: string
+  labelEn: string
+  stroke: string
+  darkStroke: string
+}[] = [
+  { key: 'inputTokens', labelZh: '输入', labelEn: 'Input', stroke: '#2a78d6', darkStroke: '#3987e5' },
+  { key: 'outputTokens', labelZh: '输出', labelEn: 'Output', stroke: '#1baf7a', darkStroke: '#34d399' },
+  { key: 'cacheCreationInputTokens', labelZh: '缓存创建', labelEn: 'Cache creation', stroke: '#eda100', darkStroke: '#fbbf24' },
+  { key: 'cachedInputTokens', labelZh: '缓存命中', labelEn: 'Cache read', stroke: '#0891b2', darkStroke: '#22d3ee' },
+]
+
+const HIT_RATE_COLOR = { stroke: '#7c3aed', darkStroke: '#a78bfa' }
+
+/// 环形图分类色(dataviz 参考色板,固定顺序不循环;第 7 片起折叠为「其他」灰)。
+const PIE_COLORS: { light: string; dark: string }[] = [
+  { light: '#2a78d6', dark: '#3987e5' },
+  { light: '#1baf7a', dark: '#34d399' },
+  { light: '#eda100', dark: '#fbbf24' },
+  { light: '#4a3aa7', dark: '#9085e9' },
+  { light: '#e34948', dark: '#e66767' },
+  { light: '#0891b2', dark: '#22d3ee' },
+]
+const PIE_OTHER_COLOR = { light: '#a8a29e', dark: '#78716c' }
+const PIE_MAX_SLICES = 6
+
+function trendHitRate(point: UsageTrendPoint): number | null {
+  if (point.inputTokens <= 0) return null
+  return Math.min(1, point.cachedInputTokens / point.inputTokens)
+}
+
+/// 单调三次插值(Fritsch-Carlson)平滑折线:曲线严格保持在相邻数据点范围内,
+/// 永不过冲——尖峰旁的零值段不会被拉出负凹(Catmull-Rom 会,已踩过)。
+function smoothPath(coords: { x: number; y: number }[]): string {
+  const n = coords.length
+  if (n === 0) return ''
+  if (n === 1) return `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`
+  // 相邻段斜率
+  const dx: number[] = []
+  const slope: number[] = []
+  for (let i = 0; i < n - 1; i++) {
+    dx.push(coords[i + 1].x - coords[i].x)
+    slope.push(dx[i] !== 0 ? (coords[i + 1].y - coords[i].y) / dx[i] : 0)
+  }
+  // 每个点的切线:相邻段斜率异号或有零 → 0(平台/极值处走平),否则调和平均
+  const tangent: number[] = [slope[0]]
+  for (let i = 1; i < n - 1; i++) {
+    const a = slope[i - 1]
+    const b = slope[i]
+    tangent.push(a * b <= 0 ? 0 : (2 * a * b) / (a + b))
+  }
+  tangent.push(slope[n - 2])
+  let path = `M ${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3
+    const c1x = coords[i].x + h
+    const c1y = coords[i].y + tangent[i] * h
+    const c2x = coords[i + 1].x - h
+    const c2y = coords[i + 1].y - tangent[i + 1] * h
+    path += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${coords[i + 1].x.toFixed(1)} ${coords[i + 1].y.toFixed(1)}`
+  }
+  return path
+}
+
 function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string }) {
-  const { path, costBars, maxTokens, maxCost } = useMemo(() => {
-    const width = 420
-    const height = 124
-    const padX = 12
-    const padY = 12
-    const maxTokens = Math.max(1, ...points.map(point => point.totalTokens))
-    const maxCost = Math.max(0, ...points.map(point => point.costUsd))
-    const step = points.length > 1 ? (width - padX * 2) / (points.length - 1) : 0
-    const coords = points.map((point, index) => {
-      const x = padX + step * index
-      const y = height - padY - (point.totalTokens / maxTokens) * (height - padY * 2)
-      return `${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    const barW = Math.max(2, Math.min(10, (width - padX * 2) / Math.max(points.length, 1) - 3))
-    const costBars = points.map((point, index) => {
-      const x = padX + step * index - barW / 2
-      const h = maxCost > 0 ? (point.costUsd / maxCost) * (height - padY * 2) : 0
-      return { x, y: height - padY - h, width: barW, height: Math.max(0, h) }
-    })
-    return {
-      path: coords.length > 0 ? `M ${coords.join(' L ')}` : '',
-      costBars,
-      maxTokens,
-      maxCost,
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set())
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+
+  const WIDTH = 640
+  const HEIGHT = 180
+  const PAD_L = 44
+  const PAD_R = 40
+  const PAD_T = 10
+  const PAD_B = 20
+
+  const geom = useMemo(() => {
+    const visible = TREND_SERIES.filter(series => !hidden.has(series.key))
+    const maxTokens = Math.max(1, ...points.flatMap(point => visible.map(series => point[series.key])))
+    const step = points.length > 1 ? (WIDTH - PAD_L - PAD_R) / (points.length - 1) : 0
+    const plotH = HEIGHT - PAD_T - PAD_B
+    const x = (index: number) => PAD_L + step * index
+    const yTokens = (value: number) => PAD_T + plotH - (value / maxTokens) * plotH
+    const yRate = (rate: number) => PAD_T + plotH - rate * plotH
+    const linePath = (values: (number | null)[]) => {
+      const coords = values.flatMap((value, index) =>
+        value == null ? [] : [{ x: x(index), y: yTokens(value) }],
+      )
+      return smoothPath(coords)
     }
-  }, [points])
+    const seriesPaths = visible.map(series => ({
+      ...series,
+      path: linePath(points.map(point => point[series.key])),
+    }))
+    const rateCoords = points.flatMap((point, index) => {
+      const rate = trendHitRate(point)
+      return rate == null ? [] : [{ x: x(index), y: yRate(rate) }]
+    })
+    return { maxTokens, step, x, yTokens, yRate, seriesPaths, ratePath: smoothPath(rateCoords), plotH }
+  }, [hidden, points])
+
+  const toggleSeries = useCallback((key: string) => {
+    setHidden(previous => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const onMove = useCallback(
+    (event: ReactMouseEvent<SVGSVGElement>) => {
+      if (points.length === 0) return
+      const rect = event.currentTarget.getBoundingClientRect()
+      const px = ((event.clientX - rect.left) / rect.width) * WIDTH
+      const index = geom.step > 0 ? Math.round((px - PAD_L) / geom.step) : 0
+      setHoverIndex(Math.max(0, Math.min(points.length - 1, index)))
+    },
+    [geom.step, points.length],
+  )
 
   if (points.length === 0) {
     return (
@@ -171,47 +273,346 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
     )
   }
 
-  const firstLabel = points[0]?.label
-  const lastLabel = points[points.length - 1]?.label
+  const hoverPoint = hoverIndex != null ? points[hoverIndex] : null
+  const hoverRate = hoverPoint ? trendHitRate(hoverPoint) : null
+  const rateHidden = hidden.has('hitRate')
+  const gridYs = [0, 0.5, 1].map(fraction => PAD_T + geom.plotH - fraction * geom.plotH)
+  // tooltip 靠左半边时显示在指针右侧，反之左侧，避免出界。
+  const tooltipLeftPct = hoverIndex != null ? (geom.x(hoverIndex) / WIDTH) * 100 : 0
+  const tooltipFlip = tooltipLeftPct > 55
 
   return (
-    <div className="rounded-md border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950/35">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 text-[11px] text-neutral-500 dark:text-neutral-400">
-          <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />Token</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-emerald-400/70" />USD</span>
-        </div>
-        <div className="truncate text-[11px] text-neutral-500 dark:text-neutral-400">
-          {formatTokens(maxTokens)} / {formatCost(maxCost)}
+    <div>
+      <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+        {TREND_SERIES.map(series => (
+          <button
+            key={series.key}
+            type="button"
+            onClick={() => toggleSeries(series.key)}
+            data-tauri-drag-region="false"
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-opacity ${
+              hidden.has(series.key)
+                ? 'border-neutral-200 text-neutral-400 opacity-55 dark:border-neutral-800 dark:text-neutral-600'
+                : 'border-neutral-200 text-neutral-600 dark:border-neutral-800 dark:text-neutral-300'
+            }`}
+          >
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: isDark ? series.darkStroke : series.stroke }}
+            />
+            {lang === 'zh' ? series.labelZh : series.labelEn}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => toggleSeries('hitRate')}
+          data-tauri-drag-region="false"
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-opacity ${
+            rateHidden
+              ? 'border-neutral-200 text-neutral-400 opacity-55 dark:border-neutral-800 dark:text-neutral-600'
+              : 'border-neutral-200 text-neutral-600 dark:border-neutral-800 dark:text-neutral-300'
+          }`}
+        >
+          <span
+            className="h-0.5 w-3 rounded-full"
+            style={{
+              backgroundImage: `repeating-linear-gradient(90deg, ${isDark ? HIT_RATE_COLOR.darkStroke : HIT_RATE_COLOR.stroke} 0 3px, transparent 3px 5px)`,
+            }}
+          />
+          {lang === 'zh' ? '缓存命中率' : 'Cache hit rate'}
+        </button>
+      </div>
+      <div className="relative">
+        <svg
+          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+          className="h-48 w-full overflow-visible"
+          role="img"
+          aria-label="token usage trend"
+          onMouseMove={onMove}
+          onMouseLeave={() => setHoverIndex(null)}
+        >
+          {gridYs.map(y => (
+            <line
+              key={y}
+              x1={PAD_L}
+              y1={y}
+              x2={WIDTH - PAD_R}
+              y2={y}
+              stroke="currentColor"
+              className="text-neutral-200 dark:text-neutral-800"
+              strokeWidth="1"
+            />
+          ))}
+          {/* 左轴 token 刻度 */}
+          {[0, 0.5, 1].map(fraction => (
+            <text
+              key={`l-${fraction}`}
+              x={PAD_L - 6}
+              y={PAD_T + geom.plotH - fraction * geom.plotH + 3.5}
+              textAnchor="end"
+              className="fill-neutral-500 text-[10px] tabular-nums dark:fill-neutral-500"
+            >
+              {formatTokens(geom.maxTokens * fraction)}
+            </text>
+          ))}
+          {/* 右轴命中率刻度 */}
+          {!rateHidden &&
+            [0, 0.5, 1].map(fraction => (
+              <text
+                key={`r-${fraction}`}
+                x={WIDTH - PAD_R + 6}
+                y={PAD_T + geom.plotH - fraction * geom.plotH + 3.5}
+                textAnchor="start"
+                className="text-[10px] tabular-nums"
+                style={{ fill: isDark ? HIT_RATE_COLOR.darkStroke : HIT_RATE_COLOR.stroke }}
+              >
+                {Math.round(fraction * 100)}%
+              </text>
+            ))}
+          {geom.seriesPaths.map(series =>
+            series.path ? (
+              <path
+                key={series.key}
+                d={series.path}
+                fill="none"
+                stroke={isDark ? series.darkStroke : series.stroke}
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ) : null,
+          )}
+          {!rateHidden && geom.ratePath && (
+            <path
+              d={geom.ratePath}
+              fill="none"
+              stroke={isDark ? HIT_RATE_COLOR.darkStroke : HIT_RATE_COLOR.stroke}
+              strokeWidth="2"
+              strokeDasharray="5 4"
+              strokeLinecap="round"
+            />
+          )}
+          {hoverIndex != null && (
+            <line
+              x1={geom.x(hoverIndex)}
+              y1={PAD_T}
+              x2={geom.x(hoverIndex)}
+              y2={PAD_T + geom.plotH}
+              stroke="currentColor"
+              className="text-neutral-300 dark:text-neutral-700"
+              strokeWidth="1"
+            />
+          )}
+          {hoverIndex != null &&
+            geom.seriesPaths.map(series => (
+              <circle
+                key={`dot-${series.key}`}
+                cx={geom.x(hoverIndex)}
+                cy={geom.yTokens(points[hoverIndex][series.key])}
+                r="3"
+                fill={isDark ? series.darkStroke : series.stroke}
+                stroke={isDark ? '#0a0a0a' : '#ffffff'}
+                strokeWidth="1.5"
+              />
+            ))}
+        </svg>
+        {hoverPoint && (
+          <div
+            className="pointer-events-none absolute top-1 z-10 min-w-36 rounded-md border border-neutral-200 bg-white/95 px-2.5 py-2 text-[11px] shadow-sm dark:border-neutral-700 dark:bg-neutral-900/95"
+            style={tooltipFlip ? { right: `${100 - tooltipLeftPct + 2}%` } : { left: `${tooltipLeftPct + 2}%` }}
+          >
+            <div className="mb-1 font-medium text-neutral-800 dark:text-neutral-100">
+              {hoverPoint.label} · {formatCount(hoverPoint.requests)} {lang === 'zh' ? '次' : 'req'}
+            </div>
+            {TREND_SERIES.map(series => (
+              <div key={series.key} className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: isDark ? series.darkStroke : series.stroke }} />
+                  {lang === 'zh' ? series.labelZh : series.labelEn}
+                </span>
+                <span className="tabular-nums">{formatTokens(hoverPoint[series.key])}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
+              <span>{lang === 'zh' ? '命中率' : 'Hit rate'}</span>
+              <span className="tabular-nums">{hoverRate == null ? '--' : formatPercent(hoverRate)}</span>
+            </div>
+            <div className="mt-0.5 flex items-center justify-between gap-3 border-t border-neutral-100 pt-0.5 text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+              <span>{lang === 'zh' ? '成本' : 'Cost'}</span>
+              <span className="tabular-nums">{formatCost(hoverPoint.costUsd)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="mt-1 flex justify-between text-[10.5px] text-neutral-500 dark:text-neutral-500" style={{ paddingLeft: PAD_L, paddingRight: PAD_R }}>
+        <span>{points[0]?.label}</span>
+        <span>{points[points.length - 1]?.label}</span>
+      </div>
+    </div>
+  )
+}
+
+type PieSlice = {
+  label: string
+  sub?: string
+  value: number
+  requests: number
+  cost: number
+  color: string
+}
+
+/// modelStats → 环形图切片:按 token 降序取前 N,余下折叠为「其他」。
+function buildPieSlices(rows: UsageGroupStats[], isDark: boolean, lang: string): PieSlice[] {
+  const sorted = rows.filter(row => row.totalTokens > 0)
+  if (sorted.length === 0) return []
+  const head = sorted.slice(0, PIE_MAX_SLICES)
+  const rest = sorted.slice(PIE_MAX_SLICES)
+  const slices: PieSlice[] = head.map((row, index) => ({
+    label: row.label,
+    sub: row.providerName ?? undefined,
+    value: row.totalTokens,
+    requests: row.requestCount,
+    cost: row.costUsd,
+    color: isDark ? PIE_COLORS[index].dark : PIE_COLORS[index].light,
+  }))
+  if (rest.length > 0) {
+    slices.push({
+      label: lang === 'zh' ? `其他 (${rest.length})` : `Other (${rest.length})`,
+      value: rest.reduce((sum, row) => sum + row.totalTokens, 0),
+      requests: rest.reduce((sum, row) => sum + row.requestCount, 0),
+      cost: rest.reduce((sum, row) => sum + row.costUsd, 0),
+      color: isDark ? PIE_OTHER_COLOR.dark : PIE_OTHER_COLOR.light,
+    })
+  }
+  return slices
+}
+
+function donutArcPath(cx: number, cy: number, rOuter: number, rInner: number, startAngle: number, endAngle: number): string {
+  // 单片占比 100% 时画整圆环(arc 命令无法画满 360°)。
+  const full = endAngle - startAngle >= Math.PI * 2 - 1e-4
+  if (full) {
+    return [
+      `M ${cx} ${cy - rOuter}`,
+      `A ${rOuter} ${rOuter} 0 1 1 ${cx} ${cy + rOuter}`,
+      `A ${rOuter} ${rOuter} 0 1 1 ${cx} ${cy - rOuter}`,
+      `M ${cx} ${cy - rInner}`,
+      `A ${rInner} ${rInner} 0 1 0 ${cx} ${cy + rInner}`,
+      `A ${rInner} ${rInner} 0 1 0 ${cx} ${cy - rInner}`,
+      'Z',
+    ].join(' ')
+  }
+  const p = (r: number, angle: number) => `${(cx + r * Math.sin(angle)).toFixed(2)} ${(cy - r * Math.cos(angle)).toFixed(2)}`
+  const large = endAngle - startAngle > Math.PI ? 1 : 0
+  return [
+    `M ${p(rOuter, startAngle)}`,
+    `A ${rOuter} ${rOuter} 0 ${large} 1 ${p(rOuter, endAngle)}`,
+    `L ${p(rInner, endAngle)}`,
+    `A ${rInner} ${rInner} 0 ${large} 0 ${p(rInner, startAngle)}`,
+    'Z',
+  ].join(' ')
+}
+
+function ModelDonut({ rows, lang }: { rows: UsageGroupStats[]; lang: string }) {
+  const [hover, setHover] = useState<number | null>(null)
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  const slices = useMemo(() => buildPieSlices(rows, isDark, lang), [rows, isDark, lang])
+  const total = useMemo(() => slices.reduce((sum, slice) => sum + slice.value, 0), [slices])
+
+  if (slices.length === 0) {
+    return (
+      <div className="flex h-36 items-center justify-center rounded-md border border-dashed border-neutral-200 text-[12px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+        {lang === 'zh' ? '暂无模型数据' : 'No model data'}
+      </div>
+    )
+  }
+
+  const CX = 100
+  const CY = 100
+  const R_OUT = 92
+  const R_IN = 56
+  let angle = 0
+  const arcs = slices.map((slice, index) => {
+    const start = angle
+    const sweep = (slice.value / total) * Math.PI * 2
+    angle += sweep
+    return { slice, index, start, end: angle, path: donutArcPath(CX, CY, R_OUT, R_IN, start, angle) }
+  })
+  const active = hover != null ? slices[hover] : null
+
+  return (
+    <div className="@container">
+      {/* SettingsGroup 已是卡片外壳,这里不再套边框/背景(避免卡中卡)。
+          容器查询:≥28rem 环形图与表格同行(卡不被撑高),更窄才堆叠。 */}
+      <div className="flex flex-col items-center gap-4 @md:flex-row @md:items-start">
+        <div className="relative shrink-0">
+        <svg viewBox="0 0 200 200" className="h-36 w-36" role="img" aria-label="model token distribution">
+          {arcs.map(arc => (
+            <path
+              key={arc.index}
+              d={arc.path}
+              fill={arc.slice.color}
+              opacity={hover == null || hover === arc.index ? 1 : 0.35}
+              stroke={isDark ? '#0a0a0a' : '#ffffff'}
+              strokeWidth="1.5"
+              onMouseEnter={() => setHover(arc.index)}
+              onMouseLeave={() => setHover(null)}
+              style={{ transition: 'opacity 120ms' }}
+            />
+          ))}
+        </svg>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+          <div className="max-w-24 truncate text-[11px] text-neutral-500 dark:text-neutral-400">
+            {active ? active.label : lang === 'zh' ? '总 Token' : 'Total'}
+          </div>
+          <div className="text-[16px] font-semibold text-neutral-900 dark:text-neutral-50">
+            {formatTokens(active ? active.value : total)}
+          </div>
+          <div className="text-[10.5px] text-neutral-500 dark:text-neutral-500">
+            {active ? formatPercent(active.value / total) : `${formatCount(slices.reduce((sum, slice) => sum + slice.requests, 0))} ${lang === 'zh' ? '次' : 'req'}`}
+          </div>
         </div>
       </div>
-      <svg viewBox="0 0 420 124" className="h-32 w-full overflow-visible" role="img" aria-label="usage trend">
-        <line x1="12" y1="112" x2="408" y2="112" stroke="currentColor" className="text-neutral-200 dark:text-neutral-800" strokeWidth="1" />
-        {costBars.map((bar, index) => (
-          <rect
-            key={`${points[index]?.date}-${index}`}
-            x={bar.x}
-            y={bar.y}
-            width={bar.width}
-            height={bar.height}
-            rx="2"
-            className="fill-emerald-400/45 dark:fill-emerald-300/35"
-          />
-        ))}
-        {path && (
-          <path
-            d={path}
-            fill="none"
-            stroke="rgb(59 130 246)"
-            strokeWidth="2.4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
-      </svg>
-      <div className="mt-1 flex justify-between text-[10.5px] text-neutral-500 dark:text-neutral-500">
-        <span>{firstLabel}</span>
-        <span>{lastLabel}</span>
+      <div className="w-full min-w-0 flex-1 @md:w-auto">
+        <table className="w-full table-fixed text-left text-[12px]">
+          <colgroup>
+            <col />
+            <col className="w-[58px]" />
+            <col className="w-[40px]" />
+            <col className="w-[52px]" />
+          </colgroup>
+          <thead className="text-[10.5px] uppercase tracking-wide text-neutral-500 dark:text-neutral-500">
+            <tr>
+              <th className="py-1 pr-2 font-semibold">{lang === 'zh' ? '模型' : 'Model'}</th>
+              <th className="py-1 pr-2 text-right font-semibold">Token</th>
+              <th className="py-1 pr-2 text-right font-semibold">{lang === 'zh' ? '占比' : 'Share'}</th>
+              <th className="py-1 text-right font-semibold">{lang === 'zh' ? '成本' : 'Cost'}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            {slices.map((slice, index) => (
+              <tr
+                key={`${slice.label}-${index}`}
+                className={`text-neutral-800 dark:text-neutral-100 ${hover === index ? 'bg-neutral-50 dark:bg-neutral-900/60' : ''}`}
+                onMouseEnter={() => setHover(index)}
+                onMouseLeave={() => setHover(null)}
+              >
+                <td className="py-1.5 pr-2" title={slice.sub ? `${slice.label} · ${slice.sub}` : slice.label}>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: slice.color }} />
+                    <span className="truncate font-medium">{slice.label}</span>
+                  </div>
+                  {slice.sub && (
+                    <div className="truncate pl-3.5 text-[10.5px] text-neutral-500 dark:text-neutral-500">{slice.sub}</div>
+                  )}
+                </td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{formatTokens(slice.value)}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{formatPercent(slice.value / total)}</td>
+                <td className="py-1.5 text-right tabular-nums">{formatCost(slice.cost)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        </div>
       </div>
     </div>
   )
@@ -460,16 +861,35 @@ export function UsageStatsPanel({ lang }: UsageStatsPanelProps) {
           <SummaryTile label={lang === 'zh' ? '估算成本' : 'Estimated cost'} value={formatCost(summary?.totalCostUsd)} sub={lang === 'zh' ? '按本地模型价格估算' : 'From local model pricing'} />
           <SummaryTile label={lang === 'zh' ? '输入 / 输出' : 'Input / Output'} value={`${formatTokens(summary?.inputTokens)} / ${formatTokens(summary?.outputTokens)}`} sub={lang === 'zh' ? 'provider 返回 usage 时统计' : 'Provider usage only'} />
           <SummaryTile label={lang === 'zh' ? '可信度' : 'Coverage'} value={`${reportedRatio}%`} sub={`${formatCount(summary?.missingUsageRequests)} ${lang === 'zh' ? '条缺少 usage' : 'missing usage'}`} />
-          <SummaryTile label={lang === 'zh' ? '缓存命中' : 'Cached input'} value={formatTokens(summary?.cachedInputTokens)} />
+          <SummaryTile
+            label={lang === 'zh' ? '缓存命中' : 'Cached input'}
+            value={formatTokens(summary?.cachedInputTokens)}
+            sub={
+              summary && summary.inputTokens > 0
+                ? `${lang === 'zh' ? '命中率' : 'hit rate'} ${formatPercent(summary.cachedInputTokens / summary.inputTokens)}`
+                : undefined
+            }
+          />
           <SummaryTile label={lang === 'zh' ? '缓存创建' : 'Cache creation'} value={formatTokens(summary?.cacheCreationInputTokens)} />
           <SummaryTile label={lang === 'zh' ? '推理 Token' : 'Reasoning'} value={formatTokens(summary?.reasoningTokens)} />
           <SummaryTile label={lang === 'zh' ? '平均耗时' : 'Avg duration'} value={formatDuration(summary?.averageDurationMs)} />
         </div>
       </SettingsGroup>
 
-      <SettingsGroup title={lang === 'zh' ? '趋势' : 'Trend'}>
-        <TrendChart points={stats?.trend ?? []} lang={lang} />
-      </SettingsGroup>
+      {/* 容器查询:按内容区实际宽度(非视口)决定并排/堆叠——设置窗口可任意缩放,
+          视口断点在这里不可靠。≥64rem(1024px)容器宽才并排,保证每卡内部
+          环形图+表格仍能同行。 */}
+      <div className="@container">
+        <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-2">
+          <SettingsGroup title={lang === 'zh' ? '模型分布' : 'Model distribution'}>
+            <ModelDonut rows={stats?.modelStats ?? []} lang={lang} />
+          </SettingsGroup>
+
+          <SettingsGroup title={lang === 'zh' ? '趋势' : 'Trend'}>
+            <TrendChart points={stats?.trend ?? []} lang={lang} />
+          </SettingsGroup>
+        </div>
+      </div>
 
       <SettingsGroup title={lang === 'zh' ? '明细' : 'Details'}>
         <div className="mb-3 flex flex-col gap-2">
