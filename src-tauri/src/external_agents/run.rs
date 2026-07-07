@@ -39,10 +39,6 @@ use crate::external_agents::workspace::{
 use crate::skills::read_skill_detail;
 use crate::state::AppState;
 
-pub struct ExternalCliRunOutcome {
-    pub stream_outcome: String,
-}
-
 pub async fn run_external_cli_slash_command(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -538,7 +534,7 @@ where
                     &LiveSessionHandle {
                         agent_id: agent_id.to_string(),
                         protocol: protocol_tag.to_string(),
-                        native_id: native_id.clone(),
+                        native_id,
                         cwd: cwd_str.clone(),
                     },
                 );
@@ -546,10 +542,8 @@ where
                     conversation_id.to_string(),
                     LiveSession {
                         control: control.clone(),
-                        protocol,
                         agent_id: agent_id.to_string(),
                         cwd: cwd_str.clone(),
-                        native_id: Some(native_id),
                         last_activity: std::time::Instant::now(),
                     },
                 );

@@ -1061,7 +1061,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         setApprovalPolicy('readonly_auto_sensitive_confirm')
         return
       }
-      const provider = settings.providers.find((item) => item.id === activeProviderId)
       const anyMcpEnabled = chatTools.enabled && chatTools.servers.some((server) => server.enabled)
       const anyNativeEnabled = hasEnabledNativeBuiltinTool(chatTools.nativeTools)
       const skillRuntimeEnabled = hasEnabledSkillRuntime(chatTools.nativeTools)
@@ -1071,18 +1070,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         setEnabledTools([])
         setEnabledToolCount(null)
         setToolsDisabledReason('')
-        return
-      }
-      if (provider?.supportsTools === false) {
-        setEnabledTools([])
-        setEnabledToolCount(0)
-        if (skillRuntimeEnabled && effectiveSkillId) {
-          setToolsDisabledReason('当前模型不支持 tools；已选 Skill 时将注入 SKILL.md')
-        } else if (skillRuntimeEnabled) {
-          setToolsDisabledReason('Skill 渐进式加载需要 tools 支持；已选 Skill 时将注入 SKILL.md')
-        } else {
-          setToolsDisabledReason('当前模型不支持 tools')
-        }
         return
       }
       const result = await api.chatMcpListTools()
@@ -1097,7 +1084,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       setApprovalPolicy('readonly_auto_sensitive_confirm')
       setToolsDisabledReason(err instanceof Error ? err.message : String(err))
     }
-  }, [activeProviderId, effectiveSkillId])
+  }, [])
 
   const handleApprovalPolicyChange = useCallback(async (nextApprovalPolicy: string) => {
     setApprovalPolicy(nextApprovalPolicy)

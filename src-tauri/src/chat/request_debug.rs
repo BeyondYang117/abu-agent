@@ -354,7 +354,6 @@ mod tests {
             base_url: "https://api.openai.com/v1".into(),
             available_models: vec!["gpt-5".into()],
             enabled_models: vec!["gpt-5".into()],
-            supports_tools: true,
             enabled: true,
             api_format: "openai_chat".into(),
             model_overrides: Default::default(),

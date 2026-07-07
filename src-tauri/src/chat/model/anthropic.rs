@@ -1092,7 +1092,6 @@ mod tests {
             base_url: "https://api.anthropic.com".into(),
             available_models: vec!["claude-opus-4-8".into()],
             enabled_models: vec!["claude-opus-4-8".into()],
-            supports_tools: true,
             enabled: true,
             api_format: "anthropic_messages".into(),
             model_overrides: Default::default(),

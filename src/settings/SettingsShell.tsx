@@ -1621,7 +1621,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       baseUrl: 'https://api.openai.com/v1',
       availableModels: [],
       enabledModels: [],
-      supportsTools: true,
       enabled: true,
       apiFormat: 'openai_chat',
     }
@@ -1643,7 +1642,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       baseUrl: preset.baseUrl,
       availableModels: [],
       enabledModels: [],
-      supportsTools: true,
       enabled: true,
       apiFormat: 'openai_chat',
     }
@@ -2253,7 +2251,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const chatProvider = settings.providers.find((provider) => provider.id === settings.chatProviderId)
     ?? settings.providers.find((provider) => provider.id === settings.lens?.providerId)
     ?? settings.providers.find((provider) => provider.id === settings.translatorProviderId)
-  const chatProviderSupportsTools = chatProvider?.supportsTools !== false
   const disabledSkillIds = chatTools.disabledSkillIds ?? []
   const builtinSkills = skills.filter(isBuiltinSkill)
   const userSkills = skills.filter((skill) => !isBuiltinSkill(skill))
@@ -2816,13 +2813,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       {lang === 'zh' ? '请先在「模型」中添加并配置供应商。' : 'Add and configure a provider under Models first.'}
                     </p>
                   )}
-                  {chatProvider && chatProviderSupportsTools === false && (
-                    <p className="kv-row-desc px-0 pb-2 text-amber-700 dark:text-amber-400">
-                      {lang === 'zh'
-                        ? '当前默认供应商未启用工具调用；MCP / Skill 工具可能不可用。'
-                        : 'The default provider is marked as not supporting tools; MCP / Skill may be unavailable.'}
-                    </p>
-                  )}
                 </SettingsGroup>
 
                 <SettingsGroup title={lang === 'zh' ? '响应' : 'Response'}>
@@ -3241,13 +3231,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   <SettingRow label={t.webSearchChatToggle} description={t.webSearchChatHint}>
                     <Toggle
                       checked={chatTools.nativeTools?.webSearch === true}
-                      onChange={(webSearch) => {
-                        if (!chatProviderSupportsTools) {
-                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用联网搜索。' : 'The current Chat provider does not support tools, so web search cannot be enabled.')
-                          return
-                        }
-                        updateNativeTools({ webSearch })
-                      }}
+                      onChange={(webSearch) => updateNativeTools({ webSearch })}
                     />
                   </SettingRow>
                   {/* 搜索 API（服务商 / Key / 结果数 / 深度）统一在「网络搜索」标签页配置，
@@ -3312,21 +3296,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   <div className="flex items-center justify-between gap-4 py-3">
                     <div className="min-w-0">
                       <div className="kv-row-label">{lang === 'zh' ? '启用 MCP' : 'Enable MCP'}</div>
-                      {!chatProviderSupportsTools && (
-                        <p className="kv-row-desc">
-                          {lang === 'zh' ? '当前 Chat 模型不支持 tools。' : 'Current Chat model does not support tools.'}
-                        </p>
-                      )}
                     </div>
                     <Toggle
                       checked={chatTools.enabled}
-                      onChange={(enabled) => {
-                        if (!chatProviderSupportsTools) {
-                          setSaveError(lang === 'zh' ? '当前 Chat 模型供应商不支持 tools，无法启用 MCP。' : 'The current Chat provider does not support tools, so MCP cannot be enabled.')
-                          return
-                        }
-                        updateChatTools({ enabled })
-                      }}
+                      onChange={(enabled) => updateChatTools({ enabled })}
                     />
                   </div>
 

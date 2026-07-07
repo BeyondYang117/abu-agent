@@ -106,8 +106,6 @@ pub struct McpSession {
     /// ChatMcpServer 序列化指纹：配置变更即重建会话。
     pub config_fingerprint: String,
     pub state: McpServerState,
-    pub server_info: Option<Value>,
-    pub capabilities: Option<Value>,
     pub tools: Vec<McpTool>,
     /// stderr 尾巴（最近 STDERR_TAIL_LINES 行），用于状态面板。
     pub stderr_tail: Arc<Mutex<VecDeque<String>>>,
@@ -122,8 +120,6 @@ impl McpSession {
         Self {
             config_fingerprint: fingerprint,
             state: McpServerState::Connecting,
-            server_info: None,
-            capabilities: None,
             tools: Vec::new(),
             stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
             last_used: Instant::now(),
@@ -457,12 +453,9 @@ impl AppState {
             }
             _ => {
                 let mut conn = spawn_stdio(server, timeout_dur, session.stderr_tail.clone())?;
-                let init = conn
-                    .request("initialize", client::initialize_params())
+                conn.request("initialize", client::initialize_params())
                     .await?;
                 conn.notify("notifications/initialized", Value::Null).await?;
-                session.server_info = init.get("serverInfo").cloned();
-                session.capabilities = init.get("capabilities").cloned();
                 let list = conn.request("tools/list", Value::Null).await?;
                 session.tools = parse_tools(&list)?;
                 session.transport = McpTransport::Stdio(conn);

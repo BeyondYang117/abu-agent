@@ -933,7 +933,6 @@ mod tests {
             base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
             available_models: vec!["gemini-3.1-flash-lite".into()],
             enabled_models: vec!["gemini-3.1-flash-lite".into()],
-            supports_tools: true,
             enabled: true,
             api_format: "gemini".into(),
             model_overrides: Default::default(),

@@ -19,14 +19,6 @@ pub enum AgentPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentStopReason {
-    Natural,
-    StepLimit,
-    Cancelled,
-    ProviderToolsUnsupported,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStreamPolicy {
     PlanningNoDoneUntilNoTools,
     SynthesisAlwaysDone,

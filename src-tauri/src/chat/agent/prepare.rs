@@ -8,16 +8,14 @@ use crate::settings::{
 use crate::skills;
 
 pub fn chat_tools_capable(
-    provider: &crate::settings::ModelProvider,
     chat_tools: &ChatToolsConfig,
     memory_enabled: bool,
     image_generation_enabled: bool,
 ) -> bool {
-    provider.supports_tools
-        && (chat_tools.enabled
-            || crate::settings::chat_native_tools_enabled(chat_tools)
-            || memory_enabled
-            || image_generation_enabled)
+    chat_tools.enabled
+        || crate::settings::chat_native_tools_enabled(chat_tools)
+        || memory_enabled
+        || image_generation_enabled
 }
 
 pub fn apply_active_skill_tool_filter(

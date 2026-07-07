@@ -626,7 +626,6 @@ export type ModelProvider = {
   baseUrl: string
   availableModels: string[]
   enabledModels: string[]
-  supportsTools: boolean
   enabled: boolean
   apiFormat: string
   // 对请求体做 gzip 压缩再发送。默认 false。仅用于个别前置 WAF 会扫明文请求体、
@@ -681,7 +680,6 @@ export type Settings = {
   theme: 'system' | 'light' | 'dark'
   themeColor: string
   targetLang: string
-  source: string
   autoPaste: boolean
   launchAtStartup: boolean
   translatorProviderId: string
@@ -1011,7 +1009,6 @@ function normalizeProvider(provider: ModelProvider): ModelProvider {
     apiKeys: Array.isArray(provider.apiKeys) ? provider.apiKeys : [],
     availableModels: Array.isArray(provider.availableModels) ? provider.availableModels : [],
     enabledModels: Array.isArray(provider.enabledModels) ? provider.enabledModels : [],
-    supportsTools: provider.supportsTools !== false,
     enabled: provider.enabled !== false,
     compressRequestBody: provider.compressRequestBody === true,
     apiFormat: normalizeProviderApiFormat(provider.apiFormat),
@@ -1147,7 +1144,6 @@ function normalizeSettings(settings: Settings): Settings {
     theme: current.theme ?? 'system',
     themeColor: normalizeThemeColorId(current.themeColor),
     targetLang: current.targetLang ?? 'auto',
-    source: current.source ?? 'openai',
     autoPaste: current.autoPaste ?? true,
     launchAtStartup: current.launchAtStartup ?? false,
     translatorProviderId: current.translatorProviderId ?? '',

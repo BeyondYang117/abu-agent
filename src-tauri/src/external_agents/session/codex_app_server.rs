@@ -140,7 +140,6 @@ fn map_codex_notification(
                         .unwrap_or("Codex turn failed");
                     sink(UnifiedAgentEvent::Error {
                         message: message.to_string(),
-                        code: None,
                     });
                 }
             }
@@ -158,7 +157,6 @@ fn map_codex_notification(
                 .unwrap_or("Codex error");
             sink(UnifiedAgentEvent::Error {
                 message: message.to_string(),
-                code: None,
             });
             return true;
         }
@@ -572,7 +570,6 @@ impl CodexAppServerSession {
                 let _ = events
                     .send(UnifiedAgentEvent::Error {
                         message: message.clone(),
-                        code: None,
                     })
                     .await;
                 return Err(message);

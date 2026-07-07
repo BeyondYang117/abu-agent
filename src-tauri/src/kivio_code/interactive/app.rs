@@ -387,6 +387,7 @@ impl App {
     }
 
     /// 是否有覆盖层打开（事件循环据此决定是否把 resize 转发给 overlay 等）。
+    #[cfg(test)]
     pub fn overlay_open(&self) -> bool {
         self.overlay.is_some()
     }
@@ -785,6 +786,7 @@ impl App {
     }
 
     /// 工具卡片数量（测试用）。
+    #[cfg(test)]
     pub fn tool_card_count(&self) -> usize {
         self.transcript
             .iter()

@@ -1726,7 +1726,6 @@ mod tests {
             base_url: "https://example.com/v1".to_string(),
             available_models: vec!["m1".to_string()],
             enabled_models: vec!["m1".to_string()],
-            supports_tools: true,
             enabled: true,
             api_format: "openai_chat".to_string(),
             model_overrides: Default::default(),

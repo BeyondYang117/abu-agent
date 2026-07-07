@@ -1,20 +1,26 @@
 // @vitest-environment jsdom
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import {
-  MULTI_ANSWER_VIEW_STORAGE_KEY,
-  _resetMultiAnswerViewModeForTest,
-  useMultiAnswerViewMode,
-} from './multiAnswerViewMode'
+import { useMultiAnswerViewMode, type MultiAnswerViewMode } from './multiAnswerViewMode'
+
+const MULTI_ANSWER_VIEW_STORAGE_KEY = 'kivio.chat.multiAnswerView'
+
+// 用公开 API 驱动 store 复位：挂一个临时 hook 把内存态写回默认，再清 storage。
+function resetMultiAnswerViewMode(mode: MultiAnswerViewMode = 'tabs') {
+  const { result, unmount } = renderHook(() => useMultiAnswerViewMode())
+  act(() => {
+    result.current[1](mode)
+  })
+  unmount()
+  window.localStorage.clear()
+}
 
 beforeEach(() => {
-  window.localStorage.clear()
-  _resetMultiAnswerViewModeForTest()
+  resetMultiAnswerViewMode()
 })
 
 afterEach(() => {
-  window.localStorage.clear()
-  _resetMultiAnswerViewModeForTest()
+  resetMultiAnswerViewMode()
 })
 
 describe('useMultiAnswerViewMode', () => {

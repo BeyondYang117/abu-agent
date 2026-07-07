@@ -149,10 +149,6 @@ impl ClaudeStreamState {
                         .or_else(|| obj.get("message").and_then(|v| v.as_str()))
                         .unwrap_or("unknown error")
                         .to_string(),
-                    code: obj
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
                 });
             }
             _ => {}

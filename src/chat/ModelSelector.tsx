@@ -44,7 +44,6 @@ function ModelSelectorBase({
           baseUrl: '',
           availableModels: currentModel ? [currentModel] : ['dev-model'],
           enabledModels: currentModel ? [currentModel] : ['dev-model'],
-          supportsTools: true,
           enabled: true,
           apiFormat: 'openai_chat',
         },

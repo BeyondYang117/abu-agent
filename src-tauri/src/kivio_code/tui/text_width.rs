@@ -769,71 +769,6 @@ pub fn truncate_to_width(text: &str, max_width: usize, ellipsis: &str, pad: bool
     finalize_truncated(&result, kept_width, ellipsis, ellipsis_width, max_width, pad)
 }
 
-// =============================================================================
-// Slice by column
-// =============================================================================
-
-/// 从 `line` 提取 `[start_col, start_col+length)` 范围的可见列，ANSI-aware。
-/// `strict=true` 时排除会越界的宽字符。返回 (text, visible_width)。
-pub fn slice_with_width(line: &str, start_col: usize, length: usize, strict: bool) -> (String, usize) {
-    if length == 0 {
-        return (String::new(), 0);
-    }
-    let end_col = start_col + length;
-    let chars: Vec<char> = line.chars().collect();
-    let mut result = String::new();
-    let mut result_width = 0usize;
-    let mut current_col = 0usize;
-    let mut i = 0;
-    let mut pending_ansi = String::new();
-
-    while i < chars.len() {
-        if let Some(ansi) = extract_ansi_code_chars(&chars, i) {
-            if current_col >= start_col && current_col < end_col {
-                result.push_str(&ansi.code);
-            } else if current_col < start_col {
-                pending_ansi.push_str(&ansi.code);
-            }
-            i += ansi.length;
-            continue;
-        }
-        let mut end = i;
-        while end < chars.len() && extract_ansi_code_chars(&chars, end).is_none() {
-            end += 1;
-        }
-        let chunk: String = chars[i..end].iter().collect();
-        let mut broke = false;
-        for g in chunk.graphemes(true) {
-            let w = grapheme_width(g);
-            let in_range = current_col >= start_col && current_col < end_col;
-            let fits = !strict || current_col + w <= end_col;
-            if in_range && fits {
-                if !pending_ansi.is_empty() {
-                    result.push_str(&pending_ansi);
-                    pending_ansi.clear();
-                }
-                result.push_str(g);
-                result_width += w;
-            }
-            current_col += w;
-            if current_col >= end_col {
-                broke = true;
-                break;
-            }
-        }
-        i = end;
-        if broke || current_col >= end_col {
-            break;
-        }
-    }
-    (result, result_width)
-}
-
-/// 同 [`slice_with_width`] 但只返回文本。
-pub fn slice_by_column(line: &str, start_col: usize, length: usize, strict: bool) -> String {
-    slice_with_width(line, start_col, length, strict).0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,28 +912,6 @@ mod tests {
     fn truncate_cjk() {
         let r = truncate_to_width("你好世界", 5, "…", false);
         assert!(visible_width(&r) <= 5);
-    }
-
-    #[test]
-    fn slice_basic() {
-        assert_eq!(slice_by_column("hello", 1, 3, false), "ell");
-        assert_eq!(slice_by_column("hello", 0, 5, false), "hello");
-    }
-
-    #[test]
-    fn slice_preserves_ansi_before() {
-        // color set before the slice window should carry into the slice
-        let r = slice_by_column("\x1b[31mhello\x1b[0m", 1, 2, false);
-        assert!(r.contains("\x1b[31m"));
-        assert_eq!(visible_width(&r), 2);
-    }
-
-    #[test]
-    fn slice_strict_excludes_wide_at_boundary() {
-        // "a你b": cols a=0, 你=1..3, b=3. slice [0,2) strict should drop 你 (would end at col 3 > 2)
-        let r = slice_with_width("a你b", 0, 2, true);
-        assert_eq!(r.0, "a");
-        assert_eq!(r.1, 1);
     }
 
     #[test]

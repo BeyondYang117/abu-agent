@@ -61,7 +61,6 @@ const testProvider = {
   baseUrl: 'https://api.example.com/v1',
   availableModels: ['gpt-4o'],
   enabledModels: ['gpt-4o'],
-  supportsTools: true,
   enabled: true,
   apiFormat: 'openai_chat' as const,
 }

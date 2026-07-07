@@ -295,10 +295,7 @@ impl Editor {
         self.state.lines.join("\n")
     }
 
-    pub fn get_lines(&self) -> Vec<String> {
-        self.state.lines.clone()
-    }
-
+    #[cfg(test)]
     pub fn get_cursor(&self) -> (usize, usize) {
         (self.state.cursor_line, self.state.cursor_col)
     }

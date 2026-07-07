@@ -138,6 +138,7 @@ impl SelectList {
         self.filtered_items.get(self.selected_index).cloned()
     }
 
+    #[cfg(test)]
     pub fn filtered_len(&self) -> usize {
         self.filtered_items.len()
     }

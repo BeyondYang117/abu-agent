@@ -2029,7 +2029,6 @@ async fn complete_assistant_reply_inner(
         conversation.context_state.warning = Some(warning.clone());
     }
     let tools_capable = agent_prepare::chat_tools_capable(
-        &provider,
         &effective_chat_tools,
         settings.chat_memory.enabled,
         crate::settings::chat_image_generation_enabled_for_session(
@@ -2041,7 +2040,6 @@ async fn complete_assistant_reply_inner(
         app,
         state.inner(),
         &settings,
-        provider.supports_tools,
         Some(session_model_for_conversation(conversation)),
     )
     .await;
@@ -2066,12 +2064,12 @@ async fn complete_assistant_reply_inner(
         skill_id.as_deref(),
         user_tools_available,
     );
-    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools, provider.supports_tools);
-    let todo_tools_available = append_agent_todo_tools(&mut tools, provider.supports_tools);
+    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools);
+    let todo_tools_available = append_agent_todo_tools(&mut tools);
     // Multi-agent spawn tool (P3): exposure is mode-controlled. Act and
     // Orchestrate both expose the `agent` tool; Plan mode excludes it (spawn is a
     // side-effecting, non-read-only capability).
-    if provider.supports_tools && !plan_mode && !builder_mode {
+    if !plan_mode && !builder_mode {
         crate::chat::sub_agent::append_tool_definitions(&mut tools, true);
     }
     // Orchestrate mode raises the autonomy budget: a single user message may
@@ -2083,7 +2081,7 @@ async fn complete_assistant_reply_inner(
             .max_tool_rounds
             .map(|rounds| rounds.max(crate::settings::ORCHESTRATE_MIN_TOOL_ROUNDS));
     }
-    let runtime_tools_available = provider.supports_tools && !tools.is_empty();
+    let runtime_tools_available = !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let agent_todo_prompt = crate::chat::todo::format_prompt(
         &conversation.agent_todo_state,
@@ -4115,10 +4113,7 @@ async fn compute_context_state(
 
     let settings = state.settings_read().clone();
     let provider = settings.get_provider(&conversation.provider_id).cloned();
-    let provider_supports_tools = provider
-        .as_ref()
-        .map(|provider| provider.supports_tools)
-        .unwrap_or(false);
+    let provider_available = provider.is_some();
     let language = crate::settings::resolve_chat_language(&settings);
     let thinking_enabled = settings.chat.thinking_enabled;
     let skill_registry =
@@ -4137,25 +4132,19 @@ async fn compute_context_state(
     });
     let mut effective_chat_tools = settings.chat_tools.clone();
     let (memory_prompt, memory_warning) = chat_memory_prompt_for_request(app, &settings);
-    let tools_capable = provider
-        .as_ref()
-        .map(|provider| {
-            agent_prepare::chat_tools_capable(
-                provider,
-                &effective_chat_tools,
-                settings.chat_memory.enabled,
-                crate::settings::chat_image_generation_enabled_for_session(
-                    &settings,
-                    Some(session_model_for_conversation(conversation)),
-                ),
-            )
-        })
-        .unwrap_or(false);
+    let tools_capable = provider_available
+        && agent_prepare::chat_tools_capable(
+            &effective_chat_tools,
+            settings.chat_memory.enabled,
+            crate::settings::chat_image_generation_enabled_for_session(
+                &settings,
+                Some(session_model_for_conversation(conversation)),
+            ),
+        );
     let mut tools = list_tools_for_chat(
         app,
         state.inner(),
         &settings,
-        provider_supports_tools,
         Some(session_model_for_conversation(conversation)),
     )
     .await;
@@ -4182,9 +4171,9 @@ async fn compute_context_state(
         active_skill_id.as_deref(),
         user_tools_available,
     );
-    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools, provider_supports_tools);
-    let todo_tools_available = append_agent_todo_tools(&mut tools, provider_supports_tools);
-    let runtime_tools_available = provider_supports_tools && !tools.is_empty();
+    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools);
+    let todo_tools_available = append_agent_todo_tools(&mut tools);
+    let runtime_tools_available = !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
 
     let route_images_through_auxiliary_vision = auxiliary_vision_model_for_images(
@@ -4535,14 +4524,12 @@ async fn list_tools_for_chat(
     app: &AppHandle,
     state: &AppState,
     settings: &Settings,
-    provider_supports_tools: bool,
     session: Option<SessionModel<'_>>,
 ) -> Vec<ChatToolDefinition> {
-    if !provider_supports_tools
-        || !(settings.chat_tools.enabled
-            || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
-            || crate::settings::chat_memory_tools_enabled(settings)
-            || crate::settings::chat_image_generation_enabled_for_session(settings, session))
+    if !(settings.chat_tools.enabled
+        || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
+        || crate::settings::chat_memory_tools_enabled(settings)
+        || crate::settings::chat_image_generation_enabled_for_session(settings, session))
     {
         return Vec::new();
     }
@@ -4574,24 +4561,12 @@ async fn list_tools_for_chat(
     tools
 }
 
-fn append_agent_todo_tools(
-    tools: &mut Vec<ChatToolDefinition>,
-    provider_supports_tools: bool,
-) -> bool {
-    if !provider_supports_tools {
-        return false;
-    }
+fn append_agent_todo_tools(tools: &mut Vec<ChatToolDefinition>) -> bool {
     crate::chat::todo::append_tool_definitions(tools);
     true
 }
 
-fn append_agent_ask_user_tools(
-    tools: &mut Vec<ChatToolDefinition>,
-    provider_supports_tools: bool,
-) -> bool {
-    if !provider_supports_tools {
-        return false;
-    }
+fn append_agent_ask_user_tools(tools: &mut Vec<ChatToolDefinition>) -> bool {
     crate::chat::ask_user::append_tool_definitions(tools);
     true
 }
@@ -6815,7 +6790,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: Vec::new(),
             enabled_models: enabled_models.into_iter().map(str::to_string).collect(),
-            supports_tools: true,
             enabled: true,
             api_format: "openai_chat".to_string(),
             model_overrides: HashMap::new(),

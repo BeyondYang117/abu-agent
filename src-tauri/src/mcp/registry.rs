@@ -33,13 +33,10 @@ pub struct NativeToolContext {
     /// Parent run id of the agent loop issuing this call. Used by sub-agent
     /// management tools to address the parent tool card and cascade
     /// cancellation. Empty when not running under an agent loop.
-    #[allow(dead_code)]
     pub run_id: String,
     /// Generation of the issuing agent loop (for cancellation cascade).
-    #[allow(dead_code)]
     pub generation: u64,
     /// Sub-agent nesting depth of the issuing agent loop (0 = top-level).
-    #[allow(dead_code)]
     pub depth: u8,
 }
 const MAX_PYTHON_INPUT_FILE_BYTES: u64 = 100 * 1024 * 1024;

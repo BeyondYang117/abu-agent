@@ -22,11 +22,6 @@ impl Text {
         self.text = text.into();
         self.cached = None;
     }
-
-    pub fn set_bg_fn(&mut self, bg_fn: Option<ColorFn>) {
-        self.bg_fn = bg_fn;
-        self.cached = None;
-    }
 }
 
 impl Component for Text {

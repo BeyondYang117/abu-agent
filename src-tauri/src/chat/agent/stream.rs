@@ -411,7 +411,7 @@ impl StreamSink for AgentStreamSink<'_> {
             StreamPart::ToolCallStart { id, name } => self.emit_tool_call_start(id, name),
             StreamPart::ToolCallDelta { id, delta } => self.emit_tool_call_delta(id, delta),
             StreamPart::ToolCallDone { call } => self.emit_tool_call_done(&call),
-            StreamPart::Finish { .. } | StreamPart::ToolResult { .. } => {}
+            StreamPart::Finish { .. } => {}
         }
         Ok(())
     }

@@ -177,7 +177,6 @@ pub fn map_pi_rpc_event(value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) 
                         .unwrap_or("Pi agent error");
                     sink(UnifiedAgentEvent::Error {
                         message: message_text.to_string(),
-                        code: None,
                     });
                 }
             }
@@ -208,7 +207,6 @@ pub fn map_pi_rpc_event(value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) 
                             .unwrap_or("Agent error");
                         sink(UnifiedAgentEvent::Error {
                             message: message.to_string(),
-                            code: None,
                         });
                     }
                     _ => {}
@@ -261,7 +259,6 @@ pub fn map_pi_rpc_event(value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) 
                 .unwrap_or("Extension error");
             sink(UnifiedAgentEvent::Error {
                 message: message.to_string(),
-                code: None,
             });
         }
         "auto_retry_end" if obj.get("success").and_then(|v| v.as_bool()) == Some(false) => {
@@ -271,7 +268,6 @@ pub fn map_pi_rpc_event(value: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) 
                 .unwrap_or("Auto-retry exhausted");
             sink(UnifiedAgentEvent::Error {
                 message: message.to_string(),
-                code: None,
             });
         }
         _ => {}

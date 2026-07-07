@@ -319,10 +319,6 @@ pub enum StreamPart {
     ToolCallDone {
         call: PendingToolCall,
     },
-    ToolResult {
-        tool_call_id: String,
-        content: String,
-    },
     Finish {
         reason: String,
         full: String,

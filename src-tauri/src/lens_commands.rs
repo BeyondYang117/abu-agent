@@ -359,25 +359,6 @@ fn lens_set_interactive_region(
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
-fn lens_set_interactive_region(
-    window: &WebviewWindow,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
-    if let (Ok(pos), Ok(scale)) = (window.outer_position(), window.scale_factor()) {
-        let _ = window.set_position(tauri::LogicalPosition::new(
-            (pos.x as f64 / scale) + x,
-            (pos.y as f64 / scale) + y,
-        ));
-    }
-    let _ = window.set_size(tauri::LogicalSize::new(width, height));
-    Ok(())
-}
-
 fn lens_position_text_floating(app: &AppHandle, window: &WebviewWindow) {
     // 浮动窗 = 卡片宽 + 左右 padding（前端 FLOATING_PADDING=24/边）。卡宽来自设置，与截图翻译统一。
     let card_w = app.state::<AppState>().settings_read().screenshot_translation.card_width as f64;

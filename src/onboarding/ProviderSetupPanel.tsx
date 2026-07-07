@@ -77,7 +77,6 @@ function freshCustomProvider(id: string, lang: Lang, index: number): ModelProvid
     baseUrl: 'https://api.openai.com/v1',
     availableModels: [],
     enabledModels: [],
-    supportsTools: true,
     enabled: true,
     apiFormat: 'openai_chat',
   }
@@ -91,7 +90,6 @@ function freshPresetProvider(preset: ProviderPreset, id: string): ModelProvider 
     baseUrl: preset.baseUrl,
     availableModels: [],
     enabledModels: [],
-    supportsTools: true,
     enabled: true,
     apiFormat: 'openai_chat',
   }

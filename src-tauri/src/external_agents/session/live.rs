@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::external_agents::types::{StreamFormat, UnifiedAgentEvent};
+use crate::external_agents::types::UnifiedAgentEvent;
 
 /// A command sent to a live session's actor task.
 pub enum SessionCommand {
@@ -31,11 +31,8 @@ pub enum SessionCommand {
 /// Registry entry: the control channel plus metadata used to decide reuse.
 pub struct LiveSession {
     pub control: mpsc::Sender<SessionCommand>,
-    pub protocol: StreamFormat,
     pub agent_id: String,
     pub cwd: String,
-    /// Native session/thread id captured at connect (for resume + diagnostics).
-    pub native_id: Option<String>,
     /// Last time a turn was sent/started; drives idle reclamation + LRU eviction.
     pub last_activity: Instant,
 }
@@ -62,10 +59,8 @@ mod tests {
         (
             LiveSession {
                 control: tx,
-                protocol: StreamFormat::CodexAppServer,
                 agent_id: agent.to_string(),
                 cwd: cwd.to_string(),
-                native_id: Some("thread-1".to_string()),
                 last_activity: Instant::now(),
             },
             rx,

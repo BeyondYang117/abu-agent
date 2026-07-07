@@ -160,15 +160,12 @@ impl<T: Terminal> Tui<T> {
         self.root.add_child(c);
     }
 
-    pub fn clear_children(&mut self) {
-        self.root.clear();
-    }
-
     pub fn invalidate(&mut self) {
         self.root.invalidate();
     }
 
     /// 全量重绘次数（测试用）。
+    #[cfg(test)]
     pub fn full_redraws(&self) -> u32 {
         self.full_redraw_count
     }

@@ -9,7 +9,7 @@ import { useCallback, useSyncExternalStore } from 'react'
 
 export type MultiAnswerViewMode = 'tabs' | 'columns'
 
-export const MULTI_ANSWER_VIEW_STORAGE_KEY = 'kivio.chat.multiAnswerView'
+const MULTI_ANSWER_VIEW_STORAGE_KEY = 'kivio.chat.multiAnswerView'
 
 const DEFAULT_MODE: MultiAnswerViewMode = 'tabs'
 
@@ -83,30 +83,4 @@ export function useMultiAnswerViewMode(): [MultiAnswerViewMode, (mode: MultiAnsw
   const mode = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const set = useCallback((next: MultiAnswerViewMode) => setMode(next), [])
   return [mode, set]
-}
-
-// 测试辅助：直接重置内存态 + storage，避免用例间偏好串味。
-export function _resetMultiAnswerViewModeForTest(): void {
-  current = DEFAULT_MODE
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.removeItem(MULTI_ANSWER_VIEW_STORAGE_KEY)
-    } catch {
-      // ignore
-    }
-  }
-  emit()
-}
-
-// 测试辅助：直接置某模式（同步内存态 + storage + 通知订阅者）。
-export function _setMultiAnswerViewModeForTest(mode: MultiAnswerViewMode): void {
-  current = mode
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.setItem(MULTI_ANSWER_VIEW_STORAGE_KEY, mode)
-    } catch {
-      // ignore
-    }
-  }
-  emit()
 }

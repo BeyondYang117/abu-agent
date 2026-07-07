@@ -56,8 +56,6 @@ pub struct ModelProvider {
     pub available_models: Vec<String>,
     #[serde(default)]
     pub enabled_models: Vec<String>,
-    #[serde(default = "default_true")]
-    pub supports_tools: bool,
     /// 关闭后该供应商不会出现在模型选择器中，已引用它的功能会在保存时切到第一个启用的供应商。
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -1076,8 +1074,6 @@ pub struct Settings {
     pub theme_color: String,
     #[serde(default = "default_target_lang")]
     pub target_lang: String,
-    #[serde(default = "default_source")]
-    pub source: String,
     #[serde(default = "default_true")]
     pub auto_paste: bool,
     #[serde(default = "default_false")]
@@ -1182,10 +1178,6 @@ impl Settings {
         )
     }
 
-    pub fn effective_title_summary_model(&self) -> (String, String) {
-        self.effective_title_summary_model_for_session(None)
-    }
-
     pub fn effective_title_summary_model_for_session(
         &self,
         session: Option<SessionModel<'_>>,
@@ -1206,10 +1198,6 @@ impl Settings {
         session: Option<SessionModel<'_>>,
     ) -> (String, String) {
         resolve_mixer_side_model(&self.default_models.vision, session, self)
-    }
-
-    pub fn effective_compression_model(&self) -> (String, String) {
-        self.effective_compression_model_for_session(None)
     }
 
     pub fn effective_compression_model_for_session(
@@ -1240,7 +1228,6 @@ impl Default for Settings {
             theme: "system".to_string(),
             theme_color: default_theme_color(),
             target_lang: "auto".to_string(),
-            source: "openai".to_string(),
             auto_paste: true,
             launch_at_startup: false,
             translator_provider_id: "default-translator".to_string(),
@@ -1291,10 +1278,6 @@ pub fn chat_native_tools_enabled(chat_tools: &ChatToolsConfig) -> bool {
 
 pub fn chat_memory_tools_enabled(settings: &Settings) -> bool {
     settings.chat_memory.enabled
-}
-
-pub fn chat_image_generation_enabled(settings: &Settings) -> bool {
-    crate::chat::model_metadata::image_generation_model_for_session(settings, None).is_some()
 }
 
 pub fn chat_image_generation_enabled_for_session(
@@ -1502,7 +1485,6 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 base_url: old_openai.base_url,
                 available_models: vec![],
                 enabled_models: vec![old_openai.model.clone()],
-                supports_tools: true,
                 enabled: true,
                 api_format: "openai".to_string(),
                 model_overrides: std::collections::HashMap::new(),
@@ -1527,7 +1509,6 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
                 base_url: old_ocr.base_url,
                 available_models: vec![],
                 enabled_models: vec![old_ocr.model.clone()],
-                supports_tools: true,
                 enabled: true,
                 api_format: "openai".to_string(),
                 model_overrides: std::collections::HashMap::new(),
@@ -1540,7 +1521,6 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     // 1b. 单 key → 多 key 迁移（v2.3.1 → v2.4 升级路径）
     for provider in &mut settings.providers {
-        provider.supports_tools = true;
         provider.api_format = provider.api_format_kind().as_str().to_string();
         if let Some(legacy) = provider.api_key_legacy.take() {
             let trimmed = legacy.trim().to_string();
@@ -2255,11 +2235,6 @@ pub fn default_chat_system_prompt(language: &str, has_image: bool) -> String {
     }
 }
 
-/// 兼容旧调用：等同于 [`default_lens_system_prompt`]。
-pub fn default_system_prompt(language: &str, has_image: bool) -> String {
-    default_lens_system_prompt(language, has_image)
-}
-
 /**
  * Lens：关闭思考模式时附加到系统提示词末尾（含紧凑输出要求）。
  */
@@ -2351,10 +2326,6 @@ fn default_theme_color() -> String {
 
 fn default_target_lang() -> String {
     "auto".to_string()
-}
-
-fn default_source() -> String {
-    "openai".to_string()
 }
 
 fn default_openai_base_url() -> String {
@@ -2622,7 +2593,6 @@ mod tests {
             base_url: LEGACY_APPLE_INTELLIGENCE_BASE_URL.to_string(),
             available_models: vec![],
             enabled_models: vec!["apple-foundation".to_string()],
-            supports_tools: false,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2636,7 +2606,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2678,34 +2647,6 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_settings_forces_cloud_provider_tools_on() {
-        let mut s = Settings::default();
-        s.providers.push(ModelProvider {
-            id: "cloud".to_string(),
-            name: "Cloud".to_string(),
-            api_keys: vec!["sk".to_string()],
-            api_key_legacy: None,
-            base_url: "https://api.example.com/v1".to_string(),
-            available_models: vec![],
-            enabled_models: vec!["gpt-4o".to_string()],
-            supports_tools: false,
-            api_format: "openai".to_string(),
-            enabled: true,
-            model_overrides: std::collections::HashMap::new(),
-            compress_request_body: false,
-        });
-
-        let s = sanitize_settings(s);
-        assert_eq!(
-            s.providers
-                .iter()
-                .find(|provider| provider.id == "cloud")
-                .map(|provider| provider.supports_tools),
-            Some(true),
-        );
-    }
-
-    #[test]
     fn sanitize_settings_migrates_legacy_apikey_to_apikeys() {
         let mut s = Settings::default();
         s.providers.push(ModelProvider {
@@ -2716,7 +2657,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2739,7 +2679,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2765,7 +2704,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2939,7 +2877,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec![],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2967,7 +2904,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -2981,7 +2917,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["vision-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3012,7 +2947,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3026,7 +2960,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["vision-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3045,8 +2978,14 @@ mod tests {
         );
         assert!(!s.has_explicit_vision_model());
         assert_eq!(s.effective_vision_model(), s.effective_chat_model());
-        assert_eq!(s.effective_title_summary_model(), s.effective_chat_model());
-        assert_eq!(s.effective_compression_model(), s.effective_chat_model());
+        assert_eq!(
+            s.effective_title_summary_model_for_session(None),
+            s.effective_chat_model()
+        );
+        assert_eq!(
+            s.effective_compression_model_for_session(None),
+            s.effective_chat_model()
+        );
         assert!(s.image_generation_model().is_none());
         assert!(s.default_models.vision.provider_id.is_empty());
         assert!(s.default_models.title_summary.provider_id.is_empty());
@@ -3065,7 +3004,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gemini-3.1-flash-lite".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3079,7 +3017,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4.1".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3118,7 +3055,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m1".to_string(), "m2".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3145,7 +3081,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["chat-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3159,7 +3094,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["vision-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3173,7 +3107,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["title-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3187,7 +3120,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["compression-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3201,7 +3133,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["image-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3227,7 +3158,7 @@ mod tests {
             ("chat".to_string(), "chat-model".to_string())
         );
         assert_eq!(
-            s.effective_title_summary_model(),
+            s.effective_title_summary_model_for_session(None),
             ("title".to_string(), "title-model".to_string())
         );
         assert!(s.has_explicit_vision_model());
@@ -3236,7 +3167,7 @@ mod tests {
             ("vision".to_string(), "vision-model".to_string())
         );
         assert_eq!(
-            s.effective_compression_model(),
+            s.effective_compression_model_for_session(None),
             ("compression".to_string(), "compression-model".to_string())
         );
         assert_eq!(
@@ -3256,7 +3187,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m1".to_string(), "m2".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3302,7 +3232,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["gpt-4o".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3316,7 +3245,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["vision-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3485,7 +3413,6 @@ mod tests {
             base_url: "https://api.example.com/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["m".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3510,7 +3437,6 @@ mod tests {
             base_url: "https://active.example/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["live-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3538,7 +3464,6 @@ mod tests {
             base_url: "https://active.example/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["live-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),
@@ -3559,7 +3484,6 @@ mod tests {
             base_url: "https://disabled.example/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["off-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: false,
             model_overrides: std::collections::HashMap::new(),
@@ -3573,7 +3497,6 @@ mod tests {
             base_url: "https://active.example/v1".to_string(),
             available_models: vec![],
             enabled_models: vec!["live-model".to_string()],
-            supports_tools: true,
             api_format: "openai".to_string(),
             enabled: true,
             model_overrides: std::collections::HashMap::new(),

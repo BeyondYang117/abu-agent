@@ -1,16 +1,23 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MessageGroup } from './MessageGroup'
 import { beginGroup, ensureGroupColumn, flushGroups, resetGroups } from './groupStreamingStore'
-import {
-  _resetMultiAnswerViewModeForTest,
-  _setMultiAnswerViewModeForTest,
-} from './multiAnswerViewMode'
+import { useMultiAnswerViewMode, type MultiAnswerViewMode } from './multiAnswerViewMode'
 import type { ChatMessage } from './types'
+
+// 用公开 API 驱动展示模式（内存态 + storage 同步），替代已删除的测试专用导出。
+function setMultiAnswerViewMode(mode: MultiAnswerViewMode) {
+  const { result, unmount } = renderHook(() => useMultiAnswerViewMode())
+  act(() => {
+    result.current[1](mode)
+  })
+  unmount()
+}
 
 afterEach(() => {
   resetGroups()
-  _resetMultiAnswerViewModeForTest()
+  setMultiAnswerViewMode('tabs')
+  window.localStorage.clear()
 })
 
 function assistant(id: string, content: string, providerId: string, model: string): ChatMessage {
@@ -27,7 +34,7 @@ function assistant(id: string, content: string, providerId: string, model: strin
 
 describe('MessageGroup — columns 模式', () => {
   beforeEach(() => {
-    _setMultiAnswerViewModeForTest('columns')
+    setMultiAnswerViewMode('columns')
   })
 
   it('落库态：渲染每列的「model | provider」标签', () => {

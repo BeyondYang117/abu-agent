@@ -1700,7 +1700,6 @@ mod tests {
             base_url: base_url.to_string(),
             available_models: Vec::new(),
             enabled_models: Vec::new(),
-            supports_tools: true,
             enabled: true,
             api_format: "openai_chat".to_string(),
             model_overrides: std::collections::HashMap::new(),
