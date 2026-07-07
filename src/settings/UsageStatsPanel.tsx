@@ -728,7 +728,7 @@ function LogsTable({ logs, lang }: { logs: UsageRecord[]; lang: string }) {
 }
 
 export function UsageStatsPanel({ lang }: UsageStatsPanelProps) {
-  const [range, setRange] = useState<UsageRange>('30d')
+  const [range, setRange] = useState<UsageRange>('7d')
   const [view, setView] = useState<UsageView>('logs')
   const [source, setSource] = useState('all')
   const [status, setStatus] = useState('all')
@@ -826,7 +826,7 @@ export function UsageStatsPanel({ lang }: UsageStatsPanelProps) {
       <SettingsGroup title={lang === 'zh' ? '总览' : 'Overview'}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="kv-seg">
-            {(['7d', '30d', '90d', 'all'] as UsageRange[]).map(option => (
+            {(['today', '1d', '7d', '30d'] as UsageRange[]).map(option => (
               <button
                 key={option}
                 type="button"
@@ -834,7 +834,7 @@ export function UsageStatsPanel({ lang }: UsageStatsPanelProps) {
                 onClick={() => updateRange(option)}
                 data-tauri-drag-region="false"
               >
-                {option === 'all' ? (lang === 'zh' ? '全部' : 'All') : option}
+                {option === 'today' ? (lang === 'zh' ? '当天' : 'Today') : option}
               </button>
             ))}
           </div>

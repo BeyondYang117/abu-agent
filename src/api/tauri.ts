@@ -839,7 +839,7 @@ export type InstallCliResult = {
   message: string
 }
 
-export type UsageRange = '7d' | '30d' | '90d' | 'all'
+export type UsageRange = 'today' | '1d' | '7d' | '30d'
 
 export type UsageStatsQuery = {
   range?: UsageRange

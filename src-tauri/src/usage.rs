@@ -162,7 +162,7 @@ pub struct UsageRecordInput<'a> {
 }
 
 fn default_range() -> String {
-    "30d".to_string()
+    "7d".to_string()
 }
 
 pub fn usage_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -432,10 +432,18 @@ fn filter_records(mut records: Vec<UsageRecord>, query: &UsageStatsQuery) -> Vec
 fn range_start(range: &str) -> Option<i64> {
     let now = Local::now().timestamp();
     match range {
-        "7d" => Some(now.saturating_sub(7 * 86_400)),
+        // 「当天」= 本地日历日起点（今日 00:00），随后各档为滚动窗口。
+        "today" => Local::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .and_then(|naive| Local.from_local_datetime(&naive).single())
+            .map(|dt| dt.timestamp()),
+        "1d" => Some(now.saturating_sub(86_400)),
+        "30d" => Some(now.saturating_sub(30 * 86_400)),
         "90d" => Some(now.saturating_sub(90 * 86_400)),
         "all" => None,
-        _ => Some(now.saturating_sub(30 * 86_400)),
+        // default 7d
+        _ => Some(now.saturating_sub(7 * 86_400)),
     }
 }
 
@@ -584,10 +592,12 @@ fn build_trend(records: &[UsageRecord], range: &str) -> Vec<UsageTrendPoint> {
 
 fn range_days(range: &str) -> Option<usize> {
     match range {
-        "7d" => Some(7),
+        "today" | "1d" => Some(1),
+        "30d" => Some(30),
         "90d" => Some(90),
         "all" => None,
-        _ => Some(30),
+        // default 7d
+        _ => Some(7),
     }
 }
 
