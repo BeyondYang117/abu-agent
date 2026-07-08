@@ -2087,13 +2087,12 @@ async fn complete_assistant_reply_inner(
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let agent_todo_prompt = crate::chat::todo::format_prompt(
         &conversation.agent_todo_state,
-        &language,
         todo_tools_available,
     );
     let agent_ask_user_prompt =
-        crate::chat::ask_user::format_prompt(&language, ask_user_tools_available);
+        crate::chat::ask_user::format_prompt(ask_user_tools_available);
     let agent_plan_prompt =
-        crate::chat::plan::format_prompt(&conversation.agent_plan_state, &language);
+        crate::chat::plan::format_prompt(&conversation.agent_plan_state);
     let project_prompt_context = project_prompt_context_for(app, conversation);
     // Persistent per-conversation delivery directory surfaced to the model so it
     // can write deliverable files there (which auto-render as downloadable cards).
@@ -2115,7 +2114,6 @@ async fn complete_assistant_reply_inner(
     .map(|path| path.display().to_string());
     let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
         &settings.email_accounts,
-        &language,
         himalaya_binary.as_deref(),
     );
     let system_prompt = agent_prepare::build_chat_system_prompt(
@@ -2168,10 +2166,9 @@ async fn complete_assistant_reply_inner(
         settings.chat.system_prompt.as_str(),
         memory_prompt.as_deref(),
         Some(&agent_plan_prompt),
-        Some(&crate::chat::ask_user::format_prompt(&language, false)),
+        Some(&crate::chat::ask_user::format_prompt(false)),
         Some(&crate::chat::todo::format_prompt(
             &conversation.agent_todo_state,
-            &language,
             false,
         )),
         project_prompt_context.as_ref(),
@@ -4207,7 +4204,6 @@ async fn compute_context_state(
     let knowledge_base_prompt = crate::chat::knowledge_base::mount_system_prompt(
         app,
         &conversation.knowledge_base_ids,
-        &language,
         conversation.force_knowledge_search,
     );
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
@@ -4218,7 +4214,6 @@ async fn compute_context_state(
     .map(|path| path.display().to_string());
     let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
         &settings.email_accounts,
-        &language,
         himalaya_binary.as_deref(),
     );
     let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
@@ -4237,15 +4232,12 @@ async fn compute_context_state(
         memory_prompt.as_deref(),
         Some(&crate::chat::plan::format_prompt(
             &conversation.agent_plan_state,
-            &language,
         )),
         Some(&crate::chat::ask_user::format_prompt(
-            &language,
             ask_user_tools_available,
         )),
         Some(&crate::chat::todo::format_prompt(
             &conversation.agent_todo_state,
-            &language,
             todo_tools_available,
         )),
         project_prompt_context_for(app, conversation).as_ref(),

@@ -352,20 +352,12 @@ fn gathered_previews(state: &RunState) -> Vec<String> {
 
 /// 去敏 + 精简的恢复输入:仅用「用户问题 + 工具产出摘要 + 中立指令」重做一次合成,
 /// 去掉触发审核的完整正文/历史。
-fn build_neutral_reduced_messages(state: &RunState, language: &str) -> Vec<Value> {
-    let zh = language.starts_with("zh");
+fn build_neutral_reduced_messages(state: &RunState) -> Vec<Value> {
     let question = last_user_text(&state.runtime_messages).unwrap_or_default();
     let previews = gathered_previews(state).join("\n\n");
-    let system = if zh {
-        "用中立、客观的语气,严格依据下面的检索摘要回答用户的问题。只整理与陈述摘要中已有的信息,不要添加评论、立场或摘要之外的内容。"
-    } else {
-        "Answer the user's question objectively and neutrally, strictly based on the search snippets below. Only organize and state information already present in the snippets; add no commentary, stance, or outside content."
-    };
-    let user = if zh {
-        format!("用户的问题:{question}\n\n检索摘要:\n{previews}")
-    } else {
-        format!("User question: {question}\n\nSearch snippets:\n{previews}")
-    };
+    let system =
+        "Answer the user's question objectively and neutrally, strictly based on the search snippets below. Only organize and state information already present in the snippets; add no commentary, stance, or outside content.";
+    let user = format!("User question: {question}\n\nSearch snippets:\n{previews}");
     vec![
         json!({ "role": "system", "content": system }),
         json!({ "role": "user", "content": user }),
@@ -461,7 +453,7 @@ async fn recover_remediate(
     kind: recovery::FailureKind,
 ) -> String {
     let config = env.config;
-    let reduced = build_neutral_reduced_messages(state, &config.language);
+    let reduced = build_neutral_reduced_messages(state);
     // 同 recover_overflow_compact_and_retry：恢复重试必须接取消。
     let result = tokio::select! {
         result = call_chat_completion_message_with_usage(

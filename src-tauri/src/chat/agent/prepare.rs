@@ -222,21 +222,13 @@ pub struct ProjectPromptContext {
     pub root_path: Option<String>,
 }
 
-fn project_context_prompt(project: &ProjectPromptContext, language: &str) -> String {
-    match (&project.root_path, language.starts_with("zh")) {
-        (Some(root), true) => format!(
-            "当前是项目对话，项目「{}」已绑定文件夹：{root}。文件/命令工具的相对路径以该目录为根；写入明确的绝对路径或 ~/ 路径（如 ~/Desktop/x.html）会写到项目外的全局位置。",
-            project.name
-        ),
-        (Some(root), false) => format!(
+fn project_context_prompt(project: &ProjectPromptContext) -> String {
+    match &project.root_path {
+        Some(root) => format!(
             "This is a project conversation. Project \"{}\" is bound to folder: {root}. Relative paths in file/command tools resolve from that root; writing an explicit absolute or ~/ path (e.g. ~/Desktop/x.html) targets that global location outside the project.",
             project.name
         ),
-        (None, true) => format!(
-            "当前是项目对话，但项目「{}」尚未绑定本地文件夹；文件/命令工具不可用，需要用户先在项目菜单中绑定文件夹。",
-            project.name
-        ),
-        (None, false) => format!(
+        None => format!(
             "This is a project conversation, but project \"{}\" has no bound folder; file/command tools are unavailable until the user binds one from the project menu.",
             project.name
         ),
@@ -270,7 +262,7 @@ pub fn build_chat_system_prompt_with_segments(
     let mut prompt = String::new();
     let mut segments = Vec::new();
     let base_prompt = if custom_system_prompt.trim().is_empty() {
-        default_chat_system_prompt(language, has_image)
+        default_chat_system_prompt(has_image)
     } else {
         custom_system_prompt.trim().to_string()
     };
@@ -284,11 +276,8 @@ pub fn build_chat_system_prompt_with_segments(
     // 工作方式纪律（始终附加，独立于可被自定义人设覆盖的基座）：对齐 opencode 的
     // Tone/Proactiveness 之「神」——默认简洁、先答后做、不过度、不注水；但刻意不搬其
     // CLI 硬限制（≤4 行/一个词），保留 Kivio 富文本 GUI 该出的结构化 Markdown/报告能力。
-    let work_style = if language.starts_with("zh") {
-        "工作方式：回答只针对当前问题，不写无谓的开场白、结语或「我接下来要做…」这类旁白；做完文件改动后不必复述改了什么（用户看得到）。篇幅随任务而定：简单问题一两句说清，复杂或报告类任务才展开结构化输出——不要为显得完整而注水。用户只是问「怎么做/可不可以」时，先直接回答，不要擅自动手改东西，也不要做用户没要求的额外工作。"
-    } else {
-        "How you work: address only the current request — no filler preamble, no wrap-up postamble, no \"here's what I'll do next\" narration; after editing files you don't need to restate what changed (the user can see it). Match length to the task: answer simple questions in a sentence or two, and expand into structured output only for complex or report-style tasks — don't pad to look thorough. When the user only asks how to do something or whether it's possible, answer first; don't jump to making changes, and don't do work they didn't ask for."
-    };
+    let work_style =
+        "How you work: address only the current request — no filler preamble, no wrap-up postamble, no \"here's what I'll do next\" narration; after editing files you don't need to restate what changed (the user can see it). Match length to the task: answer simple questions in a sentence or two, and expand into structured output only for complex or report-style tasks — don't pad to look thorough. When the user only asks how to do something or whether it's possible, answer first; don't jump to making changes, and don't do work they didn't ask for.";
     append_context_segment(
         &mut prompt,
         &mut segments,
@@ -336,7 +325,7 @@ pub fn build_chat_system_prompt_with_segments(
             &mut segments,
             "runtime_context",
             "Runtime context",
-            &project_context_prompt(project, language),
+            &project_context_prompt(project),
         );
     }
 
@@ -370,27 +359,15 @@ pub fn build_chat_system_prompt_with_segments(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let text = if language.starts_with("zh") {
-            format!(
-                "Obsidian 笔记库路径：{path}\n\
-                 这是一个本地 Obsidian markdown 笔记库，请用原生文件工具操作：\
-                 list_dir 浏览目录（条目含修改时间，可找最近修改的笔记）、\
-                 glob_files 按名找 *.md、search_files 按内容/关键词搜索、read_file 读笔记；\
-                 笔记之间用 [[wikilink]] 双链互相引用。\n\
-                 需要 Obsidian 语法或格式细节时，可激活 obsidian-markdown / obsidian-bases / \
-                 json-canvas / obsidian-cli skill。"
-            )
-        } else {
-            format!(
-                "Obsidian vault path: {path}\n\
+        let text = format!(
+            "Obsidian vault path: {path}\n\
                  This is a local Obsidian markdown vault. Use the native file tools: \
                  list_dir to browse (entries include modified time), glob_files to find *.md by name, \
                  search_files to search by content/keyword, read_file to read a note; \
                  notes cross-reference each other via [[wikilink]].\n\
                  For Obsidian syntax or file-format details, activate the obsidian-markdown / \
                  obsidian-bases / json-canvas / obsidian-cli skills."
-            )
-        };
+        );
         append_context_segment(
             &mut prompt,
             &mut segments,
@@ -481,15 +458,9 @@ pub fn build_chat_system_prompt_with_segments(
         runtime.push_str(
             " Only claim that a tool was used, a script was run, a file was read, or the web was searched after Kivio returns an actual tool result in the conversation.",
         );
-        if language.starts_with("zh") {
-            runtime.push_str(
-                " 若用户只问今天/明天/星期几等可由上文「当前日期」直接推算的日期问题，直接回答，不要调用工具。",
-            );
-        } else {
-            runtime.push_str(
-                " If the user only asks for today/tomorrow/weekday derivable from the system date above, answer directly without calling tools.",
-            );
-        }
+        runtime.push_str(
+            " If the user only asks for today/tomorrow/weekday derivable from the system date above, answer directly without calling tools.",
+        );
         append_context_segment(
             &mut prompt,
             &mut segments,
@@ -498,7 +469,7 @@ pub fn build_chat_system_prompt_with_segments(
             &runtime,
         );
         if let Some(native_prompt) =
-            native_tools_prompt(available_builtin_tools, language, delivery_dir)
+            native_tools_prompt(available_builtin_tools, delivery_dir)
         {
             append_context_segment(
                 &mut prompt,
@@ -517,11 +488,8 @@ pub fn build_chat_system_prompt_with_segments(
             .iter()
             .any(|tool| tool.as_str() == crate::chat::sub_agent::AGENT_TOOL_NAME)
         {
-            let background_prompt = if language.starts_with("zh") {
-                "委派子 agent：每个 agent 调用都会阻塞、等子 agent 跑完并直接返回完整结果。要并行处理多个互相独立的子任务，就在同一条消息里发出多个 agent 调用——它们会并发执行，各自返回自己的结果。没有任何轮询或收集工具，也不要去找。"
-            } else {
-                "Delegating to sub-agents: each agent call BLOCKS, waits for the sub-agent to finish, and returns its full result directly. To run sub-agents in PARALLEL, emit MULTIPLE agent tool calls in a SINGLE message — they execute concurrently and each returns its own result. There is no polling or collection tool; do not look for one."
-            };
+            let background_prompt =
+                "Delegating to sub-agents: each agent call BLOCKS, waits for the sub-agent to finish, and returns its full result directly. To run sub-agents in PARALLEL, emit MULTIPLE agent tool calls in a SINGLE message — they execute concurrently and each returns its own result. There is no polling or collection tool; do not look for one.";
             append_context_segment(
                 &mut prompt,
                 &mut segments,
@@ -585,23 +553,13 @@ pub fn build_chat_system_prompt_with_segments(
             &skill_prompt,
         );
     } else if tools_available && chat_tools.skill_auto_match {
-        if language.starts_with("zh") {
-            append_context_segment(
-                &mut prompt,
-                &mut segments,
-                "skills",
-                "Skills",
-                "当任务匹配某个 Skill 的描述时，主动用 skill 工具激活它——无需用户点名，描述对得上就激活。激活后会加载该 Skill 的完整步骤指令，效果明显优于自行发挥。只跳过描述明显与当前任务无关的 Skill。",
-            );
-        } else {
-            append_context_segment(
-                &mut prompt,
-                &mut segments,
-                "skills",
-                "Skills",
-                "When the task matches a skill's description, call the skill tool for it proactively — you don't need the user to name it; a description match is enough. Activating loads that skill's full step-by-step instructions, which beat improvising. Only skip a skill whose description clearly doesn't fit the current task.",
-            );
-        }
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "skills",
+            "Skills",
+            "When the task matches a skill's description, call the skill tool for it proactively — you don't need the user to name it; a description match is enough. Activating loads that skill's full step-by-step instructions, which beat improvising. Only skip a skill whose description clearly doesn't fit the current task.",
+        );
     }
 
     if matches!(fallback, "skill_md_only" | "legacy_full_body") {
@@ -624,7 +582,7 @@ pub fn build_chat_system_prompt_with_segments(
             &mut segments,
             "runtime_context",
             "Runtime context",
-            chat_no_think_instruction(language),
+            chat_no_think_instruction(),
         );
     }
     (prompt, merge_context_segments(segments))
@@ -769,7 +727,6 @@ pub(crate) fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommend
 
 fn native_tools_prompt(
     available_builtin_tools: &[String],
-    language: &str,
     delivery_dir: Option<&str>,
 ) -> Option<String> {
     let native_tool_names = available_builtin_tools
@@ -820,11 +777,7 @@ fn native_tools_prompt(
     // 对齐 opencode 的 Following conventions / Code style / Doing tasks / Tool usage /
     // Code References，取神不取形（注释用温和的「除非要求不加」）。
     let code_discipline: &str = if has_write || has_edit || has_bash {
-        if language.starts_with("zh") {
-            "\n- 改代码前先看邻近文件与现有约定，模仿既有风格、命名和已用的库/框架；别假设某个库可用，先确认项目已在用它。除非用户要求，不要加代码注释。改完能验证就验证（跑已有测试、lint/typecheck）；非用户明确要求，不要 git commit/push。引用代码位置用 `文件路径:行号`。多个互相独立的查询或命令，在同一条消息里并行调用多个工具，别一个个串行。"
-        } else {
-            "\n- Before changing code, read neighboring files and existing conventions — mimic the current style, naming, and the libraries/frameworks already in use; never assume a library is available without confirming the project already uses it. Do not add code comments unless asked. After code changes, verify when you can (run existing tests, lint/typecheck); never git commit/push unless the user explicitly asks. Reference code locations as `file_path:line_number`. When several independent lookups or commands are needed, call multiple tools in parallel in one message instead of serially."
-        }
+        "\n- Before changing code, read neighboring files and existing conventions — mimic the current style, naming, and the libraries/frameworks already in use; never assume a library is available without confirming the project already uses it. Do not add code comments unless asked. After code changes, verify when you can (run existing tests, lint/typecheck); never git commit/push unless the user explicitly asks. Reference code locations as `file_path:line_number`. When several independent lookups or commands are needed, call multiple tools in parallel in one message instead of serially."
     } else {
         ""
     };
@@ -834,13 +787,7 @@ fn native_tools_prompt(
     let delivery_dir = delivery_dir
         .map(str::trim)
         .filter(|dir| !dir.is_empty() && has_write);
-    let zh_live_access_hint = match (has_web_search, has_web_fetch) {
-        (true, true) => "实时搜索或网页读取必须优先用 search_web/web_fetch 或对应 Skill 脚本。",
-        (true, false) => "实时搜索必须优先用 search_web 或对应 Skill 脚本。",
-        (false, true) => "网页读取必须优先用 web_fetch 或对应 Skill 脚本。",
-        (false, false) => "需要联网/API 访问时，请启用对应联网工具或使用对应 Skill 脚本。",
-    };
-    let en_live_access_hint = match (has_web_search, has_web_fetch) {
+    let live_access_hint = match (has_web_search, has_web_fetch) {
         (true, true) => {
             "Use search_web/web_fetch or the relevant Skill script for live web/API access."
         }
@@ -850,33 +797,7 @@ fn native_tools_prompt(
             "Enable the relevant web tool or use the relevant Skill script for live web/API access."
         }
     };
-    let mut prompt = if language.starts_with("zh") {
-        let image_generation_hint = if has_image_generation {
-            "\n- 用户要求创建、生成、绘制图片时，必须调用 mixer_generate_image，不要只用文字描述。"
-        } else {
-            "\n- 生图工具未启用；用户要求生成图片时，说明需要先在「混音器」里配置生图模型。"
-        };
-        let generated_file_hint = match (delivery_dir, has_run_python) {
-            (Some(dir), true) => format!(
-                "\n- 文件交付分三种,按目标选:给用户的成品文件(报告/数据/代码/CSV/JSON/MD/HTML 等)→ 用 write 写到交付目录 `{dir}`,会自动显示可下载的文件卡片;修改用户项目里的文件 → write 到项目路径,不显示卡片;需要计算/数据分析/画图/库生成(如带格式 XLSX、PDF、渲染图)→ run_python,产物会自动落到交付目录并显示卡片。不要仅仅为了把已有内容写成文件而调用 run_python。"
-            ),
-            (Some(dir), false) => format!(
-                "\n- 文件交付分两种,按目标选:给用户的成品文件(报告/数据/代码/CSV/JSON/MD/HTML 等)→ 用 write 写到交付目录 `{dir}`,会自动显示可下载的文件卡片;修改用户项目里的文件 → write 到项目路径,不显示卡片。"
-            ),
-            (None, true) => "\n- 需要计算/数据分析/画图/库生成(如带格式 XLSX、PDF、渲染图)的可下载文件用 run_python(产物以文件卡片交付);修改用户项目工作区里的文件用 write/edit。不要仅仅为了把已有内容写成文件而调用 run_python。".to_string(),
-            (None, false) => String::new(),
-        };
-        format!(
-            "内置工具（已启用）：{list}。只能调用此列表中的内置工具。\n\
-- 项目对话中文件/命令工具的相对路径以项目根目录为根；写入明确的绝对路径或 ~/ 路径（如 ~/Desktop/x.html）会落到项目外的全局位置。非项目对话用绝对路径或 ~/ 路径。\n\
-- 用户明确要求保存/修改/删除本地文件或给出目标路径时才动文件：小改用 edit，新建或整文件覆盖用 write。只要求“生成代码块”时直接在回答里输出，不调用 write。写入成功后简短说明路径即可，不要复述文件内容。\n\
-- 写入/编辑类工具和 bash 可能需要用户确认；memory_read（按需读 L2，L1 已注入）、memory_search（按关键词检索 L2，找不准标题时优先用它）和 memory_modify 无需确认。\n\
-- 运行环境：{os_name}，bash 经 {shell_name} 执行；命令语法须匹配该 shell（Windows 是 PowerShell：用全名 cmdlet 如 `Get-ChildItem`/`Get-Content`、环境变量写 `$env:VAR`、多条命令用 `;` 串联，别用已废弃的 `wmic`，也别对整盘做 `-Recurse` 递归扫描；Unix 用 `$VAR`、`ls`、`/`）。每次 bash 都是全新进程，cwd 不跨调用保留——切目录用 `cwd` 参数，别靠上一条 `cd`。要跑多行或带引号的代码，先用 write 写成脚本再执行，或用 run_python，别塞进 `python -c \"...\"` 这类内联命令（内联引号在各 shell 下都脆弱）。工具返回硬性拒绝时换策略，别把同一动作换几种写法反复试；失败命令不要原样重跑；别为一次性探测或清理往项目里扔临时脚本。\n\
-- bash 在宿主 shell 从项目根目录执行，非零退出码即失败；含空格的路径必须用 `cwd` 参数，禁止 `cd 路径 && 命令`；不要同时传 `cwd` 又在 command 里写 `cd ... &&`。`npm run dev` / `tauri dev` / `vite` 等长驻 dev 命令会自动后台启动并立刻返回 pid，不要重复启动。破坏性、联网、改环境的命令先说明并等确认。Skill 附带的脚本用 run_python(沙箱)或 run_command(宿主)执行；不要用 pip 装宿主包绕过沙盒。\n\
-- run_python 在 Pyodide 沙盒运行，用于数据运算、分析、文档处理、图表，以及需要 Python 库才能产出的文件（带格式 XLSX、PDF、渲染图）；不要用它生成或打印代码答案，也不要仅为把已有内容写成文件而调用它（那用 write 写到交付目录）。代码直接写在回答里。无宿主文件系统访问；files 挂载本地文件后用 KIVIO_INPUT_FILES[n] 路径，numpy、pandas、matplotlib、pillow、openpyxl、pypdf 可直接 import。产物保存为相对路径文件名（如 report.xlsx、chart.png、summary.csv），应用会自动捕获并显示文件卡片；不要 print base64。\n\
-- {zh_live_access_hint}"
-        ) + &generated_file_hint + image_generation_hint + code_discipline
-    } else {
+    let mut prompt = {
         let image_generation_hint = if has_image_generation {
             "\n- When the user asks to create, generate, or draw an image, call mixer_generate_image; do not merely describe it."
         } else {
@@ -901,7 +822,7 @@ fn native_tools_prompt(
 - bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_python (sandbox) or run_command (host); never use host pip to bypass the run_python sandbox.\n\
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
-- {en_live_access_hint}"
+- {live_access_hint}"
         ) + &generated_file_hint + image_generation_hint + code_discipline
     };
     if has_image_generation && !prompt.ends_with('.') && !prompt.ends_with('。') {
@@ -1057,11 +978,9 @@ mod tests {
         // compute/library deliverables and explicitly discourage using it just
         // to write out existing content.
         assert!(prompt.contains("run_python"));
-        assert!(prompt.contains("文件卡片"));
+        assert!(prompt.contains("file card"));
         assert!(prompt.contains("report.xlsx"));
-        assert!(prompt.contains("不要仅仅为了把已有内容写成文件而调用 run_python"));
-        // The old proactive-catch-all wording must be gone.
-        assert!(!prompt.contains("主动调用 run_python"));
+        assert!(prompt.contains("Do not call run_python merely to write out content you already have"));
     }
 
     #[test]
@@ -1102,9 +1021,9 @@ mod tests {
         // absolute path is surfaced, all three routes are mentioned, and the
         // run_python catch-all guard remains.
         assert!(prompt.contains("/Users/me/Kivio/outputs/conv_abc"));
-        assert!(prompt.contains("交付目录"));
+        assert!(prompt.contains("delivery directory"));
         assert!(prompt.contains("run_python"));
-        assert!(prompt.contains("不要仅仅为了把已有内容写成文件而调用 run_python"));
+        assert!(prompt.contains("Do not call run_python merely to write out content you already have"));
         // The removed deliver_file tool must not appear anywhere.
         assert!(!prompt.contains("deliver_file"));
     }
@@ -1139,9 +1058,9 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("生成代码块"));
-        assert!(prompt.contains("不调用 write"));
-        assert!(prompt.contains("不要复述文件内容"));
+        assert!(prompt.contains("code block"));
+        assert!(prompt.contains("answer inline"));
+        assert!(prompt.contains("do not repeat the file content"));
     }
 
     #[test]
@@ -1173,7 +1092,7 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("Obsidian 笔记库路径：/Users/me/Obsidian/MyVault"));
+        assert!(prompt.contains("Obsidian vault path: /Users/me/Obsidian/MyVault"));
     }
 
     #[test]
@@ -1325,12 +1244,9 @@ mod tests {
         // 提示词必须展示 wire 名（search_web）——与 tools 声明一致，否则模型会调用
         // 未声明的 web_search（且该名会被 Cursor 系上游吞掉）。
         let names = vec!["web_fetch".to_string(), "web_search".to_string()];
-        let prompt = native_tools_prompt(&names, "zh", None).expect("prompt");
+        let prompt = native_tools_prompt(&names, None).expect("prompt");
         assert!(prompt.contains("search_web"), "{prompt}");
         assert!(!prompt.contains("web_search"), "{prompt}");
-        let en = native_tools_prompt(&names, "en", None).expect("prompt");
-        assert!(en.contains("search_web"), "{en}");
-        assert!(!en.contains("web_search"), "{en}");
     }
 
     #[test]
@@ -1338,17 +1254,13 @@ mod tests {
         // 代码工作纪律只在具备 write/edit/bash 时注入；纯只读/无这些工具时不出现，
         // 避免污染纯聊天场景。
         let with_bash = vec!["bash".to_string(), "read".to_string()];
-        let p = native_tools_prompt(&with_bash, "zh", None).expect("prompt");
-        assert!(p.contains("文件路径:行号"), "有 bash 应含代码纪律: {p}");
-        let en = native_tools_prompt(&with_bash, "en", None).expect("prompt");
-        assert!(en.contains("file_path:line_number"), "bash present should add discipline: {en}");
+        let p = native_tools_prompt(&with_bash, None).expect("prompt");
+        assert!(p.contains("file_path:line_number"), "bash present should add discipline: {p}");
 
         // 只有只读工具（无 write/edit/bash）时不注入。
         let read_only = vec!["read".to_string(), "glob".to_string()];
-        let p2 = native_tools_prompt(&read_only, "zh", None).expect("prompt");
-        assert!(!p2.contains("文件路径:行号"), "只读工具集不应含代码纪律: {p2}");
-        let en2 = native_tools_prompt(&read_only, "en", None).expect("prompt");
-        assert!(!en2.contains("file_path:line_number"), "read-only should omit discipline: {en2}");
+        let p2 = native_tools_prompt(&read_only, None).expect("prompt");
+        assert!(!p2.contains("file_path:line_number"), "read-only should omit discipline: {p2}");
     }
 
     #[test]

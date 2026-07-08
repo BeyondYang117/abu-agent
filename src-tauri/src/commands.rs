@@ -126,8 +126,8 @@ pub(crate) fn get_default_prompt_templates() -> serde_json::Value {
         }
       },
       "chatPrompts": {
-        "zh": default_chat_system_prompt("zh", false),
-        "en": default_chat_system_prompt("en", false)
+        "zh": default_chat_system_prompt(false),
+        "en": default_chat_system_prompt(false)
       }
     })
 }

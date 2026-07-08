@@ -1057,7 +1057,6 @@ pub fn email_account_id_from_address(email: &str) -> String {
 /// 注入系统提示：已配置的 Himalaya 邮箱列表。
 pub fn email_accounts_system_prompt(
     accounts: &[EmailAccountConfig],
-    language: &str,
     himalaya_binary: Option<&str>,
 ) -> Option<String> {
     if accounts.is_empty() {
@@ -1077,34 +1076,16 @@ pub fn email_accounts_system_prompt(
     let binary_line = himalaya_binary
         .map(str::trim)
         .filter(|path| !path.is_empty())
-        .map(|path| {
-            if language.starts_with("zh") {
-                format!("Himalaya 可执行文件：{path}")
-            } else {
-                format!("Himalaya binary: {path}")
-            }
-        });
-    if language.starts_with("zh") {
-        Some(format!(
-            "已配置邮箱（Himalaya CLI，激活 himalaya skill 后用 run_command）：\n{}\n使用 Kivio Email 连接器手动安装的 Himalaya，或系统 PATH 中的 himalaya。{}{}",
-            lines.join("\n"),
-            binary_line
-                .as_ref()
-                .map(|line| format!("\n{line}"))
-                .unwrap_or_default(),
-            "\n发信、删信、批量移动前须向用户确认。"
-        ))
-    } else {
-        Some(format!(
-            "Configured mailboxes (Himalaya CLI — activate the himalaya skill and use run_command):\n{}\nUse Himalaya installed via the Kivio Email connector, or a system PATH himalaya binary.{}{}",
-            lines.join("\n"),
-            binary_line
-                .as_ref()
-                .map(|line| format!("\n{line}"))
-                .unwrap_or_default(),
-            "\nConfirm with the user before sending, deleting, or bulk-moving mail."
-        ))
-    }
+        .map(|path| format!("Himalaya binary: {path}"));
+    Some(format!(
+        "Configured mailboxes (Himalaya CLI — activate the himalaya skill and use run_command):\n{}\nUse Himalaya installed via the Kivio Email connector, or a system PATH himalaya binary.{}{}",
+        lines.join("\n"),
+        binary_line
+            .as_ref()
+            .map(|line| format!("\n{line}"))
+            .unwrap_or_default(),
+        "\nConfirm with the user before sending, deleting, or bulk-moving mail."
+    ))
 }
 
 /**
@@ -2283,12 +2264,11 @@ pub fn default_lens_system_prompt(language: &str, has_image: bool) -> String {
 }
 
 /// Chat 客户端默认系统提示：允许正常 Markdown（含表格），不强制「不要空行」。
-pub fn default_chat_system_prompt(language: &str, has_image: bool) -> String {
-    match (language.starts_with("zh"), has_image) {
-        (true, true) => "你是 Kivio 里的 AI 助手，可以帮用户写作、分析文档/数据、查网页、运行代码计算、修改文件和解答问题。你可结合用户提供的图片作答。回答简洁、清晰、有条理；可使用 Markdown（表格、列表、代码块等，表格每行单独一行）。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁。".to_string(),
-        (true, false) => "你是 Kivio 里的 AI 助手，可以帮用户写作、分析文档/数据、查网页、运行代码计算、修改文件和解答问题。直接、简洁、清晰地回答用户问题；可使用 Markdown（表格、列表、代码块等，表格每行单独一行）。数学公式用 LaTeX（$...$ 或 $$...$$）。思考保持简洁。".to_string(),
-        (_, true) => "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string(),
-        (_, false) => "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string(),
+pub fn default_chat_system_prompt(has_image: bool) -> String {
+    if has_image {
+        "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+    } else {
+        "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     }
 }
 
@@ -2304,12 +2284,8 @@ pub fn no_think_instruction(language: &str) -> &'static str {
 }
 
 /// Chat：关闭思考模式时的附加指令（不要求紧凑、不禁止空行）。
-pub fn chat_no_think_instruction(language: &str) -> &'static str {
-    if language.starts_with("zh") {
-        "\n\n严格要求：直接给出最终答案，不要输出任何思考过程、推理步骤或 <think> 内容。"
-    } else {
-        "\n\nStrict requirement: output only the final answer; do NOT include any thinking, reasoning steps, or <think> content."
-    }
+pub fn chat_no_think_instruction() -> &'static str {
+    "\n\nStrict requirement: output only the final answer; do NOT include any thinking, reasoning steps, or <think> content."
 }
 
 /**
@@ -3645,20 +3621,18 @@ mod tests {
             email: "user@example.com".into(),
             ..Default::default()
         };
-        let prompt = email_accounts_system_prompt(&[account], "zh-CN", Some("/opt/kivio/himalaya"))
+        let prompt = email_accounts_system_prompt(&[account], Some("/opt/kivio/himalaya"))
             .expect("prompt");
         assert!(prompt.contains("user@example.com"));
-        assert!(prompt.contains("手动安装"));
-        assert!(prompt.contains("Himalaya 可执行文件：/opt/kivio/himalaya"));
+        assert!(prompt.contains("Kivio Email connector"));
+        assert!(prompt.contains("Himalaya binary: /opt/kivio/himalaya"));
         assert!(!prompt.contains("brew install"));
-        assert!(!prompt.contains("自动安装"));
 
         let en = email_accounts_system_prompt(
             &[EmailAccountConfig {
                 email: "user@example.com".into(),
                 ..Default::default()
             }],
-            "en",
             None,
         )
         .expect("prompt");

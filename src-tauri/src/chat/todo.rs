@@ -76,27 +76,16 @@ pub fn apply_todo_write(arguments: Value) -> Result<TodoToolOutcome, String> {
     })
 }
 
-pub fn format_prompt(state: &AgentTodoState, language: &str, todo_tools_available: bool) -> String {
+pub fn format_prompt(state: &AgentTodoState, todo_tools_available: bool) -> String {
     let current = format_state_lines(state);
-    if language.starts_with("zh") {
-        let tool_hint = if todo_tools_available {
-            "你可以使用 todo_write 维护这个列表（整表替换）。"
-        } else {
-            "当前请求没有可用的 todo 工具；只能把它作为上下文参考。"
-        };
-        format!(
-            "Agent todo list（内部工作状态）：这个 todo list 由助手自己维护，用户不能手动编辑。{tool_hint} 对复杂、多步骤、需要持续跟进的任务，应保持简洁、可执行的条目；开始或切换任务时标记 in_progress，完成后标记 completed，最多只能有一个 in_progress。不要告诉用户他们可以编辑 todo。\n\n当前 todo 状态：\n{current}"
-        )
+    let tool_hint = if todo_tools_available {
+        "Use todo_write to maintain it (full-list replace)."
     } else {
-        let tool_hint = if todo_tools_available {
-            "Use todo_write to maintain it (full-list replace)."
-        } else {
-            "Todo tools are unavailable for this request; use it as context only."
-        };
-        format!(
-            "Agent todo list (internal working state): this list is owned by the assistant; the user cannot edit it manually. {tool_hint} For complex, multi-step, or continuing work, keep concise actionable items; mark one item in_progress when starting or switching work, mark items completed when done, and keep at most one in_progress item. Do not tell the user they can edit todos.\n\nCurrent todo state:\n{current}"
-        )
-    }
+        "Todo tools are unavailable for this request; use it as context only."
+    };
+    format!(
+        "Agent todo list (internal working state): this list is owned by the assistant; the user cannot edit it manually. {tool_hint} For complex, multi-step, or continuing work, keep concise actionable items; mark one item in_progress when starting or switching work, mark items completed when done, and keep at most one in_progress item. Do not tell the user they can edit todos.\n\nCurrent todo state:\n{current}"
+    )
 }
 
 /// Conversation-scoped registry handler: load the conversation, apply the

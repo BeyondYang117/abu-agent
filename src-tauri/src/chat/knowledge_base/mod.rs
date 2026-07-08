@@ -616,7 +616,6 @@ pub fn heal_stale_indexing_once(app: &AppHandle) {
 pub fn mount_system_prompt(
     app: &AppHandle,
     kb_ids: &[String],
-    language: &str,
     force: bool,
 ) -> Option<String> {
     if kb_ids.is_empty() {
@@ -630,21 +629,15 @@ pub fn mount_system_prompt(
     if names.is_empty() {
         return None;
     }
-    let names_str = names.join(if language.starts_with("zh") { "、" } else { ", " });
-    let zh = language.starts_with("zh");
-    Some(match (zh, force) {
-        (true, true) => format!(
-            "本会话已挂载知识库：{names_str}。**强制检索模式已开启：每次回答前你必须先调用 knowledge_search 检索，不得跳过**——即使你认为已知道答案，也要先检索确认。文档已在知识库里，不要让用户重新上传。用到检索到的片段时，必须在正文中用 [n] 行内标注来源编号；确实检索不到相关内容时才如实说明知识库里没有。"
-        ),
-        (true, false) => format!(
-            "本会话已挂载知识库：{names_str}。当用户的问题可能涉及这些文档时，**优先调用 knowledge_search 检索**——文档已在知识库里，不要让用户重新上传文件。用到检索到的片段时，必须在正文中用 [n] 行内标注其来源编号（n 为该工具返回片段前的编号），让用户能溯源；只有检索不到相关内容时才如实说明知识库里没有。"
-        ),
-        (false, true) => format!(
+    let names_str = names.join(", ");
+    Some(if force {
+        format!(
             "This conversation has knowledge bases attached: {names_str}. **Forced retrieval is ON: you MUST call knowledge_search before every answer — do not skip it**, even if you think you already know the answer; search first to confirm. The documents are already indexed, so do not ask the user to re-upload files. When you use a retrieved passage, cite its source number inline as [n]; only if nothing relevant is found, say the knowledge base doesn't cover it."
-        ),
-        (false, false) => format!(
+        )
+    } else {
+        format!(
             "This conversation has knowledge bases attached: {names_str}. When the user's question may relate to these documents, prefer calling knowledge_search first — the documents are already indexed, so do not ask the user to re-upload files. When you use a retrieved passage, cite its source number inline as [n] (the number shown before each returned passage) so the user can trace it; only if nothing relevant is found, say the knowledge base doesn't cover it."
-        ),
+        )
     })
 }
 
