@@ -186,7 +186,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
               style={{ zIndex: value.length - i }}
               title={`${ref.model} | ${providerName(ref.provider_id)}`}
             >
-              <span className="grid size-6 place-items-center rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-2 ring-[var(--theme-surface)] dark:bg-neutral-800 dark:ring-neutral-900">
+              <span className="grid size-6 place-items-center rounded-full border border-neutral-200 bg-white dark:border-neutral-600 dark:bg-neutral-800">
                 <ModelIcon model={ref.model} size={14} />
               </span>
               <button
