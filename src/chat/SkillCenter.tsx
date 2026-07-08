@@ -154,6 +154,8 @@ function SkillSection({
   disabledSkillIds,
   onToggleEnabled,
   onPreview,
+  collapsible = false,
+  defaultCollapsed = false,
 }: {
   title: string
   note?: string
@@ -162,15 +164,31 @@ function SkillSection({
   disabledSkillIds: string[]
   onToggleEnabled: (skillId: string, enabled: boolean) => void
   onPreview: (skillId: string) => void
+  collapsible?: boolean
+  defaultCollapsed?: boolean
 }) {
+  const [collapsed, setCollapsed] = useState(collapsible && defaultCollapsed)
+  const enabledCount = skills.filter((skill) => !disabledSkillIds.includes(skill.id)).length
   return (
     <section className="space-y-2.5">
-      <div className="flex min-w-0 items-center gap-3 px-1">
+      <div
+        className={`flex min-w-0 items-center gap-3 px-1 ${collapsible ? 'cursor-pointer select-none' : ''}`}
+        onClick={collapsible ? () => setCollapsed((v) => !v) : undefined}
+      >
+        {collapsible && (
+          <ChevronDown
+            size={16}
+            className={`shrink-0 text-neutral-400 transition-transform duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-standard)] ${collapsed ? '-rotate-90' : ''}`}
+          />
+        )}
         <h3 className="text-[15px] font-semibold text-neutral-700 dark:text-neutral-200">{title}</h3>
         <span className="text-[14px] font-medium text-neutral-400">{skills.length}</span>
+        {collapsed && skills.length > 0 && (
+          <span className="text-[12.5px] text-neutral-400">已启用 {enabledCount}</span>
+        )}
         {note && <span className="ml-auto truncate text-[12.5px] text-neutral-400">{note}</span>}
       </div>
-      {skills.length === 0 ? (
+      {collapsed ? null : skills.length === 0 ? (
         <div className="grid min-h-[88px] place-items-center rounded-2xl border border-dashed border-neutral-200 text-[13px] text-neutral-400 dark:border-neutral-800">
           {emptyText}
         </div>
@@ -624,6 +642,8 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
                   disabledSkillIds={disabledSkillIds}
                   onToggleEnabled={handleToggleSkillEnabled}
                   onPreview={handlePreviewSkill}
+                  collapsible
+                  defaultCollapsed
                 />
                 <SkillSection
                   title="工作区与个人技能"
