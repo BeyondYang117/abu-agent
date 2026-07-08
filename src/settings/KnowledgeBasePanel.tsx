@@ -742,17 +742,11 @@ export function KnowledgeBasePanel({
             </SettingsGroup>
 
             <SettingsGroup title={t('文档', 'Documents')}>
-              <div
-                ref={dropZoneRef}
-                className={`relative space-y-3 rounded-lg py-2 transition ${
-                  dragActive
-                    ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900'
-                    : ''
-                }`}
-              >
+              <div ref={dropZoneRef} className="relative space-y-3 py-2">
                 {dragActive && (
-                  <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-indigo-50/80 text-sm font-medium text-indigo-600 dark:bg-indigo-950/70 dark:text-indigo-300">
-                    <Upload size={16} className="mr-1.5" /> {t('松开以导入', 'Drop to import')}
+                  <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-indigo-400 bg-indigo-50/95 text-indigo-600 dark:border-indigo-500 dark:bg-indigo-950/95 dark:text-indigo-300">
+                    <Upload size={22} />
+                    <span className="text-sm font-medium">{t('松开以导入', 'Drop to import')}</span>
                   </div>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
