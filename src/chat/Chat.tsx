@@ -3342,6 +3342,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                 ref={settingsRef}
                 variant="embedded"
                 initialTab={settingsInitialTab}
+                hideNav={extensionsNavItem === 'knowledge'}
                 reserveTrafficLightSpace={sidebarCollapsed && usesNativeTitlebar}
                 onClose={handleSettingsClose}
                 onSettingsChange={handleSettingsChange}

@@ -137,6 +137,8 @@ export interface SettingsShellProps {
   reserveTrafficLightSpace?: boolean
   /** 打开设置面板时选中的侧栏项（如 Chat 内嵌设置默认 AI 客户端） */
   initialTab?: SettingsTab
+  /** embedded 单页模式：隐藏左侧设置导航，只显示 initialTab 对应页（如从插件点「知识库」进入） */
+  hideNav?: boolean
 }
 
 export interface SettingsShellHandle {
@@ -579,7 +581,7 @@ function textToArgs(text: string): string[] {
  * 设置面板主组件（standalone / embedded 双宿主）
  */
 export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>(function SettingsShell(
-  { variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false, initialTab },
+  { variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false, initialTab, hideNav = false },
   ref,
 ) {
   const [settings, setSettings] = useState<SettingsData | null>(null)
@@ -3770,6 +3772,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 onChangeDocProcessing={(dp) => updateSettings({ documentProcessing: dp })}
                 kbConfig={settings?.knowledgeBase}
                 onChangeKbConfig={(kb) => updateSettings({ knowledgeBase: kb })}
+                ragEnabled={chatTools.nativeTools?.knowledgeSearch !== false}
+                onToggleRag={(v) => updateNativeTools({ knowledgeSearch: v })}
               />
             )}
 
@@ -4633,10 +4637,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         }`}
         data-theme-color={themeColor}
       >
-        <aside className="settings-embedded-nav">
-          <h2 className="settings-embedded-nav-title">{t.settings}</h2>
-          {categoryNav}
-        </aside>
+        {!hideNav && (
+          <aside className="settings-embedded-nav">
+            <h2 className="settings-embedded-nav-title">{t.settings}</h2>
+            {categoryNav}
+          </aside>
+        )}
         {settingsMain}
         {settingsModals}
       </div>
