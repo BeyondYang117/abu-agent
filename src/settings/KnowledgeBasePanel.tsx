@@ -28,6 +28,11 @@ import {
 
 const UPLOAD_EXTS = ['txt', 'text', 'log', 'csv', 'tsv', 'md', 'markdown', 'mdown', 'mkd', 'pdf', 'docx', 'xlsx', 'html', 'htm', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tif', 'tiff', 'gif']
 
+// embedding 请求批次：默认值 + 滑块范围，与后端 ingest::DEFAULT_EMBED_BATCH 及 1..=128 夹取一致。
+const EMBED_BATCH_DEFAULT = 64
+const EMBED_BATCH_MIN = 1
+const EMBED_BATCH_MAX = 128
+
 // Embedding 模型选择器：从 provider 的 availableModels 取建议（含未启用的 embedding
 // 模型，如 bge-m3 / text-embedding-3-small），并允许自由输入——有些 provider 不在
 // /models 里列出 embedding 模型。刻意不复用 ModelPairSelect（那个只列 enabledModels）。
@@ -162,8 +167,9 @@ export function KnowledgeBasePanel({
   const [editProviderId, setEditProviderId] = useState('')
   const [editModel, setEditModel] = useState('')
 
-  // 每次 embedding 请求的片段数草稿（0 = 默认）；拖动即时反馈，松手/失焦持久化。
-  const [batchDraft, setBatchDraft] = useState(0)
+  // 每次 embedding 请求的片段数草稿；拖动即时反馈，松手/失焦持久化。
+  // 未设置的库（存 0）显示为默认值 64，滑块永远是真实数字（不设"默认"特殊档）。
+  const [batchDraft, setBatchDraft] = useState(EMBED_BATCH_DEFAULT)
 
   // 网址导入输入框
   const [urlInput, setUrlInput] = useState('')
@@ -207,7 +213,8 @@ export function KnowledgeBasePanel({
   useEffect(() => {
     setEditProviderId(selected?.embeddingProviderId ?? '')
     setEditModel(selected?.embeddingModel ?? '')
-    setBatchDraft(selected?.embedBatchSize ?? 0)
+    // 存 0（未设置）→ 显示默认 64；否则显示已存值。
+    setBatchDraft(selected?.embedBatchSize ? selected.embedBatchSize : EMBED_BATCH_DEFAULT)
   }, [selected?.id, selected?.embeddingProviderId, selected?.embeddingModel, selected?.embedBatchSize])
 
   // 持久化片段数（松手/失焦时调）：写库 + 刷新，避免拖动过程每一格都落盘。
@@ -705,13 +712,13 @@ export function KnowledgeBasePanel({
                       {t('请求文档片段数量', 'Fragments per request')}
                     </span>
                     <span className="rounded-md border border-zinc-200 bg-white px-2 py-0.5 font-mono text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                      {batchDraft === 0 ? t('默认', 'default') : batchDraft}
+                      {batchDraft}
                     </span>
                   </div>
                   <input
                     type="range"
-                    min={0}
-                    max={128}
+                    min={EMBED_BATCH_MIN}
+                    max={EMBED_BATCH_MAX}
                     step={1}
                     value={batchDraft}
                     onChange={(e) => setBatchDraft(Number(e.target.value))}
@@ -721,13 +728,13 @@ export function KnowledgeBasePanel({
                     style={{ accentColor: 'var(--accent)' }}
                   />
                   <div className="flex justify-between text-[11px] text-zinc-400">
-                    <span>{t('默认', 'default')}</span>
-                    <span>128</span>
+                    <span>{EMBED_BATCH_MIN}</span>
+                    <span>{EMBED_BATCH_MAX}</span>
                   </div>
                   <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
                     {t(
-                      `每次向量化请求打包多少个文档片段。默认 ${64}；若 embedding 服务报“批量过大/条数超限”可调小，只影响后续索引、无需重建。`,
-                      `How many chunks each embedding request packs. Default ${64}; lower it if the embedding service rejects large batches. Affects future indexing only — no rebuild.`,
+                      `每次向量化请求打包多少个文档片段（默认 ${EMBED_BATCH_DEFAULT}）。若 embedding 服务报“批量过大/条数超限”可调小，只影响后续索引、无需重建。`,
+                      `How many chunks each embedding request packs (default ${EMBED_BATCH_DEFAULT}). Lower it if the embedding service rejects large batches. Affects future indexing only — no rebuild.`,
                     )}
                   </p>
                 </div>
