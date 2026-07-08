@@ -3454,7 +3454,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                   <ChatDotGridBackground />
                   <div className="chat-empty-hero-stack chat-motion-fade-up relative z-10 w-full max-w-3xl space-y-8">
                     <h2
-                      className="chat-empty-hero-title text-center text-[1.75rem] leading-snug tracking-tight text-neutral-900 dark:text-neutral-50 sm:text-[2rem]"
+                      className="chat-empty-hero-title text-center text-[1.75rem] font-medium leading-snug tracking-[-0.02em] text-neutral-900 dark:text-neutral-50 sm:text-[2rem]"
                       aria-label={
                         currentAssistantSnapshot
                           ? currentAssistantSnapshot.name

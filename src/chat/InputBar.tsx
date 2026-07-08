@@ -1892,7 +1892,7 @@ export function InputBar({
                     ? `bg-[#e8a090] text-white shadow-sm hover:bg-[#df9585] active:scale-90${
                         cancelVisible && onCancel ? '' : ' chat-motion-soft-pulse'
                       }`
-                    : 'bg-neutral-200 text-neutral-400 dark:bg-neutral-700 dark:text-neutral-500'
+                    : 'border border-neutral-200 bg-transparent text-neutral-300 dark:border-neutral-700 dark:text-neutral-600'
                 }`}
               >
                 <ArrowUp size={18} strokeWidth={2.25} />

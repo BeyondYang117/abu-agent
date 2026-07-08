@@ -92,7 +92,7 @@ function buildDots(width: number, height: number): Dot[] {
         diag: (normX + normY) * 0.5,
         diagRev: (normX + (1 - normY)) * 0.5,
         ringDistance: Math.hypot(x - cx, y - cy) / maxR,
-        base: 0.08 + depth * 0.14,
+        base: 0.05 + depth * 0.035,
         phase: rhythm * Math.PI * 2,
         speed: 0.3 + depth * 0.5,
         fade: centerFade(x, y, width, height),
@@ -301,8 +301,8 @@ export function ChatDotGridBackground() {
         const band = reducedMotion
           ? 0
           : computePatternGlow(pattern.id, dot, localSec, pattern.durationSec)
-        const pulse = reducedMotion ? 0 : Math.sin(nowSec * dot.speed + dot.phase) * 0.012
-        const alpha = (dot.base * (0.48 + band * 0.52) + band * 0.34 + pulse) * dot.fade
+        const pulse = reducedMotion ? 0 : Math.sin(nowSec * dot.speed + dot.phase) * 0.006
+        const alpha = (dot.base * (0.8 + band * 0.2) + band * 0.14 + pulse) * dot.fade
         if (alpha <= 0.01) continue
 
         const bucketIndex = Math.max(1, Math.min(ALPHA_BUCKETS - 1, Math.round(alpha * (ALPHA_BUCKETS - 1))))
