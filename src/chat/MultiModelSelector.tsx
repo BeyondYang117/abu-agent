@@ -5,6 +5,7 @@ import { type ModelProvider } from '../api/tauri'
 import { getSettingsCached } from '../api/settingsCache'
 import { isProviderEnabled } from '../settings/utils'
 import { ModelIcon } from './ModelIcon'
+import { IconButton } from '../components/Button'
 import type { ModelRef } from './types'
 
 const MAX_REPLY_MODELS = 4
@@ -164,18 +165,17 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
 
   return (
     <div ref={triggerRef} className="relative flex min-w-0 items-center gap-1" data-tauri-drag-region="false">
-      <button
-        type="button"
+      <IconButton
+        size="sm"
+        shape="circle"
         onClick={() => setOpen((v) => !v)}
-        className={`grid size-7 shrink-0 place-items-center rounded-full transition-colors hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
-          enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-500 dark:text-neutral-400'
-        }`}
         aria-expanded={open}
         aria-haspopup="menu"
-        title="多模型一问多答 · 选择并行回答的模型（上限 4）"
+        label="多模型一问多答 · 选择并行回答的模型（上限 4）"
+        className={`shrink-0 ${enabled ? 'text-emerald-600 dark:text-emerald-400' : ''}`}
       >
         <Layers size={18} strokeWidth={1.75} className="shrink-0" />
-      </button>
+      </IconButton>
 
       {value.length > 0 && (
         <div className="group/stack flex items-center pl-0.5" data-tauri-drag-region="false">
