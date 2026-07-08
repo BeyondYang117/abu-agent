@@ -178,23 +178,26 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
       </button>
 
       {value.length > 0 && (
-        <div className="custom-scrollbar flex min-w-0 items-center gap-1 overflow-x-auto">
-          {value.map((ref) => (
-            <span
+        <div className="group/stack flex items-center pl-0.5" data-tauri-drag-region="false">
+          {value.map((ref, i) => (
+            <div
               key={`${ref.provider_id}:${ref.model}`}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-neutral-100 px-1.5 py-0.5 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              className="chat-model-stack-item group/avatar relative -ml-2 transition-[margin] duration-[var(--kv-dur-normal)] ease-[var(--kv-ease-standard)] first:ml-0 group-hover/stack:ml-1 group-hover/stack:first:ml-0"
+              style={{ zIndex: value.length - i }}
               title={`${ref.model} | ${providerName(ref.provider_id)}`}
             >
-              <ModelIcon model={ref.model} size={14} />
+              <span className="grid size-6 place-items-center rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-2 ring-[var(--theme-surface)] dark:bg-neutral-800 dark:ring-neutral-900">
+                <ModelIcon model={ref.model} size={14} />
+              </span>
               <button
                 type="button"
                 onClick={() => removeChip(ref)}
                 aria-label={`移除 ${ref.model}`}
-                className="shrink-0 rounded-full text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-100"
+                className="absolute -right-1 -top-1 z-10 grid size-3.5 scale-50 place-items-center rounded-full bg-neutral-600 text-white opacity-0 shadow-sm transition-all duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-spring)] hover:bg-neutral-800 group-hover/avatar:scale-100 group-hover/avatar:opacity-100 dark:bg-neutral-500 dark:hover:bg-neutral-300 dark:hover:text-neutral-900"
               >
-                <X size={11} strokeWidth={2.5} />
+                <X size={9} strokeWidth={3} />
               </button>
-            </span>
+            </div>
           ))}
         </div>
       )}

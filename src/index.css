@@ -864,6 +864,22 @@ body {
   animation: chat-motion-soft-pulse 1.8s ease-in-out infinite;
 }
 
+/* 多模型头像堆叠：新模型加入时从小弹入 */
+.chat-model-stack-item {
+  animation: chat-model-stack-in var(--kv-dur-normal) var(--kv-ease-spring) both;
+}
+
+@keyframes chat-model-stack-in {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .chat-motion-search-reveal {
   animation: chat-motion-search-reveal 180ms var(--kv-ease-standard) both;
 }
