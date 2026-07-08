@@ -41,8 +41,6 @@ pub struct MarketSkill {
 #[serde(rename_all = "camelCase")]
 pub struct MarketIndex {
     #[serde(default)]
-    pub version: u32,
-    #[serde(default)]
     pub skills: Vec<MarketSkill>,
 }
 
@@ -76,7 +74,7 @@ pub struct MarketFetchResult {
 }
 
 // ponytail: 单条 URL 的内存缓存就够（用户一次只看一个市场）；换 URL 直接失效重拉。
-type CacheCell = Mutex<Option<(String, Instant, Vec<MarketSkill>, u32)>>;
+type CacheCell = Mutex<Option<(String, Instant, Vec<MarketSkill>)>>;
 fn cache() -> &'static CacheCell {
     static CACHE: OnceLock<CacheCell> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -119,7 +117,7 @@ pub async fn chat_skills_market_fetch(app: AppHandle, index_url: String) -> Mark
 
     // 命中缓存直接返回（仍重新扫描本地已装状态，安装后无需等缓存过期就能刷新三态）。
     if let Ok(guard) = cache().lock() {
-        if let Some((cached_url, at, skills, _)) = guard.as_ref() {
+        if let Some((cached_url, at, skills)) = guard.as_ref() {
             if cached_url == &url && at.elapsed() < CACHE_TTL {
                 return MarketFetchResult {
                     success: true,
@@ -165,28 +163,125 @@ pub async fn chat_skills_market_fetch(app: AppHandle, index_url: String) -> Mark
             }
         }
     };
-    let index: MarketIndex = match serde_json::from_str(&text) {
-        Ok(i) => i,
+    let skills = match parse_market_response(&text, &url) {
+        Ok(s) => s,
         Err(err) => {
             return MarketFetchResult {
                 success: false,
                 skills: Vec::new(),
                 installed: scan_installed(&app),
-                error: Some(format!("索引 JSON 解析失败：{err}")),
+                error: Some(err),
             }
         }
     };
 
     if let Ok(mut guard) = cache().lock() {
-        *guard = Some((url, Instant::now(), index.skills.clone(), index.version));
+        *guard = Some((url, Instant::now(), skills.clone()));
     }
 
     MarketFetchResult {
         success: true,
-        skills: index.skills,
+        skills,
         installed: scan_installed(&app),
         error: None,
     }
+}
+
+/// 解析市场索引：先按通用 schema（{version, skills:[...]}）尝试；否则按 ClawHub
+/// （{items:[{slug, displayName, summary, topics, tags:{latest}, ...}]}）映射。
+fn parse_market_response(text: &str, index_url: &str) -> Result<Vec<MarketSkill>, String> {
+    // 通用 schema：有 skills 数组即采用。
+    if let Ok(index) = serde_json::from_str::<MarketIndex>(text) {
+        if !index.skills.is_empty() {
+            return Ok(index.skills);
+        }
+    }
+    // ClawHub：items[] → MarketSkill，下载地址用同源 /api/v1/download?slug=&tag=latest。
+    if let Ok(claw) = serde_json::from_str::<ClawHubList>(text) {
+        let origin = origin_of(index_url);
+        return Ok(claw
+            .items
+            .into_iter()
+            .map(|it| {
+                let version = it
+                    .tags
+                    .as_ref()
+                    .and_then(|t| t.latest.clone())
+                    .or_else(|| it.latest_version.as_ref().map(|v| v.version.clone()))
+                    .unwrap_or_default();
+                MarketSkill {
+                    download_url: format!("{origin}/api/v1/download?slug={}&tag=latest", it.slug),
+                    id: it.slug.clone(),
+                    name: if it.display_name.trim().is_empty() {
+                        it.slug
+                    } else {
+                        it.display_name
+                    },
+                    description: it.summary.unwrap_or_default(),
+                    author: it.owner.and_then(|o| o.handle),
+                    version,
+                    category: it.topics.first().cloned(),
+                    tags: it.topics,
+                    icon_url: None,
+                    preview_url: None,
+                    homepage: None,
+                }
+            })
+            .collect());
+    }
+    Err("无法识别的索引格式（既非通用 schema 也非 ClawHub）".to_string())
+}
+
+/// 从 URL 取 scheme://host（端口保留），用于合成同源下载地址。
+fn origin_of(url: &str) -> String {
+    if let Some(scheme_end) = url.find("://") {
+        let after = scheme_end + 3;
+        let host_end = url[after..].find('/').map(|i| after + i).unwrap_or(url.len());
+        return url[..host_end].to_string();
+    }
+    url.trim_end_matches('/').to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct ClawHubList {
+    #[serde(default)]
+    items: Vec<ClawHubItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawHubItem {
+    slug: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    topics: Vec<String>,
+    #[serde(default)]
+    tags: Option<ClawHubTags>,
+    #[serde(default)]
+    latest_version: Option<ClawHubVersion>,
+    #[serde(default)]
+    owner: Option<ClawHubOwner>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClawHubTags {
+    #[serde(default)]
+    latest: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClawHubVersion {
+    #[serde(default)]
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClawHubOwner {
+    #[serde(default)]
+    handle: Option<String>,
 }
 
 #[tauri::command]
@@ -255,5 +350,48 @@ pub async fn chat_skills_market_install(
         success: true,
         skill: Some(meta),
         error: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_clawhub_items_and_synthesizes_download_url() {
+        let json = r#"{"items":[
+            {"slug":"gifgrep","displayName":"GIF Grep","summary":"find gifs",
+             "topics":["media","search"],"tags":{"latest":"1.2.3"},
+             "latestVersion":{"version":"1.2.0"}}
+        ]}"#;
+        let skills = parse_market_response(json, "https://clawhub.ai/api/v1/skills").unwrap();
+        assert_eq!(skills.len(), 1);
+        let s = &skills[0];
+        assert_eq!(s.id, "gifgrep");
+        assert_eq!(s.name, "GIF Grep");
+        assert_eq!(s.version, "1.2.3"); // tags.latest 优先于 latestVersion
+        assert_eq!(s.category.as_deref(), Some("media"));
+        assert_eq!(
+            s.download_url,
+            "https://clawhub.ai/api/v1/download?slug=gifgrep&tag=latest"
+        );
+    }
+
+    #[test]
+    fn parses_generic_schema() {
+        let json = r#"{"version":1,"skills":[
+            {"id":"pdf","name":"PDF","description":"d","version":"1.0.0","tags":[],
+             "downloadUrl":"https://x/pdf.zip"}
+        ]}"#;
+        let skills = parse_market_response(json, "https://x/index.json").unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "pdf");
+        assert_eq!(skills[0].download_url, "https://x/pdf.zip");
+    }
+
+    #[test]
+    fn origin_of_strips_path() {
+        assert_eq!(origin_of("https://clawhub.ai/api/v1/skills"), "https://clawhub.ai");
+        assert_eq!(origin_of("http://localhost:8080/index.json"), "http://localhost:8080");
     }
 }
