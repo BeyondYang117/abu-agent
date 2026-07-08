@@ -650,6 +650,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [draftModel, setDraftModel] = useState('')
   // 欢迎页（尚无会话）时挂载的知识库草稿；首次发送建会话时落到会话上。
   const [draftKnowledgeBaseIds, setDraftKnowledgeBaseIds] = useState<string[]>([])
+  const [draftForceKnowledgeSearch, setDraftForceKnowledgeSearch] = useState(false)
   // 欢迎页思考等级草稿；首次发送建会话时落到会话上。null=跟随全局。
   const [draftThinkingLevel, setDraftThinkingLevel] = useState<ThinkingLevel | null>(null)
   // 多模型一问多答（任务 06-30）：欢迎页（尚无会话）时的多答模型草稿；首次发送建会话时落到会话上。
@@ -2198,6 +2199,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setDraftModel(activeModel)
     setDraftAgentRuntime(activeAgentRuntime)
     setDraftKnowledgeBaseIds([])
+    setDraftForceKnowledgeSearch(false)
     currentConversationIdRef.current = null
     forgetRememberedChatRoute()
     applyConversation(null)
@@ -2516,6 +2518,19 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           console.error('Failed to apply knowledge base draft before send:', err)
         }
       }
+      // 同步「强制检索」草稿到新会话。
+      const convForce =
+        conversation.force_knowledge_search ?? conversation.forceKnowledgeSearch ?? false
+      if (draftForceKnowledgeSearch && !convForce) {
+        try {
+          conversation = await chatApi.updateConversation(conversation.id, {
+            forceKnowledgeSearch: true,
+          })
+          applyConversation(conversation)
+        } catch (err) {
+          console.error('Failed to apply force-knowledge-search draft before send:', err)
+        }
+      }
     }
 
     // 同理：把欢迎页选好的思考等级草稿落到新会话上。
@@ -2696,6 +2711,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     currentConversation,
     draftAgentRuntime,
     draftKnowledgeBaseIds,
+    draftForceKnowledgeSearch,
     draftThinkingLevel,
     draftReplyModels,
     effectiveSkillId,
@@ -3183,6 +3199,22 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }
   }, [applyConversationMeta, currentConversation])
 
+  const handleToggleForceKnowledgeSearch = useCallback(async () => {
+    const next = !(currentConversation
+      ? (currentConversation.force_knowledge_search ?? currentConversation.forceKnowledgeSearch ?? false)
+      : draftForceKnowledgeSearch)
+    setDraftForceKnowledgeSearch(next)
+    if (!currentConversation) return
+    try {
+      const updatedConv = await chatApi.updateConversation(currentConversation.id, {
+        forceKnowledgeSearch: next,
+      })
+      applyConversationMeta(updatedConv)
+    } catch (err) {
+      console.error('Failed to update force knowledge search:', err)
+    }
+  }, [applyConversationMeta, currentConversation, draftForceKnowledgeSearch])
+
   const handleCancelStream = useCallback(async () => {
     const conversationId = currentConversationIdRef.current
     if (
@@ -3542,6 +3574,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                       conversationId={currentConversation?.id ?? null}
                       knowledgeBaseIds={currentConversation ? (currentConversation.knowledge_base_ids ?? currentConversation.knowledgeBaseIds ?? []) : draftKnowledgeBaseIds}
                       onChangeKnowledgeBaseIds={handleChangeKnowledgeBaseIds}
+                      forceKnowledgeSearch={currentConversation ? (currentConversation.force_knowledge_search ?? currentConversation.forceKnowledgeSearch ?? false) : draftForceKnowledgeSearch}
+                      onToggleForceKnowledgeSearch={handleToggleForceKnowledgeSearch}
                       mcpServers={mcpServers}
                       onToggleMcpServer={handleToggleMcpServer}
                       webSearchEnabled={webSearchEnabled}
@@ -3638,6 +3672,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                     conversationId={currentConversation?.id ?? null}
                     knowledgeBaseIds={currentConversation ? (currentConversation.knowledge_base_ids ?? currentConversation.knowledgeBaseIds ?? []) : draftKnowledgeBaseIds}
                     onChangeKnowledgeBaseIds={handleChangeKnowledgeBaseIds}
+                    forceKnowledgeSearch={currentConversation ? (currentConversation.force_knowledge_search ?? currentConversation.forceKnowledgeSearch ?? false) : draftForceKnowledgeSearch}
+                    onToggleForceKnowledgeSearch={handleToggleForceKnowledgeSearch}
                     mcpServers={mcpServers}
                     onToggleMcpServer={handleToggleMcpServer}
                     webSearchEnabled={webSearchEnabled}

@@ -425,6 +425,9 @@ pub struct Conversation {
     /// 本会话挂载的知识库 id 列表；`knowledge_search` 缺省检索这些库。
     #[serde(default)]
     pub knowledge_base_ids: Vec<String>,
+    /// 强制检索：开启后系统提示要求模型回答前必须先调用 `knowledge_search`。默认关。
+    #[serde(default)]
+    pub force_knowledge_search: bool,
     /// 每对话「思考等级」：`"off"|"low"|"medium"|"high"`，`None` = 跟随全局思考开关。
     #[serde(default)]
     pub thinking_level: Option<String>,

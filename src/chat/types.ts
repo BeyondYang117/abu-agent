@@ -473,6 +473,8 @@ export interface Conversation {
   agentRuntime?: AgentRuntimeConfig
   knowledge_base_ids?: string[]
   knowledgeBaseIds?: string[]
+  force_knowledge_search?: boolean
+  forceKnowledgeSearch?: boolean
   thinking_level?: ThinkingLevel | null
   thinkingLevel?: ThinkingLevel | null
   /** 多模型一问多答（D2）：会话级持久化的多答模型集合（上限 4）。空或单元素 = 单模型现状。 */

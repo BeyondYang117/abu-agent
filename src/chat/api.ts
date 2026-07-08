@@ -1221,6 +1221,7 @@ export const chatApi = {
       activeSkillId?: string | null
       assistantId?: string | null
       knowledgeBaseIds?: string[]
+      forceKnowledgeSearch?: boolean
       thinkingLevel?: ThinkingLevel | null
       replyModels?: ModelRef[]
     }
@@ -1244,6 +1245,7 @@ export const chatApi = {
         activeSkillId: updates.activeSkillId,
         assistantId: updates.assistantId,
         knowledgeBaseIds: updates.knowledgeBaseIds,
+        forceKnowledgeSearch: updates.forceKnowledgeSearch,
         // null/未知 → 空串，后端解析为 None（回到「跟随全局」）。
         thinkingLevel: hasThinkingUpdate ? updates.thinkingLevel ?? '' : undefined,
         // 多模型一问多答（任务 06-30）：持久化会话级多答模型集（决策 D2/D4）。

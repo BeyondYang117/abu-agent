@@ -1803,6 +1803,7 @@ mod tests {
             agent_todo_state: Default::default(),
             agent_plan_state: Default::default(),
             knowledge_base_ids: Vec::new(),
+            force_knowledge_search: false,
             thinking_level: None,
             reply_models: Vec::new(),
             group_selections: Default::default(),

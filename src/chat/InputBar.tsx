@@ -387,6 +387,9 @@ interface InputBarProps {
   /** 本会话挂载的知识库 id；缺省时 knowledge_search 检索全部库 */
   knowledgeBaseIds?: string[]
   onChangeKnowledgeBaseIds?: (ids: string[]) => void | Promise<void>
+  /** 强制检索：开启后要求模型每次回答前必先调 knowledge_search。 */
+  forceKnowledgeSearch?: boolean
+  onToggleForceKnowledgeSearch?: () => void | Promise<void>
   /** 已配置的 MCP 服务器；底栏「来源」弹层切换各服务器 enabled(是否加载) */
   mcpServers?: ChatMcpServer[]
   onToggleMcpServer?: (serverId: string) => void | Promise<void>
@@ -433,6 +436,8 @@ export function InputBar({
   conversationId = null,
   knowledgeBaseIds = [],
   onChangeKnowledgeBaseIds,
+  forceKnowledgeSearch = false,
+  onToggleForceKnowledgeSearch,
   mcpServers = [],
   onToggleMcpServer,
   webSearchEnabled = true,
@@ -1616,6 +1621,8 @@ export function InputBar({
               <SourcesButton
                 knowledgeBaseIds={knowledgeBaseIds}
                 onChangeKnowledgeBaseIds={onChangeKnowledgeBaseIds}
+                forceKnowledgeSearch={forceKnowledgeSearch}
+                onToggleForceKnowledgeSearch={onToggleForceKnowledgeSearch}
                 mcpServers={mcpServers}
                 onToggleMcpServer={onToggleMcpServer ?? (() => {})}
                 webSearchEnabled={webSearchEnabled}

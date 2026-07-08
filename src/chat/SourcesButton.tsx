@@ -3,7 +3,7 @@
 // 仿 Notion「信息源」：每项一个开关，底部「管理来源」跳设置。
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { SlidersHorizontal, Library, Globe } from 'lucide-react'
+import { SlidersHorizontal, Library, Globe, SearchCheck } from 'lucide-react'
 import { McpIcon } from '../settings/NavIcons'
 import { kbListLibraries, onKbIndex, type KnowledgeLibrary } from './knowledgeBase'
 import { IconButton } from '../components/Button'
@@ -55,6 +55,8 @@ function SourceRow({
 export function SourcesButton({
   knowledgeBaseIds,
   onChangeKnowledgeBaseIds,
+  forceKnowledgeSearch = false,
+  onToggleForceKnowledgeSearch,
   mcpServers,
   onToggleMcpServer,
   webSearchEnabled,
@@ -66,6 +68,8 @@ export function SourcesButton({
 }: {
   knowledgeBaseIds: string[]
   onChangeKnowledgeBaseIds: (ids: string[]) => void | Promise<void>
+  forceKnowledgeSearch?: boolean
+  onToggleForceKnowledgeSearch?: () => void | Promise<void>
   mcpServers: ChatMcpServer[]
   onToggleMcpServer: (serverId: string) => void | Promise<void>
   webSearchEnabled: boolean
@@ -164,6 +168,15 @@ export function SourcesButton({
                     onClick={() => toggleKb(lib.id)}
                   />
                 ))}
+                {onToggleForceKnowledgeSearch && (
+                  <SourceRow
+                    icon={<SearchCheck size={13} strokeWidth={1.75} />}
+                    label="强制检索"
+                    meta={mountedKbCount === 0 ? '需先挂载' : undefined}
+                    checked={forceKnowledgeSearch}
+                    onClick={() => void onToggleForceKnowledgeSearch()}
+                  />
+                )}
               </>
             )}
 

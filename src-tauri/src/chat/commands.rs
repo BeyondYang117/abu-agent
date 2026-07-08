@@ -461,6 +461,7 @@ pub(crate) fn create_chat_conversation_internal(
                 agent_todo_state: AgentTodoState::default(),
                 agent_plan_state: AgentPlanState::default(),
                 knowledge_base_ids: Vec::new(),
+                force_knowledge_search: false,
                 thinking_level: None,
                 reply_models: Vec::new(),
                 group_selections: std::collections::HashMap::new(),
@@ -799,6 +800,7 @@ pub(crate) fn chat_create_builder_conversation(
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
         knowledge_base_ids: Vec::new(),
+        force_knowledge_search: false,
         thinking_level: None,
         reply_models: Vec::new(),
         group_selections: std::collections::HashMap::new(),
@@ -4206,6 +4208,7 @@ async fn compute_context_state(
         app,
         &conversation.knowledge_base_ids,
         &language,
+        conversation.force_knowledge_search,
     );
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
         .then_some(settings.obsidian_vault_path.as_str());
@@ -6358,6 +6361,7 @@ pub(crate) fn chat_fork_conversation(
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
         knowledge_base_ids: source.knowledge_base_ids.clone(),
+        force_knowledge_search: source.force_knowledge_search,
         thinking_level: source.thinking_level.clone(),
         reply_models: source.reply_models.clone(),
         group_selections,
@@ -6477,6 +6481,7 @@ pub(crate) fn chat_update_conversation(
     active_skill_id: Option<String>,
     assistant_id: Option<String>,
     knowledge_base_ids: Option<Vec<String>>,
+    force_knowledge_search: Option<bool>,
     thinking_level: Option<String>,
     reply_models: Option<Vec<crate::chat::ModelRef>>,
 ) -> Result<serde_json::Value, String> {
@@ -6560,6 +6565,9 @@ pub(crate) fn chat_update_conversation(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty() && seen.insert(s.clone()))
             .collect();
+    }
+    if let Some(force) = force_knowledge_search {
+        conversation.force_knowledge_search = force;
     }
     if let Some(level) = thinking_level {
         // 仅接受已知值；空串/未知 → 清除（回到「跟随全局」）。
@@ -7738,6 +7746,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+            force_knowledge_search: false,
             thinking_level: None,
             reply_models: Vec::new(),
             group_selections: std::collections::HashMap::new(),
@@ -8093,6 +8102,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+            force_knowledge_search: false,
         thinking_level: None,
             reply_models: Vec::new(),
             group_selections: std::collections::HashMap::new(),
@@ -8284,6 +8294,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+            force_knowledge_search: false,
             thinking_level: None,
             reply_models: Vec::new(),
             group_selections: std::collections::HashMap::new(),
@@ -8410,6 +8421,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+            force_knowledge_search: false,
         thinking_level: None,
             reply_models: Vec::new(),
             group_selections: std::collections::HashMap::new(),
@@ -8504,6 +8516,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: Vec::new(),
+            force_knowledge_search: false,
             thinking_level: None,
             reply_models: Vec::new(),
             group_selections: std::collections::HashMap::new(),
