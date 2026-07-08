@@ -2017,7 +2017,11 @@ pub(crate) async fn lens_replace_translate(
     let final_payload: Vec<ReplaceTranslateLinePayload> = ocr_lines
         .iter()
         .zip(translations.iter())
-        .map(|(line, tr)| ReplaceTranslateLinePayload::from_ocr(line, tr))
+        .map(|(line, tr)| {
+            // 补齐产生的空串（模型少吐一段）回退为原文，避免覆盖成空白。
+            let text = if tr.trim().is_empty() { line.text.as_str() } else { tr.as_str() };
+            ReplaceTranslateLinePayload::from_ocr(line, text)
+        })
         .collect();
     emit_replace_stream(&app, &image_id, "done", &final_payload, None);
 

@@ -206,6 +206,8 @@ pub fn build_replace_translation_batch_prompt(lines: &[&str], lang_name: &str) -
 }
 
 /// 从模型输出解析 JSON 字符串数组；容忍前后缀与 markdown 代码块。
+/// 模型偶尔多吐/少吐一段（尾部空元素、把某行拆成两段等），不再硬报错：
+/// 多的截断、少的用空串补齐到 `expected_len`，让调用方按行对齐。宁可个别行漏译，也不整体失败。
 pub fn parse_replace_translation_json(raw: &str, expected_len: usize) -> Result<Vec<String>, String> {
     let trimmed = raw.trim();
     let json_str = if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']')) {
@@ -213,13 +215,15 @@ pub fn parse_replace_translation_json(raw: &str, expected_len: usize) -> Result<
     } else {
         trimmed
     };
-    let values: Vec<String> = serde_json::from_str(json_str)
+    let mut values: Vec<String> = serde_json::from_str(json_str)
         .map_err(|e| format!("Invalid translation JSON array: {e}"))?;
-    if values.len() != expected_len {
-        return Err(format!(
-            "Translation array length mismatch: expected {expected_len}, got {}",
-            values.len()
-        ));
+    // 归一化到期望长度：多截、少补。
+    if values.len() > expected_len {
+        values.truncate(expected_len);
+    } else {
+        while values.len() < expected_len {
+            values.push(String::new());
+        }
     }
     Ok(values)
 }
@@ -308,5 +312,21 @@ mod tests {
         let raw = "```json\n[\"你好\", \"世界\"]\n```";
         let out = parse_replace_translation_json(raw, 2).unwrap();
         assert_eq!(out, vec!["你好".to_string(), "世界".to_string()]);
+    }
+
+    #[test]
+    fn parse_replace_translation_json_truncates_extra() {
+        // 模型多吐一段：截断到期望长度，不再报错
+        let raw = "[\"a\", \"b\", \"c\"]";
+        let out = parse_replace_translation_json(raw, 2).unwrap();
+        assert_eq!(out, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn parse_replace_translation_json_pads_missing() {
+        // 模型少吐一段：用空串补齐到期望长度
+        let raw = "[\"a\"]";
+        let out = parse_replace_translation_json(raw, 3).unwrap();
+        assert_eq!(out, vec!["a".to_string(), String::new(), String::new()]);
     }
 }
