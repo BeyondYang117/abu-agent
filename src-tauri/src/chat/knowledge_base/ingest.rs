@@ -16,6 +16,9 @@ use super::{
     KnowledgeDocument,
 };
 
+/// Default embedding-request batch size when a library doesn't override it.
+pub const DEFAULT_EMBED_BATCH: usize = 64;
+
 /// Lowercase hex SHA256 of `bytes` — content hash used for upload/import dedup.
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -135,9 +138,15 @@ async fn index_one(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<usize, 
 
     let texts: Vec<String> = pieces.iter().map(|p| p.text.clone()).collect();
 
-    const BATCH: usize = 64;
+    // 每次 embedding 请求打包多少片段。每库可调（lib.embed_batch_size），0 = 用默认。
+    // 上限夹到 128：过大易撞 provider 单请求条数/token 上限。
+    let batch = if lib.embed_batch_size == 0 {
+        DEFAULT_EMBED_BATCH
+    } else {
+        lib.embed_batch_size.clamp(1, 128)
+    };
     let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
-    for batch in texts.chunks(BATCH) {
+    for batch in texts.chunks(batch) {
         let mut got =
             embeddings::embed_batch(state, &provider, &lib.embedding_model, batch, attempts).await?;
         vectors.append(&mut got);
@@ -451,6 +460,26 @@ pub(crate) async fn kb_update_embedding(
     super::save_libraries(&app, &libs)?;
 
     kb_reindex_library(app, kb_id).await
+}
+
+/// Set a library's embedding-request batch size (0 = use the built-in default).
+/// Only affects future indexing requests — no reindex, existing vectors untouched.
+#[tauri::command]
+pub(crate) async fn kb_set_embed_batch_size(
+    app: AppHandle,
+    kb_id: String,
+    size: usize,
+) -> Result<(), String> {
+    let mut libs = super::load_libraries(&app)?;
+    let lib = libs
+        .iter_mut()
+        .find(|l| l.id == kb_id)
+        .ok_or_else(|| format!("Knowledge base not found: {kb_id}"))?;
+    // 0 = default; otherwise clamp to the same 1..=128 the ingest path enforces.
+    lib.embed_batch_size = if size == 0 { 0 } else { size.clamp(1, 128) };
+    lib.updated_at = chrono::Local::now().timestamp();
+    super::save_libraries(&app, &libs)?;
+    Ok(())
 }
 
 #[cfg(test)]

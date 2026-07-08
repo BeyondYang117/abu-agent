@@ -14,6 +14,8 @@ export interface KnowledgeLibrary {
   updatedAt: number
   docCount: number
   chunkCount: number
+  /** 每次 embedding 请求打包的片段数；0/缺省 = 用内置默认（64）。 */
+  embedBatchSize?: number
 }
 
 export type DocStatus = 'indexing' | 'ready' | 'error'
@@ -90,6 +92,11 @@ export async function kbUpdateEmbedding(
   model: string
 ): Promise<void> {
   await invoke('kb_update_embedding', { kbId, providerId, model })
+}
+
+/** 设置某库每次 embedding 请求的片段数（0 = 用默认）。只影响后续索引，不重建。 */
+export async function kbSetEmbedBatchSize(kbId: string, size: number): Promise<void> {
+  await invoke('kb_set_embed_batch_size', { kbId, size })
 }
 
 export async function onKbIndex(handler: (ev: KbIndexEvent) => void): Promise<UnlistenFn> {

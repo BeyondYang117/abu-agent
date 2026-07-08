@@ -56,6 +56,10 @@ pub struct KnowledgeLibrary {
     pub doc_count: usize,
     #[serde(default)]
     pub chunk_count: usize,
+    /// 每次 embedding 请求打包的片段数。0 = 用内置默认（`ingest::DEFAULT_EMBED_BATCH`）。
+    /// 只影响后续索引的请求分批，不改变已存向量，改它无需重建。
+    #[serde(default)]
+    pub embed_batch_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,6 +239,7 @@ fn create_library_at(
         updated_at: now,
         doc_count: 0,
         chunk_count: 0,
+        embed_batch_size: 0,
     };
     let mut libs = load_libraries_at(root)?;
     libs.push(lib.clone());

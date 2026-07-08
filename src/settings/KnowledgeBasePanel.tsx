@@ -2,8 +2,9 @@
 // 文档列表 + 实时索引进度 / 删除 / 换 embedding 重建。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload, FileSearch, Library, Pencil, Link2 } from 'lucide-react'
-import { type ModelProvider, type DocumentProcessingConfig, type KnowledgeBaseConfig } from '../api/tauri'
+import { type ModelProvider, type DocumentProcessingConfig, type KnowledgeBaseConfig, isTauriRuntime } from '../api/tauri'
 import { type Lang } from './i18n'
 import { SettingsGroup, Input, Select } from './components'
 import { resolveModelInfo } from '../data/modelMatching'
@@ -19,6 +20,7 @@ import {
   kbImportUrl,
   kbReindexLibrary,
   kbUpdateEmbedding,
+  kbSetEmbedBatchSize,
   onKbIndex,
   type KnowledgeLibrary,
   type KnowledgeDocument,
@@ -140,7 +142,7 @@ export function KnowledgeBasePanel({
   ragEnabled: boolean
   onToggleRag: (v: boolean) => void
 }) {
-  const t = (zh: string, en: string) => (lang === 'zh' ? zh : en)
+  const t = useCallback((zh: string, en: string) => (lang === 'zh' ? zh : en), [lang])
 
   const [libraries, setLibraries] = useState<KnowledgeLibrary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -160,10 +162,17 @@ export function KnowledgeBasePanel({
   const [editProviderId, setEditProviderId] = useState('')
   const [editModel, setEditModel] = useState('')
 
+  // 每次 embedding 请求的片段数草稿（0 = 默认）；拖动即时反馈，松手/失焦持久化。
+  const [batchDraft, setBatchDraft] = useState(0)
+
   // 网址导入输入框
   const [urlInput, setUrlInput] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+
+  // 拖拽导入：hover 高亮 + 文档区命中矩形（只在拖到文档区时才接收）
+  const [dragActive, setDragActive] = useState(false)
+  const dropZoneRef = useRef<HTMLDivElement>(null)
 
   const selected = libraries.find((l) => l.id === selectedId) ?? null
 
@@ -198,7 +207,21 @@ export function KnowledgeBasePanel({
   useEffect(() => {
     setEditProviderId(selected?.embeddingProviderId ?? '')
     setEditModel(selected?.embeddingModel ?? '')
-  }, [selected?.id, selected?.embeddingProviderId, selected?.embeddingModel])
+    setBatchDraft(selected?.embedBatchSize ?? 0)
+  }, [selected?.id, selected?.embeddingProviderId, selected?.embeddingModel, selected?.embedBatchSize])
+
+  // 持久化片段数（松手/失焦时调）：写库 + 刷新，避免拖动过程每一格都落盘。
+  const commitBatchSize = useCallback(
+    async (kbId: string, size: number) => {
+      try {
+        await kbSetEmbedBatchSize(kbId, size)
+        await refreshLibraries()
+      } catch (e) {
+        setError(String(e))
+      }
+    },
+    [refreshLibraries],
+  )
 
   // 实时索引进度：更新进度条；终态时刷新文档+库计数。
   const selectedRef = useRef<string | null>(null)
@@ -244,6 +267,32 @@ export function KnowledgeBasePanel({
     }
   }
 
+  // 导入一批文件路径：每个独立 try,一个失败不拖累其余,最后统一报告。
+  // 选文件按钮与拖拽共用此逻辑。
+  const uploadPaths = useCallback(
+    async (kbId: string, paths: string[]) => {
+      if (paths.length === 0) return
+      setBusy(true)
+      setError(null)
+      const failures: string[] = []
+      for (const path of paths) {
+        try {
+          await kbUploadDocument(kbId, path)
+        } catch (e) {
+          const name = path.split(/[\\/]/).pop() || path
+          failures.push(`${name}: ${e}`)
+        }
+      }
+      await refreshDocs(kbId).catch(() => {})
+      await refreshLibraries()
+      setBusy(false)
+      if (failures.length > 0) {
+        setError(t(`${failures.length} 个文件导入失败：`, `${failures.length} file(s) failed: `) + failures.join('; '))
+      }
+    },
+    [refreshDocs, refreshLibraries, t],
+  )
+
   const handleUpload = async () => {
     if (!selectedId) return
     let picked: string | string[] | null
@@ -258,26 +307,67 @@ export function KnowledgeBasePanel({
     }
     if (!picked) return
     const paths = Array.isArray(picked) ? picked : [picked]
-    setBusy(true)
-    setError(null)
-    // Try every file independently so one failure doesn't silently drop the
-    // rest; report which ones failed and always refresh to reflect successes.
-    const failures: string[] = []
-    for (const path of paths) {
-      try {
-        await kbUploadDocument(selectedId, path)
-      } catch (e) {
-        const name = path.split(/[\\/]/).pop() || path
-        failures.push(`${name}: ${e}`)
-      }
-    }
-    await refreshDocs(selectedId).catch(() => {})
-    await refreshLibraries()
-    setBusy(false)
-    if (failures.length > 0) {
-      setError(t(`${failures.length} 个文件导入失败：`, `${failures.length} file(s) failed: `) + failures.join('; '))
-    }
+    await uploadPaths(selectedId, paths)
   }
+
+  // 拖拽导入：Tauri 的 drag-drop 事件才带真实文件系统路径（HTML5 File 拿不到），
+  // 但事件是窗口级的——用文档区矩形命中测试,只在拖到该区且选中了库时才高亮/接收,
+  // 避免在其它设置页误触发。position 是物理像素,除以 DPR 换成 CSS 像素再比。
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+
+    const inDropZone = (pos?: { x: number; y: number }) => {
+      const el = dropZoneRef.current
+      if (!el || !pos) return false
+      const r = el.getBoundingClientRect()
+      const dpr = window.devicePixelRatio || 1
+      const x = pos.x / dpr
+      const y = pos.y / dpr
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+    }
+
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (cancelled) return
+        const p = event.payload
+        if (p.type === 'enter' || p.type === 'over') {
+          setDragActive(inDropZone(p.position))
+          return
+        }
+        if (p.type === 'leave') {
+          setDragActive(false)
+          return
+        }
+        if (p.type === 'drop') {
+          const accept = inDropZone(p.position)
+          setDragActive(false)
+          const kbId = selectedRef.current
+          if (!accept || !kbId) return
+          const paths = p.paths.filter((path) => {
+            const ext = path.split('.').pop()?.toLowerCase() ?? ''
+            return UPLOAD_EXTS.includes(ext)
+          })
+          if (paths.length === 0) {
+            setError(t('拖入的文件类型不受支持', 'Dropped file type is not supported'))
+            return
+          }
+          void uploadPaths(kbId, paths)
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+      .catch((err) => console.error('KB drag-drop listen failed:', err))
+
+    return () => {
+      cancelled = true
+      setDragActive(false)
+      unlisten?.()
+    }
+  }, [uploadPaths, t])
 
   const handleImportUrl = async () => {
     if (!selectedId) return
@@ -608,11 +698,56 @@ export function KnowledgeBasePanel({
                     {t('应用并重建索引', 'Apply & rebuild index')}
                   </button>
                 )}
+
+                <div className="border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-zinc-700 dark:text-zinc-200">
+                      {t('请求文档片段数量', 'Fragments per request')}
+                    </span>
+                    <span className="rounded-md border border-zinc-200 bg-white px-2 py-0.5 font-mono text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                      {batchDraft === 0 ? t('默认', 'default') : batchDraft}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={128}
+                    step={1}
+                    value={batchDraft}
+                    onChange={(e) => setBatchDraft(Number(e.target.value))}
+                    onPointerUp={() => void commitBatchSize(selected.id, batchDraft)}
+                    onBlur={() => void commitBatchSize(selected.id, batchDraft)}
+                    className="mt-2 w-full"
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  <div className="flex justify-between text-[11px] text-zinc-400">
+                    <span>{t('默认', 'default')}</span>
+                    <span>128</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                    {t(
+                      `每次向量化请求打包多少个文档片段。默认 ${64}；若 embedding 服务报“批量过大/条数超限”可调小，只影响后续索引、无需重建。`,
+                      `How many chunks each embedding request packs. Default ${64}; lower it if the embedding service rejects large batches. Affects future indexing only — no rebuild.`,
+                    )}
+                  </p>
+                </div>
               </div>
             </SettingsGroup>
 
             <SettingsGroup title={t('文档', 'Documents')}>
-              <div className="space-y-3 py-2">
+              <div
+                ref={dropZoneRef}
+                className={`relative space-y-3 rounded-lg py-2 transition ${
+                  dragActive
+                    ? 'ring-2 ring-indigo-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900'
+                    : ''
+                }`}
+              >
+                {dragActive && (
+                  <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-indigo-50/80 text-sm font-medium text-indigo-600 dark:bg-indigo-950/70 dark:text-indigo-300">
+                    <Upload size={16} className="mr-1.5" /> {t('松开以导入', 'Drop to import')}
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
@@ -666,8 +801,8 @@ export function KnowledgeBasePanel({
                     </span>
                     <span className="max-w-md text-xs leading-relaxed text-zinc-400">
                       {t(
-                        '支持 txt / md / pdf / docx / xlsx / html、图片（需开启 OCR），或使用上方网址导入',
-                        'txt, md, pdf, docx, xlsx, html, images (OCR required), or import a URL above',
+                        '点击或拖拽文件到此处；支持 txt / md / pdf / docx / xlsx / html、图片（需开启 OCR），或使用上方网址导入',
+                        'Click or drag files here; txt, md, pdf, docx, xlsx, html, images (OCR required), or import a URL above',
                       )}
                     </span>
                   </button>
@@ -705,38 +840,55 @@ function DocRow({
   onDelete: () => void
 }) {
   const t = (zh: string, en: string) => (lang === 'zh' ? zh : en)
+  const indexing = doc.status === 'indexing'
+  // 有 total 才是「向量化」阶段（可确定进度）；total 未知＝还在解析/OCR（不确定进度）。
+  const determinate = indexing && !!progress && progress.total > 0
+  const pct = determinate ? Math.round((progress!.indexed / progress!.total) * 100) : 0
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-sm">
-      <FileText size={14} className="shrink-0 text-zinc-400" />
-      <span className="flex-1 truncate" title={doc.name}>
-        {doc.name}
-      </span>
-      {doc.status === 'indexing' && (
-        <span className="flex items-center gap-1 text-xs text-indigo-500">
-          <Loader2 size={12} className="animate-spin" />
-          {progress && progress.total > 0
-            ? `${progress.indexed}/${progress.total}`
-            : t('索引中', 'indexing')}
+    <div className="px-3 py-2 text-sm">
+      <div className="flex items-center gap-2">
+        <FileText size={14} className="shrink-0 text-zinc-400" />
+        <span className="flex-1 truncate" title={doc.name}>
+          {doc.name}
         </span>
+        {indexing && (
+          <span className="flex items-center gap-1 text-xs text-indigo-500">
+            <Loader2 size={12} className="animate-spin" />
+            {determinate ? `${progress!.indexed}/${progress!.total}` : t('处理中', 'processing')}
+          </span>
+        )}
+        {doc.status === 'ready' && (
+          <span className="flex items-center gap-1 text-xs text-emerald-500">
+            <CheckCircle2 size={12} /> {t(`${doc.chunkCount} 块`, `${doc.chunkCount}`)}
+          </span>
+        )}
+        {doc.status === 'error' && (
+          <span className="flex items-center gap-1 text-xs text-red-500" title={doc.error ?? ''}>
+            <AlertCircle size={12} /> {t('失败', 'error')}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onDelete}
+          className="shrink-0 rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800"
+          title={t('删除文档', 'Delete document')}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+      {indexing && (
+        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+          {determinate ? (
+            <div
+              className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          ) : (
+            // 解析/OCR 阶段无逐步进度：用脉动条表示「进行中但无确定百分比」。
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-indigo-400/70" />
+          )}
+        </div>
       )}
-      {doc.status === 'ready' && (
-        <span className="flex items-center gap-1 text-xs text-emerald-500">
-          <CheckCircle2 size={12} /> {t(`${doc.chunkCount} 块`, `${doc.chunkCount}`)}
-        </span>
-      )}
-      {doc.status === 'error' && (
-        <span className="flex items-center gap-1 text-xs text-red-500" title={doc.error ?? ''}>
-          <AlertCircle size={12} /> {t('失败', 'error')}
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={onDelete}
-        className="shrink-0 rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-red-500 dark:hover:bg-zinc-800"
-        title={t('删除文档', 'Delete document')}
-      >
-        <Trash2 size={13} />
-      </button>
     </div>
   )
 }

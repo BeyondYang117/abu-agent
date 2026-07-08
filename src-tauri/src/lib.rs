@@ -513,6 +513,7 @@ pub fn run() {
             chat::knowledge_base::ingest::kb_import_url,
             chat::knowledge_base::ingest::kb_reindex_library,
             chat::knowledge_base::ingest::kb_update_embedding,
+            chat::knowledge_base::ingest::kb_set_embed_batch_size,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
