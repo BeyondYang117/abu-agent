@@ -28,7 +28,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
-import { KnowledgeBaseChip } from './KnowledgeBaseChip'
+import { SourcesButton } from './SourcesButton'
 import { MultiModelSelector } from './MultiModelSelector'
 import { Button, IconButton } from '../components/Button'
 import { api, type ChatToolDefinition, type ChatMcpServer } from '../api/tauri'
@@ -93,27 +93,6 @@ function isExternalMcpTool(tool: ChatToolDefinition): boolean {
 
 // MCP 官方标志（Model Context Protocol，路径取自官方 logo，viewBox 180）。
 // 描边用 currentColor 跟随主题，粗细换算到与 lucide 18px 图标视重一致。
-function McpIcon({ size = 18, className }: { size?: number; className?: string }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="-14 -26 210 210"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={15}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M18 84.8528L85.8822 16.9706C95.2548 7.59798 110.451 7.59798 119.823 16.9706V16.9706C129.196 26.3431 129.196 41.5391 119.823 50.9117L68.5581 102.177" />
-      <path d="M69.2652 101.47L119.823 50.9117C129.196 41.5391 144.392 41.5391 153.765 50.9117L154.118 51.2652C163.491 60.6378 163.491 75.8338 154.118 85.2063L92.7248 146.6C89.6006 149.724 89.6006 154.789 92.7248 157.913L105.331 170.52" />
-      <path d="M102.853 33.9411L52.6482 84.1457C43.2756 93.5183 43.2756 108.714 52.6482 118.087V118.087C62.0208 127.459 77.2167 127.459 86.5893 118.087L136.794 67.8822" />
-    </svg>
-  )
-}
-
 function projectPathLabel(project: ChatProject): string {
   const rootPath = project.root_path ?? project.rootPath ?? ''
   if (!rootPath) return ''
@@ -409,9 +388,12 @@ interface InputBarProps {
   /** 本会话挂载的知识库 id；缺省时 knowledge_search 检索全部库 */
   knowledgeBaseIds?: string[]
   onChangeKnowledgeBaseIds?: (ids: string[]) => void | Promise<void>
-  /** 已配置的 MCP 服务器；底栏 MCP 按钮切换各服务器 enabled(是否加载) */
+  /** 已配置的 MCP 服务器；底栏「来源」弹层切换各服务器 enabled(是否加载) */
   mcpServers?: ChatMcpServer[]
   onToggleMcpServer?: (serverId: string) => void | Promise<void>
+  /** 网络搜索全局开关（nativeTools.webSearch）；在「来源」弹层内切换 */
+  webSearchEnabled?: boolean
+  onToggleWebSearch?: () => void | Promise<void>
   /** 多答模型集（会话级 reply_models / replyModels；0/1 个=单模型，≥2=一问多答） */
   replyModels?: ModelRef[]
   onChangeReplyModels?: (models: ModelRef[]) => void | Promise<void>
@@ -454,6 +436,8 @@ export function InputBar({
   onChangeKnowledgeBaseIds,
   mcpServers = [],
   onToggleMcpServer,
+  webSearchEnabled = true,
+  onToggleWebSearch,
   replyModels = [],
   onChangeReplyModels,
   contextSlot,
@@ -465,7 +449,6 @@ export function InputBar({
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
-  const [mcpMenuOpen, setMcpMenuOpen] = useState(false)
   const [projectOptions, setProjectOptions] = useState<ChatProject[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [projectOptionsError, setProjectOptionsError] = useState('')
@@ -500,18 +483,6 @@ export function InputBar({
     setProjectMenuOpen(false)
     setProjectCreateMenuOpen(false)
   }, [])
-
-  const mcpEntryEnabled = Boolean(onToggleMcpServer) && mcpServers.length > 0
-  const closeMcpMenu = useCallback(() => setMcpMenuOpen(false), [])
-  const toggleMcpMenu = useCallback(() => {
-    if (!mcpEntryEnabled || disabled) return
-    setSlashPanelOpen(false)
-    setToolPanelOpen(false)
-    setModeMenuOpen(false)
-    setProjectMenuOpen(false)
-    setProjectCreateMenuOpen(false)
-    setMcpMenuOpen((open) => !open)
-  }, [disabled, mcpEntryEnabled])
 
   const closeModeMenu = useCallback(() => {
     setModeMenuOpen(false)
@@ -553,7 +524,6 @@ export function InputBar({
     setSlashPanelOpen(false)
     setToolPanelOpen(false)
     setModeMenuOpen(false)
-    setMcpMenuOpen(false)
     setProjectMenuOpen((open) => {
       const nextOpen = !open
       setProjectCreateMenuOpen(false)
@@ -820,7 +790,6 @@ export function InputBar({
     if (disabled || !onAgentPlanModeChange) return
     setSlashPanelOpen(false)
     setToolPanelOpen(false)
-    setMcpMenuOpen(false)
     closeProjectMenu()
     setModeMenuOpen((open) => !open)
   }, [closeProjectMenu, disabled, onAgentPlanModeChange])
@@ -1452,58 +1421,6 @@ export function InputBar({
             </div>
           </div>
         )}
-        {mcpMenuOpen && mcpEntryEnabled && (
-          <>
-            <div className="fixed inset-0 z-30" onClick={closeMcpMenu} aria-hidden />
-            <div
-              className={`chat-motion-popover chat-popover-scroll absolute inset-x-0 z-40 max-h-[40vh] overflow-y-auto rounded-xl border border-[var(--theme-surface-border)] bg-[var(--theme-surface)] p-1 shadow-[0_10px_24px_rgba(0,0,0,0.12)] dark:border-neutral-700 dark:bg-neutral-900 ${projectPanelPlacementClass}`}
-              style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
-              data-tauri-drag-region="false"
-              role="menu"
-            >
-              <div className="flex items-center justify-between gap-2 px-2 py-1">
-                <span className="text-[10.5px] text-neutral-400">勾选要加载的 MCP 服务器</span>
-                {onOpenSettings && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      closeMcpMenu()
-                      onOpenSettings()
-                    }}
-                  >
-                    管理
-                  </Button>
-                )}
-              </div>
-              {mcpServers.map((server) => {
-                const checked = server.enabled
-                return (
-                  <button
-                    key={server.id}
-                    type="button"
-                    onClick={() => void onToggleMcpServer?.(server.id)}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-neutral-700 hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                  >
-                    <span
-                      className={`grid size-4 shrink-0 place-items-center rounded border ${
-                        checked
-                          ? 'border-indigo-500 bg-indigo-500 text-white'
-                          : 'border-neutral-300 dark:border-neutral-600'
-                      }`}
-                    >
-                      {checked && <Check size={11} strokeWidth={3} />}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{server.name}</span>
-                    <span className="shrink-0 text-[10.5px] text-neutral-400">
-                      {server.transport === 'stdio' ? 'stdio' : 'http'}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </>
-        )}
         {projectMenuOpen && projectEntryEnabled && (
           <>
             <div
@@ -1696,30 +1613,19 @@ export function InputBar({
               <Plus size={18} strokeWidth={1.75} />
             </IconButton>
 
-            {onChangeKnowledgeBaseIds && (
-              <KnowledgeBaseChip
-                value={knowledgeBaseIds}
-                onChange={(ids) => void onChangeKnowledgeBaseIds(ids)}
+            {onChangeKnowledgeBaseIds && onToggleWebSearch && (
+              <SourcesButton
+                knowledgeBaseIds={knowledgeBaseIds}
+                onChangeKnowledgeBaseIds={onChangeKnowledgeBaseIds}
+                mcpServers={mcpServers}
+                onToggleMcpServer={onToggleMcpServer ?? (() => {})}
+                webSearchEnabled={webSearchEnabled}
+                onToggleWebSearch={onToggleWebSearch}
+                onOpenSettings={onOpenSettings}
                 disabled={disabled}
                 layout={layout}
                 anchorRef={innerRef}
               />
-            )}
-            {mcpEntryEnabled && (
-              <IconButton
-                size="sm"
-                shape="circle"
-                label="选择加载的 MCP"
-                onClick={toggleMcpMenu}
-                disabled={disabled}
-                aria-expanded={mcpMenuOpen}
-                aria-haspopup="menu"
-                className={`shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
-                  mcpMenuOpen ? 'bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-100' : ''
-                }`}
-              >
-                <McpIcon size={18} />
-              </IconButton>
             )}
             {projectEntryEnabled && (
               <IconButton

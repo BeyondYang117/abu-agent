@@ -664,6 +664,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [extensionsNavItem, setExtensionsNavItem] = useState<ExtensionsNavItem | null>(null)
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [mcpServers, setMcpServers] = useState<ChatMcpServer[]>([])
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true)
   const [enabledToolCount, setEnabledToolCount] = useState<number | null>(null)
   const [toolsDisabledReason, setToolsDisabledReason] = useState('')
   const [toolsRequested, setToolsRequested] = useState(false)
@@ -1045,6 +1046,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       const settings = await getSettingsCached()
       const chatTools = settings.chatTools
       setMcpServers(chatTools?.servers ?? [])
+      setWebSearchEnabled(chatTools?.nativeTools?.webSearch !== false)
       setApprovalPolicy(chatTools?.approvalPolicy || 'readonly_auto_sensitive_confirm')
       const nextDisabledSkillIds = chatTools?.disabledSkillIds ?? []
       setDisabledSkillIds((prev) =>
@@ -1125,6 +1127,27 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       await refreshToolIndicator()
     } catch (err) {
       console.error('Failed to toggle MCP server:', err)
+      void refreshToolIndicator()
+    }
+  }, [onSettingsChange, refreshToolIndicator])
+
+  const handleToggleWebSearch = useCallback(async () => {
+    try {
+      const settings = await refreshSettings()
+      const nativeTools = settings.chatTools?.nativeTools
+      const next = !(nativeTools?.webSearch !== false)
+      setWebSearchEnabled(next)
+      await saveSettingsCached({
+        ...settings,
+        chatTools: {
+          ...settings.chatTools,
+          nativeTools: { ...(nativeTools ?? {}), webSearch: next },
+        },
+      })
+      onSettingsChange()
+      await refreshToolIndicator()
+    } catch (err) {
+      console.error('Failed to toggle web search:', err)
       void refreshToolIndicator()
     }
   }, [onSettingsChange, refreshToolIndicator])
@@ -3511,6 +3534,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                       onChangeKnowledgeBaseIds={handleChangeKnowledgeBaseIds}
                       mcpServers={mcpServers}
                       onToggleMcpServer={handleToggleMcpServer}
+                      webSearchEnabled={webSearchEnabled}
+                      onToggleWebSearch={handleToggleWebSearch}
                       replyModels={activeReplyModels}
                       onChangeReplyModels={handleChangeReplyModels}
                       contextSlot={
@@ -3605,6 +3630,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                     onChangeKnowledgeBaseIds={handleChangeKnowledgeBaseIds}
                     mcpServers={mcpServers}
                     onToggleMcpServer={handleToggleMcpServer}
+                    webSearchEnabled={webSearchEnabled}
+                    onToggleWebSearch={handleToggleWebSearch}
                     replyModels={activeReplyModels}
                     onChangeReplyModels={handleChangeReplyModels}
                     contextSlot={
