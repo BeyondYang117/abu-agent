@@ -211,6 +211,9 @@ pub struct RapidOcrClient {
     high_pipeline: OnceCell<Arc<OAROCR>>,
     /// 防双击 Download 并发竞争 .tmp 文件。两档共用一把锁,足够防并发写入。
     install_lock: Mutex<()>,
+    /// 测试用:绕开 AppHandle 直接指定模型目录,见 `with_model_dir`。
+    #[cfg(test)]
+    model_dir_override: Option<PathBuf>,
 }
 
 impl RapidOcrClient {
@@ -221,6 +224,8 @@ impl RapidOcrClient {
             standard_pipeline: OnceCell::new(),
             high_pipeline: OnceCell::new(),
             install_lock: Mutex::new(()),
+            #[cfg(test)]
+            model_dir_override: None,
         })
     }
 
@@ -233,6 +238,21 @@ impl RapidOcrClient {
             standard_pipeline: OnceCell::new(),
             high_pipeline: OnceCell::new(),
             install_lock: Mutex::new(()),
+            model_dir_override: None,
+        })
+    }
+
+    /// 测试用:绕开 AppHandle,直接指定模型目录(供真实推理 E2E 测试落地固定缓存目录)。
+    /// 所有其他行为(install/status/ocr_image)与生产路径完全一致,只是 model_dir() 来源不同。
+    #[cfg(test)]
+    pub fn with_model_dir(dir: PathBuf, http: reqwest::Client) -> Arc<Self> {
+        Arc::new(Self {
+            app: None,
+            http,
+            standard_pipeline: OnceCell::new(),
+            high_pipeline: OnceCell::new(),
+            install_lock: Mutex::new(()),
+            model_dir_override: Some(dir),
         })
     }
 
@@ -246,11 +266,17 @@ impl RapidOcrClient {
             standard_pipeline: OnceCell::new(),
             high_pipeline: OnceCell::new(),
             install_lock: Mutex::new(()),
+            #[cfg(test)]
+            model_dir_override: None,
         })
     }
 
     /// 模型 + dylib 落盘位置:`{app_data_dir}/rapidocr-models/`。
     fn model_dir(&self) -> Result<PathBuf, String> {
+        #[cfg(test)]
+        if let Some(dir) = &self.model_dir_override {
+            return Ok(dir.clone());
+        }
         let app = self
             .app
             .as_ref()
@@ -492,8 +518,20 @@ pub struct RapidOcrLine {
     pub height: f32,
 }
 
+/// ModelScope 的 Tengine CDN 对默认/空 User-Agent(含 reqwest 默认值)按黑名单直接 403
+/// (`denied by UA ACL = blacklist`),GitHub Releases 不受影响。显式带一个浏览器 UA
+/// 规避,与 `native_tools/fetch.rs` 的 UA 保持一致口径。
+const DOWNLOAD_USER_AGENT: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Kivio/1.0";
+
 async fn download_bytes(http: &reqwest::Client, name: &str, url: &str) -> Result<Vec<u8>, String> {
-    match http.get(url).timeout(DOWNLOAD_TIMEOUT).send().await {
+    match http
+        .get(url)
+        .header(reqwest::header::USER_AGENT, DOWNLOAD_USER_AGENT)
+        .timeout(DOWNLOAD_TIMEOUT)
+        .send()
+        .await
+    {
         Ok(resp) => match resp.error_for_status() {
             Ok(r) => r
                 .bytes()
@@ -1178,5 +1216,152 @@ mod tests {
     #[test]
     fn lines_from_results_empty_input() {
         assert!(lines_from_results(&[]).is_empty());
+    }
+}
+
+/// 真实端到端验证:真实下载 + 真实推理(standard PP-OCRv5 mobile / high PP-OCRv6 medium)。
+///
+/// 门控:`RAPIDOCR_E2E=1` 才跑,否则打印 skip 直接返回(不算失败,CI/常规跑测试不受影响)。
+/// 单个测试函数内顺序执行两档,因为 `ort::init_from` 是进程级只能成功调用一次,不能拆成
+/// 并行的多个测试函数(会互相踩)。模型缓存目录固定在系统临时目录下的一个子目录,重复运行
+/// 不用每次重下 ~150MB。
+#[cfg(all(test, target_os = "windows"))]
+mod rapidocr_e2e {
+    use super::*;
+
+    #[tokio::test]
+    async fn rapidocr_e2e_real_download_and_inference() {
+        if std::env::var("RAPIDOCR_E2E").as_deref() != Ok("1") {
+            eprintln!("[rapidocr-e2e] RAPIDOCR_E2E != 1, skipping real download+inference test");
+            return;
+        }
+
+        // 持久缓存目录:重复跑不用每次重下模型。
+        let model_dir = std::env::temp_dir().join("kivio-rapidocr-e2e-models");
+        std::fs::create_dir_all(&model_dir).expect("mkdir model_dir");
+        eprintln!("[rapidocr-e2e] model_dir = {}", model_dir.display());
+
+        let client = RapidOcrClient::with_model_dir(model_dir.clone(), reqwest::Client::new());
+
+        // 测试图:白底黑字中英混排,由仓库脚本(PowerShell + System.Drawing)生成。
+        let image_path = std::env::temp_dir().join("kivio-rapidocr-e2e-test.png");
+        generate_test_image(&image_path);
+        assert!(
+            image_path.is_file(),
+            "test image should exist at {}",
+            image_path.display()
+        );
+
+        // 1) 下载两档(共享 dylib 只会真正下载一次)。
+        let t0 = std::time::Instant::now();
+        let standard_install = client.install(ModelTier::Standard).await;
+        eprintln!(
+            "[rapidocr-e2e] standard install: success={} message={:?} elapsed={:?}",
+            standard_install.success,
+            standard_install.message,
+            t0.elapsed()
+        );
+        assert!(
+            standard_install.success,
+            "standard install failed: {}",
+            standard_install.message
+        );
+
+        let t1 = std::time::Instant::now();
+        let high_install = client.install(ModelTier::High).await;
+        eprintln!(
+            "[rapidocr-e2e] high install: success={} message={:?} elapsed={:?}",
+            high_install.success,
+            high_install.message,
+            t1.elapsed()
+        );
+        assert!(
+            high_install.success,
+            "high install failed: {}",
+            high_install.message
+        );
+
+        // 2) status:两档都应就绪。
+        let status = client.status();
+        eprintln!("[rapidocr-e2e] status = {status:?}");
+        assert!(
+            status.standard_available,
+            "standard should be available after install"
+        );
+        assert!(
+            status.high_available,
+            "high should be available after install"
+        );
+
+        // 3) standard 档真实推理。
+        let t2 = std::time::Instant::now();
+        let standard_text = client
+            .ocr_image(&image_path, ModelTier::Standard)
+            .await
+            .expect("standard ocr_image should succeed");
+        eprintln!(
+            "[rapidocr-e2e] standard OCR result (elapsed={:?}):\n{standard_text}",
+            t2.elapsed()
+        );
+        assert!(
+            !standard_text.is_empty(),
+            "standard OCR text should not be empty"
+        );
+        assert!(
+            standard_text.contains("Kivio"),
+            "standard OCR text should contain 'Kivio', got: {standard_text}"
+        );
+
+        // 4) high 档真实推理。
+        let t3 = std::time::Instant::now();
+        let high_text = client
+            .ocr_image(&image_path, ModelTier::High)
+            .await
+            .expect("high ocr_image should succeed");
+        eprintln!(
+            "[rapidocr-e2e] high OCR result (elapsed={:?}):\n{high_text}",
+            t3.elapsed()
+        );
+        assert!(!high_text.is_empty(), "high OCR text should not be empty");
+        assert!(
+            high_text.contains("测试") || high_text.contains("识别"),
+            "high OCR text should contain a Chinese keyword ('测试'/'识别'), got: {high_text}"
+        );
+
+        // 5) 带坐标的行级 OCR(替换翻译用),同档位 pipeline 复用,断言坐标合理。
+        let lines = client
+            .ocr_image_lines(&image_path, ModelTier::High)
+            .await
+            .expect("high ocr_image_lines should succeed");
+        eprintln!("[rapidocr-e2e] high ocr_image_lines: {lines:?}");
+        assert!(
+            !lines.is_empty(),
+            "ocr_image_lines should return at least one line"
+        );
+        for line in &lines {
+            assert!(
+                line.width > 0.0 && line.height > 0.0,
+                "line bbox should be positive: {line:?}"
+            );
+        }
+    }
+
+    /// 用仓库脚本 `scripts/gen-rapidocr-e2e-image.ps1`(PowerShell + System.Drawing)生成测试图。
+    fn generate_test_image(out: &Path) {
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("scripts")
+            .join("gen-rapidocr-e2e-image.ps1");
+        let status = std::process::Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&script)
+            .arg("-OutputPath")
+            .arg(out)
+            .status()
+            .expect("failed to spawn powershell to generate test image");
+        assert!(status.success(), "gen-rapidocr-e2e-image.ps1 failed");
     }
 }
