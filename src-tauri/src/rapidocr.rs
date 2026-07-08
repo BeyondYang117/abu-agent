@@ -1,9 +1,15 @@
 //! RapidOCR 离线 OCR：跨平台 PaddleOCR ONNX pipeline。
 //!
+//! 双档位（`ModelTier`）：
+//! - `Standard` — PP-OCRv5 mobile,现状不变,文件放模型目录根下(det.onnx/rec.onnx/keys.txt)。
+//! - `High` — PP-OCRv6 medium,精度更高但更重,文件放 `high/` 子目录,按需单独下载。
+//! 两档共享同一份 ONNX Runtime dylib(+ Windows provider shared DLL),只下载一次;
+//! `ort::init_from` 全进程只能调一次,两档 pipeline 构建前都先确保它跑过。
+//!
 //! 设计原则:用户责任挂在「点一下下载」按钮上,代码这边只负责:
 //! 1. 检测必备文件齐不齐(runtime + det + rec + keys；Windows 另需 provider shared DLL)
-//! 2. 不齐就 install():逐个 HTTP GET 到 .tmp 后 atomic rename
-//! 3. 齐了就在首次 OCR 时一次性 ort::init_from + OAROCRBuilder.build,缓存 pipeline
+//! 2. 不齐就 install(tier):逐个 HTTP GET 到 .tmp 后 atomic rename
+//! 3. 齐了就在首次 OCR 时一次性 ort::init_from + OAROCRBuilder.build,按档位缓存 pipeline
 //!
 //! 不做 SHA 校验、不做断点续传、不做进度事件——用户明确要求保持简单。
 //! 失败就整体重下,留下的 .tmp 文件不污染最终路径。
@@ -72,6 +78,31 @@ const REC_URL: &str =
 const KEYS_URL: &str =
     "https://github.com/GreatV/oar-ocr/releases/download/v0.3.0/ppocrv5_dict.txt";
 
+// PP-OCRv6 medium——高精度档,50 语言统一(中英日 + 46 拉丁语系),det 59.2MB + rec 73MB + dict 73KB。
+// 官方权重非 ONNX,ModelScope 上的 greatv/oar-ocr 仓库是 oar-ocr 作者转换好的 ONNX 版本。
+const HIGH_DET_URL: &str = "https://www.modelscope.cn/api/v1/models/greatv/oar-ocr/repo?Revision=master&FilePath=pp-ocrv6_medium_det.onnx";
+const HIGH_REC_URL: &str = "https://www.modelscope.cn/api/v1/models/greatv/oar-ocr/repo?Revision=master&FilePath=pp-ocrv6_medium_rec.onnx";
+const HIGH_KEYS_URL: &str = "https://www.modelscope.cn/api/v1/models/greatv/oar-ocr/repo?Revision=master&FilePath=ppocrv6_dict.txt";
+
+/// RapidOCR 模型档位。由各调用场景(截图翻译 / 知识库文档处理)的设置字符串解析而来。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelTier {
+    /// PP-OCRv5 mobile,现状默认,速度优先。
+    Standard,
+    /// PP-OCRv6 medium,精度优先,体积更大。
+    High,
+}
+
+impl ModelTier {
+    /// 解析设置里的 `rapid_ocr_tier` 字符串:非 "high" 一律归 Standard(含旧配置缺字段/非法值)。
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "high" => ModelTier::High,
+            _ => ModelTier::Standard,
+        }
+    }
+}
+
 enum DownloadSource {
     File {
         url: &'static str,
@@ -83,12 +114,13 @@ enum DownloadSource {
 }
 
 struct DownloadFile {
+    /// model_dir 下的相对路径(可含子目录,如 "high/det.onnx")。
     name: &'static str,
     source: DownloadSource,
 }
 
-/// 必备文件:本地名 + 下载 URL。任一缺失则视为「未就绪」。
-fn download_files() -> Vec<DownloadFile> {
+/// 两档共享的 dylib 文件(ONNX Runtime + Windows provider shared),只下载一次。
+fn shared_dylib_files() -> Vec<DownloadFile> {
     let mut files = vec![DownloadFile {
         name: DYLIB_NAME,
         source: DownloadSource::Archive {
@@ -108,28 +140,56 @@ fn download_files() -> Vec<DownloadFile> {
         },
     });
 
-    files.extend([
-        DownloadFile {
-            name: "det.onnx",
-            source: DownloadSource::File { url: DET_URL },
-        },
-        DownloadFile {
-            name: "rec.onnx",
-            source: DownloadSource::File { url: REC_URL },
-        },
-        DownloadFile {
-            name: "keys.txt",
-            source: DownloadSource::File { url: KEYS_URL },
-        },
-    ]);
     files
 }
 
-/// 前端拉状态用:模型是否就绪 + 模型目录(供 UI 显示)。
+/// 档位专属的模型文件(det/rec/keys),standard 在根目录,high 在 `high/` 子目录。
+fn tier_model_files(tier: ModelTier) -> Vec<DownloadFile> {
+    match tier {
+        ModelTier::Standard => vec![
+            DownloadFile {
+                name: "det.onnx",
+                source: DownloadSource::File { url: DET_URL },
+            },
+            DownloadFile {
+                name: "rec.onnx",
+                source: DownloadSource::File { url: REC_URL },
+            },
+            DownloadFile {
+                name: "keys.txt",
+                source: DownloadSource::File { url: KEYS_URL },
+            },
+        ],
+        ModelTier::High => vec![
+            DownloadFile {
+                name: "high/det.onnx",
+                source: DownloadSource::File { url: HIGH_DET_URL },
+            },
+            DownloadFile {
+                name: "high/rec.onnx",
+                source: DownloadSource::File { url: HIGH_REC_URL },
+            },
+            DownloadFile {
+                name: "high/keys.txt",
+                source: DownloadSource::File { url: HIGH_KEYS_URL },
+            },
+        ],
+    }
+}
+
+/// 某档位的必备文件全集:共享 dylib + 该档位专属模型文件。任一缺失则视为「未就绪」。
+fn download_files(tier: ModelTier) -> Vec<DownloadFile> {
+    let mut files = shared_dylib_files();
+    files.extend(tier_model_files(tier));
+    files
+}
+
+/// 前端拉状态用:分档就绪情况 + 模型目录(供 UI 显示)。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RapidOcrStatus {
-    pub models_available: bool,
+    pub standard_available: bool,
+    pub high_available: bool,
     pub model_dir: Option<String>,
 }
 
@@ -145,10 +205,11 @@ pub struct RapidOcrInstallResult {
 pub struct RapidOcrClient {
     app: Option<AppHandle>,
     http: reqwest::Client,
-    /// 首次 ocr_image 调用时初始化:ort::init_from + OAROCRBuilder.build,后续复用。
-    /// init_from 全进程一次,所以这里也只能初始化一次;失败需重启 app 重试。
-    pipeline: OnceCell<Arc<OAROCR>>,
-    /// 防双击 Download 并发竞争 .tmp 文件。
+    /// 首次调用某档位时初始化:ort::init_from(进程级,两档共用一次) + OAROCRBuilder.build,
+    /// 按档位分别缓存 pipeline,后续复用。
+    standard_pipeline: OnceCell<Arc<OAROCR>>,
+    high_pipeline: OnceCell<Arc<OAROCR>>,
+    /// 防双击 Download 并发竞争 .tmp 文件。两档共用一把锁,足够防并发写入。
     install_lock: Mutex<()>,
 }
 
@@ -157,7 +218,8 @@ impl RapidOcrClient {
         Arc::new(Self {
             app: Some(app.clone()),
             http,
-            pipeline: OnceCell::new(),
+            standard_pipeline: OnceCell::new(),
+            high_pipeline: OnceCell::new(),
             install_lock: Mutex::new(()),
         })
     }
@@ -168,7 +230,8 @@ impl RapidOcrClient {
         Arc::new(Self {
             app: None,
             http: reqwest::Client::new(),
-            pipeline: OnceCell::new(),
+            standard_pipeline: OnceCell::new(),
+            high_pipeline: OnceCell::new(),
             install_lock: Mutex::new(()),
         })
     }
@@ -180,7 +243,8 @@ impl RapidOcrClient {
         Arc::new(Self {
             app: None,
             http,
-            pipeline: OnceCell::new(),
+            standard_pipeline: OnceCell::new(),
+            high_pipeline: OnceCell::new(),
             install_lock: Mutex::new(()),
         })
     }
@@ -195,26 +259,31 @@ impl RapidOcrClient {
         Ok(base.join("rapidocr-models"))
     }
 
-    /// 必备文件全在才算就绪。任一缺失 → 前端渲染下载按钮。
+    /// 分档就绪情况。任一档必备文件不全 → 该档 available=false,前端渲染对应下载按钮。
     pub fn status(&self) -> RapidOcrStatus {
         let Ok(dir) = self.model_dir() else {
             return RapidOcrStatus {
-                models_available: false,
+                standard_available: false,
+                high_available: false,
                 model_dir: None,
             };
         };
-        let all_present = download_files()
-            .iter()
-            .all(|file| file_is_ready(&dir.join(file.name)));
+        let tier_ready = |tier: ModelTier| {
+            download_files(tier)
+                .iter()
+                .all(|file| file_is_ready(&dir.join(file.name)))
+        };
         RapidOcrStatus {
-            models_available: all_present,
+            standard_available: tier_ready(ModelTier::Standard),
+            high_available: tier_ready(ModelTier::High),
             model_dir: Some(dir.to_string_lossy().into_owned()),
         }
     }
 
-    /// 顺序下载 4 个文件:GET → 写 .tmp → rename。任一失败立刻返回 fail,不留半成品。
-    /// install_lock 防止双击并发。
-    pub async fn install(&self) -> RapidOcrInstallResult {
+    /// 按档位顺序下载必备文件:GET → 写 .tmp → rename。任一失败立刻返回 fail,不留半成品。
+    /// dylib 等共享文件两档都会经过 file_is_ready 跳过检查,天然只下载一次。
+    /// install_lock 防止双击并发(两档共用一把锁)。
+    pub async fn install(&self, tier: ModelTier) -> RapidOcrInstallResult {
         let _guard = self.install_lock.lock().await;
         let dir = match self.model_dir() {
             Ok(d) => d,
@@ -225,11 +294,17 @@ impl RapidOcrClient {
         }
 
         let mut archive_cache: HashMap<&'static str, Arc<Vec<u8>>> = HashMap::new();
-        for file in download_files() {
+        for file in download_files(tier) {
             let name = file.name;
             let final_path = dir.join(name);
             if file_is_ready(&final_path) {
                 continue;
+            }
+            // high 档文件落在 `high/` 子目录,下载前先确保子目录存在。
+            if let Some(parent) = final_path.parent() {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    return fail(format!("mkdir failed: {e}"));
+                }
             }
             let tmp_path = dir.join(format!("{name}.tmp"));
             let write_result = match file.source {
@@ -283,33 +358,57 @@ impl RapidOcrClient {
         }
     }
 
-    /// 解析模型目录 + 校验文件齐全 + 惰性初始化并复用 OAROCR pipeline。
+    /// 解析模型目录 + 校验该档位文件齐全 + 惰性初始化并复用该档位的 OAROCR pipeline。
     /// `ocr_image` / `ocr_image_lines` 共用：文件不齐 → `rapidocr_models_missing`；
-    /// 首次走 OnceCell init（ort::init_from 加载 dylib + 构建 pipeline，~1-3s），后续复用。
-    async fn pipeline(&self) -> Result<Arc<OAROCR>, String> {
+    /// 首次走 OnceCell init（ort::init_from 全进程一次 + 构建该档 pipeline，~1-3s），后续复用。
+    async fn pipeline_for(&self, tier: ModelTier) -> Result<Arc<OAROCR>, String> {
         let dir = self.model_dir()?;
-        if !download_files()
+        if !download_files(tier)
             .iter()
             .all(|file| file_is_ready(&dir.join(file.name)))
         {
             return Err("rapidocr_models_missing".into());
         }
 
-        let pipeline = self
-            .pipeline
+        ensure_ort_init(&dir).await?;
+
+        let (det_path, rec_path, keys_path) = match tier {
+            ModelTier::Standard => (
+                dir.join("det.onnx"),
+                dir.join("rec.onnx"),
+                dir.join("keys.txt"),
+            ),
+            ModelTier::High => (
+                dir.join("high").join("det.onnx"),
+                dir.join("high").join("rec.onnx"),
+                dir.join("high").join("keys.txt"),
+            ),
+        };
+
+        let cell = match tier {
+            ModelTier::Standard => &self.standard_pipeline,
+            ModelTier::High => &self.high_pipeline,
+        };
+        let pipeline = cell
             .get_or_try_init(|| async {
-                // 必须在所有其他 ort API 之前调用,且全进程一次。
-                prepare_onnxruntime_dll_dir(&dir)?;
-                ort::init_from(dir.join(DYLIB_NAME))
-                    .map_err(|e| format!("ort init_from failed: {e}"))?
-                    .commit();
-                let p = OAROCRBuilder::new(
-                    dir.join("det.onnx").to_string_lossy().into_owned(),
-                    dir.join("rec.onnx").to_string_lossy().into_owned(),
-                    dir.join("keys.txt").to_string_lossy().into_owned(),
-                )
-                .build()
-                .map_err(|e| format!("OAROCRBuilder failed: {e}"))?;
+                let mut builder = OAROCRBuilder::new(
+                    det_path.to_string_lossy().into_owned(),
+                    rec_path.to_string_lossy().into_owned(),
+                    keys_path.to_string_lossy().into_owned(),
+                );
+                // v6 medium 检测阈值与 v3~v5 不同,builder 默认值(0.3/0.6/1.5)只适配旧模型,
+                // 高精度档必须显式覆盖,否则漏检严重。standard 档保持 builder 默认阈值。
+                if tier == ModelTier::High {
+                    builder = builder.text_detection_config(oar_ocr::domain::TextDetectionConfig {
+                        score_threshold: 0.2,
+                        box_threshold: 0.45,
+                        unclip_ratio: 1.4,
+                        ..Default::default()
+                    });
+                }
+                let p = builder
+                    .build()
+                    .map_err(|e| format!("OAROCRBuilder failed: {e}"))?;
                 Ok::<_, String>(Arc::new(p))
             })
             .await?;
@@ -317,13 +416,14 @@ impl RapidOcrClient {
     }
 
     /// OCR 主入口。文件不齐 → `rapidocr_models_missing` 错误码,前端渲染下载提示。
-    /// 首次调用走 OnceCell init:ort::init_from 加载 dylib + 构建 pipeline(~1-3s)。
-    /// 后续调用直接复用 pipeline,~200-500ms/张。
+    /// 首次调用某档位走 OnceCell init:ort::init_from(进程级一次) + 构建该档 pipeline(~1-3s)。
+    /// 后续调用直接复用对应档位 pipeline,standard ~200-500ms/张,high 更慢但更准。
     pub async fn ocr_image(
         self: &Arc<Self>,
         image_path: &std::path::Path,
+        tier: ModelTier,
     ) -> Result<String, String> {
-        let pipeline = self.pipeline().await?;
+        let pipeline = self.pipeline_for(tier).await?;
 
         // oar-ocr 同步 API,spawn_blocking 避免阻塞 tokio 调度器。
         let path = image_path.to_owned();
@@ -340,12 +440,13 @@ impl RapidOcrClient {
         Ok(text)
     }
 
-    /// 带 bbox 的行级 OCR，供替换翻译在原位绘制译文。与 `ocr_image` 共用 pipeline。
+    /// 带 bbox 的行级 OCR，供替换翻译在原位绘制译文。与 `ocr_image` 共用同档位 pipeline。
     pub async fn ocr_image_lines(
         self: &Arc<Self>,
         image_path: &std::path::Path,
+        tier: ModelTier,
     ) -> Result<Vec<RapidOcrLine>, String> {
-        let pipeline = self.pipeline().await?;
+        let pipeline = self.pipeline_for(tier).await?;
 
         let path = image_path.to_owned();
         let lines = tokio::task::spawn_blocking(move || -> Result<Vec<RapidOcrLine>, String> {
@@ -360,6 +461,24 @@ impl RapidOcrClient {
 
         Ok(lines)
     }
+}
+
+/// ort::init_from 全进程只能成功调用一次(加载 dylib 到进程),两档 pipeline 共用同一次 init。
+/// 独立于两个 pipeline OnceCell,避免"先摸哪个档位就顺带初始化 ort"的隐式耦合。
+static ORT_INIT: OnceCell<()> = OnceCell::const_new();
+
+async fn ensure_ort_init(dir: &Path) -> Result<(), String> {
+    ORT_INIT
+        .get_or_try_init(|| async {
+            // 必须在所有其他 ort API 之前调用,且全进程一次。
+            prepare_onnxruntime_dll_dir(dir)?;
+            ort::init_from(dir.join(DYLIB_NAME))
+                .map_err(|e| format!("ort init_from failed: {e}"))?
+                .commit();
+            Ok::<_, String>(())
+        })
+        .await?;
+    Ok(())
 }
 
 /// 单行 OCR 结果（带屏幕坐标），供替换翻译 Canvas 覆盖层使用。

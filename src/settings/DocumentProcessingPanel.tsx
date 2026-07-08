@@ -9,6 +9,7 @@ import {
   type OcrEngine,
   type PdfStrategy,
   type RapidOcrStatus,
+  type RapidOcrTier,
 } from '../api/tauri'
 import { type Lang } from './i18n'
 import { SettingsGroup, Select, SettingRow, Toggle, Input } from './components'
@@ -20,6 +21,7 @@ const EMPTY: DocumentProcessingConfig = {
   activeProcessor: '',
   fallbackToThirdParty: false,
   providers: [],
+  rapidOcrTier: 'standard',
 }
 
 // 两个固定的第三方解析服务；密钥填在各自条目里。
@@ -154,7 +156,13 @@ export function DocumentProcessingPanel({
           </p>
         )}
 
-        {cfg.ocrEngine === 'rapid_ocr' && <RapidOcrWidget t={t} />}
+        {cfg.ocrEngine === 'rapid_ocr' && (
+          <RapidOcrWidget
+            t={t}
+            tier={cfg.rapidOcrTier ?? 'standard'}
+            onChangeTier={(rapidOcrTier) => patch({ rapidOcrTier })}
+          />
+        )}
 
         <SettingRow
           label={t('PDF 处理策略', 'PDF strategy')}
@@ -191,7 +199,15 @@ export function DocumentProcessingPanel({
 }
 
 /** RapidOCR 离线引擎的状态/下载组件，本地自管状态。 */
-function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
+function RapidOcrWidget({
+  t,
+  tier,
+  onChangeTier,
+}: {
+  t: (zh: string, en: string) => string
+  tier: RapidOcrTier
+  onChangeTier: (tier: RapidOcrTier) => void
+}) {
   const [status, setStatus] = useState<RapidOcrStatus | null>(null)
   const [downloadState, setDownloadState] = useState<'idle' | 'downloading' | 'failed'>('idle')
   const [downloadError, setDownloadError] = useState('')
@@ -200,7 +216,7 @@ function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
     api
       .rapidOcrStatus()
       .then(setStatus)
-      .catch(() => setStatus({ modelsAvailable: false }))
+      .catch(() => setStatus({ standardAvailable: false, highAvailable: false }))
   }
 
   useEffect(() => {
@@ -211,7 +227,7 @@ function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
     setDownloadState('downloading')
     setDownloadError('')
     try {
-      const res = await api.rapidOcrInstall()
+      const res = await api.rapidOcrInstall(tier)
       if (res.success) {
         setDownloadState('idle')
         refresh()
@@ -225,16 +241,38 @@ function RapidOcrWidget({ t }: { t: (zh: string, en: string) => string }) {
     }
   }
 
+  const available = tier === 'high' ? status?.highAvailable : status?.standardAvailable
+
   return (
     <div className="mx-1 mb-2 rounded-lg border border-zinc-200 bg-zinc-50/80 px-3 py-2.5 dark:border-zinc-700 dark:bg-zinc-900/40">
-      {status?.modelsAvailable ? (
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+          {t('模型档位', 'Model tier')}
+        </span>
+        <Select
+          value={tier}
+          onChange={(v) => onChangeTier(v as RapidOcrTier)}
+          options={[
+            { value: 'standard', label: t('标准（快）', 'Standard (fast)') },
+            { value: 'high', label: t('高精度（PP-OCRv6，约 139MB）', 'High precision (PP-OCRv6, ~139MB)') },
+          ]}
+          className="w-56"
+        />
+      </div>
+      <p className="mb-2 text-xs text-zinc-400 dark:text-zinc-500">
+        {t(
+          '高精度覆盖中英日等 50 种语言，精度更高、速度较慢，需单独下载。',
+          'High precision covers 50 languages (CJK + Latin), higher accuracy, slower, downloaded separately.',
+        )}
+      </p>
+      {available ? (
         <div className="flex items-start gap-2">
           <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
               {t('RapidOCR 已就绪', 'RapidOCR ready')}
             </div>
-            {status.modelDir && (
+            {status?.modelDir && (
               <div className="mt-0.5 break-all font-mono text-[11px] text-zinc-500">{status.modelDir}</div>
             )}
           </div>

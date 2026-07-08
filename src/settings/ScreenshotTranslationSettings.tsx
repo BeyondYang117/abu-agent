@@ -1,6 +1,6 @@
 import { Download, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
-import { type DefaultPromptTemplates, type RapidOcrStatus, type Settings } from '../api/tauri'
+import { type DefaultPromptTemplates, type RapidOcrStatus, type RapidOcrTier, type Settings } from '../api/tauri'
 import { Button, IconButton } from '../components/Button'
 import { ModelPairSelect } from './ModelPairSelect'
 import {
@@ -31,7 +31,7 @@ interface ScreenshotTranslationSettingsProps {
   onUpdate: (updates: Partial<ScreenshotTranslation>) => void
   onToggleRecording: (target: 'screenshotTranslation' | 'screenshotTranslationText' | 'screenshotTranslationReplace') => void
   onRefreshRapidOcrStatus: () => void
-  onDownloadRapidOcr: () => void
+  onDownloadRapidOcr: (tier: RapidOcrTier) => void
   hotkeyError?: string
   textHotkeyError?: string
   replaceHotkeyError?: string
@@ -142,11 +142,13 @@ export function ScreenshotTranslationSettings({
             <SettingRow label={t.replaceTranslateRapidOcr} stack>
               <RapidOcrStatusPanel
                 status={rapidOcrStatus}
+                tier={screenshot?.rapidOcrTier ?? 'standard'}
                 downloadState={rapidOcrDownloadState}
                 downloadError={rapidOcrDownloadError}
                 t={t}
                 onRefresh={onRefreshRapidOcrStatus}
                 onDownload={onDownloadRapidOcr}
+                onChangeTier={(rapidOcrTier) => onUpdate({ rapidOcrTier })}
               />
             </SettingRow>
           )}
@@ -237,11 +239,13 @@ export function ScreenshotTranslationSettings({
                       <p className="kv-row-desc px-1 pb-1">{t.ocrEngineRapidOcrSharedNote}</p>
                       <RapidOcrStatusPanel
                         status={rapidOcrStatus}
+                        tier={screenshot?.rapidOcrTier ?? 'standard'}
                         downloadState={rapidOcrDownloadState}
                         downloadError={rapidOcrDownloadError}
                         t={t}
                         onRefresh={onRefreshRapidOcrStatus}
                         onDownload={onDownloadRapidOcr}
+                        onChangeTier={(rapidOcrTier) => onUpdate({ rapidOcrTier })}
                       />
                     </>
                   )}
@@ -340,29 +344,48 @@ export function PromptField({
 
 function RapidOcrStatusPanel({
   status,
+  tier,
   downloadState,
   downloadError,
   t,
   onRefresh,
   onDownload,
+  onChangeTier,
 }: {
   status: RapidOcrStatus | null
+  tier: RapidOcrTier
   downloadState: RapidOcrDownloadState
   downloadError: string
   t: I18n
   onRefresh: () => void
-  onDownload: () => void
+  onDownload: (tier: RapidOcrTier) => void
+  onChangeTier: (tier: RapidOcrTier) => void
 }) {
+  const available = tier === 'high' ? status?.highAvailable : status?.standardAvailable
   return (
-    <div className="kv-panel mt-0 w-full">
-      {status?.modelsAvailable ? (
+    <div className="kv-panel mt-0 w-full space-y-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="kv-panel-title !mb-0">{t.rapidOcrTier}</span>
+        <Select
+          value={tier}
+          onChange={(v) => onChangeTier(v as RapidOcrTier)}
+          options={[
+            { value: 'standard', label: t.rapidOcrTierStandard },
+            { value: 'high', label: t.rapidOcrTierHigh },
+          ]}
+          className="w-56"
+        />
+      </div>
+      <p className="kv-row-desc">{t.rapidOcrTierHint}</p>
+
+      {available ? (
         <div className="flex items-start gap-2">
           <span className="mt-0.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
           <div className="flex-1">
             <div className="kv-panel-title !mb-0">
               {t.rapidOcrModelsFound}
             </div>
-            {status.modelDir && (
+            {status?.modelDir && (
               <div className="kv-panel-body font-mono break-all">
                 {status.modelDir}
               </div>
@@ -403,7 +426,7 @@ function RapidOcrStatusPanel({
             <div className="pl-3.5">
               <Button
                 variant="primary"
-                onClick={onDownload}
+                onClick={() => onDownload(tier)}
               >
                 <Download size={12} strokeWidth={2.5} />
                 {t.rapidOcrDownloadButton}

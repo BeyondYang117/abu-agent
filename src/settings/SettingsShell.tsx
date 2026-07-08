@@ -953,12 +953,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
   }, [hasSystemOcr])
 
-  /** 下载 RapidOCR 包(dylib + 模型,~30-50MB):阻塞 ~15-30s,完成后 refresh status。 */
-  const handleDownloadRapidOcr = useCallback(async () => {
+  /** 下载指定档位的 RapidOCR 包(dylib 共享 + 该档模型):阻塞若干秒,完成后 refresh status。 */
+  const handleDownloadRapidOcr = useCallback(async (tier: import('../api/tauri').RapidOcrTier) => {
     setRapidOcrDownloadState('downloading')
     setRapidOcrDownloadError('')
     try {
-      const result = await api.rapidOcrInstall()
+      const result = await api.rapidOcrInstall(tier)
       if (result.success) {
         setRapidOcrDownloadState('idle')
         await refreshRapidOcrStatus()

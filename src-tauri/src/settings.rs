@@ -231,6 +231,10 @@ pub struct ScreenshotTranslationConfig {
     /// 选中文本是干净结构化文本，与 OCR 噪声场景的提示词需求不同。
     #[serde(default)]
     pub text_prompt: Option<String>,
+    /// RapidOCR 模型档位:"standard"(默认,PP-OCRv5 mobile,速度优先) | "high"(PP-OCRv6 medium,精度优先)。
+    /// 仅在 ocr_mode = RapidOcr 时生效;替换翻译（固定走 RapidOCR）跟随此字段。
+    #[serde(default = "default_rapid_ocr_tier")]
+    pub rapid_ocr_tier: String,
     // 旧版字段，用于迁移
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openai: Option<OpenAIConfig>,
@@ -255,9 +259,15 @@ impl Default for ScreenshotTranslationConfig {
             ocr_mode: Some(OcrMode::CloudVision),
             prompt: None,
             text_prompt: None,
+            rapid_ocr_tier: default_rapid_ocr_tier(),
             openai: None,
         }
     }
+}
+
+/// RapidOCR 档位默认值,截图翻译 / 知识库文档处理两处共用。
+fn default_rapid_ocr_tier() -> String {
+    "standard".to_string()
 }
 
 /**
@@ -902,6 +912,10 @@ pub struct DocProcessorProvider {
 pub struct DocumentProcessingConfig {
     /// 图片/可 OCR 内容用的引擎: "off"(默认) | "system" | "rapid_ocr"
     pub ocr_engine: String,
+    /// RapidOCR 模型档位:"standard"(默认,PP-OCRv5 mobile) | "high"(PP-OCRv6 medium)。
+    /// 仅在 ocr_engine = "rapid_ocr" 时生效。
+    #[serde(default = "default_rapid_ocr_tier")]
+    pub rapid_ocr_tier: String,
     /// PDF 处理: "text"(默认,文字层) | "force_ocr"(扫描版重扫——内置未启用,会报错)
     pub pdf_strategy: String,
     /// "" = Kivio 内置（本地 Rust）；否则为某第三方 provider id
@@ -915,6 +929,7 @@ impl Default for DocumentProcessingConfig {
     fn default() -> Self {
         Self {
             ocr_engine: "off".into(),
+            rapid_ocr_tier: default_rapid_ocr_tier(),
             pdf_strategy: "text".into(),
             active_processor: String::new(),
             fallback_to_third_party: false,
@@ -1763,6 +1778,16 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     }
     if settings.lens.message_order != "asc" && settings.lens.message_order != "desc" {
         settings.lens.message_order = "asc".to_string();
+    }
+    if settings.screenshot_translation.rapid_ocr_tier != "standard"
+        && settings.screenshot_translation.rapid_ocr_tier != "high"
+    {
+        settings.screenshot_translation.rapid_ocr_tier = default_rapid_ocr_tier();
+    }
+    if settings.document_processing.rapid_ocr_tier != "standard"
+        && settings.document_processing.rapid_ocr_tier != "high"
+    {
+        settings.document_processing.rapid_ocr_tier = default_rapid_ocr_tier();
     }
     settings.lens.web_search.tavily_api_key =
         settings.lens.web_search.tavily_api_key.trim().to_string();
@@ -3415,6 +3440,29 @@ mod tests {
 
         let cfg: LensConfig = serde_json::from_str("{}").expect("empty lens config should load");
         assert!(cfg.send_to_chat);
+    }
+
+    #[test]
+    fn rapid_ocr_tier_defaults_to_standard_for_legacy_configs() {
+        // 旧版 settings.json 没有 rapid_ocr_tier 字段:两处配置都要反序列化成 "standard",
+        // 现有 v5 mobile 用户零感知。
+        let screenshot: ScreenshotTranslationConfig =
+            serde_json::from_str("{}").expect("empty screenshot config should load");
+        assert_eq!(screenshot.rapid_ocr_tier, "standard");
+
+        let doc_processing: DocumentProcessingConfig =
+            serde_json::from_str("{}").expect("empty document processing config should load");
+        assert_eq!(doc_processing.rapid_ocr_tier, "standard");
+    }
+
+    #[test]
+    fn sanitize_settings_normalizes_invalid_rapid_ocr_tier() {
+        let mut s = Settings::default();
+        s.screenshot_translation.rapid_ocr_tier = "garbage".to_string();
+        s.document_processing.rapid_ocr_tier = "garbage".to_string();
+        let s = sanitize_settings(s);
+        assert_eq!(s.screenshot_translation.rapid_ocr_tier, "standard");
+        assert_eq!(s.document_processing.rapid_ocr_tier, "standard");
     }
 
     #[test]
