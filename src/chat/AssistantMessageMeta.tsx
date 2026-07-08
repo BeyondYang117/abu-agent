@@ -27,10 +27,10 @@ function realUsageTokens(usage?: MessageUsage | null): { total: number; label: s
   const input = usage.input_tokens ?? usage.inputTokens
   const total = usage.total_tokens ?? usage.totalTokens
   if (output != null && input != null) {
-    return { total: input + output, label: `${input} in + ${output} out tokens` }
+    return { total: input + output, label: `↑${input} ↓${output}` }
   }
   if (total != null) return { total, label: `${total} tokens` }
-  if (output != null) return { total: output, label: `${output} out tokens` }
+  if (output != null) return { total: output, label: `↓${output}` }
   return null
 }
 
@@ -131,7 +131,7 @@ export function AssistantMessageMeta({
         </span>
       )}
 
-      <span className="text-neutral-400 dark:text-neutral-500">({tokenLabel})</span>
+      <span className="text-neutral-400 dark:text-neutral-500">{tokenLabel}</span>
     </div>
   )
 }
