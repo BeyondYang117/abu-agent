@@ -10,6 +10,8 @@ const DEFAULT: KnowledgeBaseConfig = {
   weightKeyword: 1,
   rerankProviderId: '',
   rerankModel: '',
+  chunkTokens: 480,
+  topK: 5,
 }
 
 export function RetrievalPanel({

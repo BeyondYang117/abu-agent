@@ -1,22 +1,32 @@
-// 文档处理设置区（知识库页）：仅 Kivio 内置本地解析 + 图片 OCR。
-// 第三方处理器（MinerU/Doc2X/自定义）已挂起。
+// 文档处理设置区（知识库页）：Kivio 内置本地解析 + 图片 OCR，
+// 以及可选第三方解析服务（MinerU / LlamaParse，扫描版/复杂版面）。
 import { Download, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   api,
+  type DocProcessorProvider,
   type DocumentProcessingConfig,
   type OcrEngine,
   type PdfStrategy,
   type RapidOcrStatus,
 } from '../api/tauri'
 import { type Lang } from './i18n'
-import { SettingsGroup, Select, SettingRow } from './components'
+import { SettingsGroup, Select, SettingRow, Toggle, Input } from './components'
 import { Button, IconButton } from '../components/Button'
 
 const EMPTY: DocumentProcessingConfig = {
   ocrEngine: 'off',
   pdfStrategy: 'text',
+  activeProcessor: '',
+  fallbackToThirdParty: false,
+  providers: [],
 }
+
+// 两个固定的第三方解析服务；密钥填在各自条目里。
+const THIRD_PARTY: Array<{ kind: string; name: string; keyUrl: string }> = [
+  { kind: 'mineru', name: 'MinerU', keyUrl: 'https://mineru.net' },
+  { kind: 'llamaparse', name: 'LlamaParse', keyUrl: 'https://cloud.llamaindex.ai' },
+]
 
 export function DocumentProcessingPanel({
   config,
@@ -28,14 +38,98 @@ export function DocumentProcessingPanel({
   onChange: (next: DocumentProcessingConfig) => void
 }) {
   const t = (zh: string, en: string) => (lang === 'zh' ? zh : en)
-  const cfg = config ?? EMPTY
+  const cfg = { ...EMPTY, ...config }
 
   const patch = (updates: Partial<DocumentProcessingConfig>) => onChange({ ...cfg, ...updates })
 
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
 
+  // 固定 provider 条目按 kind 定位（id = kind）；改 key 时就地建/改。
+  const providerOf = (kind: string) => cfg.providers.find((p) => p.kind === kind)
+  const setProviderKey = (kind: string, name: string, key: string) => {
+    const others = cfg.providers.filter((p) => p.kind !== kind)
+    const next: DocProcessorProvider = {
+      ...(providerOf(kind) ?? { id: kind, name, kind, apiKeys: [], baseUrl: '', enabled: false }),
+      apiKeys: key.trim() ? [key] : [],
+      enabled: Boolean(key.trim()),
+    }
+    // 选中的服务密钥被清空时,回退到内置,避免留下必失败的路由。
+    const updates: Partial<DocumentProcessingConfig> = { providers: [...others, next] }
+    if (!key.trim() && cfg.activeProcessor === kind) updates.activeProcessor = ''
+    patch(updates)
+  }
+
+  // id = kind,所以 activeProcessor 本身就是 kind('' = 内置)。
+  const activeKind = cfg.activeProcessor
+
   return (
     <div className="space-y-4">
+      <SettingsGroup title={t('文档解析服务', 'Parsing service')}>
+        <div className="px-1 py-2">
+          <div className="kv-seg w-full">
+            {[{ kind: '', name: t('Kivio 内置', 'Kivio built-in') }, ...THIRD_PARTY].map((s) => (
+              <button
+                key={s.kind || 'builtin'}
+                type="button"
+                className={`flex-1 ${activeKind === s.kind ? 'active' : ''}`}
+                onClick={() => patch({ activeProcessor: s.kind })}
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+          <p className="kv-row-desc mt-1.5">
+            {activeKind === ''
+              ? t(
+                  'Kivio 本地解析 txt / md / html / PDF 文字层 / docx / xlsx，免费离线。',
+                  'Kivio parses txt, md, html, PDF text layer, docx and xlsx locally — free and offline.',
+                )
+              : t(
+                  '文档上传到所选服务解析为 Markdown（适合扫描版 / 复杂版面），需要 API 密钥。',
+                  'Documents are uploaded to the selected service and parsed to Markdown (good for scanned / complex layouts). Requires an API key.',
+                )}
+          </p>
+        </div>
+
+        {THIRD_PARTY.map((s) => {
+          const p = providerOf(s.kind)
+          const key = p?.apiKeys?.[0] ?? ''
+          const needsKey = activeKind === s.kind && !key.trim()
+          if (activeKind !== s.kind && !key.trim()) return null
+          return (
+            <SettingRow
+              key={s.kind}
+              label={t(`${s.name} API 密钥`, `${s.name} API key`)}
+              description={t(`在 ${s.keyUrl} 获取`, `Get one at ${s.keyUrl}`)}
+            >
+              <Input
+                type="password"
+                className={`w-64 ${needsKey ? '!border-amber-400' : ''}`}
+                value={key}
+                onChange={(v) => setProviderKey(s.kind, s.name, v)}
+                placeholder={t('粘贴密钥…', 'Paste key…')}
+                mono
+              />
+            </SettingRow>
+          )
+        })}
+
+        {activeKind === '' && cfg.providers.some((p) => p.enabled) && (
+          <SettingRow
+            label={t('解析失败时回退第三方', 'Fall back to third-party')}
+            description={t(
+              '内置抽不出文本（如扫描版 PDF）时，自动改用已配置的解析服务。',
+              'When built-in extracts no text (e.g. scanned PDFs), retry with a configured service.',
+            )}
+          >
+            <Toggle
+              checked={cfg.fallbackToThirdParty}
+              onChange={(v) => patch({ fallbackToThirdParty: v })}
+            />
+          </SettingRow>
+        )}
+      </SettingsGroup>
+
       <SettingsGroup title={t('解析选项', 'Parsing options')}>
         <SettingRow
           label={t('OCR 引擎', 'OCR engine')}

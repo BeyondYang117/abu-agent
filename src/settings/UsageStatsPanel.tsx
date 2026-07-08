@@ -30,7 +30,7 @@ const SOURCE_OPTIONS = [
 ]
 
 const STATUS_OPTIONS = ['all', 'success', 'error', 'cancelled', 'missing_usage']
-const LOG_PAGE_SIZE = 30
+const LOG_PAGE_SIZE = 15
 const SEARCH_DEBOUNCE_MS = 250
 
 function sourceLabel(source: string, lang: string) {

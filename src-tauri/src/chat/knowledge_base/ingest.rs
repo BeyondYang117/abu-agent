@@ -95,7 +95,7 @@ async fn index_one(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<usize, 
 
     // Resolve provider + retry budget + doc-processing config under the lock,
     // then drop the guard before any await (never hold a std lock across .await).
-    let (provider, attempts, doc_cfg) = {
+    let (provider, attempts, doc_cfg, chunk_target) = {
         let settings = state.settings_read();
         let provider = settings
             .get_provider(&lib.embedding_provider_id)
@@ -110,12 +110,19 @@ async fn index_one(app: &AppHandle, kb_id: &str, doc_id: &str) -> Result<usize, 
             provider,
             effective_retry_attempts(&settings),
             settings.document_processing.clone(),
+            (settings.knowledge_base.chunk_tokens as usize).clamp(256, 8192),
         )
     };
 
     // Built-in parse (txt/md/html/pdf-text/docx/xlsx), or image → OCR per the config.
     let parsed = super::process::process_document(state, &doc_cfg, &path).await?;
-    let pieces = chunking::chunk_document(&parsed.text, parsed.markdown);
+    let pieces = chunking::chunk_with(
+        &parsed.text,
+        parsed.markdown,
+        chunk_target,
+        chunking::OVERLAP_TOKENS,
+        chunking::MIN_TOKENS,
+    );
 
     let total = pieces.len();
     emit_index(app, kb_id, doc_id, "indexing", 0, total, None);

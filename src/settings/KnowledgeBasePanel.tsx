@@ -2,13 +2,12 @@
 // 文档列表 + 实时索引进度 / 删除 / 换 embedding 重建。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload, FileCog, Library, SlidersHorizontal, Pencil, Link2 } from 'lucide-react'
+import { Loader2, Trash2, Plus, RefreshCw, FileText, AlertCircle, CheckCircle2, Upload, FileSearch, Library, Pencil, Link2 } from 'lucide-react'
 import { type ModelProvider, type DocumentProcessingConfig, type KnowledgeBaseConfig } from '../api/tauri'
 import { type Lang } from './i18n'
 import { SettingsGroup, Input, Select } from './components'
 import { resolveModelInfo } from '../data/modelMatching'
-import { DocumentProcessingPanel } from './DocumentProcessingPanel'
-import { RetrievalPanel } from './RetrievalPanel'
+import { KnowledgeRagPanel } from './KnowledgeRagPanel'
 import {
   kbListLibraries,
   kbCreateLibrary,
@@ -120,15 +119,6 @@ function KbInfoPill({ children }: { children: React.ReactNode }) {
   )
 }
 
-function KbPageHeader({ title, subtitle }: { title: string; subtitle: string }) {
-  return (
-    <div>
-      <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{title}</h2>
-      <p className="mt-1 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">{subtitle}</p>
-    </div>
-  )
-}
-
 type Progress = { indexed: number; total: number }
 
 export function KnowledgeBasePanel({
@@ -138,6 +128,8 @@ export function KnowledgeBasePanel({
   onChangeDocProcessing,
   kbConfig,
   onChangeKbConfig,
+  ragEnabled,
+  onToggleRag,
 }: {
   providers: ModelProvider[]
   lang: Lang
@@ -145,13 +137,15 @@ export function KnowledgeBasePanel({
   onChangeDocProcessing: (next: DocumentProcessingConfig) => void
   kbConfig?: KnowledgeBaseConfig
   onChangeKbConfig: (next: KnowledgeBaseConfig) => void
+  ragEnabled: boolean
+  onToggleRag: (v: boolean) => void
 }) {
   const t = (zh: string, en: string) => (lang === 'zh' ? zh : en)
 
   const [libraries, setLibraries] = useState<KnowledgeLibrary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // 右栏视图：某个库 / 新建 / 文档处理 / 检索设置
-  const [rightView, setRightView] = useState<'library' | 'new' | 'docproc' | 'retrieval'>('library')
+  // 右栏视图：某个库 / 新建 / RAG 设置（文档处理+分块+检索合并页）
+  const [rightView, setRightView] = useState<'library' | 'new' | 'rag'>('library')
   const [docs, setDocs] = useState<KnowledgeDocument[]>([])
   const [progress, setProgress] = useState<Record<string, Progress>>({})
   const [busy, setBusy] = useState(false)
@@ -398,26 +392,14 @@ export function KnowledgeBasePanel({
         <div className="space-y-0.5">
         <button
           type="button"
-          onClick={() => setRightView('docproc')}
+          onClick={() => setRightView('rag')}
           className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
-            rightView === 'docproc'
+            rightView === 'rag'
               ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
               : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800'
           }`}
         >
-          <FileCog size={14} className="shrink-0 text-zinc-400" /> {t('文档处理', 'Doc processing')}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setRightView('retrieval')}
-          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition ${
-            rightView === 'retrieval'
-              ? 'bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
-              : 'text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800'
-          }`}
-        >
-          <SlidersHorizontal size={14} className="shrink-0 text-zinc-400" /> {t('检索', 'Retrieval')}
+          <FileSearch size={14} className="shrink-0 text-zinc-400" /> {t('知识库（RAG）', 'RAG settings')}
         </button>
 
         <div className="my-1.5 border-t border-zinc-200/70 dark:border-zinc-800" />
@@ -513,41 +495,18 @@ export function KnowledgeBasePanel({
           </SettingsGroup>
         )}
 
-        {/* 文档处理 */}
-        {rightView === 'docproc' && (
-          <div className="space-y-4">
-            <KbPageHeader
-              title={t('文档处理', 'Doc processing')}
-              subtitle={t(
-                'Kivio 本地解析文档，免费离线；图片需配置 OCR 后入库。',
-                'Kivio parses documents locally — free and offline; images need OCR enabled.',
-              )}
-            />
-            <DocumentProcessingPanel
-              config={docProcessing}
-              lang={lang}
-              onChange={onChangeDocProcessing}
-            />
-          </div>
-        )}
-
-        {/* 检索设置 */}
-        {rightView === 'retrieval' && (
-          <div className="space-y-4">
-            <KbPageHeader
-              title={t('检索', 'Retrieval')}
-              subtitle={t(
-                '配置混合检索权重与可选 rerank；仅 embedding 模型也可直接检索。',
-                'Tune hybrid weights and optional rerank; embedding alone is enough to search.',
-              )}
-            />
-            <RetrievalPanel
-              config={kbConfig}
-              providers={providers}
-              lang={lang}
-              onChange={onChangeKbConfig}
-            />
-          </div>
+        {/* RAG 设置（文档处理 + 分块 + 检索） */}
+        {rightView === 'rag' && (
+          <KnowledgeRagPanel
+            providers={providers}
+            lang={lang}
+            docProcessing={docProcessing}
+            onChangeDocProcessing={onChangeDocProcessing}
+            kbConfig={kbConfig}
+            onChangeKbConfig={onChangeKbConfig}
+            ragEnabled={ragEnabled}
+            onToggleRag={onToggleRag}
+          />
         )}
 
         {/* 选中库为空时的提示 */}

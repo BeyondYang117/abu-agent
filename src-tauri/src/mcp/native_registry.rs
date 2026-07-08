@@ -479,13 +479,14 @@ fn call_knowledge_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
         if query.is_empty() {
             return Err("knowledge_search query is empty".to_string());
         }
+        let default_top_k = (ctx.settings.knowledge_base.top_k as usize).clamp(1, 20);
         let top_k = ctx
             .arguments
             .get("top_k")
             .and_then(|v| v.as_u64())
             .map(|n| n as usize)
             .filter(|n| *n > 0)
-            .unwrap_or(5)
+            .unwrap_or(default_top_k)
             .min(20);
 
         // Target libraries: explicit arg > conversation mount > all libraries.
