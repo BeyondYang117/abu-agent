@@ -2329,6 +2329,16 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }
   }, [applyConversation, currentConversation, refreshContextStats, refreshSidebar])
 
+  // 底栏弹层选择专家：有会话则切换该会话专家，无会话则以该专家开新对话；null=清除。
+  const handleSelectAssistant = useCallback(async (assistant: ChatAssistant | null) => {
+    if (!assistant) {
+      await handleApplyAssistant(null)
+      return
+    }
+    if (currentConversation) await handleApplyAssistant(assistant.id)
+    else await handleStartAssistantChat(assistant)
+  }, [currentConversation, handleApplyAssistant, handleStartAssistantChat])
+
   const ensureConversationForAgentPlan = useCallback(async () => {
     if (currentConversation) return currentConversation
     let conversation = await chatApi.createConversation(
@@ -3525,7 +3535,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                       showProjectEntry
                       currentAssistant={currentAssistantSnapshot ? { id: currentAssistantSnapshot.id, name: currentAssistantSnapshot.name } : null}
                       onOpenAssistantCenter={openAssistantCenter}
-                      onClearAssistant={() => void handleApplyAssistant(null)}
+                      onSelectAssistant={handleSelectAssistant}
                       autoFocus
                       usesExternalRuntime={usesExternalRuntime}
                       externalAgentName={activeAgentRuntime.externalAgentId ?? null}
@@ -3621,7 +3631,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                     showProjectEntry
                     currentAssistant={currentAssistantSnapshot ? { id: currentAssistantSnapshot.id, name: currentAssistantSnapshot.name } : null}
                     onOpenAssistantCenter={openAssistantCenter}
-                    onClearAssistant={() => void handleApplyAssistant(null)}
+                    onSelectAssistant={handleSelectAssistant}
                     autoFocus
                     usesExternalRuntime={usesExternalRuntime}
                     externalAgentName={activeAgentRuntime.externalAgentId ?? null}

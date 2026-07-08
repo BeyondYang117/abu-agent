@@ -5,7 +5,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   ArrowUp,
   Archive,
-  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -24,17 +23,16 @@ import {
   Square,
   Terminal,
   Wrench,
-  X,
   Zap,
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
 import { SourcesButton } from './SourcesButton'
+import { AssistantPicker } from './AssistantPicker'
 import { MultiModelSelector } from './MultiModelSelector'
 import { Button, IconButton } from '../components/Button'
 import { api, type ChatToolDefinition, type ChatMcpServer } from '../api/tauri'
 import { chatApi } from './api'
-import { builtinAssistantGlyph } from './assistantIcons'
-import type { AgentPlanMode, AgentPlanState, ChatProject, ModelRef, PendingAttachment } from './types'
+import type { AgentPlanMode, AgentPlanState, ChatAssistant, ChatProject, ModelRef, PendingAttachment } from './types'
 import {
   buildSlashCommands,
   commandMatches,
@@ -377,7 +375,8 @@ interface InputBarProps {
   /** 当前生效的专家(无则为空);显示在底部栏 */
   currentAssistant?: { id: string; name: string } | null
   onOpenAssistantCenter?: () => void
-  onClearAssistant?: () => void
+  /** 从底栏弹层选择专家：应用到当前会话，或（无会话时）以该专家开新对话；null=清除 */
+  onSelectAssistant?: (assistant: ChatAssistant | null) => void | Promise<void>
   autoFocus?: boolean
   /** footer：贴底（有消息时）；inline：嵌入居中区域（空对话欢迎页） */
   layout?: 'footer' | 'inline'
@@ -426,7 +425,7 @@ export function InputBar({
   showProjectEntry = false,
   currentAssistant = null,
   onOpenAssistantCenter,
-  onClearAssistant,
+  onSelectAssistant,
   autoFocus,
   layout = 'footer',
   usesExternalRuntime = false,
@@ -1651,35 +1650,15 @@ export function InputBar({
                 )}
               </IconButton>
             )}
-            {showAssistantEntry && (
-              <>
-                <IconButton
-                  size="sm"
-                  shape="circle"
-                  label={currentAssistant ? currentAssistant.name : '选择或创建专家'}
-                  title={currentAssistant ? `专家 · ${currentAssistant.name}` : '选择或创建专家'}
-                  onClick={onOpenAssistantCenter}
-                  disabled={disabled}
-                  className={`shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300/60 disabled:opacity-50 dark:focus-visible:ring-neutral-600 ${
-                    currentAssistant ? 'text-indigo-500 dark:text-indigo-300' : ''
-                  }`}
-                >
-                  {currentAssistant
-                    ? builtinAssistantGlyph(currentAssistant.id, 18) ?? <Bot size={18} strokeWidth={1.75} />
-                    : <Bot size={18} strokeWidth={1.75} />}
-                </IconButton>
-                {currentAssistant && onClearAssistant && (
-                  <IconButton
-                    size="sm"
-                    shape="circle"
-                    label="清除专家"
-                    onClick={onClearAssistant}
-                    className="shrink-0"
-                  >
-                    <X size={15} strokeWidth={2} />
-                  </IconButton>
-                )}
-              </>
+            {showAssistantEntry && onOpenAssistantCenter && (
+              <AssistantPicker
+                currentAssistant={currentAssistant}
+                onSelect={onSelectAssistant ?? (() => {})}
+                onOpenCenter={onOpenAssistantCenter}
+                disabled={disabled}
+                layout={layout}
+                anchorRef={innerRef}
+              />
             )}
 
             {!usesExternalRuntime && onChangeReplyModels && (
