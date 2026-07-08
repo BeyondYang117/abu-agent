@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { Layers, X } from 'lucide-react'
+import { Layers } from 'lucide-react'
 import { type ModelProvider } from '../api/tauri'
 import { getSettingsCached } from '../api/settingsCache'
 import { isProviderEnabled } from '../settings/utils'
@@ -180,24 +180,19 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up', anchorRef }
       {value.length > 0 && (
         <div className="group/stack flex items-center pl-0.5" data-tauri-drag-region="false">
           {value.map((ref, i) => (
-            <div
+            <button
               key={`${ref.provider_id}:${ref.model}`}
-              className="chat-model-stack-item group/avatar relative -ml-2 transition-[margin] duration-[var(--kv-dur-normal)] ease-[var(--kv-ease-standard)] first:ml-0 group-hover/stack:ml-1 group-hover/stack:first:ml-0"
+              type="button"
+              onClick={() => removeChip(ref)}
+              aria-label={`移除 ${ref.model}`}
+              className="chat-model-stack-item relative -ml-2 transition-[margin,transform] duration-[var(--kv-dur-normal)] ease-[var(--kv-ease-standard)] first:ml-0 hover:scale-110 active:scale-95 group-hover/stack:ml-1 group-hover/stack:first:ml-0"
               style={{ zIndex: value.length - i }}
-              title={`${ref.model} | ${providerName(ref.provider_id)}`}
+              title={`${ref.model} | ${providerName(ref.provider_id)} · 点击移除`}
             >
               <span className="grid size-6 place-items-center rounded-full border border-neutral-200 bg-white dark:border-neutral-600 dark:bg-neutral-800">
                 <ModelIcon model={ref.model} size={14} />
               </span>
-              <button
-                type="button"
-                onClick={() => removeChip(ref)}
-                aria-label={`移除 ${ref.model}`}
-                className="absolute -right-1 -top-1 z-10 grid size-3.5 scale-50 place-items-center rounded-full bg-neutral-600 text-white opacity-0 shadow-sm transition-all duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-spring)] hover:bg-neutral-800 group-hover/avatar:scale-100 group-hover/avatar:opacity-100 dark:bg-neutral-500 dark:hover:bg-neutral-300 dark:hover:text-neutral-900"
-              >
-                <X size={9} strokeWidth={3} />
-              </button>
-            </div>
+            </button>
           ))}
         </div>
       )}
