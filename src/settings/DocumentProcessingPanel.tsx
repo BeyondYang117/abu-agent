@@ -21,7 +21,7 @@ const EMPTY: DocumentProcessingConfig = {
   activeProcessor: '',
   fallbackToThirdParty: false,
   providers: [],
-  rapidOcrTier: 'standard',
+  rapidOcrTier: 'high',
 }
 
 // 两个固定的第三方解析服务；密钥填在各自条目里。
@@ -159,7 +159,7 @@ export function DocumentProcessingPanel({
         {cfg.ocrEngine === 'rapid_ocr' && (
           <RapidOcrWidget
             t={t}
-            tier={cfg.rapidOcrTier ?? 'standard'}
+            tier={cfg.rapidOcrTier ?? 'high'}
             onChangeTier={(rapidOcrTier) => patch({ rapidOcrTier })}
           />
         )}
