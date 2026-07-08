@@ -9,9 +9,7 @@ const PATTERN_MAX_SEC = 12
 const TARGET_FRAME_MS = 1000 / 20
 const MAX_CANVAS_DPR = 1.5
 const MAX_CANVAS_DPR_WINDOWS = 1
-// 整体透明度已压到 ~0.05 量级，量化档必须足够细：步长 1/47 ≈ 0.021，
-// 否则相邻点会被拍进明度差近一倍的两档，本身就制造斑块。
-const ALPHA_BUCKETS = 48
+const ALPHA_BUCKETS = 12
 
 type Dot = {
   x: number
@@ -94,7 +92,7 @@ function buildDots(width: number, height: number): Dot[] {
         diag: (normX + normY) * 0.5,
         diagRev: (normX + (1 - normY)) * 0.5,
         ringDistance: Math.hypot(x - cx, y - cy) / maxR,
-        base: 0.055 + depth * 0.015,
+        base: 0.08 + depth * 0.14,
         phase: rhythm * Math.PI * 2,
         speed: 0.3 + depth * 0.5,
         fade: centerFade(x, y, width, height),
@@ -303,8 +301,8 @@ export function ChatDotGridBackground() {
         const band = reducedMotion
           ? 0
           : computePatternGlow(pattern.id, dot, localSec, pattern.durationSec)
-        const pulse = reducedMotion ? 0 : Math.sin(nowSec * dot.speed + dot.phase) * 0.004
-        const alpha = (dot.base * (0.9 + band * 0.1) + band * 0.05 + pulse) * dot.fade
+        const pulse = reducedMotion ? 0 : Math.sin(nowSec * dot.speed + dot.phase) * 0.012
+        const alpha = (dot.base * (0.48 + band * 0.52) + band * 0.34 + pulse) * dot.fade
         if (alpha <= 0.01) continue
 
         const bucketIndex = Math.max(1, Math.min(ALPHA_BUCKETS - 1, Math.round(alpha * (ALPHA_BUCKETS - 1))))
