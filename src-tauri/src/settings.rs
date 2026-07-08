@@ -859,18 +859,7 @@ pub struct ChatToolsConfig {
     /// 默认关闭；关闭时 adapter 零开销（不构造记录）。仅内存、不落盘。
     #[serde(default)]
     pub request_debug_enabled: bool,
-    /// 技能市场配置（远程 JSON 索引地址）。为空表示未接入市场。
-    #[serde(default)]
-    pub skill_market: SkillMarketConfig,
     pub native_tools: ChatNativeToolsConfig,
-}
-
-/// 技能市场设置：货源索引地址由用户配置，代码不写死来源。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillMarketConfig {
-    #[serde(default)]
-    pub index_url: String,
 }
 
 impl Default for ChatToolsConfig {
@@ -889,7 +878,6 @@ impl Default for ChatToolsConfig {
             approval_policy: default_chat_approval_policy(),
             sub_agent_concurrency: default_sub_agent_concurrency(),
             request_debug_enabled: false,
-            skill_market: SkillMarketConfig::default(),
             native_tools: ChatNativeToolsConfig::default(),
         }
     }

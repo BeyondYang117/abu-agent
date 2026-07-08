@@ -1,6 +1,5 @@
 mod catalog;
 mod discover;
-pub mod marketplace;
 pub mod parse;
 mod runtime;
 mod types;

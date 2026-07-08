@@ -515,33 +515,7 @@ export type ChatToolsConfig = {
   subAgentConcurrency?: number
   /** 开发者「请求调试」开关：开启后每次 provider 调用被记录到内存环形缓冲（脱敏）。默认关。 */
   requestDebugEnabled?: boolean
-  /** 技能市场配置：远程 JSON 索引地址。空 = 未接入市场。 */
-  skillMarket?: { indexUrl?: string }
   nativeTools: ChatNativeToolsConfig
-}
-
-/** 技能市场索引里的一条技能。 */
-export type MarketSkill = {
-  id: string
-  name: string
-  description: string
-  author?: string | null
-  version: string
-  category?: string | null
-  tags: string[]
-  downloadUrl: string
-  iconUrl?: string | null
-  previewUrl?: string | null
-  homepage?: string | null
-}
-
-export type MarketInstalledInfo = { id: string; version: string }
-
-export type MarketFetchResult = {
-  success: boolean
-  skills: MarketSkill[]
-  installed: MarketInstalledInfo[]
-  error?: string | null
 }
 
 export type SkillMeta = {
@@ -1096,7 +1070,6 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     subAgentConcurrency: Math.min(64, Math.max(1, Math.round(current.subAgentConcurrency ?? 12))),
     requestDebugEnabled: current.requestDebugEnabled ?? false,
-    skillMarket: { indexUrl: current.skillMarket?.indexUrl ?? '' },
     nativeTools: {
       ...defaultNativeTools(),
       ...current.nativeTools,
@@ -1535,13 +1508,6 @@ export const api = {
   chatSkillsOpenFolder: () =>
     invoke<{ success: boolean; path?: string | null; error?: string | null }>(
       'chat_skills_open_folder',
-    ),
-  chatSkillsMarketFetch: (indexUrl: string) =>
-    invoke<MarketFetchResult>('chat_skills_market_fetch', { indexUrl }),
-  chatSkillsMarketInstall: (skill: MarketSkill, indexUrl: string) =>
-    invoke<{ success: boolean; skill?: SkillMeta | null; error?: string | null }>(
-      'chat_skills_market_install',
-      { skill, indexUrl },
     ),
   /** 当前仍在运行的后台命令（chat agent run_command background:true 起的）。空数组 = 无。 */
   chatListBackgroundCommands: () =>

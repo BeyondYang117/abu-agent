@@ -25,7 +25,6 @@ import {
   type SkillMeta,
 } from '../api/tauri'
 import { getSettingsCached, refreshSettings, saveSettingsCached } from '../api/settingsCache'
-import { SkillMarket } from './SkillMarket'
 import { usesNativeTitlebar } from './platform'
 import { Select } from '../settings/components'
 import { Button, IconButton } from '../components/Button'
@@ -216,7 +215,6 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
   const [skillError, setSkillError] = useState('')
   const [query, setQuery] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [view, setView] = useState<'installed' | 'market'>('installed')
   const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillDetail | null>(null)
 
   // 高级设置折叠时内容仍在 DOM（用于 chat-motion-reveal 高度动画），用 inert 让其退出 tab 序 / a11y 树，
@@ -470,39 +468,6 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
             </div>
           </div>
 
-          {/* 已安装 / 市场 切换 */}
-          <div className="mt-5 flex items-center gap-1">
-            {([
-              ['installed', '已安装'],
-              ['market', '市场'],
-            ] as const).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setView(id)}
-                className={`h-8 rounded-lg px-3 text-[13px] font-semibold transition-colors ${
-                  view === id
-                    ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
-                    : 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800'
-                }`}
-                data-tauri-drag-region="false"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {view === 'market' ? (
-            <SkillMarket
-              indexUrl={chatTools.skillMarket?.indexUrl ?? ''}
-              onChangeIndexUrl={(indexUrl) => persistChatTools({ skillMarket: { indexUrl } })}
-              onInstalled={() => {
-                void refreshChatSkills()
-                onSkillsChanged?.()
-              }}
-            />
-          ) : (
-          <>
           {/* 搜索 */}
           <div className="relative mt-6">
             <Search size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
@@ -656,8 +621,6 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
               </>
             )}
           </div>
-          </>
-          )}
         </div>
       </main>
 
