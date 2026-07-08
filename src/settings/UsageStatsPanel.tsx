@@ -27,6 +27,7 @@ const SOURCE_OPTIONS = [
   'chat_compression',
   'chat_aux_vision',
   'chat_image_generation',
+  'knowledge_base',
 ]
 
 const STATUS_OPTIONS = ['all', 'success', 'error', 'cancelled', 'missing_usage']
@@ -44,6 +45,7 @@ function sourceLabel(source: string, lang: string) {
     chat_compression: '上下文压缩',
     chat_aux_vision: '辅助视觉',
     chat_image_generation: '图片生成',
+    knowledge_base: '知识库',
   }
   const en: Record<string, string> = {
     all: 'All sources',
@@ -55,6 +57,7 @@ function sourceLabel(source: string, lang: string) {
     chat_compression: 'Context compression',
     chat_aux_vision: 'Aux vision',
     chat_image_generation: 'Image generation',
+    knowledge_base: 'Knowledge base',
   }
   return (lang === 'zh' ? zh : en)[source] || source.replace(/_/g, ' ')
 }

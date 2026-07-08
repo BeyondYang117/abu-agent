@@ -9,6 +9,10 @@ use serde_json::Value;
 use crate::api::{send_with_failover, with_standard_request_timeout};
 use crate::settings::ModelProvider;
 use crate::state::AppState;
+use crate::usage::{self, UsageRecordInput};
+
+/// 用量统计里嵌入调用的来源标签（索引与检索共用同一条通道）。
+const EMBED_USAGE_SOURCE: &str = "knowledge_base";
 
 /// Embed a batch of inputs in one request. Returns one vector per input, in
 /// input order.
@@ -32,7 +36,34 @@ pub async fn embed_batch(
     let url = format!("{}/embeddings", provider.base_url.trim_end_matches('/'));
     let body = serde_json::json!({ "model": model, "input": inputs });
 
-    let response = send_with_failover(
+    // 记一次用量：/embeddings 是真实计费调用，成功/失败都进「用量统计」，来源=知识库。
+    let started_at = chrono::Local::now().timestamp();
+    let clock = std::time::Instant::now();
+    let record = |status: &str,
+                  status_code: Option<u16>,
+                  usage: Option<crate::chat::model::ModelUsage>,
+                  error_kind: Option<String>| {
+        usage::record_model_call(
+            state,
+            UsageRecordInput {
+                provider,
+                model,
+                source: EMBED_USAGE_SOURCE,
+                operation: "embed",
+                status,
+                status_code,
+                usage,
+                usage_source: "provider_reported",
+                started_at,
+                duration_ms: clock.elapsed().as_millis() as u64,
+                conversation_id: None,
+                message_id: None,
+                error_kind,
+            },
+        );
+    };
+
+    let response = match send_with_failover(
         state,
         "Embeddings API",
         attempts,
@@ -43,12 +74,27 @@ pub async fn embed_batch(
                 .send()
         },
     )
-    .await?;
+    .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            record(
+                "error",
+                crate::api::extract_status_code(&e),
+                None,
+                Some(usage::error_kind_from_message(&e)),
+            );
+            return Err(e);
+        }
+    };
 
     let value: Value = response
         .json()
         .await
         .map_err(|e| format!("embeddings response not JSON: {e}"))?;
+
+    // 调用已计费成功——先记用量（含 provider 返回的 token 数），再做数量校验。
+    record("success", Some(200), usage::model_usage_from_openai_value(&value), None);
 
     let vectors = parse_embeddings_response(&value)?;
     if vectors.len() != inputs.len() {
