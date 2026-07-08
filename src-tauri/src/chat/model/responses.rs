@@ -217,6 +217,7 @@ impl OpenAiResponsesProvider<'_> {
         })?;
 
         let mut buffer = String::new();
+        let mut utf8 = crate::api::Utf8StreamDecoder::default();
         let mut state = ResponsesStreamState::default();
 
         loop {
@@ -242,7 +243,7 @@ impl OpenAiResponsesProvider<'_> {
             let Some(chunk) = chunk else {
                 break;
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.push_str(&utf8.push(&chunk));
             while let Some(pos) = buffer.find('\n') {
                 let line: String = buffer.drain(..=pos).collect();
                 if let Some(err) = process_sse_line(&line, &mut state, sink)? {

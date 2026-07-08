@@ -145,6 +145,7 @@ impl AnthropicMessagesProvider<'_> {
         })?;
 
         let mut buffer = String::new();
+        let mut utf8 = crate::api::Utf8StreamDecoder::default();
         let mut full = String::new();
         let mut reasoning_full = String::new();
         let mut tool_calls = Vec::new();
@@ -177,7 +178,7 @@ impl AnthropicMessagesProvider<'_> {
             let Some(chunk) = chunk else {
                 break;
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.push_str(&utf8.push(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
                 let line: String = buffer.drain(..=pos).collect();

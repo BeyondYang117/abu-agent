@@ -150,6 +150,34 @@ pub fn build_http_client() -> Client {
         })
 }
 
+/// 流式 UTF-8 增量解码器：SSE 分片可能在多字节字符（如中文 3 字节）中间切开，
+/// 逐片 `from_utf8_lossy` 会把半个字符变成替换符。此解码器把不完整的尾字节留到下一片。
+#[derive(Default)]
+pub struct Utf8StreamDecoder {
+    tail: Vec<u8>,
+}
+
+impl Utf8StreamDecoder {
+    /// 喂入一片原始字节，返回可安全解码的前缀；未构成完整字符的尾字节暂存到下次。
+    pub fn push(&mut self, chunk: &[u8]) -> String {
+        self.tail.extend_from_slice(chunk);
+        let valid = match std::str::from_utf8(&self.tail) {
+            Ok(s) => s.len(),
+            Err(err) => err.valid_up_to(),
+        };
+        let out = String::from_utf8_lossy(&self.tail[..valid]).into_owned();
+        self.tail.drain(..valid);
+        // 单个 UTF-8 字符最多 4 字节：残留超过 4 字节说明是真·非法序列而非跨片切割，
+        // 按 lossy 冲掉以免永久卡住。
+        if self.tail.len() > 4 {
+            let flushed = String::from_utf8_lossy(&self.tail).into_owned();
+            self.tail.clear();
+            return out + &flushed;
+        }
+        out
+    }
+}
+
 // ===== Retry / Failover =====
 
 /// 重试延迟基础值（毫秒）。暂时性错误起步退避 ~5s。
@@ -1343,6 +1371,7 @@ pub async fn stream_translate_combined(
     let sep_len = sep.len();
 
     let mut sse_buf = String::new();
+    let mut utf8 = Utf8StreamDecoder::default();
     let mut tail = String::new();
     let mut streamed_content = String::new();
     let mut translated = String::new();
@@ -1392,7 +1421,7 @@ pub async fn stream_translate_combined(
             }
         };
 
-        let text = String::from_utf8_lossy(&chunk);
+        let text = utf8.push(&chunk);
         sse_buf.push_str(&text);
 
         while let Some(pos) = sse_buf.find('\n') {
@@ -1557,6 +1586,7 @@ async fn stream_vision_response(
     my_generation: u64,
 ) -> Result<StreamCallResult, String> {
     let mut buffer = String::new();
+    let mut utf8 = Utf8StreamDecoder::default();
     let mut full = String::new();
     let mut reasoning_full = String::new();
     let mut usage: Option<ModelUsage> = None;
@@ -1594,7 +1624,7 @@ async fn stream_vision_response(
             }
         };
 
-        let text = String::from_utf8_lossy(&chunk);
+        let text = utf8.push(&chunk);
         buffer.push_str(&text);
 
         while let Some(pos) = buffer.find('\n') {
@@ -1676,6 +1706,27 @@ async fn stream_vision_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_decoder_reassembles_split_multibyte() {
+        // "温周" 各 3 字节；在字符中间切开分多片喂入，不应产生替换符。
+        let bytes = "温周".as_bytes().to_vec();
+        let mut dec = Utf8StreamDecoder::default();
+        let mut out = String::new();
+        // 逐字节喂：最坏情况的边界切割。
+        for b in &bytes {
+            out.push_str(&dec.push(&[*b]));
+        }
+        assert_eq!(out, "温周");
+        assert!(!out.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn utf8_decoder_passes_ascii_and_complete_chunks() {
+        let mut dec = Utf8StreamDecoder::default();
+        assert_eq!(dec.push(b"hello "), "hello ");
+        assert_eq!(dec.push("世界".as_bytes()), "世界");
+    }
 
     // ===== attach_json_body (gzip) =====
 

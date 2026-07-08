@@ -147,6 +147,7 @@ impl GeminiProvider<'_> {
         })?;
 
         let mut buffer = String::new();
+        let mut utf8 = crate::api::Utf8StreamDecoder::default();
         let mut full = String::new();
         let mut reasoning_full = String::new();
         let mut tool_calls: Vec<PendingToolCall> = Vec::new();
@@ -178,7 +179,7 @@ impl GeminiProvider<'_> {
             let Some(chunk) = chunk else {
                 break;
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.push_str(&utf8.push(&chunk));
 
             // Gemini `alt=sse`：每个 `data:` 行是一整段 GenerateContentResponse 片段。
             while let Some(pos) = buffer.find('\n') {
