@@ -219,6 +219,25 @@ pub async fn list_enabled_tool_defs(
         tools.push(tool);
     }
 
+    // Advisor tool (executor-advisor): exposed only when an advisor model is
+    // configured. It lives in NATIVE_TOOLS (so find_entry dispatches it) but is
+    // gated out of the auto-list, so append it here like the image gen tool.
+    if let Some((provider_id, model)) = settings.advisor_model() {
+        let mut tool = super::types::native_advisor_tool();
+        let provider_name = settings
+            .get_provider(&provider_id)
+            .map(|provider| {
+                if provider.name.trim().is_empty() {
+                    provider.id.clone()
+                } else {
+                    provider.name.clone()
+                }
+            })
+            .unwrap_or(provider_id);
+        tool.server_id = Some(format!("{provider_name} / {model}"));
+        tools.push(tool);
+    }
+
     if settings.chat_tools.enabled {
         // 并行从每个已启用 server 拉工具列表（持久会话，命中即复用）。失败仅置 Error
         // 态并发事件（mcp_get_or_connect 内部已发），不阻塞其他 server。借用 &AppState 的
@@ -472,6 +491,7 @@ fn enabled_tools_cache_key(settings: &crate::settings::Settings) -> String {
         "chatTools": settings.chat_tools,
         "chatMemory": settings.chat_memory,
         "imageGeneration": settings.default_models.image_generation,
+        "advisor": settings.default_models.advisor,
         "lensWebSearchProvider": settings.lens.web_search.provider,
         "lensWebSearchMaxResults": settings.lens.web_search.max_results,
         "lensWebSearchDepth": settings.lens.web_search.search_depth,

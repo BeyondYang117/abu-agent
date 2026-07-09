@@ -442,7 +442,7 @@ pub fn default_chat_max_output_tokens() -> u32 {
     32768
 }
 
-fn clamp_chat_max_output_tokens(value: u32) -> u32 {
+pub(crate) fn clamp_chat_max_output_tokens(value: u32) -> u32 {
     value.clamp(512, 65_536)
 }
 
@@ -605,6 +605,8 @@ fn resolve_mixer_side_model(
  * title_summary：标题总结副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
  * compression：上下文/历史对话压缩副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
  * image_generation：生图副任务使用；为空时若当前会话主模型支持直接生图则继承该模型。
+ * advisor：顾问模型（executor-advisor 模式）——主循环模型可用 `advisor` 工具向它
+ *   单次咨询；为空 = 功能关闭（工具不注册），没有继承语义。
  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -619,6 +621,8 @@ pub struct DefaultModelsConfig {
     pub compression: DefaultModelSelection,
     #[serde(default)]
     pub image_generation: DefaultModelSelection,
+    #[serde(default)]
+    pub advisor: DefaultModelSelection,
 }
 
 impl Default for DefaultModelsConfig {
@@ -629,6 +633,7 @@ impl Default for DefaultModelsConfig {
             title_summary: DefaultModelSelection::default(),
             compression: DefaultModelSelection::default(),
             image_generation: DefaultModelSelection::default(),
+            advisor: DefaultModelSelection::default(),
         }
     }
 }
@@ -1255,6 +1260,21 @@ impl Settings {
             None
         }
     }
+
+    /// Advisor model (executor-advisor pattern): the `advisor` tool is exposed
+    /// only when both provider and model are set. No inheritance — blank = off.
+    pub fn advisor_model(&self) -> Option<(String, String)> {
+        if self.default_models.advisor.is_configured()
+            && !self.default_models.advisor.model.trim().is_empty()
+        {
+            Some((
+                self.default_models.advisor.provider_id.clone(),
+                self.default_models.advisor.model.clone(),
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for Settings {
@@ -1726,6 +1746,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             &mut settings.default_models.image_generation,
             &settings.providers,
         );
+        sanitize_default_model_selection(&mut settings.default_models.advisor, &settings.providers);
     }
 
     // 3. 确保当前使用的模型确实在该 provider 的 enabled_models 中。

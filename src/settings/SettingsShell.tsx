@@ -483,6 +483,7 @@ function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData
     titleSummary: { providerId: '', model: '' },
     compression: { providerId: '', model: '' },
     imageGeneration: { providerId: '', model: '' },
+    advisor: { providerId: '', model: '' },
   }
 }
 
@@ -504,6 +505,9 @@ function clearDefaultModelProvider(
     imageGeneration: defaultModels.imageGeneration.providerId === providerId
       ? { providerId: '', model: '' }
       : defaultModels.imageGeneration,
+    advisor: defaultModels.advisor.providerId === providerId
+      ? { providerId: '', model: '' }
+      : defaultModels.advisor,
   }
 }
 
@@ -528,6 +532,9 @@ function resolveDefaultModelsAfterModelRemoval(
     imageGeneration: defaultModels.imageGeneration.providerId === providerId
       ? { ...defaultModels.imageGeneration, model: resolveAfterRemoval(defaultModels.imageGeneration.model) }
       : defaultModels.imageGeneration,
+    advisor: defaultModels.advisor.providerId === providerId
+      ? { ...defaultModels.advisor, model: resolveAfterRemoval(defaultModels.advisor.model) }
+      : defaultModels.advisor,
   }
 }
 
@@ -3104,6 +3111,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         updateDefaultModel('titleSummary', '', '')
                         updateDefaultModel('compression', '', '')
                         updateDefaultModel('imageGeneration', '', '')
+                        updateDefaultModel('advisor', '', '')
                         updateChatTools({ subAgentProviderId: '', subAgentModel: '' })
                       }}
                       data-tauri-drag-region="false"
@@ -3175,6 +3183,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       inheritLabel={t.mixerFollowChatModel}
                       onChange={(providerId, model) => {
                         updateChatTools({ subAgentProviderId: providerId, subAgentModel: model })
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={t.defaultAdvisorModel}
+                    description={t.defaultAdvisorModelHint}
+                  >
+                    <ModelPairSelect
+                      providerId={settings.defaultModels.advisor.providerId || ''}
+                      model={settings.defaultModels.advisor.model || ''}
+                      providers={settings.providers}
+                      inheritLabel={t.mixerAdvisorOff}
+                      onChange={(providerId, model) => {
+                        updateDefaultModel('advisor', providerId, model)
                       }}
                     />
                   </SettingRow>

@@ -37,7 +37,8 @@ use super::registry::NativeToolContext;
 use super::types::{
     native_bash_output_tool, native_edit_file_tool, native_glob_files_tool,
     native_kill_background_tool,
-    native_knowledge_search_tool, native_list_dir_tool, native_memory_modify_tool,
+    native_advisor_tool, native_knowledge_search_tool, native_list_dir_tool,
+    native_memory_modify_tool,
     native_memory_read_tool, native_memory_search_tool, native_read_file_tool,
     native_run_command_tool, native_run_python_tool, native_save_assistant_tool,
     native_search_files_tool, native_web_fetch_tool, native_web_search_tool,
@@ -145,6 +146,20 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         read_only: true,
         requires_session_consent: false,
         call: NativeToolCall::Async(call_knowledge_search),
+    },
+    NativeToolEntry {
+        name: "advisor",
+        def: native_advisor_tool,
+        // Never auto-listed: exposure depends on `default_models.advisor` being
+        // configured, which this gate can't see. Appended separately in
+        // `list_enabled_tool_defs` when configured (mirrors mixer_generate_image).
+        // find_entry still resolves it here for dispatch.
+        enabled: |_, _, _| false,
+        parallel_safe: true,
+        bypasses_approval: true,
+        read_only: true,
+        requires_session_consent: false,
+        call: NativeToolCall::Async(call_advisor),
     },
     NativeToolEntry {
         name: "read",
@@ -648,6 +663,98 @@ fn call_knowledge_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     })
 }
 
+/// Advisor consultation (executor-advisor pattern). Runs a single-shot chat
+/// completion against the model configured in `default_models.advisor` and
+/// returns its guidance text. No tools, no recursion. If the advisor model is
+/// missing/unusable, returns a tool error (the main loop continues).
+fn call_advisor(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let question = ctx
+            .arguments
+            .get("question")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if question.is_empty() {
+            return Err("advisor requires a non-empty question".to_string());
+        }
+        let extra_context = ctx
+            .arguments
+            .get("context")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+
+        // Resolve the advisor model (runtime second gate: the tool list is
+        // cached, so the config may have been cleared since listing).
+        let Some((provider_id, model)) = ctx.settings.advisor_model() else {
+            return Err("No advisor model is configured under Mixer settings.".to_string());
+        };
+        let Some(provider) = ctx.settings.get_provider(&provider_id).cloned() else {
+            return Err("Advisor provider is missing or disabled.".to_string());
+        };
+        if provider.api_keys.is_empty() {
+            return Err("Advisor provider has no API key configured.".to_string());
+        }
+
+        let language = crate::settings::resolve_chat_language(ctx.settings);
+        let system = if language.starts_with("zh") {
+            "你是一位资深技术顾问，被一个正在执行任务的 AI 助手请来咨询。请针对它的问题给出清晰的诊断、根因分析和可执行的方向性建议；聚焦决策与思路，不要代写完整实现。若信息不足，指出还需要哪些关键信息。"
+        } else {
+            "You are a senior technical advisor consulted by an AI assistant that is executing a task. Give a clear diagnosis, root-cause analysis, and actionable direction for its question; focus on decisions and approach, do not write the full implementation for it. If information is insufficient, say what key details are missing."
+        };
+        let user_content = if extra_context.is_empty() {
+            question.clone()
+        } else {
+            format!("{question}\n\n---\nContext:\n{extra_context}")
+        };
+        let messages = vec![
+            serde_json::json!({ "role": "system", "content": system }),
+            serde_json::json!({ "role": "user", "content": user_content }),
+        ];
+        let retry_attempts = if ctx.settings.retry_enabled {
+            ctx.settings.retry_attempts as usize
+        } else {
+            1
+        };
+        let max_output_tokens =
+            crate::settings::clamp_chat_max_output_tokens(ctx.settings.chat.max_output_tokens);
+        let conversation_id = ctx
+            .native_ctx
+            .map(|nc| nc.conversation_id.clone())
+            .unwrap_or_default();
+        let message_id = ctx
+            .native_ctx
+            .and_then(|nc| nc.tool_call_id.clone())
+            .unwrap_or_default();
+
+        let (message, _usage) =
+            crate::chat::agent::planning::call_chat_completion_message_with_usage(
+                ctx.state,
+                &provider,
+                &model,
+                messages,
+                None,
+                retry_attempts,
+                false,
+                None,
+                max_output_tokens,
+                &conversation_id,
+                &message_id,
+                "Advisor consultation",
+            )
+            .await?;
+        let advice =
+            crate::chat::agent::stop::assistant_content_from_api_message(&message);
+        let advice = advice.trim();
+        if advice.is_empty() {
+            return Err("Advisor returned an empty response.".to_string());
+        }
+        Ok(text_tool_result(format!("[Advisor · {model}]\n\n{advice}")))
+    })
+}
+
 
 fn call_memory_read(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     Box::pin(async move {
@@ -763,6 +870,7 @@ mod tests {
         "web_search",
         "web_fetch",
         "knowledge_search",
+        "advisor",
         "read",
         "ls",
         "grep",
@@ -843,6 +951,7 @@ mod tests {
                 "web_search",
                 "web_fetch",
                 "knowledge_search",
+                "advisor",
                 "read",
                 "ls",
                 "grep",
@@ -869,6 +978,7 @@ mod tests {
         assert_eq!(
             bypass,
             [
+                "advisor",
                 "memory_read",
                 "memory_modify",
                 "memory_search",
@@ -892,6 +1002,7 @@ mod tests {
                 "web_search",
                 "web_fetch",
                 "knowledge_search",
+                "advisor",
                 "read",
                 "ls",
                 "grep",

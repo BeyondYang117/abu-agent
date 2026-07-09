@@ -761,6 +761,9 @@ fn native_tools_prompt(
     let has_image_generation = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "mixer_generate_image");
+    let has_advisor = native_tool_names
+        .iter()
+        .any(|tool| tool.as_str() == "advisor");
     let has_run_python = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "run_python");
@@ -803,6 +806,11 @@ fn native_tools_prompt(
         } else {
             "\n- Image generation is not enabled; if asked, explain that an image model must be configured under Mixer first."
         };
+        let advisor_hint = if has_advisor {
+            "\n- A stronger advisor model is available via the advisor tool. Consult it when you are stuck, have failed the same approach repeatedly, or face a significant design/architecture decision — pass a specific question plus the relevant context. Do not call it for routine steps you can handle yourself."
+        } else {
+            ""
+        };
         let generated_file_hint = match (delivery_dir, has_run_python) {
             (Some(dir), true) => format!(
                 "\n- File delivery has three modes — pick by intent: a finished file FOR THE USER (report/data/code/CSV/JSON/MD/HTML, etc.) → write it into the delivery directory `{dir}` (it automatically shows a downloadable file card); editing a file in the user's project → write to the project path (no card); content that needs computation, data analysis, charts/plots, or a Python library to generate (e.g. a formatted XLSX, PDF, or rendered image) → run_python (its artifacts land in the delivery directory automatically and show a card). Do not call run_python merely to write out content you already have."
@@ -823,7 +831,7 @@ fn native_tools_prompt(
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {live_access_hint}"
-        ) + &generated_file_hint + image_generation_hint + code_discipline
+        ) + &generated_file_hint + image_generation_hint + advisor_hint + code_discipline
     };
     if has_image_generation && !prompt.ends_with('.') && !prompt.ends_with('。') {
         prompt.push('.');

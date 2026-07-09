@@ -659,6 +659,7 @@ export type DefaultModelsConfig = {
   titleSummary: DefaultModelSelection
   compression: DefaultModelSelection
   imageGeneration: DefaultModelSelection
+  advisor: DefaultModelSelection
 }
 
 // 应用设置数据结构
@@ -1122,6 +1123,7 @@ function normalizeDefaultModels(
     titleSummary: normalizeDefaultModelSelection(config?.titleSummary),
     compression: normalizeDefaultModelSelection(config?.compression),
     imageGeneration: normalizeDefaultModelSelection(config?.imageGeneration),
+    advisor: normalizeDefaultModelSelection(config?.advisor),
   }
 }
 

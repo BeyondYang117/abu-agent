@@ -4524,7 +4524,8 @@ async fn list_tools_for_chat(
     if !(settings.chat_tools.enabled
         || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
         || crate::settings::chat_memory_tools_enabled(settings)
-        || crate::settings::chat_image_generation_enabled_for_session(settings, session))
+        || crate::settings::chat_image_generation_enabled_for_session(settings, session)
+        || settings.advisor_model().is_some())
     {
         return Vec::new();
     }

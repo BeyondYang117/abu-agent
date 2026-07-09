@@ -813,6 +813,38 @@ pub fn native_knowledge_search_tool() -> ChatToolDefinition {
     }
 }
 
+/// `advisor` — consult a stronger model (executor-advisor pattern). The main
+/// loop model calls this on demand when it is stuck, repeatedly failing, or
+/// facing a significant design decision; the advisor model configured under
+/// Mixer answers in a single shot (no tools, no recursion). Read-only.
+pub fn native_advisor_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__advisor".to_string(),
+        name: "advisor".to_string(),
+        description: "Consult a stronger advisor model for guidance. Use this when you are stuck, have failed the same approach repeatedly, or face a significant design/architecture decision — NOT for routine steps you can handle yourself. Pass the specific question and enough context (relevant code, what you already tried, constraints). Returns the advisor's diagnosis and direction; you remain responsible for carrying it out.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The specific question or problem you want advice on."
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional but recommended: relevant code, constraints, error messages, and what you have already tried. The advisor sees only what you pass here."
+                }
+            },
+            "required": ["question"]
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
 /// Builtin native tool exposure: iterates the static registry in
 /// `mcp/native_registry.rs` (declaration order = model-facing order).
 pub fn list_native_builtin_tool_defs(
