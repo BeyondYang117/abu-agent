@@ -718,8 +718,15 @@ fn call_advisor(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
         } else {
             1
         };
-        let max_output_tokens =
-            crate::settings::clamp_chat_max_output_tokens(ctx.settings.chat.max_output_tokens);
+        // Model-aware output cap (matches sub-agents / top-level chat): a small
+        // advisor model may have a real ceiling far below the global chat cap;
+        // sending the raw cap makes strict providers 400. Prefer the model
+        // library / provider override, fall back to the global setting.
+        let max_output_tokens = crate::chat::model_metadata::chat_max_output_tokens_for_model(
+            Some(&provider),
+            &model,
+            ctx.settings.chat.max_output_tokens,
+        );
         let conversation_id = ctx
             .native_ctx
             .map(|nc| nc.conversation_id.clone())
