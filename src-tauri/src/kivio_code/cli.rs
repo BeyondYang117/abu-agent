@@ -259,16 +259,34 @@ fn attach_parent_console() {
     };
 
     unsafe {
-        // Prefer the parent terminal's console; if that fails (no parent console),
-        // allocate our own so the user still sees output.
+        // If stdout is already a valid handle, the shell gave us one — either the
+        // console-subsystem standalone `kivio-code` binary's own console, or a
+        // file/pipe the user redirected to (`kivio code -p ... > out.txt`).
+        // Reopening it to CONOUT$ would clobber that redirection and silently drop
+        // piped output, so leave the streams untouched (this is what makes the
+        // standalone bin genuinely no-op the attach).
+        if stdout_handle_valid() {
+            return;
+        }
+        // Windows-subsystem GUI binary launched from a terminal has NO console and
+        // NULL std handles. Borrow the parent terminal's console (or allocate one),
+        // then bind the CRT streams to it so println!/the TUI reach the user.
         if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
             let _ = AllocConsole();
         }
-
-        // Re-bind the CRT std streams to the freshly attached console, otherwise
-        // stdout/stderr/stdin keep pointing at the invalid pre-attach handles and
-        // all I/O is silently dropped.
         reopen_std_streams();
+    }
+}
+
+/// True when the process already owns a usable stdout handle (own console, or a
+/// shell-provided file/pipe). Checked before attaching so we never `freopen` over
+/// a valid redirection.
+#[cfg(windows)]
+unsafe fn stdout_handle_valid() -> bool {
+    use windows::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+    match GetStdHandle(STD_OUTPUT_HANDLE) {
+        Ok(h) => !h.is_invalid(),
+        Err(_) => false,
     }
 }
 
