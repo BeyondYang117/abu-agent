@@ -5347,6 +5347,7 @@ pub(crate) async fn run_chat_probe(
     provider: Option<String>,
     model: Option<String>,
     skill_id: Option<String>,
+    mode: Option<String>,
     cwd: Option<String>,
 ) -> Result<ChatMessage, String> {
     const PROBE_PROJECT_ID: &str = "proj_kivio_probe";
@@ -5405,6 +5406,12 @@ pub(crate) async fn run_chat_probe(
         let head: String = prompt.chars().take(60).collect();
         format!("🔬 {head}")
     };
+    // 可选运行模式（act/plan/orchestrate）：验证模式提示词用。非法值报错而非静默回落。
+    if let Some(mode) = mode.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        let mode = crate::chat::plan::mode_from_str(mode)?;
+        conversation.agent_plan_state =
+            crate::chat::plan::with_mode(&conversation.agent_plan_state, mode);
+    }
     let user_message = ChatMessage {
         id: format!("msg_{}", Uuid::new_v4()),
         role: "user".to_string(),

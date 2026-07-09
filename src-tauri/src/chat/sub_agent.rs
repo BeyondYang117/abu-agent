@@ -399,6 +399,7 @@ struct SubAgentHost {
     parent_generation: u64,
     task_id: String,
     name: String,
+    model: String,
     depth: u8,
     progress: Mutex<ProgressState>,
 }
@@ -439,6 +440,7 @@ impl SubAgentHost {
                 "parentToolCallId": self.parent_tool_call_id,
                 "taskId": self.task_id,
                 "name": self.name,
+                "model": self.model,
                 "depth": self.depth,
                 "status": status,
                 "preview": text,
@@ -711,6 +713,7 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
             parent_generation: req.parent_generation,
             task_id: req.task_id.clone(),
             name: req.name.clone(),
+            model: req.model.clone(),
             depth: req.depth,
             progress: Mutex::new(ProgressState::default()),
         };
@@ -1090,6 +1093,7 @@ pub fn handle_agent_spawn<'a>(
             task_id: task_id.clone(),
             name: name.clone(),
             agent_type: def.name.clone(),
+            model: request.model.clone(),
         };
 
         // Blocking + single-result: await completion and return the result
@@ -1109,6 +1113,7 @@ struct FinalizeCtx {
     task_id: String,
     name: String,
     agent_type: String,
+    model: String,
 }
 
 /// Backstop cleanup when the `agent` spawn future is dropped mid-run instead of
@@ -1167,6 +1172,7 @@ fn finalize_sub_agent_outcome(
             task_id: &ctx.task_id,
             name: &ctx.name,
             agent_type: &ctx.agent_type,
+            model: &ctx.model,
         },
         outcome,
     )
@@ -1180,6 +1186,7 @@ struct SubAgentFinalizeParams<'a> {
     task_id: &'a str,
     name: &'a str,
     agent_type: &'a str,
+    model: &'a str,
 }
 
 /// Pure finalization: update the manager record for the outcome and build the
@@ -1194,6 +1201,7 @@ fn compute_sub_agent_finalization(
         task_id,
         name,
         agent_type,
+        model,
     } = *params;
 
     match outcome {
@@ -1210,6 +1218,7 @@ fn compute_sub_agent_finalization(
                 "taskId": task_id,
                 "name": name,
                 "agentType": agent_type,
+                "model": model,
                 "status": "cancelled",
                 "error": "cancelled",
             });
@@ -1241,6 +1250,7 @@ fn compute_sub_agent_finalization(
                 "taskId": task_id,
                 "name": name,
                 "agentType": agent_type,
+                "model": model,
                 "status": "completed",
                 "result": clip(&content, RESULT_PREVIEW_MAX),
             });
@@ -1283,6 +1293,7 @@ fn compute_sub_agent_finalization(
                 "taskId": task_id,
                 "name": name,
                 "agentType": agent_type,
+                "model": model,
                 "status": if cancelled { "cancelled" } else { "failed" },
                 "error": display_err,
             });
@@ -1601,6 +1612,7 @@ mod tests {
             task_id,
             name: "Researcher",
             agent_type: "general-purpose",
+            model: "test-model",
         }
     }
 

@@ -22,7 +22,8 @@ use crate::chat::types::ToolCallStatus;
 use crate::state::AppState;
 
 /// 单次生成超时（无 GUI 应答，靠这个兜底避免 watcher 永久卡住）。
-const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+/// orchestrate 编排流程（多子代理并行多轮）常超 2 分钟，放宽到 6 分钟。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(360);
 /// 轮询间隔——调试用途，延迟无所谓。
 const POLL_INTERVAL: Duration = Duration::from_millis(700);
 
@@ -38,6 +39,9 @@ struct ProbeRequest {
     model: Option<String>,
     #[serde(default)]
     skill_id: Option<String>,
+    /// agent 运行模式（act/plan/orchestrate），省略 = act。用于验证模式提示词。
+    #[serde(default)]
+    mode: Option<String>,
     /// 文件工具的根目录（read/glob/grep 相对路径从此解析）。省略则用进程 cwd
     /// （dev 通常是仓库根），使文件工具开箱即用。
     #[serde(default)]
@@ -168,6 +172,7 @@ async fn handle_probe_request(app: &AppHandle, req: ProbeRequest) -> ProbeResult
         req.provider,
         req.model,
         req.skill_id,
+        req.mode,
         cwd,
     );
 

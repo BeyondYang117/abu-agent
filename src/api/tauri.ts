@@ -268,6 +268,8 @@ export type ChatSubagentPayload = {
   parentToolCallId: string
   taskId: string
   name: string
+  /** 子代理实际运行的模型（含全局 Subagent 模型覆盖后的结果）。 */
+  model?: string
   depth: number
   status: 'running' | 'completed' | 'failed' | 'cancelled'
   preview?: string

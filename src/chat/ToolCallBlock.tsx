@@ -261,6 +261,7 @@ function stringValue(value: unknown): string {
 interface SubagentView {
   name: string
   agentType?: string
+  model?: string
   depth: number
   status: string
   result?: string
@@ -319,6 +320,7 @@ function structuredSubagent(toolCall: ToolCallRecord): SubagentView | null {
   return {
     name: stringValue(progress?.name) || stringValue(structured.name) || 'subagent',
     agentType: stringValue(structured.agentType) || undefined,
+    model: stringValue(structured.model) || stringValue(progress?.model) || undefined,
     depth: numberValue(progress?.depth ?? structured.depth),
     status: stringValue(progress?.status) || stringValue(structured.status) || 'running',
     result: stringValue(structured.result) || undefined,
@@ -382,6 +384,7 @@ function SubAgentCard({ toolCall, defaultOpen = false }: ToolCallBlockProps) {
   const agentType = subagentAgentType(view, args)
   const name = subagentName(view, args)
   const title = subagentTitle(agentType, name)
+  const model = view?.model || ''
   const duration = formatDuration(getDuration(toolCall))
   const statusLine = subagentStatusLine(view, status)
   const prompt = subagentPrompt(args)
@@ -416,6 +419,11 @@ function SubAgentCard({ toolCall, defaultOpen = false }: ToolCallBlockProps) {
         <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
           {title}
         </span>
+        {model && (
+          <span className="shrink-0 text-neutral-400 dark:text-neutral-500">
+            · {model}
+          </span>
+        )}
         <span className="shrink-0">
           <StatusIcon status={status} />
         </span>

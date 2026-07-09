@@ -1874,6 +1874,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         const progress = {
           taskId: payload.taskId,
           name: payload.name,
+          model: payload.model ?? '',
           depth: payload.depth,
           status: payload.status,
           preview: payload.preview ?? '',
