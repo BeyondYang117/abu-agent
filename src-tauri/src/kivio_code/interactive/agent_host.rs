@@ -68,6 +68,17 @@ pub enum AgentUiEvent {
         /// Stream outcome: `completed` | `cancelled` | `error`.
         reason: String,
     },
+    /// The agent loop is asking the user to approve a tool call before it runs.
+    /// The event loop renders a y/n prompt and sends the decision back through
+    /// `responder`. `session=true` marks the once-per-session filesystem/shell
+    /// consent (the event loop may cache a "yes" and auto-answer later requests);
+    /// `session=false` is a per-call approval (`always_confirm` / MCP tools) that
+    /// is always prompted. A dropped `responder` (event loop gone) reads as deny.
+    ApprovalRequest {
+        prompt: String,
+        session: bool,
+        responder: Sender<bool>,
+    },
 }
 
 /// Shared, cheaply-cloneable cancel token for one interactive run. The event loop
@@ -138,6 +149,27 @@ impl InteractiveAgentHost {
         // event is correct (nothing left to render).
         let _ = self.tx.send(event);
     }
+
+    /// Emit an [`AgentUiEvent::ApprovalRequest`] and await the user's decision.
+    ///
+    /// The decision travels back over a fresh std `mpsc` channel; the event loop
+    /// (a different thread) sends the bool once the user answers. We block for it
+    /// on a `spawn_blocking` thread so the tokio worker running the agent loop is
+    /// not parked. A dropped responder (event loop gone) or a channel error reads
+    /// as deny — fail closed.
+    fn prompt_decision(&self, prompt: String, session: bool) -> AgentHostFuture<'_, bool> {
+        let (responder, rx) = std::sync::mpsc::channel::<bool>();
+        self.send(AgentUiEvent::ApprovalRequest {
+            prompt,
+            session,
+            responder,
+        });
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || rx.recv().unwrap_or(false))
+                .await
+                .unwrap_or(false)
+        })
+    }
 }
 
 impl AgentHost for InteractiveAgentHost {
@@ -187,19 +219,25 @@ impl AgentHost for InteractiveAgentHost {
     fn request_tool_approval<'a>(
         &'a self,
         _ctx: &'a ToolExecutionContext<'a>,
-        _record: &'a ToolCallRecord,
+        record: &'a ToolCallRecord,
     ) -> AgentHostFuture<'a, bool> {
-        // MVP: auto-approve. The tool still surfaces as a card; Esc cancels the
-        // whole run. A per-tool y/n prompt is a later phase.
-        Box::pin(async move { true })
+        // Per-call approval (always_confirm / MCP): prompt every time, never cached.
+        let prompt = tool_approval_prompt(record);
+        self.prompt_decision(prompt, false)
     }
 
     fn request_session_consent<'a>(
         &'a self,
         _ctx: &'a ToolExecutionContext<'a>,
     ) -> AgentHostFuture<'a, bool> {
-        // Running the CLI on one's own machine is the consent (same as print).
-        Box::pin(async move { true })
+        // Once-per-session filesystem/shell consent (the default policy). The event
+        // loop caches a "yes" so this only actually prompts on the first FS/shell
+        // tool of the session.
+        self.prompt_decision(
+            "Allow kivio-code to read/modify files and run commands in this directory for this session?"
+                .to_string(),
+            true,
+        )
     }
 
     fn request_user_response<'a>(
@@ -236,6 +274,25 @@ impl AgentHost for InteractiveAgentHost {
             }
         })
     }
+}
+
+/// Build a concise one-line approval prompt for a per-call tool approval, e.g.
+/// `Run bash? {"command":"rm -rf build"}`. The argument JSON is trimmed to keep
+/// the prompt to a single readable line.
+fn tool_approval_prompt(record: &ToolCallRecord) -> String {
+    const MAX_ARGS: usize = 100;
+    let args = record.arguments.trim();
+    if args.is_empty() || args == "{}" {
+        return format!("Run {}?", record.name);
+    }
+    let one_line = args.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clipped: String = one_line.chars().take(MAX_ARGS).collect();
+    let ellipsis = if one_line.chars().count() > MAX_ARGS {
+        "…"
+    } else {
+        ""
+    };
+    format!("Run {}? {clipped}{ellipsis}", record.name)
 }
 
 #[cfg(test)]
@@ -355,11 +412,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_and_consent_are_granted() {
-        let (tx, _rx) = mpsc::channel();
+    async fn approval_emits_request_and_returns_the_decision() {
+        // The host emits an ApprovalRequest carrying a responder; whatever the
+        // (fake) event loop sends back is the future's result.
+        let (tx, rx) = mpsc::channel();
         let host = InteractiveAgentHost::new(tx, RunCancel::new(1));
         let c = ctx();
-        assert!(host.request_session_consent(&c).await);
-        assert!(host.request_tool_approval(&c, &record("write")).await);
+
+        // Consent request → answered "yes".
+        let fut = host.request_session_consent(&c);
+        match rx.recv().unwrap() {
+            AgentUiEvent::ApprovalRequest { session, responder, .. } => {
+                assert!(session, "session consent should set session=true");
+                responder.send(true).unwrap();
+            }
+            other => panic!("expected ApprovalRequest, got {other:?}"),
+        }
+        assert!(fut.await, "yes decision → approved");
+
+        // Per-call tool approval → answered "no".
+        let rec = record("write");
+        let fut = host.request_tool_approval(&c, &rec);
+        match rx.recv().unwrap() {
+            AgentUiEvent::ApprovalRequest { session, prompt, responder } => {
+                assert!(!session, "per-call approval should set session=false");
+                assert!(prompt.contains("write"), "prompt names the tool: {prompt}");
+                responder.send(false).unwrap();
+            }
+            other => panic!("expected ApprovalRequest, got {other:?}"),
+        }
+        assert!(!fut.await, "no decision → denied");
+    }
+
+    #[tokio::test]
+    async fn approval_denies_when_event_loop_is_gone() {
+        // If the receiver (event loop) is already dropped, the request can never be
+        // answered → fail closed (deny), never hang.
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        let host = InteractiveAgentHost::new(tx, RunCancel::new(1));
+        assert!(!host.request_session_consent(&ctx()).await);
     }
 }

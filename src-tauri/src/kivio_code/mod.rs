@@ -374,8 +374,11 @@ pub struct TurnAssembly {
 impl TurnAssembly {
     /// Resolve the provider/model and derive every settings-driven knob for a
     /// run rooted at `cwd`. `approve_sensitive` mirrors print mode's
-    /// `!no_approve`: when false the approval policy is `always_confirm` so the
-    /// host can deny sensitive (write/edit/bash) tools; when true it is `auto`.
+    /// `!no_approve`: when false the approval policy is `always_confirm` (per-call
+    /// prompt); when true it is the kivio-code config's policy, defaulting to
+    /// `readonly_auto_sensitive_confirm` (prompt once per session for file/shell
+    /// access). The policy is written onto `settings.chat_tools` — the field the
+    /// loop's approval gate reads.
     pub fn resolve(
         settings: &Settings,
         provider_override: Option<&str>,
@@ -387,11 +390,18 @@ impl TurnAssembly {
         let (provider, model) =
             resolve_provider_model(settings, &cfg, provider_override, model_override)?;
 
-        let mut effective_chat_tools = settings.chat_tools.clone();
         // Approval policy precedence: `--no-approve` (approve_sensitive == false) forces
-        // `always_confirm`; otherwise the kivio-code config's policy applies when set to a
-        // known value; otherwise the existing default (`auto`).
-        effective_chat_tools.approval_policy = if !approve_sensitive {
+        // `always_confirm` (per-call prompt); otherwise the kivio-code config's policy
+        // applies when set to a known value; otherwise the SAFE default
+        // `readonly_auto_sensitive_confirm` — the interactive host prompts once per
+        // session before the first file/shell tool, then runs freely. (Print mode's
+        // host auto-grants session consent, so this default is transparent there;
+        // interactive is where it closes the silent-auto-run gap.)
+        //
+        // The gate in `execute.rs` reads `config.settings.chat_tools.approval_policy`,
+        // so the policy MUST be written onto the `settings` clone that becomes
+        // `self.settings` (not only `effective_chat_tools`, which the gate ignores).
+        let approval_policy = if !approve_sensitive {
             "always_confirm".to_string()
         } else {
             match cfg.approval_policy.as_deref() {
@@ -400,9 +410,12 @@ impl TurnAssembly {
                     "readonly_auto_sensitive_confirm".to_string()
                 }
                 Some("always_confirm") => "always_confirm".to_string(),
-                _ => "auto".to_string(),
+                _ => "readonly_auto_sensitive_confirm".to_string(),
             }
         };
+        let mut run_settings = settings.clone();
+        run_settings.chat_tools.approval_policy = approval_policy;
+        let effective_chat_tools = run_settings.chat_tools.clone();
 
         let language = if settings.chat.default_language.trim().is_empty() {
             "en".to_string()
@@ -460,7 +473,7 @@ impl TurnAssembly {
             stream_enabled: settings.chat.stream_enabled,
             max_output_tokens,
             retry_attempts,
-            settings: settings.clone(),
+            settings: run_settings,
             // MCP tools are collected asynchronously at startup (see
             // `set_mcp_tools`); start empty.
             mcp_tools: Vec::new(),
@@ -1067,6 +1080,26 @@ mod tests {
         for kept in ["read", "ls", "grep", "glob", "web_fetch"] {
             assert!(plan.iter().any(|n| n == kept), "plan must keep {kept}: {plan:?}");
         }
+    }
+
+    #[test]
+    fn resolve_writes_approval_policy_onto_run_settings() {
+        // Regression guard: the loop's gate reads config.settings.chat_tools.
+        // approval_policy, so resolve() must write the policy THERE (not only onto
+        // effective_chat_tools, which the gate ignores). --no-approve forces
+        // always_confirm deterministically regardless of the on-disk config.
+        let mut settings = Settings::default();
+        settings.providers = vec![provider("chat")];
+        settings.default_models.chat.provider_id = "chat".to_string();
+        settings.default_models.chat.model = "m1".to_string();
+
+        let a = TurnAssembly::resolve(&settings, None, None, std::path::Path::new("."), false)
+            .expect("resolves");
+        assert_eq!(
+            a.settings.chat_tools.approval_policy, "always_confirm",
+            "policy must reach settings.chat_tools (the gate's source), not just effective_chat_tools"
+        );
+        assert_eq!(a.effective_chat_tools.approval_policy, "always_confirm");
     }
 
     #[test]

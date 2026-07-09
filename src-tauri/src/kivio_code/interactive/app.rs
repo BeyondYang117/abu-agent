@@ -231,6 +231,19 @@ pub struct App {
     /// 当前未发送消息附带的图片（Ctrl+V 粘贴 / 拖入路径）。每张对应编辑器里一个 `[Image #N]`
     /// 占位符；提交后清空，`/new` 时清空。**永不**渲染图片本体。
     pending_images: Vec<PendingImage>,
+    /// 待处理的工具审批提示（agent loop 通过 [`AgentUiEvent::ApprovalRequest`] 请求）。存在时
+    /// 拦截所有按键（y/n/Esc），并在 editor 位置渲染提示。答复后清空。
+    pending_approval: Option<PendingApproval>,
+    /// 本会话是否已授予文件/命令访问（session-consent）。首次同意后置真，后续 session-consent
+    /// 请求直接放行、不再打扰（对齐 GUI「每会话确认一次」语义）。
+    session_consent_granted: bool,
+}
+
+/// 一次待答复的审批请求：提示文案 + 是否 session-consent（可缓存）+ 回传决定的通道。
+struct PendingApproval {
+    prompt: String,
+    session: bool,
+    responder: std::sync::mpsc::Sender<bool>,
 }
 
 impl App {
@@ -273,6 +286,8 @@ impl App {
             terminal_cols: 80,
             generating_started: None,
             pending_images: Vec::new(),
+            pending_approval: None,
+            session_consent_granted: false,
         }
     }
 
@@ -812,6 +827,19 @@ impl App {
             AgentUiEvent::Done { message_id, reason } => {
                 self.finalize_assistant(&message_id, &reason);
             }
+            AgentUiEvent::ApprovalRequest { prompt, session, responder } => {
+                // Cached session consent: a prior "yes" this session auto-approves
+                // further session-consent requests without re-prompting.
+                if session && self.session_consent_granted {
+                    let _ = responder.send(true);
+                    return;
+                }
+                self.pending_approval = Some(PendingApproval {
+                    prompt,
+                    session,
+                    responder,
+                });
+            }
         }
     }
 
@@ -974,6 +1002,11 @@ impl App {
     pub fn handle_key(&mut self, data: &str) -> AppEffect {
         use crate::kivio_code::tui::keys::matches_key;
 
+        // 待审批提示优先吃掉所有输入：y=批准；n/Esc=拒绝并取消本轮。
+        if self.pending_approval.is_some() {
+            return self.handle_approval_key(data);
+        }
+
         // 覆盖层（模型 / 会话选择器）优先吃掉所有输入。
         if self.overlay.is_some() {
             return self.handle_overlay_key(data);
@@ -1064,6 +1097,32 @@ impl App {
         // 其余一律交给 editor（含历史 / 编辑 / autocomplete / 换行 alt+enter 等）。
         self.editor.handle_input(data);
         self.refresh_slash_popup();
+        AppEffect::None
+    }
+
+    /// 待审批态的按键处理：`y`/`Y` 批准（session 请求则记住本会话）；`n`/`N`/`Esc` 拒绝并取消本轮
+    /// （拒绝文件/命令访问通常意味着「停下」，故连带取消，避免带着被拒工具继续跑）。其它键忽略。
+    fn handle_approval_key(&mut self, data: &str) -> AppEffect {
+        use crate::kivio_code::tui::keys::matches_key;
+        let approve = data.eq_ignore_ascii_case("y");
+        let deny = data.eq_ignore_ascii_case("n") || matches_key(data, "escape", self.kitty_active);
+        if !approve && !deny {
+            return AppEffect::None;
+        }
+        if let Some(pending) = self.pending_approval.take() {
+            let _ = pending.responder.send(approve);
+            if approve {
+                if pending.session {
+                    self.session_consent_granted = true;
+                    self.push_notice("Approved — file/command access granted for this session.");
+                } else {
+                    self.push_notice("Approved.");
+                }
+                return AppEffect::None;
+            }
+            self.push_notice("Denied — cancelling this turn.");
+            return AppEffect::Cancel;
+        }
         AppEffect::None
     }
 
@@ -1353,7 +1412,19 @@ impl App {
         }
 
         // overlay（模型 / 会话选择器）打开时替代 editor；否则渲染 editor。
-        if let Some(overlay) = &mut self.overlay {
+        if let Some(pending) = &self.pending_approval {
+            // 待审批：在 editor 位置渲染提示 + 按键说明，独占输入。
+            dynamic_lines.push(String::new());
+            let mut heading = Text::new(pending.prompt.clone(), 1, 0, None);
+            dynamic_lines.extend(heading.render(width));
+            let mut hint = Text::new(
+                "[y] approve   [n] deny (cancels this turn)   [Esc] deny".to_string(),
+                1,
+                0,
+                None,
+            );
+            dynamic_lines.extend(hint.render(width));
+        } else if let Some(overlay) = &mut self.overlay {
             dynamic_lines.push(String::new());
             let (heading, list) = match overlay {
                 Overlay::Model(list) => ("Select a model (Enter to choose · Esc to cancel)", list),
@@ -2581,6 +2652,64 @@ mod tests {
         });
         assert_eq!(a.last_assistant_text(), Some("Hello"));
         assert!(a.assistant_streaming(), "still streaming before Done");
+    }
+
+    #[test]
+    fn approval_request_then_y_approves_and_replies() {
+        let mut a = app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        a.apply_agent_event(AgentUiEvent::ApprovalRequest {
+            prompt: "Run bash?".to_string(),
+            session: false,
+            responder: tx,
+        });
+        assert!(a.pending_approval.is_some(), "prompt is pending");
+        assert_eq!(a.handle_key("y"), AppEffect::None);
+        assert!(a.pending_approval.is_none(), "prompt cleared after decision");
+        assert_eq!(rx.recv().unwrap(), true, "approve → true");
+    }
+
+    #[test]
+    fn approval_request_then_deny_cancels_turn() {
+        let mut a = app();
+        for key in ["n", "\x1b"] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            a.apply_agent_event(AgentUiEvent::ApprovalRequest {
+                prompt: "Run bash?".to_string(),
+                session: false,
+                responder: tx,
+            });
+            assert_eq!(a.handle_key(key), AppEffect::Cancel, "deny cancels turn");
+            assert_eq!(rx.recv().unwrap(), false, "deny → false");
+        }
+    }
+
+    #[test]
+    fn session_consent_is_cached_after_first_yes() {
+        let mut a = app();
+        // First session-consent request: prompts, user approves.
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        a.apply_agent_event(AgentUiEvent::ApprovalRequest {
+            prompt: "Allow FS/shell?".to_string(),
+            session: true,
+            responder: tx1,
+        });
+        assert!(a.pending_approval.is_some());
+        a.handle_key("y");
+        assert_eq!(rx1.recv().unwrap(), true);
+
+        // Second session-consent request: auto-approved, no prompt shown.
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        a.apply_agent_event(AgentUiEvent::ApprovalRequest {
+            prompt: "Allow FS/shell?".to_string(),
+            session: true,
+            responder: tx2,
+        });
+        assert!(
+            a.pending_approval.is_none(),
+            "cached session consent skips the prompt"
+        );
+        assert_eq!(rx2.recv().unwrap(), true, "auto-approved from cache");
     }
 
     #[test]
