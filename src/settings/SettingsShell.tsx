@@ -3111,8 +3111,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         updateDefaultModel('titleSummary', '', '')
                         updateDefaultModel('compression', '', '')
                         updateDefaultModel('imageGeneration', '', '')
-                        updateDefaultModel('advisor', '', '')
-                        updateChatTools({ subAgentProviderId: '', subAgentModel: '' })
                       }}
                       data-tauri-drag-region="false"
                     >
@@ -3172,6 +3170,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       }}
                     />
                   </SettingRow>
+                  {!chatProvider && (
+                    <p className="kv-row-desc px-0 pb-2">
+                      {lang === 'zh' ? '请先在「模型」中添加并配置供应商。' : 'Add and configure a provider under Models first.'}
+                    </p>
+                  )}
+                </SettingsGroup>
+
+                <SettingsGroup title={t.mixerSubAgentSection}>
                   <SettingRow
                     label={t.defaultSubAgentModel}
                     description={t.defaultSubAgentModelHint}
@@ -3186,6 +3192,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       }}
                     />
                   </SettingRow>
+                </SettingsGroup>
+
+                <SettingsGroup title={t.mixerAdvisorSection}>
                   <SettingRow
                     label={t.defaultAdvisorModel}
                     description={t.defaultAdvisorModelHint}
@@ -3200,11 +3209,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       }}
                     />
                   </SettingRow>
-                  {!chatProvider && (
-                    <p className="kv-row-desc px-0 pb-2">
-                      {lang === 'zh' ? '请先在「模型」中添加并配置供应商。' : 'Add and configure a provider under Models first.'}
-                    </p>
-                  )}
                 </SettingsGroup>
               </>
             )}
