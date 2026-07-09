@@ -85,7 +85,7 @@
 
 ### 启动逻辑
 - [ ] 点击应用图标打开 AI 客户端（修改 `open_settings_window_for_activation`）
-- [ ] 动态 Dock 图标显示/隐藏（切换 `ActivationPolicy`）
+- [x] 动态 Dock 图标显示/隐藏（切换 `ActivationPolicy`）
 - [ ] 托盘菜单新增"打开 AI 客户端"选项
 
 ### 高级功能

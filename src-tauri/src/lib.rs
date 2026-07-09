@@ -174,6 +174,18 @@ pub fn run() {
                     }
                 }
             }
+            tauri::WindowEvent::Destroyed => {
+                // macOS：Dock 图标身份由 Chat 窗口撑起（open/reveal 时切 Regular）。Chat
+                // 销毁后切回 Accessory 隐藏 Dock 图标，回到后台常驻形态；其余窗口
+                // （translator/lens/translate）本就是 Accessory 友好的浮层，不占 Dock。
+                // 下次打开 Chat 时 open_chat_window/reveal_chat_window 会再切回 Regular。
+                #[cfg(target_os = "macos")]
+                if window.label() == "chat" {
+                    let _ = window
+                        .app_handle()
+                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+            }
             _ => {}
         })
         .setup(|app| {
