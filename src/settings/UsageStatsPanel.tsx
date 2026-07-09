@@ -228,7 +228,9 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
     const maxTokens = Math.max(1, ...points.flatMap(point => visible.map(series => point[series.key])))
     const step = points.length > 1 ? (WIDTH - PAD_L - PAD_R) / (points.length - 1) : 0
     const plotH = HEIGHT - PAD_T - PAD_B
-    const x = (index: number) => PAD_L + step * index
+    // 单点(如单日区间)居中,否则从左轴按步长铺开
+    const singleX = PAD_L + (WIDTH - PAD_L - PAD_R) / 2
+    const x = (index: number) => (points.length > 1 ? PAD_L + step * index : singleX)
     const yTokens = (value: number) => PAD_T + plotH - (value / maxTokens) * plotH
     const yRate = (rate: number) => PAD_T + plotH - rate * plotH
     const linePath = (values: (number | null)[]) => {
@@ -385,6 +387,17 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
               />
             ) : null,
           )}
+          {/* 单点时线段不可见,补画常驻圆点 */}
+          {points.length === 1 &&
+            geom.seriesPaths.map(series => (
+              <circle
+                key={`single-${series.key}`}
+                cx={geom.x(0)}
+                cy={geom.yTokens(points[0][series.key])}
+                r="3.5"
+                fill={isDark ? series.darkStroke : series.stroke}
+              />
+            ))}
           {!rateHidden && geom.ratePath && (
             <path
               d={geom.ratePath}
@@ -447,9 +460,12 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
           </div>
         )}
       </div>
-      <div className="mt-1 flex justify-between text-[10.5px] text-neutral-500 dark:text-neutral-500" style={{ paddingLeft: PAD_L, paddingRight: PAD_R }}>
+      <div
+        className={`mt-1 flex text-[10.5px] text-neutral-500 dark:text-neutral-500 ${points.length === 1 ? 'justify-center' : 'justify-between'}`}
+        style={{ paddingLeft: PAD_L, paddingRight: PAD_R }}
+      >
         <span>{points[0]?.label}</span>
-        <span>{points[points.length - 1]?.label}</span>
+        {points.length > 1 && <span>{points[points.length - 1]?.label}</span>}
       </div>
     </div>
   )

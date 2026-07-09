@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{Datelike, Duration as ChronoDuration, Local, TimeZone};
+use chrono::{Datelike, Duration as ChronoDuration, Local, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
@@ -540,7 +540,23 @@ fn record_total_tokens(record: &UsageRecord) -> u64 {
 
 fn build_trend(records: &[UsageRecord], range: &str) -> Vec<UsageTrendPoint> {
     let mut points: BTreeMap<String, UsageTrendPoint> = BTreeMap::new();
-    if let Some(days) = range_days(range) {
+    // 「当天」按小时分桶（今日 00:00 至当前小时），其余档位按天分桶。
+    let hourly = range == "today";
+    if hourly {
+        let now = Local::now();
+        let today = now.date_naive();
+        for hour in 0..=now.hour() {
+            let key = format!("{} {:02}", today.format("%Y-%m-%d"), hour);
+            points.insert(
+                key.clone(),
+                UsageTrendPoint {
+                    date: key,
+                    label: format!("{:02}:00", hour),
+                    ..UsageTrendPoint::default()
+                },
+            );
+        }
+    } else if let Some(days) = range_days(range) {
         let today = Local::now().date_naive();
         for offset in (0..days).rev() {
             let date = today - ChronoDuration::days(offset as i64);
@@ -556,17 +572,27 @@ fn build_trend(records: &[UsageRecord], range: &str) -> Vec<UsageTrendPoint> {
         }
     }
     for record in records {
-        let date = Local
+        let dt = Local
             .timestamp_opt(record.created_at, 0)
             .single()
-            .unwrap_or_else(Local::now)
-            .date_naive();
-        let key = date.format("%Y-%m-%d").to_string();
+            .unwrap_or_else(Local::now);
+        let (key, label) = if hourly {
+            (
+                format!("{} {:02}", dt.date_naive().format("%Y-%m-%d"), dt.hour()),
+                format!("{:02}:00", dt.hour()),
+            )
+        } else {
+            let date = dt.date_naive();
+            (
+                date.format("%Y-%m-%d").to_string(),
+                date.format("%m/%d").to_string(),
+            )
+        };
         let point = points
             .entry(key.clone())
             .or_insert_with(|| UsageTrendPoint {
                 date: key,
-                label: date.format("%m/%d").to_string(),
+                label,
                 ..UsageTrendPoint::default()
             });
         point.requests = point.requests.saturating_add(1);
