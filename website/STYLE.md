@@ -115,7 +115,7 @@ KIVIO 五个字母和 tagline 逐字 `<span>` 拆分，`translateY(0.55em) → 0
 - 分区之间只用 `1px --border` 顶边线分隔，`padding: 110px 0`。**没有**卡片阴影、没有圆角大卡片 —— 层次全靠留白和 1px 线。
 - 12 格网格：`grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border)`（用 1px gap 露出底色当格线），单元格白底，hover 变 `#fafafa`，右上角 `+` hover 旋转 90°。响应式 4→2→1 列。
 - 规格清单（spec-list）：`<dl>` 行式表格，左列 mono 大写小字标签（130px），右列正文，行间 1px 线 —— "参数表"是本风格叙述产品的标准方式，优先于营销段落。
-- 圆角只出现在：按钮/胶囊（`border-radius: 999px`）和 logo 图（4–5px）。卡片、分区一律直角。
+- 圆角：按钮/胶囊 `border-radius: 999px`、logo 图 4–5px。**官网的**分区、12 格网格、spec-list 一律直角，靠 1px 线分隔。功能性小卡片（如产品内的信息卡 / 工具卡）可用 ≤6px 的小圆角（`rounded-md`）让边缘柔和，但**禁止大圆角容器**（≥12px）——大圆角会滑向"App 卡片"观感，偏离本风格。
 
 ## 6. 组件速查
 
