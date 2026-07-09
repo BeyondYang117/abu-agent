@@ -79,10 +79,21 @@ function shouldComposerAutoFocus(activeElement: Element | null): boolean {
   if (!activeElement || activeElement === document.body || activeElement === document.documentElement) {
     return true
   }
-  if (activeElement instanceof HTMLTextAreaElement || activeElement instanceof HTMLInputElement) {
+  // Never steal focus from a text field the user may be typing in — the composer
+  // itself, the search box, a conversation-rename field, another textarea, or any
+  // contenteditable.
+  if (
+    activeElement instanceof HTMLTextAreaElement ||
+    activeElement instanceof HTMLInputElement ||
+    (activeElement instanceof HTMLElement && activeElement.isContentEditable)
+  ) {
     return false
   }
-  return activeElement.closest('[data-chat-composer="true"]') !== null
+  // Any other focused element is non-typeable (button / link / div). On macOS the
+  // webview auto-focuses the first tabbable control — the sidebar toggle — when the
+  // window opens, leaving it ring-highlighted instead of the composer. Treat that
+  // (and any such default focus) as safe to move to the composer.
+  return true
 }
 
 function isExternalMcpTool(tool: ChatToolDefinition): boolean {
