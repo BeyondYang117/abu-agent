@@ -25,7 +25,6 @@ import {
   Save,
   ScrollText,
   Search,
-  Sparkles,
   SquareTerminal,
   Trash2,
   Wrench,
@@ -356,13 +355,6 @@ function subagentPrompt(args: Record<string, unknown> | null): string {
   return stringValue(args?.prompt)
 }
 
-function subagentTitle(agentType: string, name: string): string {
-  const parts = ['Subagent']
-  if (agentType) parts.push(agentType)
-  if (name && name !== agentType) parts.push(name)
-  return parts.join(' · ')
-}
-
 function subagentStatusLine(view: SubagentView | null, status: ToolCallStatus): string {
   if (status === 'completed') return '已完成'
   if (status === 'error') return view?.error ? compactText(view.error, 160) : '运行失败'
@@ -376,6 +368,16 @@ function subagentStatusLine(view: SubagentView | null, status: ToolCallStatus): 
   return '准备运行…'
 }
 
+function CardEyebrow({ running = false }: { running?: boolean }) {
+  // 品牌标记：7×7 实心方块（黑/白随主题）。运行中缓慢闪烁，呼应官网运行轨迹的光标方块。
+  return (
+    <span
+      className={`inline-block h-[7px] w-[7px] shrink-0 bg-neutral-900 dark:bg-neutral-100 ${running ? 'chat-motion-subagent-shimmer' : ''}`}
+      aria-hidden="true"
+    />
+  )
+}
+
 function SubAgentCard({ toolCall }: ToolCallBlockProps) {
   const status = normalizeToolCallStatus(toolCall.status)
   const [open, setOpen] = useState(false)
@@ -384,7 +386,6 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
 
   const agentType = subagentAgentType(view, args)
   const name = subagentName(view, args)
-  const title = subagentTitle(agentType, name)
   const model = view?.model || ''
   const duration = formatDuration(getDuration(toolCall))
   const statusLine = subagentStatusLine(view, status)
@@ -396,67 +397,73 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
   const usageLine = status !== 'running' ? subagentUsageLine(view?.usage) : ''
 
   const hasBody = Boolean(prompt || steps.length || preview || result || error)
+  const displayName = name && name !== agentType ? name : ''
 
   return (
-    <div className="not-prose mb-2 rounded-lg border border-violet-400/25 bg-violet-500/[0.035] px-3 py-2 text-[12.5px] leading-5 text-neutral-500 dark:border-violet-400/20 dark:bg-violet-400/[0.05] dark:text-neutral-400">
+    <div className="not-prose mb-2 rounded-none border border-neutral-200 bg-neutral-50/70 px-3 py-2 leading-5 text-neutral-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400">
       <button
         type="button"
         onClick={() => { if (hasBody) setOpen((v) => !v) }}
         aria-expanded={hasBody ? open : undefined}
-        className={`flex w-full max-w-full min-w-0 flex-wrap items-center gap-1.5 text-left ${hasBody ? '' : 'cursor-default'}`}
+        className={`flex w-full max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-left ${hasBody ? '' : 'cursor-default'}`}
         data-tauri-drag-region="false"
       >
-        <span
-          className={`shrink-0 text-[13px] leading-none text-violet-500 dark:text-violet-300 ${
-            status === 'running' ? 'subagent-sparkle is-running' : 'subagent-sparkle'
-          }`}
-          aria-hidden="true"
-        />
-        <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
-          {title}
+        <CardEyebrow running={status === 'running'} />
+        <span className="shrink-0 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-800 dark:text-neutral-100">
+          SUBAGENT
         </span>
+        {agentType && (
+          <span className="shrink-0 font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+            {agentType}
+          </span>
+        )}
+        {displayName && (
+          <span className="shrink-0 font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+            {displayName}
+          </span>
+        )}
         {model && (
-          <span className="shrink-0 text-neutral-400 dark:text-neutral-500">
-            · {model}
+          <span className="shrink-0 font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+            {model}
           </span>
         )}
         <span className="shrink-0">
           <StatusIcon status={status} />
         </span>
         {duration && (
-          <span className="shrink-0 tabular-nums text-neutral-400 dark:text-neutral-500">
-            · {duration}
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+            {duration}
           </span>
         )}
         {usageLine && (
-          <span className="shrink-0 tabular-nums text-neutral-400 dark:text-neutral-500">
-            · {usageLine}
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+            {usageLine}
           </span>
         )}
         {statusLine && (
           <span
-            className={`min-w-0 truncate ${
+            className={`min-w-0 truncate font-mono text-[11px] ${
               status === 'running' ? 'chat-motion-subagent-shimmer' : 'text-neutral-400 dark:text-neutral-500'
             }`}
           >
-            · {statusLine}
+            {statusLine}
           </span>
         )}
         {hasBody && (
           <ChevronDown
             size={12}
             strokeWidth={2}
-            className={`ml-auto shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+            className={`ml-auto shrink-0 text-neutral-400 transition-transform duration-300 dark:text-neutral-500 ${open ? 'rotate-180' : ''}`}
           />
         )}
       </button>
 
       {hasBody && open && (
-        <div className="mt-1.5 ml-1.5 space-y-1.5 border-l-2 border-violet-400/50 pl-2.5 dark:border-violet-400/40">
+        <div className="mt-2 space-y-2 border-t border-neutral-200 pt-2 text-[12.5px] dark:border-white/10">
           {prompt && (
             <div>
-              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                任务
+              <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.16em] text-neutral-400 dark:text-neutral-500">
+                Task
               </div>
               <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
                 {compactText(prompt, 600)}
@@ -464,12 +471,12 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
             </div>
           )}
           {status === 'running' && (steps.length > 0 || preview) && (
-            <div className="rounded-md border-l-2 border-violet-400/60 bg-violet-500/[0.04] py-1 pl-2.5 pr-1.5 dark:bg-violet-400/[0.06]">
+            <div className="border-l border-neutral-300 pl-2.5 dark:border-white/15">
               {steps.length > 0 && (
-                <div className="space-y-0.5 text-[10.5px] text-neutral-500 dark:text-neutral-400">
+                <div className="space-y-0.5 font-mono text-[10.5px] text-neutral-500 dark:text-neutral-400">
                   {steps.map((step, index) => (
                     <div key={`${index}-${step}`} className="truncate">
-                      · {step}
+                      {step}
                     </div>
                   ))}
                 </div>
@@ -483,8 +490,8 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
           )}
           {status !== 'running' && result && (
             <div>
-              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                结果
+              <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.16em] text-neutral-400 dark:text-neutral-500">
+                Result
               </div>
               <ChatMarkdown content={result} />
             </div>
@@ -546,55 +553,55 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
   const hasBody = Boolean(question || advice || error)
 
   return (
-    <div className="not-prose mb-2 rounded-lg border border-amber-400/30 bg-amber-500/[0.045] px-3 py-2 text-[12.5px] leading-5 text-neutral-500 dark:border-amber-400/25 dark:bg-amber-400/[0.06] dark:text-neutral-400">
+    <div className="not-prose mb-2 rounded-none border border-neutral-200 bg-neutral-50/70 px-3 py-2 leading-5 text-neutral-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400">
       <button
         type="button"
         onClick={() => { if (hasBody) setOpen((v) => !v) }}
         aria-expanded={hasBody ? open : undefined}
-        className={`flex w-full max-w-full min-w-0 flex-wrap items-center gap-1.5 text-left ${hasBody ? '' : 'cursor-default'}`}
+        className={`flex w-full max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-left ${hasBody ? '' : 'cursor-default'}`}
         data-tauri-drag-region="false"
       >
-        <Sparkles size={13} className="shrink-0 text-amber-500 dark:text-amber-300" aria-hidden="true" />
-        <span className="shrink-0 font-medium text-neutral-700 dark:text-neutral-200">
-          顾问咨询
+        <CardEyebrow running={status === 'running'} />
+        <span className="shrink-0 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-800 dark:text-neutral-100">
+          ADVISOR
         </span>
         {model && (
-          <span className="shrink-0 text-neutral-400 dark:text-neutral-500">
-            · {model}
+          <span className="shrink-0 font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+            {model}
           </span>
         )}
         <span className="shrink-0">
           <StatusIcon status={status} />
         </span>
         {duration && (
-          <span className="shrink-0 tabular-nums text-neutral-400 dark:text-neutral-500">
-            · {duration}
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
+            {duration}
           </span>
         )}
         {statusLine && (
           <span
-            className={`min-w-0 truncate ${
+            className={`min-w-0 truncate font-mono text-[11px] ${
               status === 'running' ? 'chat-motion-subagent-shimmer' : 'text-neutral-400 dark:text-neutral-500'
             }`}
           >
-            · {statusLine}
+            {statusLine}
           </span>
         )}
         {hasBody && (
           <ChevronDown
             size={12}
             strokeWidth={2}
-            className={`ml-auto shrink-0 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}
+            className={`ml-auto shrink-0 text-neutral-400 transition-transform duration-300 dark:text-neutral-500 ${open ? 'rotate-180' : ''}`}
           />
         )}
       </button>
 
       {hasBody && open && (
-        <div className="mt-1.5 ml-1.5 space-y-1.5 border-l-2 border-amber-400/50 pl-2.5 dark:border-amber-400/40">
+        <div className="mt-2 space-y-2 border-t border-neutral-200 pt-2 text-[12.5px] dark:border-white/10">
           {question && (
             <div>
-              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                问题
+              <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.16em] text-neutral-400 dark:text-neutral-500">
+                Question
               </div>
               <div className="whitespace-pre-wrap break-words text-neutral-500 dark:text-neutral-400">
                 {compactText(question, 600)}
@@ -603,8 +610,8 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
           )}
           {advice && (
             <div>
-              <div className="text-[10.5px] font-medium text-neutral-400 dark:text-neutral-500">
-                建议
+              <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.16em] text-neutral-400 dark:text-neutral-500">
+                Advice
               </div>
               <ChatMarkdown content={advice} />
             </div>
