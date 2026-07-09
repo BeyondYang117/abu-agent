@@ -369,10 +369,10 @@ function subagentStatusLine(view: SubagentView | null, status: ToolCallStatus): 
 }
 
 function CardEyebrow({ running = false }: { running?: boolean }) {
-  // 品牌标记：7×7 实心方块（黑/白随主题）。运行中缓慢闪烁，呼应官网运行轨迹的光标方块。
+  // 品牌标记：7×7 实心方块（黑/白随主题）。运行中像终端光标一样步进闪烁，呼应官网运行轨迹方块。
   return (
     <span
-      className={`inline-block h-[7px] w-[7px] shrink-0 bg-neutral-900 dark:bg-neutral-100 ${running ? 'chat-motion-subagent-shimmer' : ''}`}
+      className={`inline-block h-[7px] w-[7px] shrink-0 bg-neutral-900 dark:bg-neutral-100 ${running ? 'kv-card-eyebrow--running' : ''}`}
       aria-hidden="true"
     />
   )
@@ -400,7 +400,7 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
   const displayName = name && name !== agentType ? name : ''
 
   return (
-    <div className="not-prose mb-2 rounded-none border border-neutral-200 bg-neutral-50/70 px-3 py-2 leading-5 text-neutral-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400">
+    <div className="not-prose mb-2 rounded-none border border-neutral-200 bg-neutral-50/70 px-3 py-2 leading-5 text-neutral-500 transition-colors duration-200 hover:bg-neutral-100/70 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400 dark:hover:bg-white/[0.045]">
       <button
         type="button"
         onClick={() => { if (hasBody) setOpen((v) => !v) }}
@@ -459,7 +459,7 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
       </button>
 
       {hasBody && open && (
-        <div className="mt-2 space-y-2 border-t border-neutral-200 pt-2 text-[12.5px] dark:border-white/10">
+        <div className="chat-motion-search-reveal mt-2 space-y-2 border-t border-neutral-200 pt-2 text-[12.5px] dark:border-white/10">
           {prompt && (
             <div>
               <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.16em] text-neutral-400 dark:text-neutral-500">
@@ -553,7 +553,7 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
   const hasBody = Boolean(question || advice || error)
 
   return (
-    <div className="not-prose mb-2 rounded-none border border-neutral-200 bg-neutral-50/70 px-3 py-2 leading-5 text-neutral-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400">
+    <div className="not-prose mb-2 rounded-none border border-neutral-200 bg-neutral-50/70 px-3 py-2 leading-5 text-neutral-500 transition-colors duration-200 hover:bg-neutral-100/70 dark:border-white/10 dark:bg-white/[0.02] dark:text-neutral-400 dark:hover:bg-white/[0.045]">
       <button
         type="button"
         onClick={() => { if (hasBody) setOpen((v) => !v) }}
@@ -597,7 +597,7 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
       </button>
 
       {hasBody && open && (
-        <div className="mt-2 space-y-2 border-t border-neutral-200 pt-2 text-[12.5px] dark:border-white/10">
+        <div className="chat-motion-search-reveal mt-2 space-y-2 border-t border-neutral-200 pt-2 text-[12.5px] dark:border-white/10">
           {question && (
             <div>
               <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.16em] text-neutral-400 dark:text-neutral-500">

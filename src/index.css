@@ -1443,6 +1443,16 @@ body {
   animation: subagent-sparkle-cycle 1.4s steps(1, end) infinite;
 }
 
+/* Advisor/Subagent 卡片 eyebrow：运行中像终端光标一样步进闪烁（呼应官网运行轨迹的方块光标）。
+   静止态不动。reduced-motion 由全局 * 兜底压到 0.01ms。 */
+@keyframes kv-card-eyebrow-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0.18; }
+}
+.kv-card-eyebrow--running {
+  animation: kv-card-eyebrow-blink 1.1s steps(1, end) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* 全局兜底：覆盖内联 Tailwind transition / animate 工具类等未被下方具名规则捕获的动效。
      用 0.01ms 而非 0，保留 transitionend/animationend 事件（附件退出动画等依赖它清理 DOM）。
