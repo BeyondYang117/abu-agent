@@ -378,6 +378,16 @@ function CardEyebrow({ running = false }: { running?: boolean }) {
   )
 }
 
+/** 卡片状态标记：完成用中性灰 ✓（不用应用全局那枚 terracotta ✓，保持 STYLE.md 纯灰阶
+ *  调色板）；出错/取消/跳过沿用 StatusIcon 的中性图标；运行态不在此渲染（由 eyebrow 闪烁 +
+ *  状态文字流光表达）。 */
+function CardStatusMark({ status }: { status: ToolCallStatus }) {
+  if (status === 'completed' || status === 'success') {
+    return <CheckCircle2 size={13} strokeWidth={1.9} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
+  }
+  return <StatusIcon status={status} />
+}
+
 function SubAgentCard({ toolCall }: ToolCallBlockProps) {
   const status = normalizeToolCallStatus(toolCall.status)
   const [open, setOpen] = useState(false)
@@ -429,7 +439,7 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
         )}
         {status !== 'running' && (
           <span className="shrink-0">
-            <StatusIcon status={status} />
+            <CardStatusMark status={status} />
           </span>
         )}
         {duration && (
@@ -445,7 +455,7 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
         {statusLine && (
           <span
             className={`min-w-0 truncate font-mono text-[11px] ${
-              status === 'running' ? 'chat-motion-tool-shimmer' : 'text-neutral-400 dark:text-neutral-500'
+              status === 'running' ? 'reasoning-shimmer-text' : 'text-neutral-400 dark:text-neutral-500'
             }`}
           >
             {statusLine}
@@ -574,7 +584,7 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
         )}
         {status !== 'running' && (
           <span className="shrink-0">
-            <StatusIcon status={status} />
+            <CardStatusMark status={status} />
           </span>
         )}
         {duration && (
@@ -585,7 +595,7 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
         {statusLine && (
           <span
             className={`min-w-0 truncate font-mono text-[11px] ${
-              status === 'running' ? 'chat-motion-tool-shimmer' : 'text-neutral-400 dark:text-neutral-500'
+              status === 'running' ? 'reasoning-shimmer-text' : 'text-neutral-400 dark:text-neutral-500'
             }`}
           >
             {statusLine}
