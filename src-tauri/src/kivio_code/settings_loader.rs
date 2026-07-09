@@ -34,13 +34,15 @@ pub fn settings_store_path() -> Option<PathBuf> {
 
 /// The per-app data directory Tauri would use for `com.zmair.kivio`.
 pub fn app_data_dir() -> Option<PathBuf> {
-    // Tauri's `app_data_dir` = `dirs::data_dir()/<identifier>` on Linux/Windows
-    // and `~/Library/Application Support/<identifier>` on macOS. `directories`'
-    // `ProjectDirs::from("", "", identifier)` yields the same base on all three.
-    directories::ProjectDirs::from("", "", APP_IDENTIFIER)
-        .map(|dirs| dirs.data_dir().to_path_buf())
-        // Fallback: hand-roll from the platform data dir + identifier.
-        .or_else(|| directories::BaseDirs::new().map(|base| base.data_dir().join(APP_IDENTIFIER)))
+    // Must match Tauri's `app_data_dir` = `dirs::data_dir()/<identifier>` exactly:
+    //   Windows: `%APPDATA%\com.zmair.kivio`  (Roaming, NO `\data` subfolder)
+    //   macOS:   `~/Library/Application Support/com.zmair.kivio`
+    //   Linux:   `$XDG_DATA_HOME/com.zmair.kivio` (or `~/.local/share/...`)
+    // NOTE: do NOT use `ProjectDirs::data_dir()` here — on Windows it appends a
+    // `\data` subfolder (mac/Linux don't), so kivio-code would read
+    // `...\com.zmair.kivio\data\settings.json` and never find the GUI's file.
+    // `BaseDirs::data_dir()` matches Tauri's base on all three platforms.
+    directories::BaseDirs::new().map(|base| base.data_dir().join(APP_IDENTIFIER))
 }
 
 /// Load + sanitize the user's `Settings` from the on-disk store. Missing or
@@ -79,6 +81,20 @@ fn parse_settings_json(raw: &str) -> Option<Settings> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_data_dir_ends_with_identifier_not_data_subfolder() {
+        // Regression: ProjectDirs::data_dir() appends `\data` on Windows, which
+        // pointed kivio-code at a path the GUI never writes. The dir must end with
+        // the bundle identifier itself, matching Tauri's app_data_dir.
+        if let Some(dir) = app_data_dir() {
+            assert_eq!(
+                dir.file_name().and_then(|n| n.to_str()),
+                Some(APP_IDENTIFIER),
+                "app_data_dir must end with the bundle id, got {dir:?}"
+            );
+        }
+    }
 
     #[test]
     fn missing_file_yields_sanitized_defaults() {
