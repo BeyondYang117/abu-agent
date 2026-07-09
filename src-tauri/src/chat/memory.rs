@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -89,30 +89,38 @@ pub struct MemoryModifyArgs {
     pub archive_mode: Option<String>,
 }
 
-pub fn memory_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
+/// Resolve (and create) the `chat-memory` dir under an explicit app-data base.
+/// This is the AppHandle-free core so non-Tauri callers (e.g. the kivio-code
+/// terminal agent, which has no `AppHandle`) can read/write the SAME memory the
+/// GUI writes, by passing their own resolved app-data dir.
+pub fn memory_dir_at(base: &Path) -> Result<PathBuf, String> {
     let dir = base.join(MEMORY_DIR);
     fs::create_dir_all(&dir).map_err(|e| format!("create memory dir: {e}"))?;
     Ok(dir)
 }
 
-fn memory_file_path(app: &AppHandle, layer: MemoryLayer) -> Result<PathBuf, String> {
-    Ok(memory_dir(app)?.join(layer.file_name()))
+pub fn memory_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
+    memory_dir_at(&base)
 }
 
-fn ensure_memory_file(app: &AppHandle, layer: MemoryLayer) -> Result<PathBuf, String> {
-    let path = memory_file_path(app, layer)?;
+fn memory_file_path_at(dir: &Path, layer: MemoryLayer) -> PathBuf {
+    dir.join(layer.file_name())
+}
+
+fn ensure_memory_file_at(dir: &Path, layer: MemoryLayer) -> Result<PathBuf, String> {
+    let path = memory_file_path_at(dir, layer);
     if !path.exists() {
         crate::chat::storage::atomic_write(&path, layer.default_content(), "memory")?;
     }
     Ok(path)
 }
 
-pub fn read_layer(app: &AppHandle, layer: MemoryLayer) -> Result<MemoryLayerContent, String> {
-    let path = ensure_memory_file(app, layer)?;
+pub fn read_layer_at(dir: &Path, layer: MemoryLayer) -> Result<MemoryLayerContent, String> {
+    let path = ensure_memory_file_at(dir, layer)?;
     let content =
         fs::read_to_string(&path).map_err(|e| format!("read {} memory: {e}", layer.label()))?;
     Ok(MemoryLayerContent {
@@ -123,14 +131,29 @@ pub fn read_layer(app: &AppHandle, layer: MemoryLayer) -> Result<MemoryLayerCont
     })
 }
 
+pub fn read_layer(app: &AppHandle, layer: MemoryLayer) -> Result<MemoryLayerContent, String> {
+    read_layer_at(&memory_dir(app)?, layer)
+}
+
 pub fn read_all(app: &AppHandle) -> Result<ChatMemoryState, String> {
     let dir = memory_dir(app)?;
     Ok(ChatMemoryState {
         success: true,
-        l1: read_layer(app, MemoryLayer::L1)?,
-        l2: read_layer(app, MemoryLayer::L2)?,
+        l1: read_layer_at(&dir, MemoryLayer::L1)?,
+        l2: read_layer_at(&dir, MemoryLayer::L2)?,
         dir: dir.display().to_string(),
     })
+}
+
+pub fn save_layer_at(
+    dir: &Path,
+    layer: MemoryLayer,
+    content: &str,
+) -> Result<MemoryLayerContent, String> {
+    validate_memory_content(layer, content)?;
+    let path = memory_file_path_at(dir, layer);
+    crate::chat::storage::atomic_write(&path, content, "memory")?;
+    read_layer_at(dir, layer)
 }
 
 pub fn save_layer(
@@ -138,14 +161,11 @@ pub fn save_layer(
     layer: MemoryLayer,
     content: &str,
 ) -> Result<MemoryLayerContent, String> {
-    validate_memory_content(layer, content)?;
-    let path = memory_file_path(app, layer)?;
-    crate::chat::storage::atomic_write(&path, content, "memory")?;
-    read_layer(app, layer)
+    save_layer_at(&memory_dir(app)?, layer, content)
 }
 
-pub fn l1_prompt_block(app: &AppHandle) -> Result<Option<String>, String> {
-    let memory = read_layer(app, MemoryLayer::L1)?;
+pub fn l1_prompt_block_at(dir: &Path) -> Result<Option<String>, String> {
+    let memory = read_layer_at(dir, MemoryLayer::L1)?;
     let trimmed = memory.content.trim();
     if trimmed.is_empty() || trimmed == "# L1 Online Memory" {
         return Ok(None);
@@ -160,6 +180,10 @@ pub fn l1_prompt_block(app: &AppHandle) -> Result<Option<String>, String> {
         "Kivio Memory (L1 online memory; user-editable; persistent across chats):\n\n{}",
         trimmed
     )))
+}
+
+pub fn l1_prompt_block(app: &AppHandle) -> Result<Option<String>, String> {
+    l1_prompt_block_at(&memory_dir(app)?)
 }
 
 #[tauri::command]
@@ -191,6 +215,10 @@ pub(crate) fn chat_memory_open_folder(app: AppHandle) -> Result<serde_json::Valu
 }
 
 pub fn tool_read(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResult, String> {
+    tool_read_at(&memory_dir(app)?, arguments)
+}
+
+pub fn tool_read_at(dir: &Path, arguments: &Value) -> Result<McpToolCallResult, String> {
     let layer = arguments
         .get("layer")
         .and_then(|value| value.as_str())
@@ -211,7 +239,7 @@ pub fn tool_read(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResult
             MemoryLayer::L2 => 8_000,
         });
 
-    let memory = read_layer(app, layer)?;
+    let memory = read_layer_at(dir, layer)?;
     let content = if layer == MemoryLayer::L2 {
         l2_read_slice(&memory.content, query, max_bytes)
     } else {
@@ -247,6 +275,10 @@ struct MemorySearchMatch {
 }
 
 pub fn tool_search(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResult, String> {
+    tool_search_at(&memory_dir(app)?, arguments)
+}
+
+pub fn tool_search_at(dir: &Path, arguments: &Value) -> Result<McpToolCallResult, String> {
     let query = arguments
         .get("query")
         .and_then(|value| value.as_str())
@@ -268,7 +300,7 @@ pub fn tool_search(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResu
         .transpose()?
         .unwrap_or(MemoryLayer::L2);
 
-    let memory = read_layer(app, layer)?;
+    let memory = read_layer_at(dir, layer)?;
     let tokens = tokenize(query);
     let matches = search_sections(&memory.content, &tokens, max_results);
 
@@ -410,24 +442,28 @@ fn split_sections(content: &str) -> Vec<(String, String)> {
 }
 
 pub fn tool_modify(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResult, String> {
+    tool_modify_at(&memory_dir(app)?, arguments)
+}
+
+pub fn tool_modify_at(dir: &Path, arguments: &Value) -> Result<McpToolCallResult, String> {
     let args: MemoryModifyArgs = serde_json::from_value(arguments.clone())
         .map_err(|e| format!("Invalid memory_modify arguments: {e}"))?;
     let layer = MemoryLayer::from_str(&args.layer)?;
     let operation = args.operation.trim().to_ascii_lowercase();
     let result = match operation.as_str() {
-        "append" => modify_append(app, layer, args.content.as_deref(), args.heading.as_deref())?,
+        "append" => modify_append(dir, layer, args.content.as_deref(), args.heading.as_deref())?,
         "replace" => modify_replace(
-            app,
+            dir,
             layer,
             args.old_text.as_deref(),
             args.content.as_deref(),
         )?,
-        "remove" => modify_remove(app, layer, args.old_text.as_deref())?,
+        "remove" => modify_remove(dir, layer, args.old_text.as_deref())?,
         "archive" => {
             if layer != MemoryLayer::L1 {
                 return Err("memory_modify archive must use layer=\"l1\" because archive moves or copies L1 content into L2".to_string());
             }
-            modify_archive(app, &args)?
+            modify_archive(dir, &args)?
         }
         _ => {
             return Err(
@@ -451,54 +487,54 @@ pub fn tool_modify(app: &AppHandle, arguments: &Value) -> Result<McpToolCallResu
 }
 
 fn modify_append(
-    app: &AppHandle,
+    dir: &Path,
     layer: MemoryLayer,
     content: Option<&str>,
     heading: Option<&str>,
 ) -> Result<MemoryLayerContent, String> {
     let addition = require_content(content)?;
-    let current = read_layer(app, layer)?.content;
+    let current = read_layer_at(dir, layer)?.content;
     let next = if layer == MemoryLayer::L2 {
         append_to_heading_or_end(&current, addition, heading)
     } else {
         append_block(&current, addition)
     };
-    save_layer(app, layer, &next)
+    save_layer_at(dir, layer, &next)
 }
 
 fn modify_replace(
-    app: &AppHandle,
+    dir: &Path,
     layer: MemoryLayer,
     old_text: Option<&str>,
     content: Option<&str>,
 ) -> Result<MemoryLayerContent, String> {
     let old_text = require_old_text(old_text)?;
     let replacement = require_content(content)?;
-    let current = read_layer(app, layer)?.content;
+    let current = read_layer_at(dir, layer)?.content;
     ensure_unique_match(&current, old_text)?;
-    save_layer(app, layer, &current.replacen(old_text, replacement, 1))
+    save_layer_at(dir, layer, &current.replacen(old_text, replacement, 1))
 }
 
 fn modify_remove(
-    app: &AppHandle,
+    dir: &Path,
     layer: MemoryLayer,
     old_text: Option<&str>,
 ) -> Result<MemoryLayerContent, String> {
     let old_text = require_old_text(old_text)?;
-    let current = read_layer(app, layer)?.content;
+    let current = read_layer_at(dir, layer)?.content;
     ensure_unique_match(&current, old_text)?;
-    save_layer(app, layer, &current.replacen(old_text, "", 1))
+    save_layer_at(dir, layer, &current.replacen(old_text, "", 1))
 }
 
-fn modify_archive(app: &AppHandle, args: &MemoryModifyArgs) -> Result<MemoryLayerContent, String> {
+fn modify_archive(dir: &Path, args: &MemoryModifyArgs) -> Result<MemoryLayerContent, String> {
     let old_text = require_old_text(args.old_text.as_deref())?;
-    let l1 = read_layer(app, MemoryLayer::L1)?.content;
+    let l1 = read_layer_at(dir, MemoryLayer::L1)?.content;
     ensure_unique_match(&l1, old_text)?;
-    let l2 = read_layer(app, MemoryLayer::L2)?.content;
+    let l2 = read_layer_at(dir, MemoryLayer::L2)?.content;
     let archived = args.content.as_deref().unwrap_or(old_text);
     validate_memory_content(MemoryLayer::L2, archived)?;
     let next_l2 = append_to_heading_or_end(&l2, archived, args.heading.as_deref());
-    save_layer(app, MemoryLayer::L2, &next_l2)?;
+    save_layer_at(dir, MemoryLayer::L2, &next_l2)?;
 
     let mode = args
         .archive_mode
@@ -507,9 +543,9 @@ fn modify_archive(app: &AppHandle, args: &MemoryModifyArgs) -> Result<MemoryLaye
         .trim()
         .to_ascii_lowercase();
     if mode == "copy" {
-        read_layer(app, MemoryLayer::L1)
+        read_layer_at(dir, MemoryLayer::L1)
     } else {
-        save_layer(app, MemoryLayer::L1, &l1.replacen(old_text, "", 1))
+        save_layer_at(dir, MemoryLayer::L1, &l1.replacen(old_text, "", 1))
     }
 }
 

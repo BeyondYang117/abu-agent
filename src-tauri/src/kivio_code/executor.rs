@@ -139,6 +139,25 @@ impl CliToolExecutor {
             )?)),
             "web_fetch" => Ok(text_tool_result(web_fetch(&self.http, &arguments).await?)),
             "web_search" => self.dispatch_web_search(&arguments).await,
+            "todo_write" => {
+                // Full-list-replace: pure apply + formatted receipt. No AppHandle /
+                // conversation persistence (that's GUI-only); the model always sends
+                // the complete list, so state need not survive between calls here.
+                let outcome = crate::chat::todo::apply_todo_write(arguments)?;
+                Ok(crate::chat::todo::tool_result(
+                    &outcome.state,
+                    &outcome.changed,
+                ))
+            }
+            "memory_read" => {
+                crate::chat::memory::tool_read_at(&self.memory_dir()?, &arguments)
+            }
+            "memory_search" => {
+                crate::chat::memory::tool_search_at(&self.memory_dir()?, &arguments)
+            }
+            "memory_modify" => {
+                crate::chat::memory::tool_modify_at(&self.memory_dir()?, &arguments)
+            }
             "enter_plan_mode" => {
                 // Signal-only tool (build + auto_plan): does NOT mutate anything. The
                 // interactive layer detects this tool record at turn end and runs a
@@ -199,6 +218,15 @@ impl CliToolExecutor {
         Ok(text_tool_result(crate::web_search::format_web_context(
             &results,
         )))
+    }
+
+    /// Resolve the shared `chat-memory` dir (AppHandle-free) so memory tools read/
+    /// write the SAME files the GUI does. Rooted at the shared app-data dir (the
+    /// same base Tauri's `app_data_dir` uses — see `settings_loader::app_data_dir`).
+    fn memory_dir(&self) -> Result<std::path::PathBuf, String> {
+        let base = crate::kivio_code::settings_loader::app_data_dir()
+            .ok_or_else(|| "app data dir unavailable for memory".to_string())?;
+        crate::chat::memory::memory_dir_at(&base)
     }
 }
 
@@ -571,6 +599,33 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not support tool"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn todo_write_dispatch_returns_normalized_list() {
+        // The todo_write arm applies the pure normalizer and echoes the list back —
+        // no AppHandle / persistence. Proves the executor wiring, not the (already
+        // tested) normalizer.
+        let (dir, executor) = temp_workspace();
+        let result = executor
+            .call(
+                &ctx(),
+                &tool("todo_write"),
+                serde_json::json!({
+                    "todos": [
+                        { "id": "1", "content": "first step", "status": "in_progress" },
+                        { "id": "2", "content": "second step", "status": "pending" }
+                    ]
+                }),
+                None,
+            )
+            .await
+            .expect("todo_write ok");
+        assert!(!result.is_error);
+        assert!(result.content.contains("first step"));
+        assert!(result.content.contains("second step"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

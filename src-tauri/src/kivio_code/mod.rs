@@ -29,9 +29,11 @@ use serde_json::{json, Value};
 
 use crate::chat::agent::{run_agent_loop, AgentRunConfig};
 use crate::mcp::types::{
-    native_edit_file_tool, native_enter_plan_mode_tool, native_glob_files_tool,
-    native_list_dir_tool, native_read_file_tool, native_run_command_tool, native_search_files_tool,
-    native_web_fetch_tool, native_web_search_tool, native_write_file_tool, ChatToolDefinition,
+    native_bash_output_tool, native_edit_file_tool, native_enter_plan_mode_tool,
+    native_glob_files_tool, native_kill_background_tool, native_list_dir_tool,
+    native_memory_modify_tool, native_memory_read_tool, native_memory_search_tool,
+    native_read_file_tool, native_run_command_tool, native_search_files_tool, native_web_fetch_tool,
+    native_web_search_tool, native_write_file_tool, ChatToolDefinition,
 };
 use crate::settings::{ModelProvider, Settings, WebSearchProvider};
 use crate::skills::SkillRegistry;
@@ -123,7 +125,10 @@ pub struct PrintOptions {
 }
 
 /// The core file/shell/web tools exposed to the model in print mode. Mirrors the
-/// PI coding set (read/write/edit/ls/glob/grep/bash) plus web_fetch.
+/// PI coding set (read/write/edit/ls/glob/grep/bash) plus web_fetch, and the two
+/// background-job companions to `bash` (`bash_output` to poll a backgrounded
+/// command's output, `kill_background` to stop it) — the executor already
+/// dispatches these (executor.rs), they just need advertising here.
 pub fn core_tool_definitions() -> Vec<ChatToolDefinition> {
     vec![
         native_read_file_tool(),
@@ -133,6 +138,8 @@ pub fn core_tool_definitions() -> Vec<ChatToolDefinition> {
         native_write_file_tool(),
         native_edit_file_tool(),
         native_run_command_tool(),
+        native_bash_output_tool(),
+        native_kill_background_tool(),
         native_web_fetch_tool(),
     ]
 }
@@ -413,7 +420,22 @@ impl TurnAssembly {
         // so the same registry instance drives BOTH the prompt's skill catalog
         // and `into_config`'s skill tool definitions (kept consistent).
         let skill_registry = skill_setup::build_skill_registry(settings, cwd);
-        let system_prompt = build_system_prompt(cwd, &skill_registry);
+        let mut system_prompt = build_system_prompt(cwd, &skill_registry);
+
+        // Memory: when the memory tools are enabled, splice the L1 online-memory
+        // block into the prompt so the terminal agent shares the SAME cross-chat
+        // memory the GUI writes (`<app_data>/chat-memory/L1.md`). AppHandle-free via
+        // the dir-based memory core rooted at the shared app-data dir. Best-effort —
+        // any failure (no dir, empty/oversized L1) just omits the block.
+        if crate::settings::chat_memory_tools_enabled(settings) {
+            if let Some(block) = settings_loader::app_data_dir()
+                .and_then(|base| crate::chat::memory::memory_dir_at(&base).ok())
+                .and_then(|dir| crate::chat::memory::l1_prompt_block_at(&dir).ok().flatten())
+            {
+                system_prompt.push_str("\n\n");
+                system_prompt.push_str(&block);
+            }
+        }
 
         // Single source of truth: the resolved model's configured max output
         // (provider override → built-in model database → fallback). The global
@@ -509,6 +531,22 @@ impl TurnAssembly {
         let mut tools = core_tool_definitions();
         tools.extend(self.mcp_tools.clone());
         tools.extend(skill_setup::skill_tool_definitions(&self.skill_registry));
+
+        // Agent todo list (full-list-replace scratchpad for multi-step work). The
+        // model resends the whole list each call, so the executor dispatch is pure
+        // (no per-conversation persistence / UI card like the GUI has); the tool
+        // still gives the model a place to track and echo back its plan.
+        crate::chat::todo::append_tool_definitions(&mut tools);
+
+        // Memory tools (L1/L2 cross-chat memory), gated by the same setting as the
+        // GUI. Dispatched AppHandle-free in the executor via the dir-based memory
+        // core. memory_read/search are read-only (survive the plan-mode filter);
+        // memory_modify is mutating (dropped in plan mode).
+        if crate::settings::chat_memory_tools_enabled(&self.settings) {
+            tools.push(native_memory_read_tool());
+            tools.push(native_memory_search_tool());
+            tools.push(native_memory_modify_tool());
+        }
 
         // enter_plan_mode (build + auto_plan only): a non-mutating signal tool the model
         // calls FIRST for complex tasks. Added before the plan-mode read-only filter, but
@@ -658,14 +696,15 @@ mod tests {
     }
 
     #[test]
-    fn core_tools_are_the_expected_eight() {
+    fn core_tools_are_the_expected_set() {
         let names: Vec<String> = core_tool_definitions()
             .iter()
             .map(|t| t.name.clone())
             .collect();
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 10);
         for expected in [
-            "read", "ls", "grep", "glob", "write", "edit", "bash", "web_fetch",
+            "read", "ls", "grep", "glob", "write", "edit", "bash", "bash_output",
+            "kill_background", "web_fetch",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
@@ -1028,6 +1067,68 @@ mod tests {
         for kept in ["read", "ls", "grep", "glob", "web_fetch"] {
             assert!(plan.iter().any(|n| n == kept), "plan must keep {kept}: {plan:?}");
         }
+    }
+
+    #[test]
+    fn into_config_wires_background_todo_and_memory_tools() {
+        let mut assembly = assembly_with("chat", "Chat", "m1");
+        assembly.settings.chat_memory.enabled = true;
+        let state = build_app_state(assembly.settings.clone());
+        let names: Vec<String> = assembly
+            .into_config(
+                &state,
+                "c".to_string(),
+                "r".to_string(),
+                "msg".to_string(),
+                1,
+                Vec::new(),
+                /* plan_mode */ false,
+                /* offer_enter_plan_mode */ false,
+            )
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        for expected in [
+            "bash_output",
+            "kill_background",
+            "todo_write",
+            "memory_read",
+            "memory_search",
+            "memory_modify",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "build mode should wire {expected}; got {names:?}"
+            );
+        }
+
+        // Memory tools are gated: disabled → none advertised.
+        let mut off = assembly_with("chat", "Chat", "m1");
+        off.settings.chat_memory.enabled = false;
+        let state = build_app_state(off.settings.clone());
+        let off_names: Vec<String> = off
+            .into_config(
+                &state,
+                "c".to_string(),
+                "r".to_string(),
+                "msg".to_string(),
+                1,
+                Vec::new(),
+                false,
+                false,
+            )
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            !off_names.iter().any(|n| n.starts_with("memory_")),
+            "memory disabled → no memory_* tools; got {off_names:?}"
+        );
+        // Background + todo are not gated by the memory flag.
+        assert!(off_names.iter().any(|n| n == "bash_output"));
+        assert!(off_names.iter().any(|n| n == "todo_write"));
     }
 
     #[test]
