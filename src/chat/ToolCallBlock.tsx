@@ -427,9 +427,11 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
             {model}
           </span>
         )}
-        <span className="shrink-0">
-          <StatusIcon status={status} />
-        </span>
+        {status !== 'running' && (
+          <span className="shrink-0">
+            <StatusIcon status={status} />
+          </span>
+        )}
         {duration && (
           <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
             {duration}
@@ -570,9 +572,11 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
             {model}
           </span>
         )}
-        <span className="shrink-0">
-          <StatusIcon status={status} />
-        </span>
+        {status !== 'running' && (
+          <span className="shrink-0">
+            <StatusIcon status={status} />
+          </span>
+        )}
         {duration && (
           <span className="shrink-0 font-mono text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">
             {duration}
