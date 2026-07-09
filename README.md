@@ -168,16 +168,15 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 
 Kivio checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.7.6
+## What's New — v2.7.7
 
-- **Conversation branching** — fork a new conversation from any message; the source stays untouched and attachments are copied.
-- **Accurate context metering** — context usage is now anchored to real provider-reported token counts, with a conservative floor so it never under-reports.
-- **Model favorites** — star models to pin them at the top of the selector.
-- **Windows: fnm / nvm node support** — Kivio loads your PowerShell profile PATH at startup, so node and CLIs installed via fnm or nvm are found without manual env injection.
-- **Windows: `run_command` via PowerShell** — shell commands run through PowerShell (pwsh → powershell) with correct quoting and UTF-8 output.
-- **Obsidian connector** — built-in Obsidian skills (markdown / bases / canvas / CLI), gated until you configure a vault.
-- **Leaner system prompt** — more concise with clearer work discipline, applied across chat and sub-agents.
-- **Reliability** — conversation index self-heal (no more lost history when starting a new chat), image preview keeps composer attachments, streaming tool-call id fix (SenseNova), auto-retry when an endpoint rejects the cache key, and a GitHub update-check fallback.
+- **Multi-model collaboration (Mixer)** — assign models by task weight: a cheap/fast model for sub-agents, a stronger model as an on-demand **Advisor** the main model can consult via the `advisor` tool when stuck, and an **Orchestrate** mode where the main model plans and delegates token-heavy work to worker sub-agents.
+- **Knowledge base upgrades** — third-party document parsing services (MinerU / LlamaParse), drag-and-drop import with an indexing progress bar, a per-conversation "force retrieval" toggle, and embedding calls now counted in usage stats.
+- **High-precision offline OCR** — RapidOCR gains a high-accuracy tier (PP-OCRv6 medium, 50 languages), selectable per scenario.
+- **Usage stats rework** — token accounting anchored to real provider counts, with a model-distribution donut and multi-series trend chart, across today / 1d / 7d / 30d ranges.
+- **Chat UI** — a unified Sources popover (knowledge base / connectors / web search), stacked multi-model avatars for one-question-many-answers, and standalone Advisor / sub-agent cards in the conversation.
+- **macOS** — the Dock icon now hides again when the chat window is closed.
+- **Leaner codebase** — a large dead-code sweep across the frontend, chat core, and terminal agent.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -374,16 +373,15 @@ Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是�
 
 Kivio 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.7.6
+## 新版本 —— v2.7.7
 
-- **对话分支** —— 从任意消息分叉出新对话;源对话保持不变,附件自动拷贝。
-- **上下文计量校准** —— 上下文用量以服务商返回的真实 token 数为锚点,并设保守下限,绝不少报。
-- **模型收藏** —— 收藏模型,置顶到选择器最上方,快速切换。
-- **Windows:支持 fnm / nvm 的 node** —— 启动时读取 PowerShell profile 的 PATH,fnm/nvm 安装的 node 与各类 CLI 无需手动注入环境即可识别。
-- **Windows:`run_command` 改走 PowerShell** —— 命令经 PowerShell(pwsh → powershell)执行,参数引用正确、输出 UTF-8。
-- **Obsidian 连接器** —— 内置 Obsidian 技能(markdown / bases / canvas / CLI),配置 vault 后才对模型开放。
-- **系统提示词精简** —— 更精简、工作纪律更清晰,作用于 Chat 与子代理。
-- **稳定性** —— 对话索引自愈(新建对话不再丢历史)、图片预览后输入框附件不丢、流式工具调用 id 修复(商汤)、端点拒绝缓存键时自动重试、GitHub 更新检查回退。
+- **多模型协作（混音器）** —— 按任务难度分配模型:子代理用便宜/快的模型,配一个更强的模型作为**顾问(Advisor)**,主模型遇到困难时可用 `advisor` 工具主动咨询;再加**编排(Orchestrate)**模式,主模型只做规划、把 token 重活派给 worker 子代理。
+- **知识库增强** —— 第三方文档解析服务(MinerU / LlamaParse)、拖拽导入 + 索引进度条、会话级「强制检索」开关,embedding 调用计入用量统计。
+- **离线高精度 OCR** —— RapidOCR 新增高精度档(PP-OCRv6 medium,50 语言),按场景选择。
+- **用量统计重做** —— token 口径对齐服务商真实计数,新增模型分布环形图与多序列趋势图,支持 当天 / 1d / 7d / 30d。
+- **Chat 界面** —— 统一的「来源」弹层(知识库 / 连接器 / 网络搜索)、一问多答的叠放头像组、对话内独立的顾问 / 子代理卡片。
+- **macOS** —— 关闭对话窗口后 Dock 图标重新隐藏。
+- **代码瘦身** —— 前端、chat core、终端 agent 的一轮大规模死代码清理。
 
 完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
