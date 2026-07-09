@@ -513,6 +513,9 @@ export type ChatToolsConfig = {
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
   /** 同一时刻最多并行运行的子 agent 数（后端钳制 1..64，默认 12）。 */
   subAgentConcurrency?: number
+  /** 子代理全局模型覆盖（providerId+model，皆空 = 跟随主对话模型）。agent 定义的 model 字段仍优先。 */
+  subAgentProviderId?: string
+  subAgentModel?: string
   /** 开发者「请求调试」开关：开启后每次 provider 调用被记录到内存环形缓冲（脱敏）。默认关。 */
   requestDebugEnabled?: boolean
   nativeTools: ChatNativeToolsConfig
@@ -1079,6 +1082,8 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     mcpIdleTimeoutMs: current.mcpIdleTimeoutMs ?? 600_000,
     approvalPolicy: current.approvalPolicy || 'readonly_auto_sensitive_confirm',
     subAgentConcurrency: Math.min(64, Math.max(1, Math.round(current.subAgentConcurrency ?? 12))),
+    subAgentProviderId: current.subAgentProviderId ?? '',
+    subAgentModel: current.subAgentModel ?? '',
     requestDebugEnabled: current.requestDebugEnabled ?? false,
     nativeTools: {
       ...defaultNativeTools(),

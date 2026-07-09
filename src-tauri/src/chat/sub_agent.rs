@@ -608,6 +608,46 @@ impl ToolExecutor for SubAgentToolExecutor {
 // Runner
 // ---------------------------------------------------------------------------
 
+/// Resolve the provider+model a sub-agent should run on. Three tiers:
+/// agent-definition `model` (on the PARENT provider) → global override
+/// (`chat_tools.sub_agent_provider_id`/`sub_agent_model`, may switch provider) →
+/// parent conversation provider+model. An override provider that no longer
+/// resolves falls back to the parent instead of failing the spawn.
+fn resolve_sub_agent_provider_model(
+    settings: &Settings,
+    parent_provider_id: &str,
+    parent_model: &str,
+    def_model: Option<&str>,
+) -> Result<(ModelProvider, String), String> {
+    let parent_provider = || {
+        settings
+            .get_provider(parent_provider_id)
+            .cloned()
+            .ok_or_else(|| "Parent chat provider not found".to_string())
+    };
+
+    // Tier 1: definition override — parent provider, definition's model.
+    if let Some(m) = def_model.map(str::trim).filter(|m| !m.is_empty()) {
+        return Ok((parent_provider()?, m.to_string()));
+    }
+
+    // Tier 2: global sub-agent override (both fields must be usable).
+    let ov_provider_id = settings.chat_tools.sub_agent_provider_id.trim();
+    let ov_model = settings.chat_tools.sub_agent_model.trim();
+    if !ov_provider_id.is_empty() && !ov_model.is_empty() {
+        if let Some(p) = settings
+            .get_provider(ov_provider_id)
+            .filter(|p| p.enabled && !p.api_keys.is_empty())
+        {
+            return Ok((p.clone(), ov_model.to_string()));
+        }
+        // Unusable override → fall through to the parent (tier 3).
+    }
+
+    // Tier 3: follow the parent conversation.
+    Ok((parent_provider()?, parent_model.to_string()))
+}
+
 pub struct SubAgentRequest {
     pub task_id: String,
     pub name: String,
@@ -896,22 +936,25 @@ pub fn handle_agent_spawn<'a>(
         };
         let def = def.clone();
 
-        // Provider/model inherited from the parent conversation unless the
-        // agent definition overrides the model.
-        let provider = settings
-            .get_provider(&parent_conversation.provider_id)
-            .cloned()
-            .ok_or_else(|| "Parent chat provider not found".to_string())?;
+        // Provider/model resolution, three tiers:
+        //   1. agent definition `model` field — highest, resolved against the
+        //      PARENT provider (pre-existing semantics, ignores the global override)
+        //   2. global sub-agent override (settings.chat_tools.sub_agent_*) —
+        //      switches provider AND model, allowing a cheap cross-provider model
+        //   3. parent conversation provider+model — the default (follow)
+        // Runtime defense: an unusable override provider falls back to the parent
+        // rather than failing the spawn (sanitize_settings normally prevents this).
+        let (provider, model) = resolve_sub_agent_provider_model(
+            &settings,
+            &parent_conversation.provider_id,
+            &parent_conversation.model,
+            def.model.as_deref(),
+        )?;
         if provider.api_keys.is_empty() {
             return Ok(err_result(
-                "Parent chat provider has no API key configured.".to_string(),
+                "Sub-agent provider has no API key configured.".to_string(),
             ));
         }
-        let model = def
-            .model
-            .clone()
-            .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| parent_conversation.model.clone());
         if model.trim().is_empty() {
             return Ok(err_result("No model available for the sub-agent.".to_string()));
         }
@@ -1689,6 +1732,98 @@ mod tests {
     use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
     use crate::settings::{ChatToolsConfig, ModelProvider, Settings};
     use crate::state::AppState;
+
+    // -----------------------------------------------------------------------
+    // resolve_sub_agent_provider_model: the three-tier priority.
+    // -----------------------------------------------------------------------
+
+    fn named_provider(id: &str) -> ModelProvider {
+        ModelProvider {
+            id: id.to_string(),
+            name: id.to_string(),
+            api_keys: vec!["key".to_string()],
+            api_key_legacy: None,
+            base_url: "http://localhost".to_string(),
+            available_models: Vec::new(),
+            enabled_models: Vec::new(),
+            enabled: true,
+            api_format: "openai_chat".to_string(),
+            model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
+        }
+    }
+
+    fn settings_with_providers(providers: Vec<ModelProvider>) -> Settings {
+        Settings {
+            providers,
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn sub_agent_model_follows_parent_by_default() {
+        let settings = settings_with_providers(vec![named_provider("parent-p")]);
+        let (provider, model) =
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+                .expect("resolves");
+        assert_eq!(provider.id, "parent-p");
+        assert_eq!(model, "parent-model");
+    }
+
+    #[test]
+    fn sub_agent_model_uses_global_override_cross_provider() {
+        let mut settings =
+            settings_with_providers(vec![named_provider("parent-p"), named_provider("cheap-p")]);
+        settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
+        settings.chat_tools.sub_agent_model = "cheap-model".to_string();
+        let (provider, model) =
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+                .expect("resolves");
+        assert_eq!(provider.id, "cheap-p");
+        assert_eq!(model, "cheap-model");
+    }
+
+    #[test]
+    fn sub_agent_definition_model_beats_global_override() {
+        let mut settings =
+            settings_with_providers(vec![named_provider("parent-p"), named_provider("cheap-p")]);
+        settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
+        settings.chat_tools.sub_agent_model = "cheap-model".to_string();
+        // Definition model resolves on the PARENT provider (pre-existing semantics).
+        let (provider, model) = resolve_sub_agent_provider_model(
+            &settings,
+            "parent-p",
+            "parent-model",
+            Some("def-model"),
+        )
+        .expect("resolves");
+        assert_eq!(provider.id, "parent-p");
+        assert_eq!(model, "def-model");
+    }
+
+    #[test]
+    fn sub_agent_unusable_override_falls_back_to_parent() {
+        // Override points at a provider that is disabled / keyless / missing →
+        // fall back to the parent rather than failing the spawn.
+        let mut keyless = named_provider("cheap-p");
+        keyless.api_keys.clear();
+        let mut settings =
+            settings_with_providers(vec![named_provider("parent-p"), keyless]);
+        settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
+        settings.chat_tools.sub_agent_model = "cheap-model".to_string();
+        let (provider, model) =
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+                .expect("resolves");
+        assert_eq!(provider.id, "parent-p");
+        assert_eq!(model, "parent-model");
+
+        settings.chat_tools.sub_agent_provider_id = "missing-p".to_string();
+        let (provider, model) =
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+                .expect("resolves");
+        assert_eq!(provider.id, "parent-p");
+        assert_eq!(model, "parent-model");
+    }
 
     fn test_provider(base_url: &str) -> ModelProvider {
         ModelProvider {

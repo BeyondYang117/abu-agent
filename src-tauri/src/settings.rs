@@ -870,6 +870,12 @@ pub struct ChatToolsConfig {
     /// 同一时刻最多并行运行的子 agent 数。受 [`SUB_AGENT_CONCURRENCY_MIN`]..[`MAX`] 钳制。
     #[serde(default = "default_sub_agent_concurrency")]
     pub sub_agent_concurrency: usize,
+    /// 子代理全局模型覆盖：spawn 的 sub-agent 用这个 provider+model 而非父会话的。
+    /// 两者皆空 = 跟随父会话（现状）。agent 定义文件里的 model 字段仍优先于此设置。
+    #[serde(default)]
+    pub sub_agent_provider_id: String,
+    #[serde(default)]
+    pub sub_agent_model: String,
     /// 开发者「请求调试」总开关：开启后每次 provider 调用被记录到内存环形缓冲（脱敏）。
     /// 默认关闭；关闭时 adapter 零开销（不构造记录）。仅内存、不落盘。
     #[serde(default)]
@@ -892,6 +898,8 @@ impl Default for ChatToolsConfig {
             max_tool_output_chars: default_max_tool_output_chars(),
             approval_policy: default_chat_approval_policy(),
             sub_agent_concurrency: default_sub_agent_concurrency(),
+            sub_agent_provider_id: String::new(),
+            sub_agent_model: String::new(),
             request_debug_enabled: false,
             native_tools: ChatNativeToolsConfig::default(),
         }
@@ -1661,6 +1669,8 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         settings.default_models = DefaultModelsConfig::default();
         settings.screenshot_translation.provider_id.clear();
         settings.lens.provider_id.clear();
+        settings.chat_tools.sub_agent_provider_id.clear();
+        settings.chat_tools.sub_agent_model.clear();
     } else {
         if !provider_selectable(&settings.translator_provider_id) {
             if let Some(first) = first_selectable_provider() {
@@ -1692,6 +1702,14 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         {
             settings.lens.provider_id.clear();
             settings.lens.model.clear();
+        }
+
+        // 子代理模型覆盖可空（空 = 跟随父会话）；填了不存在/已禁用的 provider 则重置回跟随。
+        if !settings.chat_tools.sub_agent_provider_id.is_empty()
+            && !provider_selectable(&settings.chat_tools.sub_agent_provider_id)
+        {
+            settings.chat_tools.sub_agent_provider_id.clear();
+            settings.chat_tools.sub_agent_model.clear();
         }
 
         sanitize_default_model_selection(&mut settings.default_models.chat, &settings.providers);

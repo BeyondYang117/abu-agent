@@ -3104,6 +3104,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                         updateDefaultModel('titleSummary', '', '')
                         updateDefaultModel('compression', '', '')
                         updateDefaultModel('imageGeneration', '', '')
+                        updateChatTools({ subAgentProviderId: '', subAgentModel: '' })
                       }}
                       data-tauri-drag-region="false"
                     >
@@ -3160,6 +3161,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       inheritLabel={t.mixerNoImageGenerationModel}
                       onChange={(providerId, model) => {
                         updateDefaultModel('imageGeneration', providerId, model)
+                      }}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    label={t.defaultSubAgentModel}
+                    description={t.defaultSubAgentModelHint}
+                  >
+                    <ModelPairSelect
+                      providerId={chatTools.subAgentProviderId || ''}
+                      model={chatTools.subAgentModel || ''}
+                      providers={settings.providers}
+                      inheritLabel={t.mixerFollowChatModel}
+                      onChange={(providerId, model) => {
+                        updateChatTools({ subAgentProviderId: providerId, subAgentModel: model })
                       }}
                     />
                   </SettingRow>
