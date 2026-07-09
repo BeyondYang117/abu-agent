@@ -238,7 +238,13 @@ impl ToolExecutor for CliToolExecutor {
         arguments: Value,
         skill_cache: Option<&'a mut skills::SkillRunCache>,
     ) -> ToolExecutorFuture<'a> {
-        let tool_name = tool.openai_tool_name();
+        // Dispatch by the INTERNAL tool name. `openai_tool_name()` applies the
+        // reserved wire alias (e.g. `web_search` → `search_web`) for the model-
+        // facing API, but the dispatch table keys on internal names, so resolve the
+        // alias back first — otherwise `web_search` would only route via the raw-name
+        // retry below and surface the wrong error on failure.
+        let tool_name =
+            crate::mcp::types::resolve_reserved_wire_alias(&tool.openai_tool_name()).to_string();
         let fallback = tool.name.clone();
         Box::pin(async move {
             // Skill tools are dispatched here (not in `dispatch`) because they
