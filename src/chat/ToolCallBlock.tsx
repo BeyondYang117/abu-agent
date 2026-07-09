@@ -443,7 +443,7 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
         {statusLine && (
           <span
             className={`min-w-0 truncate font-mono text-[11px] ${
-              status === 'running' ? 'chat-motion-subagent-shimmer' : 'text-neutral-400 dark:text-neutral-500'
+              status === 'running' ? 'chat-motion-tool-shimmer' : 'text-neutral-400 dark:text-neutral-500'
             }`}
           >
             {statusLine}
@@ -581,7 +581,7 @@ function AdvisorCard({ toolCall }: ToolCallBlockProps) {
         {statusLine && (
           <span
             className={`min-w-0 truncate font-mono text-[11px] ${
-              status === 'running' ? 'chat-motion-subagent-shimmer' : 'text-neutral-400 dark:text-neutral-500'
+              status === 'running' ? 'chat-motion-tool-shimmer' : 'text-neutral-400 dark:text-neutral-500'
             }`}
           >
             {statusLine}
