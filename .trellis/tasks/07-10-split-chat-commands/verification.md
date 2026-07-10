@@ -250,3 +250,26 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; no reusable runtime contract changed, so no `.trellis/spec/` update is required.
+
+
+## Round 12: post-commit verification
+
+- Commit: `df7a3bb refactor(chat): extract debug probe runtime`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 13 began.
+
+## Round 13: direct image generation extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/direct_image.rs`: 161 lines extracted.
+- `src-tauri/src/chat/commands.rs`: 3,682 -> 3,535 lines.
+- Moved direct image generation orchestration, the pending marker constant, artifact Markdown rendering, and prompt selection/truncation.
+- Kept `agent_run_entry_label` in the parent because normal reply completion and multi-model fan-out still use it; the new module accesses it as a descendant-only parent helper.
+- Removed direct-image-only `ChatToolArtifact` and production `ModelProvider` imports from the parent while retaining `ModelProvider` for existing tests.
+- This round contains no Tauri command, so registration paths and IPC names are unchanged.
+- All three moved function bodies exactly match `df7a3bb` after normalizing the entry function's `pub(super)` visibility. SHA-256: `25a616a8d4dfe41f846ea3ece83c90877ce6afa297c278cabb2402b83bc417a8`, `548357fb1027b1f1b3247136b052e7e80e628a23decfaf9c1f6c6cce425faf14`, and `dc2ebb9b2de1131621c6ea359ede2c5bfd7b1b5e6c0e7d4deb6f3fcd7ea8f037`.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/direct_image.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including the shared run-entry label coverage.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; no provider/image-generation contract changed, so no `.trellis/spec/` update is required.

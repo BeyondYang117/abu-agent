@@ -196,4 +196,16 @@
 - [x] Confirm this round moves no Tauri command and requires no registration-path change.
 - [x] Compare the formatted extraction exactly against the original block from `bb982ca`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 12 and rerun post-commit verification before starting round 13.
+- [x] Commit round 12 and rerun post-commit verification before starting round 13.
+
+## Step 22 - Continuous split: direct image generation (round 13)
+
+- [x] Add `src-tauri/src/chat/commands/direct_image.rs`.
+- [x] Move direct image generation orchestration, artifact Markdown rendering, prompt selection/truncation, and the pending marker constant.
+- [x] Keep the shared `agent_run_entry_label` helper in the parent because normal replies and fan-out still own callers.
+- [x] Restrict the moved entry point to parent-module visibility and keep the parent call shape unchanged.
+- [x] Remove direct-image-only imports from the parent while retaining test-only provider types.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare all three moved function bodies exactly against `df7a3bb`; no business logic changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 13 and rerun post-commit verification before starting round 14.

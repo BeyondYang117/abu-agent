@@ -19,13 +19,12 @@ use crate::chat::model_metadata::{
     chat_max_output_tokens_for_model, model_can_generate_images_directly,
     reasoning_efforts_for_model,
 };
-use crate::mcp::types::ChatToolArtifact;
 use crate::mcp;
 #[cfg(test)]
 use crate::mcp::ChatToolDefinition;
-use crate::settings::{ModelProvider, Settings};
+use crate::settings::Settings;
 #[cfg(test)]
-use crate::settings::SessionModel;
+use crate::settings::{ModelProvider, SessionModel};
 use crate::skills;
 use crate::state::AppState;
 
@@ -80,6 +79,9 @@ mod messages;
 
 mod sanitization;
 
+mod direct_image;
+use direct_image::complete_direct_image_generation_reply;
+
 #[cfg(debug_assertions)]
 mod probe_runtime;
 #[cfg(debug_assertions)]
@@ -101,8 +103,7 @@ use sanitization::sanitize_image_payloads_for_model;
 use messages::{
     auxiliary_tool_segments, build_assistant_message, build_error_arm_message,
     capture_agent_plan_draft_if_needed, merge_latest_agent_plan_state,
-    merge_latest_agent_todo_state, plain_text_segment,
-    tool_segment_for_record, upsert_assistant_message,
+    merge_latest_agent_todo_state, tool_segment_for_record, upsert_assistant_message,
 };
 #[cfg(test)]
 use messages::{
@@ -135,7 +136,6 @@ use context::{
 #[cfg(test)]
 use super::ConversationContextSummary;
 
-const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
 const CHAT_REPLY_BUSY_ERROR: &str = "该对话正在生成中，请稍后再试";
 /// 多模型一问多答的并排上限（决策 D4）。超过此数不允许发送。
 const MAX_REPLY_MODELS: usize = 4;
@@ -1255,158 +1255,11 @@ async fn run_reply_fan_out(
     Err(first_error.unwrap_or_else(|| "全部模型回答均失败".to_string()))
 }
 
-async fn complete_direct_image_generation_reply(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings: &Settings,
-    provider: &ModelProvider,
-    conversation: &mut Conversation,
-    title_from_first_user: Option<&str>,
-    last_user_api_content: Option<&str>,
-    last_user_image_paths: &[PathBuf],
-    active_skill_id: Option<&str>,
-    run_id: &str,
-    assistant_message_id: String,
-    run_generation: u64,
-    retry_attempts: usize,
-    entry: crate::chat::agent::AgentRunEntry,
-) -> Result<(), String> {
-    if !last_user_image_paths.is_empty() {
-        return Err(
-            "当前直接选择的生图模型只支持文字生图；图生图/图片编辑请先使用文字提示，或之后单独配置支持图片编辑的流程。"
-                .to_string(),
-        );
-    }
-
-    let prompt = direct_image_generation_prompt(conversation, last_user_api_content)?;
-    let arguments = serde_json::json!({
-        "prompt": prompt,
-        "size": "auto",
-        "quality": "auto",
-        "n": 1,
-    });
-    let started = Instant::now();
-    emit_chat_stream_delta(
-        app,
-        &conversation.id,
-        run_id,
-        &assistant_message_id,
-        DIRECT_IMAGE_GENERATION_PENDING,
-        None,
-        Some(&plain_text_segment(1000, DIRECT_IMAGE_GENERATION_PENDING)),
-    );
-
-    let model = conversation.model.clone();
-    let result = tokio::select! {
-        result = crate::chat::image_generation::generate_image_with_provider(
-            state.inner(),
-            provider,
-            &model,
-            &arguments,
-            retry_attempts,
-            "Chat image generation",
-        ) => result,
-        _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
-            emit_chat_stream_done(
-                app,
-                &conversation.id,
-                run_id,
-                &assistant_message_id,
-                "cancelled",
-                "",
-            );
-            return Err("cancelled".to_string());
-        }
-    };
-
-    match result {
-        Ok(output) if !output.is_error => {
-            let content = direct_image_generation_content(&output.artifacts);
-            emit_chat_stream_done(
-                app,
-                &conversation.id,
-                run_id,
-                &assistant_message_id,
-                "done",
-                &content,
-            );
-            let active_skill = active_skill_id
-                .map(str::to_string)
-                .or_else(|| conversation.active_skill_id.clone());
-            push_assistant_message(
-                app,
-                state,
-                settings,
-                conversation,
-                assistant_message_id,
-                content.clone(),
-                None,
-                output.artifacts,
-                Vec::new(),
-                Vec::new(),
-                vec![plain_text_segment(1000, content.as_str())],
-                active_skill.as_deref(),
-                title_from_first_user,
-                Some(agent_run_entry_label(entry)),
-                Some("completed"),
-                None,
-                None,
-                None,
-            )
-            .await?;
-            Ok(())
-        }
-        Ok(output) => {
-            let err = output.content;
-            eprintln!(
-                "Direct image generation failed after {}ms: {err}",
-                started.elapsed().as_millis()
-            );
-            Err(err)
-        }
-        Err(err) => {
-            eprintln!(
-                "Direct image generation failed after {}ms: {err}",
-                started.elapsed().as_millis()
-            );
-            Err(err)
-        }
-    }
-}
-
 fn agent_run_entry_label(entry: crate::chat::agent::AgentRunEntry) -> &'static str {
     match entry {
         crate::chat::agent::AgentRunEntry::Send => "send",
         crate::chat::agent::AgentRunEntry::Regenerate => "regenerate",
     }
-}
-
-fn direct_image_generation_content(artifacts: &[ChatToolArtifact]) -> String {
-    artifacts
-        .iter()
-        .map(|artifact| format!("![{}]({})", artifact.name, artifact.name))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn direct_image_generation_prompt(
-    conversation: &Conversation,
-    last_user_api_content: Option<&str>,
-) -> Result<String, String> {
-    let prompt = conversation
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "user")
-        .map(|message| message.content.trim())
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            last_user_api_content
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .ok_or_else(|| "请输入要生成的图片描述。".to_string())?;
-    Ok(truncate_chars(prompt, 8000))
 }
 
 // 历史拼装的唯一入口：send 与 regenerate 都最终走这里。
