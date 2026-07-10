@@ -147,4 +147,16 @@
 - [x] Confirm this round moves no Tauri command and requires no registration-path change.
 - [x] Compare the formatted extraction exactly against the functions from `ce718cd`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 8 and rerun post-commit verification before starting round 9.
+- [x] Commit round 8 and rerun post-commit verification before starting round 9.
+
+
+## Step 18 - Continuous split: conversation mutations (round 9)
+
+- [x] Add `src-tauri/src/chat/commands/mutations.rs`.
+- [x] Move 7 Tauri commands for message update/regeneration/deletion, conversation fork/deletion/update, and group selection.
+- [x] Move the 4 owning helpers for message lookup, regeneration truncation, fork-message construction, and forked-file copying.
+- [x] Update the 7 `src-tauri/src/lib.rs` registration paths without changing IPC command names.
+- [x] Keep existing parent-module tests intact through narrow test-only imports.
+- [x] Compare the formatted extraction exactly against the functions from `9dcad89`; no business logic changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, Tauri command parity, and diff cleanliness.
+- [ ] Commit round 9 and rerun post-commit verification before starting round 10.

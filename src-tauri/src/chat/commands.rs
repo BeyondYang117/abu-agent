@@ -40,16 +40,16 @@ use super::vision::{
     user_content_with_auxiliary_vision_result,
 };
 use super::storage::{
-    assistant_snapshot, conversation_attachments_dir, create_project,
-    delete_conversation as delete_conv, find_project_by_id, find_project_by_name, find_set_by_id,
-    get_projects, load_conversation, save_conversation, update_project,
+    conversation_attachments_dir, create_project, find_set_by_id, get_projects,
+    load_conversation, save_conversation, update_project,
 };
 use super::{
-    AgentPlanState, AgentTodoState, ChatMessage, ChatMessageSegment, ChatMessageSegmentKind,
-    ChatMessageSegmentPhase, CompactionBoundaryRecord, Conversation, ConversationContextState,
-    ForkOrigin, ToolCallRecord,
+    AgentPlanState, ChatMessage, ChatMessageSegment, ChatMessageSegmentKind,
+    ChatMessageSegmentPhase, CompactionBoundaryRecord, Conversation, ToolCallRecord,
     ToolCallStatus,
 };
+#[cfg(test)]
+use super::{AgentTodoState, ConversationContextState};
 
 pub(crate) mod attachments;
 
@@ -58,8 +58,7 @@ pub(crate) mod catalog;
 pub(crate) use catalog::create_assistant_via_builder;
 use catalog::{
     chat_memory_prompt_for_request, create_chat_conversation_internal, is_builder_conversation,
-    project_prompt_context_for, reconcile_conversation_orphan_tool_segments,
-    strip_transcripts_for_frontend,
+    project_prompt_context_for, strip_transcripts_for_frontend,
 };
 #[cfg(test)]
 use catalog::assistant_from_builder_args;
@@ -74,6 +73,8 @@ mod tooling;
 
 mod messages;
 
+pub(crate) mod mutations;
+
 pub(crate) use interaction::{
     emit_chat_stream_delta, emit_chat_stream_done, emit_chat_tool_record,
 };
@@ -83,16 +84,18 @@ use interaction::{
 #[cfg(test)]
 use title::generate_title;
 pub(crate) use messages::push_assistant_message;
+#[cfg(test)]
+use mutations::{apply_regenerate_truncation, build_fork_messages};
 use messages::{
     auxiliary_tool_segments, build_assistant_message, build_error_arm_message,
     capture_agent_plan_draft_if_needed, merge_latest_agent_plan_state,
     merge_latest_agent_todo_state, persist_partial_assistant_snapshot, plain_text_segment,
-    replace_final_text_segments_for_edit, tool_segment_for_record, upsert_assistant_message,
+    tool_segment_for_record, upsert_assistant_message,
 };
 #[cfg(test)]
 use messages::{
     assistant_model_messages_for_storage, content_from_segments, normalize_assistant_segments,
-    reasoning_from_segments, reconcile_orphan_tool_segments,
+    reasoning_from_segments, reconcile_orphan_tool_segments, replace_final_text_segments_for_edit,
 };
 use tooling::{
     append_agent_ask_user_tools, append_agent_todo_tools, apply_agent_plan_tool_filter,
@@ -110,13 +113,12 @@ use interaction::{approve_agent_plan_for_execution, format_tool_approval_summary
 use context::{
     build_chat_api_messages, compress_conversation_context, compute_context_state,
     context_likely_over_limit, emit_chat_compaction_state, emit_chat_context_state,
-    mark_summary_stale_if_needed, resolve_usage_anchor, rollback_user_message_after_failed_send,
-    should_auto_compress_context,
+    resolve_usage_anchor, rollback_user_message_after_failed_send, should_auto_compress_context,
 };
 #[cfg(test)]
 use context::{
     count_tokens_in_value, estimate_image_tokens_for_dimensions,
-    group_answer_excluded_from_context,
+    group_answer_excluded_from_context, mark_summary_stale_if_needed,
 };
 #[cfg(test)]
 use super::ConversationContextSummary;
@@ -1926,606 +1928,6 @@ fn looks_like_inline_image_base64(value: &str) -> bool {
 
 
 use crate::chat::agent::execute::truncate_chars;
-
-
-fn find_message_index(conversation: &Conversation, message_id: &str) -> Result<usize, String> {
-    conversation
-        .messages
-        .iter()
-        .position(|m| m.id == message_id)
-        .ok_or_else(|| "消息不存在".to_string())
-}
-
-/// 更新单条消息（仅助手回复）
-#[tauri::command]
-pub(crate) async fn chat_update_message(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    conversation_id: String,
-    message_id: String,
-    content: String,
-) -> Result<serde_json::Value, String> {
-    let mut conversation = load_conversation(&app, &conversation_id)?;
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return Err("消息内容不能为空".to_string());
-    }
-
-    let idx = find_message_index(&conversation, &message_id)?;
-    if conversation.messages[idx].role != "assistant" {
-        return Err("仅支持编辑助手回复".to_string());
-    }
-
-    mark_summary_stale_if_needed(&mut conversation, idx);
-    replace_final_text_segments_for_edit(&mut conversation.messages[idx], trimmed);
-    conversation.messages[idx].timestamp = chrono::Local::now().timestamp();
-    let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
-    conversation.context_state = context_state.clone();
-    conversation.updated_at = chrono::Local::now().timestamp();
-    save_conversation(&app, &conversation)?;
-    emit_chat_context_state(&app, &conversation.id, &context_state);
-
-    strip_transcripts_for_frontend(&mut conversation);
-    Ok(serde_json::json!({
-        "success": true,
-        "conversation": conversation,
-    }))
-}
-
-/// `chat_regenerate_message` 的截断/编辑核心（纯函数，便于单测）：
-/// - assistant：截到它之前（`new_content` 无意义 → 报错）。
-/// - user + `new_content`：trim 校验非空 → 替换内容（编辑提问；附件保留）→ 保留该条截掉其后。
-///   摘要失效用 `idx`（内容变了，覆盖到该条的摘要即失效）。
-/// - user 无 `new_content`：孤儿重试，摘要失效用 `idx + 1`，保留该条截掉其后。
-fn apply_regenerate_truncation(
-    conversation: &mut Conversation,
-    idx: usize,
-    new_content: Option<String>,
-) -> Result<(), String> {
-    match conversation.messages[idx].role.as_str() {
-        "assistant" => {
-            if new_content.is_some() {
-                return Err("编辑内容仅支持用户消息".to_string());
-            }
-            mark_summary_stale_if_needed(conversation, idx);
-            conversation.messages.truncate(idx);
-        }
-        "user" => {
-            if let Some(content) = new_content {
-                let trimmed = content.trim();
-                if trimmed.is_empty() {
-                    return Err("消息内容不能为空".to_string());
-                }
-                mark_summary_stale_if_needed(conversation, idx);
-                conversation.messages[idx].content = trimmed.to_string();
-                conversation.messages[idx].timestamp = chrono::Local::now().timestamp();
-            } else {
-                mark_summary_stale_if_needed(conversation, idx + 1);
-            }
-            conversation.messages.truncate(idx + 1);
-        }
-        _ => return Err("仅支持重新生成助手回复或重试用户消息".to_string()),
-    }
-    Ok(())
-}
-
-/// 重新生成助手回复（移除该条及之后的消息，再基于此前上下文请求新回复）。
-/// `new_content`：编辑用户提问并重新生成——仅当目标是 user 消息时有效，先替换其内容
-/// 再走截断+重生成（附件保留；一个原子命令，避免"改了历史但不重生成"的不一致状态）。
-#[tauri::command]
-pub(crate) async fn chat_regenerate_message(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    conversation_id: String,
-    message_id: String,
-    new_content: Option<String>,
-) -> Result<serde_json::Value, String> {
-    // Busy 拒绝：该会话仍有任意一条 run 在跑时不允许再触发重新生成。
-    // 原子哨兵预留关闭 TOCTOU 窗口；per-run 槽位 / generation 在 `complete_assistant_reply` 内注册。
-    let Some(_send_reservation) = ChatSendReservation::try_acquire(state.inner(), &conversation_id)
-    else {
-        return Ok(serde_json::json!({
-            "success": false,
-            "error": CHAT_REPLY_BUSY_ERROR,
-        }));
-    };
-
-    let mut conversation = load_conversation(&app, &conversation_id)?;
-    let idx = find_message_index(&conversation, &message_id)?;
-    apply_regenerate_truncation(&mut conversation, idx, new_content)?;
-    if conversation.messages.last().map(|m| m.role.as_str()) != Some("user") {
-        return Err("缺少对应的用户消息，无法重新生成".to_string());
-    }
-
-    // 多答组（任务 06-30 / D5 / AC4）：truncate 可能删掉某组的显式「选中条」（或整组），
-    // 留下指向已删消息的 group_selections，会让 group_answer_excluded_from_context 把残余
-    // 答案全排除出上下文。清掉任何指向已不存在消息的选中记录，回退到「组内第一条」默认。
-    if !conversation.group_selections.is_empty() {
-        let existing_ids: std::collections::HashSet<&str> =
-            conversation.messages.iter().map(|m| m.id.as_str()).collect();
-        conversation
-            .group_selections
-            .retain(|_, msg_id| existing_ids.contains(msg_id.as_str()));
-    }
-
-    conversation.updated_at = chrono::Local::now().timestamp();
-    save_conversation(&app, &conversation)?;
-
-    let last_user_api_content = conversation
-        .messages
-        .last()
-        .filter(|message| message.role == "user")
-        .map(|message| {
-            let attachment_dir = if message.attachments.is_empty() {
-                None
-            } else {
-                conversation_attachments_dir(&app, &conversation_id).ok()
-            };
-            compose_user_content_for_api(
-                &message.content,
-                &message.attachments,
-                attachment_dir.as_deref(),
-            )
-        });
-    let last_user_image_paths = conversation
-        .messages
-        .last()
-        .filter(|message| message.role == "user")
-        .map(|message| {
-            stored_image_paths_for_attachments(&app, &conversation_id, &message.attachments)
-        })
-        .transpose()?
-        .unwrap_or_default();
-    match compute_context_state(
-        &app,
-        &state,
-        &conversation,
-        last_user_api_content.as_deref(),
-        &last_user_image_paths,
-    )
-    .await
-    {
-        Ok(context_state) => {
-            conversation.context_state = context_state.clone();
-            save_conversation(&app, &conversation)?;
-            emit_chat_context_state(&app, &conversation.id, &context_state);
-        }
-        Err(err) => eprintln!("Context usage estimate failed before regenerate: {err}"),
-    }
-    let reply_outcome = complete_assistant_reply(
-        &app,
-        &state,
-        &mut conversation,
-        None,
-        last_user_api_content.as_deref(),
-        &last_user_image_paths,
-        None,
-        crate::chat::agent::AgentRunEntry::Regenerate,
-    )
-    .await;
-    strip_transcripts_for_frontend(&mut conversation);
-    match reply_outcome {
-        Ok(()) => Ok(serde_json::json!({
-            "success": true,
-            "conversation": conversation,
-        })),
-        Err(err) if err == "cancelled" => Ok(serde_json::json!({
-            "success": true,
-            "conversation": conversation,
-        })),
-        Err(err) => Ok(serde_json::json!({
-            "success": false,
-            "error": err,
-        })),
-    }
-}
-
-/// 删除单条消息
-#[tauri::command]
-pub(crate) async fn chat_delete_message(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    conversation_id: String,
-    message_id: String,
-) -> Result<serde_json::Value, String> {
-    let mut conversation = load_conversation(&app, &conversation_id)?;
-    let idx = find_message_index(&conversation, &message_id)?;
-    if conversation.messages[idx].role != "assistant" {
-        return Err("仅支持删除助手回复".to_string());
-    }
-
-    mark_summary_stale_if_needed(&mut conversation, idx);
-    let removed = conversation.messages.remove(idx);
-    // 多答组（任务 06-30 / D5 / AC4）：删除某条答案时，若它正是某组的显式「选中条」，
-    // 清掉该 group 的 group_selections 记录，让选中条回退到「该组顺序第一条」。否则
-    // group_selections 会指向已删除的 message_id，导致 group_answer_excluded_from_context
-    // 把整组答案都排除出下一轮上下文（无任何答案进历史）。
-    if let Some(group_id) = removed.group_id.as_deref() {
-        if conversation.group_selections.get(group_id).map(String::as_str) == Some(removed.id.as_str()) {
-            conversation.group_selections.remove(group_id);
-        }
-    }
-    let context_state = compute_context_state(&app, &state, &conversation, None, &[]).await?;
-    conversation.context_state = context_state.clone();
-    conversation.updated_at = chrono::Local::now().timestamp();
-    save_conversation(&app, &conversation)?;
-    emit_chat_context_state(&app, &conversation.id, &context_state);
-
-    strip_transcripts_for_frontend(&mut conversation);
-    Ok(serde_json::json!({
-        "success": true,
-        "conversation": conversation,
-    }))
-}
-
-/// 组装分叉分支的消息前缀（纯函数，便于单测）：
-/// - 取 `messages[0..=anchor_idx]`（含锚点）。
-/// - 若锚点属于某多模型多答组（`group_id = Some(g)`，决策 Q2）：只保留锚点那一列，
-///   移除前缀内其余同组兄弟列（组内更晚的列已被切片排除），并把锚点的 `group_id` 置 None
-///   转为普通单答，使新对话该轮成为干净的线性单答。
-/// - 保留原 message id（跨对话无需唯一，`group_selections` 引用因此仍有效）。
-fn build_fork_messages(messages: &[ChatMessage], anchor_idx: usize) -> Vec<ChatMessage> {
-    let anchor_id = messages[anchor_idx].id.clone();
-    let anchor_group = messages[anchor_idx].group_id.clone();
-    let mut out: Vec<ChatMessage> = messages[..=anchor_idx].to_vec();
-
-    if let Some(group) = anchor_group {
-        // 丢弃同组的其它兄弟列，仅留锚点那条。
-        out.retain(|m| m.group_id.as_deref() != Some(group.as_str()) || m.id == anchor_id);
-        // 锚点转普通单答。
-        if let Some(anchor) = out.iter_mut().find(|m| m.id == anchor_id) {
-            anchor.group_id = None;
-        }
-    }
-
-    out
-}
-
-/// 分叉成新对话（方案 B）：把源对话某消息及其之前的消息复制进一个全新对话，之后独立继续。
-/// 纯复制 + 打开，不自动发送（决策 Q1）。新对话继承源的会话级配置、深拷被引用的附件/图片
-/// artifact，并记录 `forked_from` 供 UI 面包屑回跳。源对话完全只读、不受影响。
-#[tauri::command]
-pub(crate) fn chat_fork_conversation(
-    app: AppHandle,
-    conversation_id: String,
-    message_id: String,
-) -> Result<serde_json::Value, String> {
-    let source = load_conversation(&app, &conversation_id)?;
-    let anchor_idx = find_message_index(&source, &message_id)?;
-
-    let now = chrono::Local::now().timestamp();
-    let new_id = format!("conv_{}", Uuid::new_v4());
-    let messages = build_fork_messages(&source.messages, anchor_idx);
-
-    // 深拷被复制消息引用的附件 / 图片 artifact 文件到新对话目录（裸文件名同名拷贝，路径保持有效）。
-    // 缺文件容错跳过（记 warning，不阻断分叉）。沙箱导出的生成文件（~/Kivio/outputs/<id>/）不拷——见 design 限制。
-    copy_forked_conversation_files(&app, &conversation_id, &new_id, &messages);
-
-    // 清理 group_selections：仅保留其选中 message_id 仍存在于新 messages、且该消息仍带 group_id 的条目。
-    let existing_groups: std::collections::HashMap<&str, &str> = messages
-        .iter()
-        .filter_map(|m| m.group_id.as_deref().map(|g| (m.id.as_str(), g)))
-        .collect();
-    let mut group_selections = source.group_selections.clone();
-    group_selections.retain(|group_id, sel_msg_id| {
-        existing_groups.get(sel_msg_id.as_str()) == Some(&group_id.as_str())
-    });
-
-    // 标题加「（分支）」后缀（R7）。先把源标题截到留出后缀空间，保证后缀在 40 字上限内始终可见。
-    const FORK_SUFFIX: &str = "（分支）";
-    let base = truncate_chars(&source.title, 40 - FORK_SUFFIX.chars().count());
-    let title = format!("{base}{FORK_SUFFIX}");
-
-    let conversation = Conversation {
-        id: new_id,
-        title,
-        provider_id: source.provider_id.clone(),
-        model: source.model.clone(),
-        messages,
-        agent_runtime: source.agent_runtime.clone(),
-        active_skill_id: source.active_skill_id.clone(),
-        assistant_id: source.assistant_id.clone(),
-        assistant_snapshot: source.assistant_snapshot.clone(),
-        created_at: now,
-        updated_at: now,
-        pinned: false,
-        folder: source.folder.clone(),
-        project_id: source.project_id.clone(),
-        set_id: source.set_id.clone(),
-        context_state: ConversationContextState::default(),
-        agent_todo_state: AgentTodoState::default(),
-        agent_plan_state: AgentPlanState::default(),
-        knowledge_base_ids: source.knowledge_base_ids.clone(),
-        force_knowledge_search: source.force_knowledge_search,
-        thinking_level: source.thinking_level.clone(),
-        reply_models: source.reply_models.clone(),
-        group_selections,
-        forked_from: Some(ForkOrigin {
-            conversation_id: source.id.clone(),
-            message_id: source.messages[anchor_idx].id.clone(),
-            title: source.title.clone(),
-        }),
-    };
-
-    save_conversation(&app, &conversation)?;
-
-    let mut conversation = conversation;
-    // 与 chat_get_conversation 一致：返回前做读时孤立工具分段对账（必须在 strip 之前——
-    // strip 会清掉已完成消息的 api_messages，而回捞工具名依赖它）。源存量文件若有孤立分段，
-    // 分叉后的即时展示也能正常显示工具卡（tool-segment-record-reconcile 契约）。
-    reconcile_conversation_orphan_tool_segments(&mut conversation);
-    strip_transcripts_for_frontend(&mut conversation);
-    Ok(serde_json::json!({
-        "success": true,
-        "conversation": conversation,
-    }))
-}
-
-/// 深拷分叉消息引用的对话目录文件（附件 + 图片 artifact）到新对话附件目录。
-/// path 为裸文件名（相对源对话附件目录），同名拷贝到新目录后引用保持有效。
-fn copy_forked_conversation_files(
-    app: &AppHandle,
-    source_id: &str,
-    new_id: &str,
-    messages: &[ChatMessage],
-) {
-    // 收集所有被引用的裸文件名（附件 + 消息级 artifact + 各 tool_call 内 artifact）。
-    let mut names: Vec<&str> = Vec::new();
-    for message in messages {
-        for att in &message.attachments {
-            if !att.path.is_empty() {
-                names.push(att.path.as_str());
-            }
-        }
-        for artifact in &message.artifacts {
-            if let Some(p) = artifact.path.as_deref().filter(|p| !p.is_empty()) {
-                names.push(p);
-            }
-        }
-        for tool_call in &message.tool_calls {
-            for artifact in &tool_call.artifacts {
-                if let Some(p) = artifact.path.as_deref().filter(|p| !p.is_empty()) {
-                    names.push(p);
-                }
-            }
-        }
-    }
-    if names.is_empty() {
-        return;
-    }
-    names.sort_unstable();
-    names.dedup();
-
-    let (Ok(src_dir), Ok(dst_dir)) = (
-        conversation_attachments_dir(app, source_id),
-        conversation_attachments_dir(app, new_id),
-    ) else {
-        eprintln!("fork: 无法解析附件目录，跳过附件深拷（source={source_id} new={new_id}）");
-        return;
-    };
-
-    for name in names {
-        // 只接受裸文件名，拒绝任何路径分隔符（防越目录）。
-        if name.contains('/') || name.contains('\\') {
-            eprintln!("fork: 跳过非法附件路径 {name}");
-            continue;
-        }
-        let src = src_dir.join(name);
-        let dst = dst_dir.join(name);
-        if !src.is_file() {
-            eprintln!("fork: 源附件不存在，跳过 {name}");
-            continue;
-        }
-        if let Err(e) = std::fs::copy(&src, &dst) {
-            eprintln!("fork: 拷贝附件失败 {name}: {e}");
-        }
-    }
-}
-
-/// 删除对话
-#[tauri::command]
-pub(crate) fn chat_delete_conversation(
-    app: AppHandle,
-    state: tauri::State<crate::state::AppState>,
-    conversation_id: String,
-) -> Result<serde_json::Value, String> {
-    // 删对话即终止其持久外部 CLI 会话（actor 关闭子进程）并清掉跨重启 resume 句柄。
-    state.remove_external_live_session(&conversation_id);
-    crate::external_agents::session::clear_live_handle(&app, &conversation_id);
-    // 顺手清掉该对话在内存里按 conversation_id 累积的运行态小 map（stream 代际计数 /
-    // 会话级工具同意），它们只插不删、严格无界——对话删了便永远不会再被引用。
-    state.forget_chat_conversation_runtime(&conversation_id);
-    delete_conv(&app, &conversation_id)?;
-    Ok(serde_json::json!({
-        "success": true,
-    }))
-}
-
-/// 更新对话（标题、置顶、文件夹等）
-#[tauri::command]
-pub(crate) fn chat_update_conversation(
-    app: AppHandle,
-    conversation_id: String,
-    title: Option<String>,
-    pinned: Option<bool>,
-    folder: Option<String>,
-    project_id: Option<String>,
-    set_id: Option<String>,
-    provider_id: Option<String>,
-    model: Option<String>,
-    active_skill_id: Option<String>,
-    assistant_id: Option<String>,
-    knowledge_base_ids: Option<Vec<String>>,
-    force_knowledge_search: Option<bool>,
-    thinking_level: Option<String>,
-    reply_models: Option<Vec<crate::chat::ModelRef>>,
-) -> Result<serde_json::Value, String> {
-    let mut conversation = load_conversation(&app, &conversation_id)?;
-
-    if let Some(t) = title {
-        conversation.title = t;
-    }
-    if let Some(p) = pinned {
-        conversation.pinned = p;
-    }
-    if let Some(folder) = folder {
-        let trimmed = folder.trim();
-        conversation.folder = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        };
-        conversation.project_id = match conversation.folder.as_deref() {
-            Some(folder) => find_project_by_name(&app, folder)?.map(|project| project.id),
-            None => None,
-        };
-    }
-    if let Some(project_id) = project_id {
-        let trimmed = project_id.trim();
-        if trimmed.is_empty() {
-            conversation.project_id = None;
-            conversation.folder = None;
-        } else {
-            let project = find_project_by_id(&app, trimmed)?;
-            conversation.project_id = Some(project.id);
-            conversation.folder = Some(project.name);
-            conversation.set_id = None; // 集与项目互斥
-        }
-    }
-    if let Some(set_id) = set_id {
-        let trimmed = set_id.trim();
-        if trimmed.is_empty() {
-            conversation.set_id = None;
-        } else {
-            let set = find_set_by_id(&app, trimmed)?;
-            conversation.set_id = Some(set.id);
-            // 集与项目互斥：归入集即移出项目/文件夹
-            conversation.project_id = None;
-            conversation.folder = None;
-        }
-    }
-    if let Some(provider_id) = provider_id {
-        conversation.provider_id = provider_id;
-    }
-    if let Some(model) = model {
-        conversation.model = model;
-    }
-    if let Some(skill_id) = active_skill_id {
-        let trimmed = skill_id.trim();
-        conversation.active_skill_id = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        };
-    }
-    if let Some(assistant_id) = assistant_id {
-        let trimmed = assistant_id.trim();
-        if trimmed.is_empty() {
-            conversation.assistant_id = None;
-            conversation.assistant_snapshot = None;
-            conversation.active_skill_id = None;
-        } else {
-            let snapshot = assistant_snapshot(&app, trimmed)?;
-            // 切换助手不再强制激活默认技能;skill_ids 仅作白名单。
-            conversation.active_skill_id = None;
-            conversation.assistant_id = Some(snapshot.id.clone());
-            conversation.assistant_snapshot = Some(snapshot);
-        }
-    }
-    if let Some(ids) = knowledge_base_ids {
-        // Drop blanks/dups; order preserved.
-        let mut seen = std::collections::HashSet::new();
-        conversation.knowledge_base_ids = ids
-            .into_iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && seen.insert(s.clone()))
-            .collect();
-    }
-    if let Some(force) = force_knowledge_search {
-        conversation.force_knowledge_search = force;
-    }
-    if let Some(level) = thinking_level {
-        // 仅接受已知值；空串/未知 → 清除（回到「跟随全局」）。
-        conversation.thinking_level = match level.trim() {
-            "off" | "low" | "medium" | "high" | "xhigh" | "max" => Some(level.trim().to_string()),
-            _ => None,
-        };
-    }
-    if let Some(reply_models) = reply_models {
-        // 多模型一问多答（决策 D2/D4）：持久化会话级多答模型集。去重（provider+model）、
-        // 丢空、保序、上限 MAX_REPLY_MODELS（超出报错，前端应已禁选）。
-        if reply_models.len() > MAX_REPLY_MODELS {
-            return Err(format!(
-                "多模型并行回答最多同时选择 {MAX_REPLY_MODELS} 个模型。"
-            ));
-        }
-        let mut seen = std::collections::HashSet::new();
-        conversation.reply_models = reply_models
-            .into_iter()
-            .filter_map(|m| {
-                let provider_id = m.provider_id.trim().to_string();
-                let model = m.model.trim().to_string();
-                if provider_id.is_empty() || model.is_empty() {
-                    return None;
-                }
-                let key = format!("{provider_id}\u{0}{model}");
-                if seen.insert(key) {
-                    Some(crate::chat::ModelRef { provider_id, model })
-                } else {
-                    None
-                }
-            })
-            .collect();
-    }
-
-    conversation.updated_at = chrono::Local::now().timestamp();
-    save_conversation(&app, &conversation)?;
-
-    strip_transcripts_for_frontend(&mut conversation);
-    Ok(serde_json::json!({
-        "success": true,
-        "conversation": conversation,
-    }))
-}
-
-/// 设置某个多答组（task 06-30）的「选中条」（决策 D5）：用户点选某一列后续聊以它为准。
-/// `message_id` 必须是属于 `group_id` 这组的某条 assistant 消息；写入
-/// `conversation.group_selections[group_id] = message_id`，下一轮历史拼装据此只保留该条。
-#[tauri::command]
-pub(crate) fn chat_set_group_selection(
-    app: AppHandle,
-    conversation_id: String,
-    group_id: String,
-    message_id: String,
-) -> Result<serde_json::Value, String> {
-    let mut conversation = load_conversation(&app, &conversation_id)?;
-    let group_id = group_id.trim();
-    let message_id = message_id.trim();
-    if group_id.is_empty() || message_id.is_empty() {
-        return Err("group_id 与 message_id 不能为空".to_string());
-    }
-    // 校验：该消息必须存在、是 assistant、且属于这个 group。
-    let valid = conversation.messages.iter().any(|m| {
-        m.id == message_id
-            && m.role == "assistant"
-            && m.group_id.as_deref() == Some(group_id)
-    });
-    if !valid {
-        return Err("选中的回答不属于该多答组".to_string());
-    }
-    conversation
-        .group_selections
-        .insert(group_id.to_string(), message_id.to_string());
-    conversation.updated_at = chrono::Local::now().timestamp();
-    save_conversation(&app, &conversation)?;
-
-    strip_transcripts_for_frontend(&mut conversation);
-    Ok(serde_json::json!({
-        "success": true,
-        "conversation": conversation,
-    }))
-}
-
 
 
 #[cfg(test)]

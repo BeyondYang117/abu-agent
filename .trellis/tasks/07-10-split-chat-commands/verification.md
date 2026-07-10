@@ -160,3 +160,25 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including message construction, segment normalization, edit replay, and orphan reconciliation tests.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; no reusable runtime contract changed, so no `.trellis/spec/` update is required.
+
+
+## Round 8: post-commit verification
+
+- Commit: `9dcad89 refactor(chat): extract message lifecycle`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 9 began.
+
+## Round 9: conversation mutations extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/mutations.rs`: 626 lines extracted across 7 Tauri commands and 4 owning helpers.
+- `src-tauri/src/chat/commands.rs`: 4,760 -> 4,162 lines.
+- Moved message update/regeneration/deletion, conversation fork/deletion/update, group selection, and their mutation-specific helpers.
+- Updated 7 Tauri registration paths to `chat::commands::mutations::*`; the command basename set remains exactly 50/50 with no missing, added, or duplicate registrations.
+- Existing parent tests retain access to `apply_regenerate_truncation` and `build_fork_messages` through test-only imports.
+- The formatted new module exactly matches the mutation block extracted from `9dcad89`; only imports, the two test-helper visibilities, and module formatting changed.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/mutations.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including regeneration, fork, and group-selection coverage.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; the existing conversation-fork contract remains unchanged, so no `.trellis/spec/` update is required.
