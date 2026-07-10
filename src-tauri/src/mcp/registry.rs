@@ -463,6 +463,20 @@ pub async fn call_tool(
     let mut result = state
         .mcp_call_tool(app, &server, &tool.name, arguments.clone())
         .await?;
+    // R1：MCP 工具结果里的图片 artifact 直达模型——vision 主模型直喂原图，
+    // 纯文本主模型走辅助视觉模型审查向分析（R2）。通用于所有 MCP server，非
+    // officecli 专属；无 native_ctx（如独立调用场景）时无法解析会话 provider/
+    // model，直接跳过，保留 client.rs 生成的 `[image: <mime>]` 占位符。
+    if let Some(ctx) = native_ctx.as_ref() {
+        crate::chat::commands::attach_image_artifacts_for_model(
+            app,
+            &settings,
+            &ctx.conversation_id,
+            &ctx.message_id,
+            &mut result,
+        )
+        .await;
+    }
     // OfficeCLI 插件：文档写/改成功后默认拉起 live preview（浏览器实时看）
     if let Some(note) =
         crate::plugins::note_after_officecli_tool(app, state, tool, &arguments, &result)

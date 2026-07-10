@@ -13,10 +13,13 @@ pub fn cleanup_temp_file(path: &Path) {
 
 /// 启动时清理 temp_dir 下遗留的截图文件。
 ///
-/// 我们在三个地方写 PNG 到 temp_dir：
+/// 我们在几个地方写图片文件到 temp_dir：
 ///   - `lens-<uuid>.png`（macOS SCK 整窗截图）
 ///   - `lens-region-<uuid>.png`（macOS SCK 区域截图）
 ///   - `screenshot-<uuid>.png`（Windows xcap）
+///   - `kivio-mcpimg-<uuid>.<ext>`（R1：MCP 工具结果图片走辅助视觉模型分析前的
+///     临时落盘，扩展名跟随实际 mime，正常路径分析完就地删除；这里兜底崩溃/
+///     强杀残留）
 ///
 /// 正常路径里 lens_close 会删除 active image_id 对应的文件，但以下情况会留 orphan：
 ///   - 应用被强杀 / 崩溃前来不及清
@@ -46,11 +49,13 @@ pub fn cleanup_orphan_temp_files() {
             Some(n) => n,
             None => continue,
         };
-        // Capture PNGs (lens/screenshot) and large-command output logs
-        // (kivio-bash-*.log) both live in temp; GC either when stale. Background
-        // command logs (kivio-bgcmd-*.log) are normally removed by the app-exit
-        // sweep, but a crash can leave them behind — GC stale ones here too.
+        // Capture PNGs (lens/screenshot), MCP-image temp files (R1, any image
+        // extension), and large-command output logs (kivio-bash-*.log) all live
+        // in temp; GC either when stale. Background command logs
+        // (kivio-bgcmd-*.log) are normally removed by the app-exit sweep, but a
+        // crash can leave them behind — GC stale ones here too.
         let is_orphan = (PNG_PREFIXES.iter().any(|p| name.starts_with(p)) && name.ends_with(".png"))
+            || name.starts_with("kivio-mcpimg-")
             || (name.starts_with("kivio-bash-") && name.ends_with(".log"))
             || (name.starts_with(crate::native_tools::BG_CMD_LOG_PREFIX) && name.ends_with(".log"));
         if !is_orphan {
