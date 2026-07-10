@@ -92,4 +92,16 @@
 - [x] Update compaction call sites/comments and `.trellis/spec/chat/compaction-contracts.md` implementation paths.
 - [x] Fix the recompression test fixture so its old segment actually exceeds `RECENT_KEEP_TOKENS`; production behavior is unchanged.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and `chat::agent::compaction::tests`.
-- [ ] Commit round 3 and rerun post-commit verification before starting round 4.
+- [x] Commit round 3 and rerun post-commit verification before starting round 4.
+
+
+## Step 13 ? Continuous split: session interaction module (round 4)
+
+- [x] Add `src-tauri/src/chat/commands/interaction.rs`.
+- [x] Move external-send intake, plan-mode controls, cancellation/approval/consent/user-choice bridges, background command controls, Python completion, and request-debug commands.
+- [x] Move session prompt waiters and chat stream/tool/plan event emitters behind narrow visibility.
+- [x] Preserve `chat::commands::{emit_chat_stream_delta, emit_chat_stream_done, emit_chat_tool_record}` through crate-visible re-exports for `external_agents`.
+- [x] Move 12 Tauri registration paths to `chat::commands::interaction::*` without changing IPC command names.
+- [x] Keep plan-approval and tool-approval-summary tests in the parent test module through test-only imports.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, Tauri command parity, and diff cleanliness.
+- [ ] Commit round 4 and rerun post-commit verification before starting round 5.

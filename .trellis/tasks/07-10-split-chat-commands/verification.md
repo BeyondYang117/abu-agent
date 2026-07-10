@@ -56,3 +56,24 @@
 - `git diff --check`: passed.
 - The recompression test now appends enough content to exceed `RECENT_KEEP_TOKENS`; the previous short fixture did not satisfy the behavior's prerequisite.
 - Compaction implementation references now point to `commands/context.rs` where appropriate, while L2 summary writeback references remain on `commands.rs`.
+
+
+## Round 3: post-commit verification
+
+- Commit: `75c9407 refactor(chat): extract context commands`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Post-commit `chat::agent::compaction::tests`: 59/59 passed.
+- Working tree was clean before round 4 began.
+
+## Round 4: session interaction extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/interaction.rs`: 637 lines extracted.
+- `src-tauri/src/chat/commands.rs`: 6,642 -> 6,032 lines.
+- Moved 12 Tauri command registrations; chat command basenames remain 50/50 with no missing, added, or duplicate entries compared with `75c9407`.
+- Preserved the crate-visible parent paths for stream/tool event emitters used by `external_agents::run` through re-exports.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/interaction.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; no new reusable runtime contract required a `.trellis/spec/` update.

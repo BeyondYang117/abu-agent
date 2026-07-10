@@ -1,0 +1,645 @@
+use std::{collections::HashMap, time::Duration};
+
+use serde_json::Value;
+use tauri::{AppHandle, Emitter, State};
+use tokio::time::{sleep, timeout};
+
+use crate::chat::agent::execute::truncate_chars;
+use crate::chat::{AgentPlanState, ChatMessageSegment, Conversation, ToolCallRecord};
+use crate::mcp::types::ChatToolArtifact;
+use crate::state::AppState;
+
+use super::catalog::strip_transcripts_for_frontend;
+use crate::chat::storage::{load_conversation, save_conversation};
+
+/// 取走外部入口排队给 Chat 前端发送的消息。
+#[tauri::command]
+pub(crate) fn chat_take_external_sends(
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let requests = {
+        let mut pending = state
+            .pending_chat_external_sends
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *pending)
+    };
+
+    Ok(serde_json::json!({
+        "success": true,
+        "requests": requests,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_set_agent_plan_mode(
+    app: AppHandle,
+    conversation_id: String,
+    mode: String,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    let mode = crate::chat::plan::mode_from_str(&mode)?;
+    conversation.agent_plan_state =
+        crate::chat::plan::with_mode(&conversation.agent_plan_state, mode);
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+    emit_chat_plan_state(&app, &conversation.id, &conversation.agent_plan_state);
+
+    strip_transcripts_for_frontend(&mut conversation);
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+        "planState": conversation.agent_plan_state,
+    }))
+}
+
+#[tauri::command]
+pub(crate) fn chat_execute_agent_plan(
+    app: AppHandle,
+    conversation_id: String,
+    message_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut conversation = load_conversation(&app, &conversation_id)?;
+    approve_agent_plan_for_execution(&mut conversation, message_id.as_deref())?;
+    conversation.updated_at = chrono::Local::now().timestamp();
+    save_conversation(&app, &conversation)?;
+    emit_chat_plan_state(&app, &conversation.id, &conversation.agent_plan_state);
+
+    strip_transcripts_for_frontend(&mut conversation);
+    Ok(serde_json::json!({
+        "success": true,
+        "conversation": conversation,
+        "planState": conversation.agent_plan_state,
+    }))
+}
+
+pub(super) fn approve_agent_plan_for_execution(
+    conversation: &mut Conversation,
+    message_id: Option<&str>,
+) -> Result<(), String> {
+    let selected_plan =
+        if let Some(message_id) = message_id.map(str::trim).filter(|id| !id.is_empty()) {
+            Some({
+                let message = conversation
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id == message_id && message.role == "assistant")
+                    .ok_or_else(|| "计划消息不存在".to_string())?;
+                let plan_state = message
+                    .agent_plan
+                    .as_ref()
+                    .ok_or_else(|| "该消息不是可执行计划".to_string())?;
+                if crate::chat::plan::executable_plan_text(plan_state).is_none() {
+                    return Err("该消息不是可执行计划".to_string());
+                }
+                let approved = crate::chat::plan::approve(plan_state);
+                message.agent_plan = Some(approved.clone());
+                approved
+            })
+        } else {
+            None
+        };
+    conversation.agent_plan_state =
+        selected_plan.unwrap_or_else(|| crate::chat::plan::approve(&conversation.agent_plan_state));
+    Ok(())
+}
+
+/// 取消指定对话的当前 Chat 生成或工具执行。
+#[tauri::command]
+pub(crate) fn chat_cancel_stream(
+    state: State<AppState>,
+    conversation_id: String,
+) -> Result<(), String> {
+    state.cancel_chat_generation(&conversation_id);
+    Ok(())
+}
+
+/// 响应敏感工具调用确认。
+#[tauri::command]
+pub(crate) fn chat_confirm_tool_call(
+    state: State<AppState>,
+    tool_call_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let sender = state
+        .pending_chat_tool_approvals
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&tool_call_id);
+    if let Some(sender) = sender {
+        let _ = sender.send(approved);
+    }
+    Ok(())
+}
+
+/// 返回开发者「请求调试」缓冲快照（最新在前）。仅内存，未开启开关时通常为空。
+#[tauri::command]
+pub(crate) fn get_request_debug_records(
+    state: State<AppState>,
+) -> Vec<crate::chat::request_debug::RequestDebugRecord> {
+    crate::chat::request_debug::snapshot(&state)
+}
+
+/// 清空开发者「请求调试」缓冲。
+#[tauri::command]
+pub(crate) fn clear_request_debug_records(state: State<AppState>) {
+    crate::chat::request_debug::clear(&state);
+}
+
+/// 列出当前仍在运行的后台命令（chat agent 用 `run_command background:true` 起的）。
+/// 只返回 Running 的——UI 仅在有后台任务时才显示指示器，终止/退出的不必展示。
+#[tauri::command]
+pub(crate) fn chat_list_background_commands(state: State<AppState>) -> Vec<serde_json::Value> {
+    let map = state.background_commands_handle();
+    let map = map.lock().unwrap_or_else(|e| e.into_inner());
+    let mut jobs: Vec<&crate::native_tools::BackgroundCommand> = map
+        .values()
+        .filter(|j| {
+            matches!(
+                j.status,
+                crate::native_tools::BackgroundCommandStatus::Running
+            )
+        })
+        .collect();
+    jobs.sort_by_key(|j| j.started_at);
+    jobs.into_iter()
+        .map(|j| {
+            serde_json::json!({
+                "jobId": j.job_id,
+                "command": j.command,
+                "cwd": j.cwd,
+                "pid": j.pid,
+                "elapsedSecs": j.started_at.elapsed().map(|d| d.as_secs()).unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// 从 UI 终止一个后台命令。复用 agent 的 `kill_background`（整组杀 + 标记 Killed）。
+#[tauri::command]
+pub(crate) fn chat_kill_background_command(
+    state: State<AppState>,
+    job_id: String,
+) -> Result<(), String> {
+    crate::native_tools::kill_background(&state, &serde_json::json!({ "job_id": job_id }))
+        .map(|_| ())
+}
+
+/// 响应会话级文件/命令工具授权请求(按 conversation_id)。
+#[tauri::command]
+pub(crate) fn chat_respond_session_consent(
+    state: State<AppState>,
+    conversation_id: String,
+    granted: bool,
+) -> Result<(), String> {
+    let sender = state
+        .pending_chat_session_consents
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&conversation_id);
+    if let Some(sender) = sender {
+        let _ = sender.send(granted);
+    }
+    Ok(())
+}
+
+/// 回答 ask_user 澄清卡片。
+#[tauri::command]
+pub(crate) fn chat_submit_user_choice(
+    state: State<AppState>,
+    tool_call_id: String,
+    answers: HashMap<String, crate::chat::ask_user::AskUserAnswer>,
+    skipped: bool,
+) -> Result<(), String> {
+    let response = {
+        let pending = state
+            .pending_chat_user_prompts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(pending) = pending.get(&tool_call_id) else {
+            return Err("Clarification is no longer awaiting a response".to_string());
+        };
+        if skipped {
+            crate::chat::ask_user::skipped_response()
+        } else {
+            crate::chat::ask_user::validate_response(
+                &pending.prompt,
+                crate::chat::ask_user::AskUserResponseResult {
+                    phase: crate::chat::ask_user::ASK_USER_PHASE_ANSWERED.to_string(),
+                    answers,
+                },
+            )?
+        }
+    };
+    let pending = state
+        .pending_chat_user_prompts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&tool_call_id);
+    let Some(pending) = pending else {
+        return Err("Clarification is no longer awaiting a response".to_string());
+    };
+    let _ = pending.sender.send(response);
+    Ok(())
+}
+
+/// 前端 Pyodide 执行完成后回传结果。
+#[tauri::command]
+pub(crate) fn chat_python_complete(
+    state: State<AppState>,
+    run_id: String,
+    content: String,
+    is_error: bool,
+    artifacts: Option<Vec<ChatToolArtifact>>,
+) -> Result<(), String> {
+    let pending = state
+        .pending_python_runs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&run_id);
+    if let Some(pending) = pending {
+        let _ = pending.sender.send(crate::mcp::types::PythonRunResult {
+            content,
+            is_error,
+            artifacts: artifacts.unwrap_or_default(),
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn emit_chat_plan_state(
+    app: &AppHandle,
+    conversation_id: &str,
+    plan_state: &AgentPlanState,
+) {
+    let _ = app.emit(
+        "chat-plan",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "planState": plan_state,
+        }),
+    );
+}
+
+pub(super) async fn request_session_consent(
+    app: &AppHandle,
+    state: &AppState,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+) -> bool {
+    // Already granted for this conversation — no prompt.
+    if state.has_chat_consent(conversation_id) {
+        return true;
+    }
+    // Serialize prompts so concurrent first-round tools (read/grep/find/ls run
+    // in parallel) don't each insert a pending sender and clobber one another.
+    // Whoever wins the lock prompts once; the rest re-check consent and reuse
+    // the grant without a second dialog.
+    let _prompt_guard = state.chat_consent_prompt_lock.lock().await;
+    if state.has_chat_consent(conversation_id) {
+        return true;
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut pending = state
+            .pending_chat_session_consents
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Only one outstanding consent prompt per conversation.
+        pending.insert(conversation_id.to_string(), tx);
+    }
+    let _ = app.emit(
+        "chat-session-consent",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+        }),
+    );
+    let result = tokio::select! {
+        result = timeout(Duration::from_secs(60), rx) => result,
+        _ = wait_for_chat_cancel(state, conversation_id, generation) => {
+            state
+                .pending_chat_session_consents
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(conversation_id);
+            return false;
+        }
+    };
+    match result {
+        Ok(Ok(true)) => {
+            state.grant_chat_consent(conversation_id);
+            true
+        }
+        _ => {
+            state
+                .pending_chat_session_consents
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(conversation_id);
+            false
+        }
+    }
+}
+
+pub(super) async fn request_tool_approval(
+    app: &AppHandle,
+    state: &AppState,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+    record: &ToolCallRecord,
+) -> bool {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut pending = state
+            .pending_chat_tool_approvals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pending.insert(record.id.clone(), tx);
+    }
+    let _ = app.emit(
+        "chat-tool-confirm",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+            "toolCallId": record.id,
+            "name": record.name,
+            "source": record.source,
+            "serverId": record.server_id,
+            "argumentsPreview": format_tool_approval_summary(record),
+            "sensitivity": "sensitive",
+        }),
+    );
+    let result = tokio::select! {
+        result = timeout(Duration::from_secs(60), rx) => result,
+        _ = wait_for_chat_cancel(state, conversation_id, generation) => {
+            let mut pending = state
+                .pending_chat_tool_approvals
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            return false;
+        }
+    };
+    match result {
+        Ok(Ok(value)) => value,
+        _ => {
+            let mut pending = state
+                .pending_chat_tool_approvals
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            false
+        }
+    }
+}
+
+pub(super) async fn request_user_response(
+    app: &AppHandle,
+    state: &AppState,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    generation: u64,
+    record: &ToolCallRecord,
+    prompt: crate::chat::ask_user::AskUserPromptPayload,
+) -> crate::chat::ask_user::AskUserResponseResult {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut pending = state
+            .pending_chat_user_prompts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pending.insert(
+            record.id.clone(),
+            crate::chat::ask_user::PendingAskUserPrompt {
+                prompt: prompt.clone(),
+                sender: tx,
+            },
+        );
+    }
+
+    let empty_answers = HashMap::new();
+    let structured_content = crate::chat::ask_user::structured_content(
+        &prompt,
+        crate::chat::ask_user::ASK_USER_PHASE_AWAITING,
+        &empty_answers,
+    );
+    let _ = app.emit(
+        "chat-user-prompt",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+            "toolCallId": record.id,
+            "id": record.id,
+            "name": record.name,
+            "source": record.source,
+            "prompt": prompt,
+            "structuredContent": structured_content,
+        }),
+    );
+
+    let result = tokio::select! {
+        result = timeout(Duration::from_secs(600), rx) => result,
+        _ = wait_for_chat_cancel(state, conversation_id, generation) => {
+            let mut pending = state
+                .pending_chat_user_prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            return crate::chat::ask_user::cancelled_response();
+        }
+    };
+    match result {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) => {
+            let mut pending = state
+                .pending_chat_user_prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            crate::chat::ask_user::cancelled_response()
+        }
+        Err(_) => {
+            let mut pending = state
+                .pending_chat_user_prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            pending.remove(&record.id);
+            crate::chat::ask_user::timeout_response()
+        }
+    }
+}
+
+pub(super) async fn wait_for_chat_cancel(state: &AppState, conversation_id: &str, generation: u64) {
+    while state.is_chat_generation_active(conversation_id, generation) {
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
+pub(crate) fn emit_chat_tool_record(
+    app: &AppHandle,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    record: &ToolCallRecord,
+) {
+    let _ = app.emit(
+        "chat-tool",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+            "toolCallId": record.id,
+            "id": record.id,
+            "name": record.name,
+            "source": record.source,
+            "serverId": record.server_id,
+            "status": record.status,
+            "argumentsPreview": truncate_chars(&record.arguments, 800),
+            "resultPreview": record.result_preview,
+            "error": record.error,
+            "startedAt": record.started_at,
+            "completedAt": record.completed_at,
+            "durationMs": record.duration_ms,
+            "round": record.round,
+            "sensitive": record.sensitive,
+            "artifacts": record.artifacts,
+            "traceId": record.trace_id,
+            "spanId": record.span_id,
+            "structuredContent": record.structured_content,
+        }),
+    );
+}
+
+pub(crate) fn emit_chat_stream_delta(
+    app: &AppHandle,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    delta: &str,
+    reasoning_delta: Option<&str>,
+    segment: Option<&ChatMessageSegment>,
+) {
+    let _ = app.emit(
+        "chat-stream",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+            "imageId": "",
+            "kind": "answer",
+            "delta": delta,
+            "reasoningDelta": reasoning_delta,
+            "segmentId": segment.map(|segment| segment.id.as_str()),
+            "segmentKind": segment.map(|segment| &segment.kind),
+            "phase": segment.map(|segment| &segment.phase),
+            "order": segment.map(|segment| segment.order),
+            "stepNumber": segment.and_then(|segment| segment.step_number),
+            "round": segment.and_then(|segment| segment.round),
+            "toolCallId": segment.and_then(|segment| segment.tool_call_id.as_deref()),
+            "segment": segment,
+        }),
+    );
+}
+
+pub(crate) fn emit_chat_stream_done(
+    app: &AppHandle,
+    conversation_id: &str,
+    run_id: &str,
+    message_id: &str,
+    reason: &str,
+    full: &str,
+) {
+    let _ = app.emit(
+        "chat-stream",
+        serde_json::json!({
+            "conversationId": conversation_id,
+            "runId": run_id,
+            "messageId": message_id,
+            "imageId": "",
+            "kind": "answer",
+            "delta": "",
+            "done": true,
+            "reason": reason,
+            "full": full,
+        }),
+    );
+}
+
+pub(super) fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
+    let parsed = serde_json::from_str::<Value>(&record.arguments).ok();
+    let mut lines = Vec::new();
+    match record.name.as_str() {
+        "bash" => {
+            if let Some(command) = parsed
+                .as_ref()
+                .and_then(|value| value.get("command"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                lines.push(format!("Command: {command}"));
+            }
+            if let Some(cwd) = parsed
+                .as_ref()
+                .and_then(|value| value.get("cwd"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                lines.push(format!("Working directory: {cwd}"));
+            }
+        }
+        "write" | "edit" | "read" => {
+            if let Some(path) = parsed
+                .as_ref()
+                .and_then(|value| value.get("path"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                lines.push(format!("Path: {path}"));
+            }
+            if record.name == "edit" {
+                // Current shape: edits: [{old_string, new_string}, ...]. Preview the
+                // first edit's old_string; fall back to the legacy single-edit field.
+                let first_old = parsed
+                    .as_ref()
+                    .and_then(|value| value.get("edits"))
+                    .and_then(|value| value.as_array())
+                    .and_then(|edits| edits.first())
+                    .and_then(|edit| edit.get("old_string"))
+                    .and_then(|value| value.as_str())
+                    .or_else(|| {
+                        parsed
+                            .as_ref()
+                            .and_then(|value| value.get("old_string").or_else(|| value.get("old")))
+                            .and_then(|value| value.as_str())
+                    })
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                if let Some(old) = first_old {
+                    lines.push(format!("Replace: {}", truncate_chars(old, 180)));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    if lines.is_empty() {
+        truncate_chars(&record.arguments, 800)
+    } else {
+        let mut summary = lines.join("\n");
+        summary.push_str("\n\nRaw arguments:\n");
+        summary.push_str(&truncate_chars(&record.arguments, 800));
+        summary
+    }
+}
