@@ -279,4 +279,15 @@
 - [x] Confirm this round moves no Tauri command and requires no registration-path change.
 - [x] Compare both proxy bodies against `74677ad`; only the owning-module path and rustfmt wrapping changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 19 and rerun post-commit verification before starting round 20.
+- [x] Commit round 19 and rerun post-commit verification before starting round 20.
+
+## Step 29 - Continuous split: parent regression tests (round 20)
+
+- [x] Add `src-tauri/src/chat/commands/tests.rs`.
+- [x] Move the complete inline `chat::commands::tests` module body as one test-only boundary without reclassifying tests by owning production module.
+- [x] Replace the inline block in `commands.rs` with `#[cfg(test)] mod tests;` so test paths remain `chat::commands::tests::*`.
+- [x] Retain parent test-only aliases and imports to preserve the existing `use super::*` surface for this behavior-neutral move.
+- [x] Compare the standalone-rustfmt result exactly against the block extracted from `3b6ea3c`.
+- [x] Confirm the test/helper function-name sequence is unchanged and the full 72-test filtered suite still runs.
+- [x] Verify targeted formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 20 and rerun post-commit verification before starting final facade cleanup.

@@ -404,3 +404,24 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including the auxiliary-vision integration regression.
 - `git diff --check`: passed.
 - This round is a behavior-neutral compatibility-boundary extraction; the existing `.trellis/spec/chat/mcp-image-feedback.md` compatibility-path contract remains satisfied and requires no update.
+
+## Round 19: post-commit verification
+
+- Commit: `3b6ea3c refactor(chat): extract vision compatibility`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 20 began.
+
+## Round 20: parent regression-test extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/tests.rs`: 2,275 formatted lines containing the complete former inline test-module body.
+- `src-tauri/src/chat/commands.rs`: 2,361 -> 129 lines and now declares the same module with `#[cfg(test)] mod tests;`.
+- Test module paths remain `chat::commands::tests::*`; no production command, visibility, registration path, IPC name, or runtime behavior changed.
+- Parent test-only aliases remain in place so the existing `use super::*` test surface is unchanged; test reclassification is intentionally deferred.
+- Formatting the test body extracted from `3b6ea3c` as a standalone module file exactly matches the new file; expected and actual SHA-256 are both `005c64b2966d2efe289490dff24c9e335b7061ebf3d3593d33a119162d16c25a`.
+- The extracted and new files have the same 84-function name sequence, including all 72 `#[test]` cases and local helper functions.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/tests.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed with the original test paths.
+- `git diff --check`: passed.
+- This round changes only test source layout, so no `.trellis/spec/` update is required.
