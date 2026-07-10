@@ -1,0 +1,242 @@
+use tauri::AppHandle;
+
+use crate::chat::agent::prepare as agent_prepare;
+use crate::mcp::{self, ChatToolDefinition};
+use crate::settings::{SessionModel, Settings};
+use crate::skills;
+use crate::state::AppState;
+
+/// Detect a leading `/skill <args>` slash trigger in a user message and, when it
+/// matches an enabled skill, rewrite the message body to pin that skill.
+///
+/// Returns `(skill_id, rewritten_content)` on a match. The rewrite is
+/// `"[Skill: name]\n\n{body}"` where `body` is the skill body with `$ARGUMENTS`
+/// / `$ARG_NAME` substituted from the trailing words. The resolved id then flows
+/// through the existing pin chain (resolve_forced_skill_id → active_skill_record
+/// → apply_active_skill_tool_filter + catalog/pin injection).
+///
+/// `disable_model_invocation` only gates *model* auto-invocation, so it is
+/// intentionally ignored here — an explicit user slash command may still trigger
+/// such a skill. Availability is gated by `skill_allowed_for_conversation`
+/// (Settings enable list, connector prerequisites, assistant allow-list).
+pub(super) fn try_apply_skill_slash_trigger(
+    registry: &skills::SkillRegistry,
+    chat_tools: &crate::settings::ChatToolsConfig,
+    assistant_snapshot: Option<&crate::chat::types::ChatAssistantSnapshot>,
+    content: &str,
+    email_accounts: &[crate::settings::EmailAccountConfig],
+    obsidian_vault_configured: bool,
+) -> Option<(String, String)> {
+    let trimmed = content.trim_start();
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let first_word = parts.next().unwrap_or_default();
+    if !first_word.starts_with('/') {
+        return None;
+    }
+    let args_raw = parts.next().unwrap_or_default();
+
+    let record = registry.find_by_trigger(first_word)?;
+    if !agent_prepare::skill_allowed_for_conversation(
+        chat_tools,
+        assistant_snapshot,
+        &record.meta.id,
+        email_accounts,
+        obsidian_vault_configured,
+    ) {
+        // A disabled or out-of-allow-list skill's slash command is left as ordinary text.
+        return None;
+    }
+    if crate::mcp::native_registry::find_entry(first_word.trim_start_matches('/')).is_some() {
+        // A skill id colliding with a built-in tool name would shadow it on the
+        // backend trigger path. The front-end intercepts built-in slash commands
+        // before send, so this is low risk — just note it.
+        eprintln!(
+            "[skill-slash] trigger {first_word} matches a built-in tool name; pinning skill {}",
+            record.meta.id
+        );
+    }
+
+    let rendered = skills::substitute_arguments(&record.body, args_raw, &record.meta.arguments);
+    let rewritten = format!("[Skill: {}]\n\n{}", record.meta.name, rendered);
+    Some((record.meta.id.clone(), rewritten))
+}
+
+pub(super) fn resolve_forced_skill_id(
+    chat_tools: &crate::settings::ChatToolsConfig,
+    assistant_snapshot: Option<&crate::chat::types::ChatAssistantSnapshot>,
+    registry: &skills::SkillRegistry,
+    requested: Option<&str>,
+    email_accounts: &[crate::settings::EmailAccountConfig],
+    obsidian_vault_configured: bool,
+) -> Option<String> {
+    let requested = requested.map(str::trim).filter(|id| !id.is_empty())?;
+    let enabled = registry
+        .records
+        .iter()
+        .filter(|record| {
+            agent_prepare::skill_allowed_for_conversation(
+                chat_tools,
+                assistant_snapshot,
+                &record.meta.id,
+                email_accounts,
+                obsidian_vault_configured,
+            )
+        })
+        .any(|record| {
+            record.meta.id == requested
+                || record.meta.name == requested
+                || skills::slugify(requested) == record.meta.id
+        });
+    if enabled {
+        Some(requested.to_string())
+    } else {
+        None
+    }
+}
+
+pub(super) async fn list_tools_for_chat(
+    app: &AppHandle,
+    state: &AppState,
+    settings: &Settings,
+    session: Option<SessionModel<'_>>,
+) -> Vec<ChatToolDefinition> {
+    if !(settings.chat_tools.enabled
+        || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
+        || crate::settings::chat_memory_tools_enabled(settings)
+        || crate::settings::chat_image_generation_enabled_for_session(settings, session)
+        || settings.advisor_model().is_some())
+    {
+        return Vec::new();
+    }
+    let mut tools = mcp::registry::list_enabled_tool_defs(app, state)
+        .await
+        .unwrap_or_default();
+    if let Some((provider_id, model)) =
+        crate::chat::model_metadata::image_generation_model_for_session(settings, session)
+    {
+        if !tools.iter().any(|tool| tool.name == "mixer_generate_image") {
+            let mut tool = mcp::types::mixer_generate_image_tool();
+            let provider_name = settings
+                .get_provider(&provider_id)
+                .map(|provider| {
+                    if provider.name.trim().is_empty() {
+                        provider.id.clone()
+                    } else {
+                        provider.name.clone()
+                    }
+                })
+                .unwrap_or(provider_id);
+            tool.server_id = Some(format!("{provider_name} / {model}"));
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
+pub(super) fn append_agent_todo_tools(tools: &mut Vec<ChatToolDefinition>) -> bool {
+    crate::chat::todo::append_tool_definitions(tools);
+    true
+}
+
+pub(super) fn append_agent_ask_user_tools(tools: &mut Vec<ChatToolDefinition>) -> bool {
+    crate::chat::ask_user::append_tool_definitions(tools);
+    true
+}
+
+pub(super) fn apply_agent_plan_tool_filter(
+    tools: &mut Vec<ChatToolDefinition>,
+    plan_mode: bool,
+) -> Vec<ChatToolDefinition> {
+    if !plan_mode {
+        return Vec::new();
+    }
+    let mut blocked = Vec::new();
+    tools.retain(|tool| {
+        let allowed = agent_plan_allows_tool(tool);
+        if !allowed {
+            blocked.push(tool.clone());
+        }
+        allowed
+    });
+    blocked
+}
+
+fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
+    if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
+        return true;
+    }
+    if tool.source == "native" && crate::chat::todo::is_agent_todo_tool_name(&tool.name) {
+        return true;
+    }
+    if tool.source == "native" {
+        return tool.is_read_only_tool();
+    }
+    if tool.source == "mcp" {
+        return tool.is_read_only_tool();
+    }
+    tool.source == "skill" && tool.name == "skill"
+}
+
+pub(super) fn apply_inline_code_request_tool_filter(
+    tools: &mut Vec<ChatToolDefinition>,
+    last_user_api_content: Option<&str>,
+) {
+    if !should_answer_inline_without_file_write(last_user_api_content) {
+        return;
+    }
+    tools.retain(|tool| !(tool.source == "native" && tool.name == "write"));
+}
+
+pub(super) fn should_answer_inline_without_file_write(last_user_api_content: Option<&str>) -> bool {
+    let Some(content) = last_user_api_content else {
+        return false;
+    };
+    let user_text = content
+        .split("[已添加附件]")
+        .next()
+        .unwrap_or(content)
+        .trim();
+    if user_text.is_empty() {
+        return false;
+    }
+    let normalized = user_text.to_ascii_lowercase();
+    if has_explicit_file_write_intent(user_text, &normalized) {
+        return false;
+    }
+    has_inline_code_request_intent(user_text, &normalized)
+}
+
+fn has_explicit_file_write_intent(text: &str, normalized: &str) -> bool {
+    const ZH_MARKERS: &[&str] = &[
+        "保存",
+        "写入",
+        "写到",
+        "写进",
+        "输出到",
+        "导出",
+        "创建文件",
+        "生成文件",
+        "另存为",
+        "存成",
+        "落盘",
+    ];
+    const EN_MARKERS: &[&str] = &[
+        "save",
+        "create file",
+        "output file",
+        "output to",
+        "export",
+        "save as",
+        "write to",
+        "file named",
+    ];
+    ZH_MARKERS.iter().any(|marker| text.contains(marker))
+        || EN_MARKERS.iter().any(|marker| normalized.contains(marker))
+}
+
+fn has_inline_code_request_intent(text: &str, normalized: &str) -> bool {
+    const ZH_MARKERS: &[&str] = &["```", "代码块", "代码框", "围栏代码"];
+    const EN_MARKERS: &[&str] = &["```", "code block", "fenced code"];
+    ZH_MARKERS.iter().any(|marker| text.contains(marker))
+        || EN_MARKERS.iter().any(|marker| normalized.contains(marker))
+}

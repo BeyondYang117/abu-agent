@@ -117,3 +117,24 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including all four title-specific tests.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; no `.trellis/spec/` behavior contract changed.
+
+## Round 6: post-commit verification
+
+- Commit: `4bee8b1 refactor(chat): extract title generation`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 7 began.
+
+## Round 7: chat tooling and filters extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/tooling.rs`: 242 lines extracted.
+- `src-tauri/src/chat/commands.rs`: 5,765 -> 5,535 lines.
+- Moved 11 functions covering slash-skill trigger/pinning resolution, tool listing and injection, plan-mode filtering, and inline-code write filtering.
+- Connector prerequisites, assistant allow-list checks, skill argument substitution, image-tool injection, and read-only classification remain byte-for-byte equivalent after formatting.
+- This round contains no Tauri command, so command registration paths and IPC names are unchanged.
+- The formatted new module exactly matches the tooling functions extracted from `4bee8b1`; only visibility, imports, and module formatting changed.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/tooling.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including slash-trigger, plan-filter, and inline-code-filter tests.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; existing skill runtime and connector-gating contracts remain unchanged, so no `.trellis/spec/` update is required.

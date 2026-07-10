@@ -124,4 +124,15 @@
 - [x] Confirm this round moves no Tauri command and requires no registration-path change.
 - [x] Compare the formatted extraction exactly against the functions from `372c09b`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 6 and rerun post-commit verification before starting round 7.
+- [x] Commit round 6 and rerun post-commit verification before starting round 7.
+
+## Step 16 - Continuous split: chat tooling and filters (round 7)
+
+- [x] Add `src-tauri/src/chat/commands/tooling.rs`.
+- [x] Move slash-skill trigger/pinning resolution, chat tool listing, agent state tool injection, plan-mode filtering, and inline-code write filtering.
+- [x] Preserve connector and assistant allow-list gates by keeping the existing `agent_prepare::skill_allowed_for_conversation` calls unchanged.
+- [x] Keep parent-module tests intact through narrow production and test-only imports.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare the formatted extraction exactly against the functions from `4bee8b1`; no business logic changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 7 and rerun post-commit verification before starting round 8.
