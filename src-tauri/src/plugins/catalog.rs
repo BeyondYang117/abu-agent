@@ -55,14 +55,11 @@ pub const PLUGIN_CATALOG: &[CatalogPlugin] = &[CatalogPlugin {
         "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/README_zh.md",
         "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/README.md",
     ],
-    // Kivio 适配策略（英文）：启用后拼进 system。强调 MCP≠shell、batch、效率与官方 skill。
+    // Kivio 适配策略（英文）：仅保留 officecli 专属约束（MCP 优先、禁 watch、禁 mcp <ide>）+ skill 路由表；
+    // 通用能力（图直喂 R1、临时目录/清理/绝对路径 R3、bash R4）已下沉到运行时，不再靠 hint 打补丁。
     system_hint: "\
 ### OfficeCLI (plugin: officecli)\n\
 **Role.** Create/read/edit .docx / .xlsx / .pptx with OfficeCLI. Prefer this plugin over python-docx / openpyxl / python-pptx.\n\
-\n\
-**Two entry points (do not confuse them):**\n\
-1. **MCP tool `officecli`** — preferred for normal CLI verbs. Argument is one `command` string (or argv-style list) passed to the officecli binary. This is **NOT a shell**: no bash `<<EOF` heredoc, no unquoted pipes, no shell-only redirects.\n\
-2. **bash / run_command** — use when you need a real shell (write a temp JSON file, PowerShell here-strings, pipes). Then call `officecli …` inside that shell.\n\
 \n\
 **Skills (official set is installed).** Before substantial work, activate the matching skill (`skill` tool, or MCP `load_skill <cli-name>`):\n\
 - Base strategy → `officecli`\n\
@@ -71,21 +68,10 @@ pub const PLUGIN_CATALOG: &[CatalogPlugin] = &[CatalogPlugin {
 - Excel → `officecli-xlsx`; dashboard → `officecli-data-dashboard`; financial model → `officecli-financial-model`\n\
 Do **not** start layout-heavy work without the domain skill.\n\
 \n\
-**batch (critical in Kivio):**\n\
-- Supported forms: `batch <file> --commands '[{...}]'` OR `batch <file> --input <absolute-path.json>` OR (via **bash only**) stdin JSON.\n\
-- Each JSON item is an object: `\"command\"` is the bare verb (`add`/`set`/`remove`/…); args are **sibling fields** (`parent`, `path`, `type`, `props`, …), not a nested CLI string.\n\
-- **Never** put `<<EOF` / `<<'EOF'` in the MCP `command` field — it will fail. For large batches: write JSON to an **absolute** temp path with bash/`write`, then `batch … --input \"C:\\\\…\\\\cmds.json\"`.\n\
-- Prefer **one batch per slide** (or per logical group of ≥3 ops) over dozens of single `add`/`set` calls. If batch fails, fix the payload; do not permanently abandon batch for the rest of the deck.\n\
-\n\
-**Efficiency (keep tool counts reasonable):**\n\
-- Structure first (slides + titles + body), then styling. Avoid one tool call per tiny decoration when batch can carry many shapes.\n\
-- For a small deck (≤5 slides): at most **one** full screenshot pass (`view … screenshot` per page or `--grid`) after the main build; a second pass only if issues remain. Do not screenshot after every minor tweak.\n\
-- On syntax uncertainty: `officecli help <format> <element>` once — do not guess props.\n\
-\n\
 **Do NOT:**\n\
-- `officecli mcp claude|cursor|vscode|…` (Kivio already registers official stdio `officecli mcp` as plugin-officecli)\n\
-- `officecli watch` / `unwatch` (MCP edits do not drive watch; preview is Kivio-side when applicable)\n\
-- Invent a thin custom SKILL.md instead of official skills\n\
+- Run `officecli` via bash / run_command — always use the MCP `officecli` tool (one persistent process holds the document warm; bash cold-starts a new process per call and skips Kivio's live preview).\n\
+- Run `officecli watch` / `unwatch` (MCP edits don't drive watch; Kivio provides its own preview).\n\
+- Run `officecli mcp claude|cursor|vscode|…` (Kivio already registers the official stdio server as plugin-officecli).\n\
 \n\
 **Done.** Tell the user the final saved file path(s).",
     // 官方 skill id = load_skill frontmatter `name`（启用时从 CLI 全量同步）

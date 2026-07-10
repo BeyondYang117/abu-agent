@@ -513,6 +513,21 @@ pub fn build_chat_system_prompt_with_segments(
                 background_prompt,
             );
         }
+        // Generic tool-hygiene rules (all conversations with tools enabled, not
+        // an officecli/plugin-specific hint): intermediate files vs. the delivery
+        // directory, cleanup before finishing, and absolute paths for stdio MCP
+        // tools whose working directory is unpredictable.
+        let tool_hygiene = "Working directory hygiene:\n\
+- Intermediate working files you create mid-task (batch/job descriptor JSONs, review screenshots, scratch drafts) go in the system temp directory, not the delivery directory — only final deliverables belong there.\n\
+- Before finishing a multi-step task, delete the intermediate files you created so the delivery directory holds only final artifacts.\n\
+- When passing file paths to MCP tools (stdio servers), always use absolute paths — the server's working directory is unpredictable.";
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "native_tools",
+            "Native tools",
+            tool_hygiene,
+        );
     }
 
     let include_catalog = chat_tools.skill_auto_match
@@ -759,13 +774,28 @@ fn native_tools_prompt(
         .map(|name| crate::mcp::types::apply_reserved_wire_alias(name))
         .collect::<Vec<_>>()
         .join(", ");
-    // 运行时取值,让同一份 prompt 在不同平台都说真话(run_command 的 shell 是编译期 cfg 选的)。
-    let (os_name, shell_name) = if cfg!(target_os = "windows") {
+    // 运行时取值,让同一份 prompt 在不同平台都说真话。Windows 上 bash 实际选哪个
+    // shell 是运行期探测的(见 native_tools::find_git_bash / run_command_shell_hint),
+    // 这里用同一个探测结果分支措辞,保证系统提示词与 run_command 工具描述(R4,
+    // mcp/types.rs::native_run_command_tool)永远一致——不会出现提示词说 PowerShell、
+    // 工具描述说 Git Bash 的自相矛盾。
+    let windows_git_bash =
+        cfg!(target_os = "windows") && !crate::native_tools::run_command_shell_hint().is_empty();
+    let (os_name, shell_name) = if windows_git_bash {
+        ("Windows", "Git Bash")
+    } else if cfg!(target_os = "windows") {
         ("Windows", "PowerShell")
     } else if cfg!(target_os = "macos") {
         ("macOS", "sh")
     } else {
         ("Linux", "sh")
+    };
+    let shell_syntax_hint = if windows_git_bash {
+        "Windows via Git Bash: use bash syntax (pipes, heredoc, `$VAR`, `$(seq ...)`), NOT PowerShell cmdlets; write Windows paths with forward slashes (C:/Users/...) — backslashes are escape characters in bash"
+    } else if cfg!(target_os = "windows") {
+        "Windows is PowerShell: use full cmdlet names like `Get-ChildItem`/`Get-Content`, environment variables as `$env:VAR`, chain commands with `;`, do NOT use the removed `wmic`, and do NOT `-Recurse` the whole drive"
+    } else {
+        "Unix: `$VAR`, `ls`, `/`"
     };
     let has_web_search = native_tool_names
         .iter()
@@ -841,7 +871,7 @@ fn native_tools_prompt(
 - In project conversations, relative paths in file/command tools resolve from the project root; writing an explicit absolute or ~/ path (e.g. ~/Desktop/x.html) targets that global location outside the project. Non-project conversations use absolute or ~/ paths.\n\
 - Touch files only when the user explicitly asks to save/modify/delete local files or gives a target path: edit for small edits, write for new files or whole-file overwrites. If asked for a code block without saving, answer inline. After a write, state the path briefly; do not repeat the file content.\n\
 - Write/edit tools and bash may need user approval; memory_read (L2 on demand; L1 is auto-injected), memory_search (keyword search over L2; prefer it when you are unsure of the exact heading), and memory_modify do not.\n\
-- Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax (Windows is PowerShell: use full cmdlet names like `Get-ChildItem`/`Get-Content`, environment variables as `$env:VAR`, chain commands with `;`, do NOT use the removed `wmic`, and do NOT `-Recurse` the whole drive; Unix: `$VAR`, `ls`, `/`). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
+- Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax ({shell_syntax_hint}). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
 - bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_python (sandbox) or run_command (host); never use host pip to bypass the run_python sandbox.\n\
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
