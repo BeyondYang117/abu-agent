@@ -6,6 +6,8 @@ pub mod commands;
 pub mod dsml_tools;
 pub mod image_generation;
 pub mod knowledge_base;
+mod mcp_image_feedback;
+mod model_call;
 pub mod memory;
 pub mod model;
 pub mod model_metadata;
@@ -17,5 +19,6 @@ pub mod storage;
 pub mod sub_agent;
 pub mod todo;
 pub mod types;
+mod vision;
 
 pub use types::*;

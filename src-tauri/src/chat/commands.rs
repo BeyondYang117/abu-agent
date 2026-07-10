@@ -1,13 +1,11 @@
 use std::{
     collections::HashMap,
-    fs,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
-use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::ShellExt;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
@@ -20,14 +18,12 @@ use crate::chat::attachments::{
     PastedAttachmentSave, PastedImageSave,
 };
 use crate::chat::model::{
-    generate_request_from_openai_messages, model_messages_from_openai_messages,
-    openai_messages_from_model_messages, AnthropicMessagesProvider, GenerateOptions,
-    GenerateOutput, GenerateRequestContext, LanguageModelProvider, MessagePart, ModelMessage,
-    ModelRole, OpenAiChatProvider, OpenAiResponsesProvider,
+    model_messages_from_openai_messages, openai_messages_from_model_messages, MessagePart,
+    ModelMessage, ModelRole,
 };
 use crate::chat::model_metadata::{
     chat_max_output_tokens_for_model, context_window_for_model, model_can_generate_images_directly,
-    model_supports_image_generation, model_supports_vision, reasoning_efforts_for_model,
+    reasoning_efforts_for_model,
 };
 use crate::external_agents::detection::EXTERNAL_AGENT_MODELS_CACHE_TTL;
 use crate::mcp::types::ChatToolArtifact;
@@ -36,6 +32,17 @@ use crate::settings::{ModelProvider, ProviderApiFormat, SessionModel, Settings};
 use crate::skills;
 use crate::state::AppState;
 
+use super::model_call::{
+    call_chat_completion_message, chat_missing_model_error, format_chat_missing_api_key_error,
+    session_model_for_conversation,
+};
+#[cfg(test)]
+use super::vision::AuxiliaryVisionResult;
+use super::vision::{
+    analyze_chat_images_with_auxiliary_model, auxiliary_vision_model_for_images,
+    auxiliary_vision_tool_record, finish_auxiliary_vision_tool_record, image_content_part,
+    user_content_with_auxiliary_vision_result,
+};
 use super::storage::{
     archive_assistant, assistant_snapshot, conversation_attachments_dir, create_assistant,
     create_project, create_set, delete_conversation as delete_conv, delete_project, delete_set,
@@ -3936,90 +3943,6 @@ fn estimate_messages_segments(
     agent_prepare::merge_context_segments(segments)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AuxiliaryVisionModel {
-    provider_id: String,
-    provider_name: String,
-    model: String,
-}
-
-fn auxiliary_vision_model_for_images(
-    settings: &Settings,
-    main_provider: Option<&ModelProvider>,
-    main_model: &str,
-    image_paths: &[PathBuf],
-    session: Option<SessionModel<'_>>,
-) -> Option<AuxiliaryVisionModel> {
-    if image_paths.is_empty() {
-        return None;
-    }
-
-    // 主模型自身支持视觉时，图片永远直接交给主模型——即便配置了独立视觉模型。
-    // 独立视觉模型只是给「纯文本主模型」补视觉的兜底，不应把会看图的主模型降级走 mixer。
-    if model_supports_vision(main_provider, main_model) == Some(true) {
-        return None;
-    }
-
-    if settings.has_explicit_vision_model() {
-        let (provider_id, model) = settings.effective_vision_model_for_session(session);
-        return auxiliary_vision_model_from_selection(settings, &provider_id, &model);
-    }
-
-    if model_supports_vision(main_provider, main_model) != Some(false) {
-        return None;
-    }
-
-    settings
-        .providers
-        .iter()
-        .filter(|provider| provider.enabled)
-        .flat_map(|provider| {
-            provider
-                .enabled_models
-                .iter()
-                .map(move |model| (provider, model))
-        })
-        .find_map(|(provider, model)| {
-            if provider.id
-                == main_provider
-                    .map(|provider| provider.id.as_str())
-                    .unwrap_or("")
-                && model == main_model
-            {
-                return None;
-            }
-            if model_supports_vision(Some(provider), model) == Some(true)
-                && model_supports_image_generation(Some(provider), model) != Some(true)
-            {
-                Some(AuxiliaryVisionModel {
-                    provider_id: provider.id.clone(),
-                    provider_name: provider.name.clone(),
-                    model: model.clone(),
-                })
-            } else {
-                None
-            }
-        })
-}
-
-fn auxiliary_vision_model_from_selection(
-    settings: &Settings,
-    provider_id: &str,
-    model: &str,
-) -> Option<AuxiliaryVisionModel> {
-    let model = model.trim();
-    if model.is_empty() {
-        return None;
-    }
-    settings
-        .get_provider(provider_id)
-        .map(|provider| AuxiliaryVisionModel {
-            provider_id: provider.id.clone(),
-            provider_name: provider.name.clone(),
-            model: model.to_string(),
-        })
-}
-
 /// 解析会话的真实用量锚点：从尾部找最近一条带 `anchor_usage` 且 provider 与当前一致的 assistant。
 /// 返回 `(anchor_total_tokens, trailing_estimate)`：
 /// - `anchor_total_tokens` = 该 assistant 上次调用「整个 prompt + 该次响应」的真实 token 总数
@@ -4424,14 +4347,6 @@ async fn try_auto_compress_context_after_update(
     }
 }
 
-/// 混音器未单独指定压缩模型时，用当前会话的 provider/model（顶栏主模型），
-/// 而不是设置里的全局 Chat 默认（`effective_chat_model`）。
-fn session_model_for_conversation(conversation: &Conversation) -> SessionModel<'_> {
-    SessionModel {
-        provider_id: conversation.provider_id.as_str(),
-        model: conversation.model.as_str(),
-    }
-}
 
 async fn compress_conversation_context(
     app: &AppHandle,
@@ -4806,134 +4721,6 @@ fn build_chat_api_messages(
     Ok(messages)
 }
 
-struct AuxiliaryVisionResult {
-    provider_name: String,
-    model: String,
-    content: String,
-}
-
-fn auxiliary_vision_tool_record(
-    settings: &Settings,
-    auxiliary_model: &AuxiliaryVisionModel,
-    image_count: usize,
-) -> ToolCallRecord {
-    let provider_name = if auxiliary_model.provider_name.trim().is_empty() {
-        auxiliary_model.provider_id.clone()
-    } else {
-        auxiliary_model.provider_name.clone()
-    };
-    ToolCallRecord {
-        id: format!("call_mixer_vision_{}", Uuid::new_v4()),
-        name: "mixer_vision".to_string(),
-        source: "mixer".to_string(),
-        server_id: Some(format!("{provider_name} / {}", auxiliary_model.model)),
-        arguments: serde_json::json!({
-            "task": "vision",
-            "provider": provider_name,
-            "model": auxiliary_model.model,
-            "images": image_count,
-            "auto": !settings.has_explicit_vision_model(),
-        })
-        .to_string(),
-        status: ToolCallStatus::Running,
-        result_preview: None,
-        error: None,
-        duration_ms: None,
-        started_at: Some(chrono::Local::now().timestamp()),
-        completed_at: None,
-        round: 0,
-        sensitive: false,
-        artifacts: Vec::new(),
-        trace_id: None,
-        span_id: None,
-        structured_content: None,
-    }
-}
-
-fn finish_auxiliary_vision_tool_record(
-    record: &mut ToolCallRecord,
-    status: ToolCallStatus,
-    started: Instant,
-    result_preview: Option<String>,
-    error: Option<String>,
-) {
-    record.status = status;
-    record.duration_ms = Some(started.elapsed().as_millis() as u64);
-    record.completed_at = Some(chrono::Local::now().timestamp());
-    record.result_preview = result_preview;
-    record.error = error;
-}
-
-async fn analyze_chat_images_with_auxiliary_model(
-    state: &State<'_, AppState>,
-    settings: &Settings,
-    auxiliary_model: &AuxiliaryVisionModel,
-    conversation_id: &str,
-    message_id: &str,
-    last_user_api_content: Option<&str>,
-    image_paths: &[PathBuf],
-    retry_attempts: usize,
-    language: &str,
-) -> Result<AuxiliaryVisionResult, String> {
-    if image_paths.is_empty() {
-        return Err("No image attachments to analyze".to_string());
-    }
-    let provider = settings
-        .get_provider(&auxiliary_model.provider_id)
-        .ok_or_else(|| "Vision auxiliary provider not found".to_string())?
-        .clone();
-    if provider.api_keys.is_empty() {
-        return Err(format_chat_missing_api_key_error(&provider.name));
-    }
-    if auxiliary_model.model.trim().is_empty() {
-        return Err(chat_missing_model_error());
-    }
-
-    let mut parts = image_paths
-        .iter()
-        .map(image_content_part)
-        .collect::<Result<Vec<_>, _>>()?;
-    parts.push(serde_json::json!({
-        "type": "text",
-        "text": auxiliary_vision_user_prompt(last_user_api_content, language),
-    }));
-    let messages = vec![
-        serde_json::json!({
-            "role": "system",
-            "content": auxiliary_vision_system_prompt(language),
-        }),
-        serde_json::json!({
-            "role": "user",
-            "content": parts,
-        }),
-    ];
-    let message = call_chat_completion_message(
-        state,
-        &provider,
-        &auxiliary_model.model,
-        messages,
-        None,
-        retry_attempts,
-        false,
-        Some(conversation_id),
-        Some(message_id),
-        "Chat auxiliary vision analysis",
-    )
-    .await?;
-    let content = agent_stop::assistant_content_from_api_message(&message);
-    if content.trim().is_empty() {
-        return Err("Vision auxiliary model returned an empty analysis".to_string());
-    }
-    Ok(AuxiliaryVisionResult {
-        provider_name: provider.name,
-        model: auxiliary_model.model.clone(),
-        content,
-    })
-}
-
-/// `read` 工具读到图片文件时的三级策略，复用对话级图片附件那套现成实现：
-/// ① 主模型支持视觉 → 直喂原图（作为 follow-up user 消息，因为工具结果本身只能
-/// 回文本）；② 纯文本主模型 → 辅助视觉模型出客观文字描述；③ 兜底 → OCR。
 /// 失败/无视觉模型时逐级降级，始终返回一个可读的文本结果。
 pub(crate) async fn read_image_as_tool_result(
     app: &AppHandle,
@@ -4942,175 +4729,8 @@ pub(crate) async fn read_image_as_tool_result(
     message_id: &str,
     path: &Path,
 ) -> Result<mcp::types::McpToolCallResult, String> {
-    use crate::mcp::native_registry::text_tool_result;
-    // 直传 base64 不压缩；超大图片会撑爆上下文，故设上限兜底。
-    // ponytail: 不压缩直传，12MB 上限兜底；上下文吃紧再加 resize helper。
-    const MAX_IMAGE_BYTES: u64 = 12 * 1024 * 1024;
-
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("image")
-        .to_string();
-
-    if let Ok(meta) = fs::metadata(path) {
-        if meta.len() > MAX_IMAGE_BYTES {
-            return Ok(text_tool_result(format!(
-                "图片 {name} 过大（{} 字节，上限 {MAX_IMAGE_BYTES} 字节），未读取。请压缩后重试。",
-                meta.len()
-            )));
-        }
-    }
-
-    let state = app.state::<AppState>();
-    let conversation = load_conversation(app, conversation_id)?;
-    let provider = settings.get_provider(&conversation.provider_id);
-    let model = conversation.model.as_str();
-    let path_buf = path.to_path_buf();
-
-    // ① 主模型支持视觉 → 直喂原图。工具结果只能回文本，所以真正的图片作为紧随
-    // 其后的一条 user 消息追加（rounds::push_tool_execution_result 负责排在 tool
-    // 结果之后；Anthropic 侧会与 tool_result 合并进同一 user turn）。
-    if model_supports_vision(provider, model) == Some(true) {
-        let part = image_content_part(&path_buf)?;
-        let follow_up = serde_json::json!({ "role": "user", "content": [part] });
-        return Ok(mcp::types::McpToolCallResult {
-            content: format!("已读取图片 {name}，已作为图片直接提供给你查看（见下一条消息）。"),
-            is_error: false,
-            raw: Value::Null,
-            artifacts: Vec::new(),
-            structured_content: None,
-            follow_up_user_messages: vec![follow_up],
-        });
-    }
-
-    // ② 纯文本主模型 → 辅助视觉模型出客观文字描述（复用对话级图片那套）。
-    if let Some(aux) = auxiliary_vision_model_for_images(
-        settings,
-        provider,
-        model,
-        std::slice::from_ref(&path_buf),
-        Some(session_model_for_conversation(&conversation)),
-    ) {
-        let language = crate::settings::resolve_chat_language(settings);
-        let retry_attempts = if settings.retry_enabled {
-            settings.retry_attempts as usize
-        } else {
-            1
-        };
-        if let Ok(result) = analyze_chat_images_with_auxiliary_model(
-            &state,
-            settings,
-            &aux,
-            conversation_id,
-            message_id,
-            None,
-            std::slice::from_ref(&path_buf),
-            retry_attempts,
-            &language,
-        )
+    super::vision::read_image_as_tool_result(app, settings, conversation_id, message_id, path)
         .await
-        {
-            return Ok(text_tool_result(format!(
-                "图片 {name} 的视觉分析（{} / {}）：\n\n{}",
-                result.provider_name, result.model, result.content
-            )));
-        }
-    }
-
-    // ③ 兜底 OCR。
-    match crate::chat::knowledge_base::process::process_document(
-        state.inner(),
-        &settings.document_processing,
-        path,
-    )
-    .await
-    {
-        Ok(doc) => Ok(text_tool_result(format!(
-            "图片 {name} 的 OCR 文本：\n\n{}",
-            doc.text
-        ))),
-        Err(err) => Ok(text_tool_result(format!(
-            "图片 {name}：当前模型不支持视觉，且无可用视觉模型，OCR 也未成功（{err}）。如需识别请在设置启用视觉模型或 OCR 引擎。"
-        ))),
-    }
-}
-
-/// R1（单图 ≤8MB / 单结果 ≤4 张）护栏 + 过滤的纯函数部分：从 MCP 工具结果的
-/// `artifacts` 里选出可内联的图片（mime 以 `image/` 开头且 `data_url` 非空），
-/// 解码 base64 校验大小与数量上限。返回已解码字节（配 `analyze_...`/直喂都要用）
-/// 与超限提示文案（供追加进 tool 结果 content，让模型知道有图被跳过）。不涉及
-/// IO/网络，纯同步，便于单测覆盖护栏边界；`attach_image_artifacts_for_model`
-/// 是它的唯一调用方。
-fn select_image_artifacts_for_attach(
-    artifacts: &[ChatToolArtifact],
-    max_bytes: usize,
-    max_images: usize,
-) -> (Vec<(&ChatToolArtifact, Vec<u8>)>, Option<String>) {
-    let mut accepted: Vec<(&ChatToolArtifact, Vec<u8>)> = Vec::new();
-    let mut oversize_count = 0usize;
-    let mut overflow_count = 0usize;
-
-    for artifact in artifacts {
-        if !artifact.mime_type.starts_with("image/") || artifact.data_url.is_empty() {
-            continue;
-        }
-        let base64_payload = artifact
-            .data_url
-            .split_once(',')
-            .map(|(_, data)| data)
-            .unwrap_or(artifact.data_url.as_str());
-        let Ok(bytes) = general_purpose::STANDARD.decode(base64_payload) else {
-            continue; // 解不出 base64：保留原有占位符，不计入护栏统计
-        };
-        if bytes.len() > max_bytes {
-            oversize_count += 1;
-            continue;
-        }
-        if accepted.len() >= max_images {
-            overflow_count += 1;
-            continue;
-        }
-        accepted.push((artifact, bytes));
-    }
-
-    let mut notes = Vec::new();
-    if oversize_count > 0 {
-        notes.push(format!(
-            "（{oversize_count} 张图片超过 {}MB 上限，未内联，保留文字占位符）",
-            max_bytes / (1024 * 1024)
-        ));
-    }
-    if overflow_count > 0 {
-        notes.push(format!(
-            "（另有 {overflow_count} 张图片超出单结果 {max_images} 张上限，未内联）"
-        ));
-    }
-    let guard_note = if notes.is_empty() {
-        None
-    } else {
-        Some(notes.join("\n"))
-    };
-    (accepted, guard_note)
-}
-
-fn append_tool_result_note(result: &mut mcp::types::McpToolCallResult, note: &str) {
-    if result.content.trim().is_empty() {
-        result.content = note.to_string();
-    } else {
-        result.content = format!("{}\n\n{note}", result.content.trim_end());
-    }
-}
-
-fn image_extension_for_mime(mime: &str) -> &'static str {
-    match mime {
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/bmp" => "bmp",
-        "image/tiff" => "tiff",
-        _ => "png",
-    }
 }
 
 /// R1：MCP 工具结果里的图片 artifact「直达模型」。通用于所有 MCP server（非
@@ -5128,190 +4748,14 @@ pub(crate) async fn attach_image_artifacts_for_model(
     message_id: &str,
     result: &mut mcp::types::McpToolCallResult,
 ) {
-    // 单图 8MB / 单结果 4 张，见 PRD R1 护栏约束。
-    const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
-    const MAX_IMAGES: usize = 4;
-
-    let (accepted, guard_note) =
-        select_image_artifacts_for_attach(&result.artifacts, MAX_IMAGE_BYTES, MAX_IMAGES);
-    if accepted.is_empty() {
-        if let Some(note) = guard_note {
-            append_tool_result_note(result, &note);
-        }
-        return;
-    }
-
-    let conversation = match load_conversation(app, conversation_id) {
-        Ok(conversation) => conversation,
-        Err(_) => return, // 拿不到会话上下文，静默保留占位符
-    };
-    let provider = settings.get_provider(&conversation.provider_id);
-    let model = conversation.model.as_str();
-
-    // ① 主模型支持视觉 → 直喂原图（工具结果只能回文本，图片作为紧随其后的 user
-    // 消息追加；rounds::push_tool_execution_result 负责排序，Anthropic 侧会与
-    // tool_result 合并进同一 user turn，与 read 工具走的管子完全一致）。
-    if model_supports_vision(provider, model) == Some(true) {
-        let parts: Vec<Value> = accepted
-            .iter()
-            .filter_map(|(artifact, _)| data_url_image_part(&artifact.data_url).ok())
-            .collect();
-        if !parts.is_empty() {
-            result
-                .follow_up_user_messages
-                .push(serde_json::json!({ "role": "user", "content": parts }));
-            // 已直喂模型的图属于审查材料而非交付物：清掉 artifacts，
-            // 聊天画廊不再重复展示（成品预览走 live preview / 交付目录）。
-            result.artifacts.clear();
-        }
-        if let Some(note) = guard_note {
-            append_tool_result_note(result, &note);
-        }
-        return;
-    }
-
-    // ② 纯文本主模型 → 落临时文件走辅助视觉模型（审查向分析，见 R2）。
-    let mut temp_paths: Vec<PathBuf> = Vec::new();
-    for (artifact, bytes) in &accepted {
-        let ext = image_extension_for_mime(&artifact.mime_type);
-        let path = std::env::temp_dir().join(format!("kivio-mcpimg-{}.{ext}", Uuid::new_v4()));
-        if fs::write(&path, bytes).is_ok() {
-            temp_paths.push(path);
-        }
-    }
-    if temp_paths.is_empty() {
-        if let Some(note) = guard_note {
-            append_tool_result_note(result, &note);
-        }
-        return;
-    }
-    let cleanup_temp_paths = |paths: &[PathBuf]| {
-        for path in paths {
-            let _ = fs::remove_file(path);
-        }
-    };
-
-    let Some(aux) = auxiliary_vision_model_for_images(
+    super::vision::attach_image_artifacts_for_model(
+        app,
         settings,
-        provider,
-        model,
-        &temp_paths,
-        Some(session_model_for_conversation(&conversation)),
-    ) else {
-        cleanup_temp_paths(&temp_paths);
-        if let Some(note) = guard_note {
-            append_tool_result_note(result, &note);
-        }
-        return;
-    };
-
-    let state = app.state::<AppState>();
-    let language = crate::settings::resolve_chat_language(settings);
-    let retry_attempts = if settings.retry_enabled {
-        settings.retry_attempts as usize
-    } else {
-        1
-    };
-    let analysis = analyze_chat_images_with_auxiliary_model(
-        &state,
-        settings,
-        &aux,
         conversation_id,
         message_id,
-        None,
-        &temp_paths,
-        retry_attempts,
-        &language,
+        result,
     )
     .await;
-    cleanup_temp_paths(&temp_paths);
-
-    match analysis {
-        Ok(analysis) => {
-            let mut note = format!(
-                "图片视觉分析（{} / {}）：\n\n{}",
-                analysis.provider_name, analysis.model, analysis.content
-            );
-            if let Some(guard_note) = guard_note {
-                note.push('\n');
-                note.push_str(&guard_note);
-            }
-            append_tool_result_note(result, &note);
-            // 同 vision 分支：审查材料不进聊天画廊。
-            result.artifacts.clear();
-        }
-        Err(_) => {
-            // 辅助视觉模型也失败：保留原占位符，只附上护栏提示（如果有）。
-            if let Some(note) = guard_note {
-                append_tool_result_note(result, &note);
-            }
-        }
-    }
-}
-
-// R2：从纯「客观描述」升级为「审查+描述」——纯文本主模型读图（含 R1 的 MCP 图片
-// 兜底路径）全靠这个函数出的文字判断画面对不对，之前只描述内容会漏掉字面 \n、
-// 文字溢出等一看就是缺陷的问题（Gate 3 视觉审查假 PASS 的根因）。中英文都要求
-// 逐条列出发现的问题，确无问题才允许写「未见视觉缺陷」。
-fn auxiliary_vision_system_prompt(language: &str) -> &'static str {
-    if language.starts_with("zh") {
-        "你是 Kivio 的视觉副任务模型。你的任务是审查并描述用户提供的图片，输出给另一个主对话模型使用的文字观察。除描述图片中可见的信息、文字、结构、对象、界面状态和与用户问题相关的细节外，必须显式检查并逐条报告以下缺陷（如存在）：文字被截断或溢出容器、元素重叠、字面转义符（如按文字原样出现的 \\n、\\t）、明显的位置或对齐错位、对比度过低导致文字不可读。确认不存在以上问题才写「未见视觉缺陷」。不要回答最终问题，不要编造不可见内容。"
-    } else {
-        "You are Kivio's auxiliary vision model. Read the user's images and produce textual observations for another main chat model, combining description with review. Beyond describing visible information, text, layout, objects, UI state, and details relevant to the user's request, you must explicitly check and list any of the following defects if present: text truncated or overflowing its container, overlapping elements, literal escape sequences appearing as text (e.g. \\n, \\t), obvious position or alignment misalignment, and low-contrast unreadable text. Only state \"no visual defects observed\" once you have confirmed none of these are present. Do not answer the final question and do not invent unseen content."
-    }
-}
-
-fn auxiliary_vision_user_prompt(last_user_api_content: Option<&str>, language: &str) -> String {
-    let content = last_user_api_content
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_default();
-    if language.starts_with("zh") {
-        if content.is_empty() {
-            "请分析这些图片，输出主对话模型回答用户时需要知道的视觉事实。".to_string()
-        } else {
-            format!(
-                "用户原始消息如下。请结合图片提取主对话模型回答时需要知道的视觉事实。\n\n{content}"
-            )
-        }
-    } else if content.is_empty() {
-        "Analyze these images and output the visual facts the main chat model needs.".to_string()
-    } else {
-        format!(
-            "The user's original message is below. Extract the visual facts the main chat model needs to answer it.\n\n{content}"
-        )
-    }
-}
-
-fn user_content_with_auxiliary_vision_result(
-    last_user_api_content: Option<&str>,
-    result: &AuxiliaryVisionResult,
-    language: &str,
-) -> String {
-    let original = last_user_api_content
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_default();
-    let aux_block = if language.starts_with("zh") {
-        format!(
-            "[混音器视觉副任务结果]\n图片附件已由视觉模型（{} - {}）预先分析。主对话模型不能直接访问图片，请基于以下视觉观察回答用户：\n{}",
-            result.provider_name,
-            result.model,
-            result.content.trim()
-        )
-    } else {
-        format!(
-            "[Mixer vision auxiliary result]\nThe image attachments were pre-analyzed by the vision model ({} - {}). The main chat model cannot access the images directly; answer using the visual observations below:\n{}",
-            result.provider_name,
-            result.model,
-            result.content.trim()
-        )
-    };
-    if original.is_empty() {
-        aux_block
-    } else {
-        format!("{original}\n\n{aux_block}")
-    }
 }
 
 struct ChatAgentHost<'a> {
@@ -5720,65 +5164,6 @@ impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
     }
 }
 
-async fn call_chat_completion_message(
-    state: &State<'_, AppState>,
-    provider: &crate::settings::ModelProvider,
-    model: &str,
-    messages: Vec<Value>,
-    tools: Option<&[ChatToolDefinition]>,
-    retry_attempts: usize,
-    thinking_enabled: bool,
-    conversation_id: Option<&str>,
-    message_id: Option<&str>,
-    label: &str,
-) -> Result<Value, String> {
-    let request = generate_request_from_openai_messages(
-        model,
-        messages,
-        tools,
-        GenerateOptions {
-            thinking_enabled,
-            ..GenerateOptions::default()
-        },
-        label,
-        GenerateRequestContext::new(conversation_id, message_id),
-    );
-    let output =
-        generate_with_chat_provider(state.inner(), provider, retry_attempts, request).await?;
-    Ok(output.to_openai_compatible_message())
-}
-
-async fn generate_with_chat_provider(
-    state: &AppState,
-    provider: &crate::settings::ModelProvider,
-    retry_attempts: usize,
-    request: crate::chat::model::GenerateRequest,
-) -> Result<GenerateOutput, String> {
-    match provider.api_format_kind() {
-        ProviderApiFormat::OpenAiChat => {
-            OpenAiChatProvider::new(state, provider, retry_attempts)
-                .generate(request)
-                .await
-        }
-        ProviderApiFormat::AnthropicMessages => {
-            AnthropicMessagesProvider::new(state, provider, retry_attempts)
-                .generate(request)
-                .await
-        }
-        ProviderApiFormat::OpenAiResponses => {
-            OpenAiResponsesProvider::new(state, provider, retry_attempts)
-                .generate(request)
-                .await
-        }
-        ProviderApiFormat::Gemini => {
-            crate::chat::model::GeminiProvider::new(state, provider, retry_attempts)
-                .generate(request)
-                .await
-        }
-    }
-    .map_err(|err| err.to_string())
-}
-
 fn sanitize_api_message_for_model(message: &Value) -> Value {
     let mut sanitized = message.clone();
     if let Some(content) = sanitized.get_mut("content") {
@@ -6159,18 +5544,9 @@ pub(crate) fn emit_chat_stream_done(
 
 use crate::chat::agent::execute::truncate_chars;
 
-fn format_chat_missing_api_key_error(provider_name: &str) -> String {
-    let provider = provider_name.trim();
-    if provider.is_empty() {
-        "Chat 模型供应商缺少 API Key，请到设置 > 模型中填写后再发送。".to_string()
-    } else {
-        format!("Chat 模型供应商「{provider}」缺少 API Key，请到设置 > 模型中填写后再发送。")
-    }
-}
 
-fn chat_missing_model_error() -> String {
-    "请先为当前 Chat 对话选择模型，或到设置 > AI 客户端配置默认模型。".to_string()
-}
+
+
 
 fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
     let parsed = serde_json::from_str::<Value>(&record.arguments).ok();
@@ -6239,47 +5615,6 @@ fn format_tool_approval_summary(record: &ToolCallRecord) -> String {
         summary.push_str("\n\nRaw arguments:\n");
         summary.push_str(&truncate_chars(&record.arguments, 800));
         summary
-    }
-}
-
-fn image_content_part(path: &PathBuf) -> Result<serde_json::Value, String> {
-    let bytes = fs::read(path).map_err(|e| format!("读取图片附件失败: {e}"))?;
-    let base64 = general_purpose::STANDARD.encode(bytes);
-    let mime = image_mime_for_path(path);
-    Ok(serde_json::json!({
-        "type": "image_url",
-        "image_url": { "url": format!("data:{mime};base64,{base64}") },
-    }))
-}
-
-/// `image_content_part` 的姊妹函数：吃已经是 data: URL 的字符串（R1，MCP 工具
-/// 结果的 image artifact 本身就是 data_url，不需要落盘再读一次）。内容部分的
-/// JSON 形状与 `image_content_part` 保持一致，各 provider 适配器不用区分来源。
-fn data_url_image_part(data_url: &str) -> Result<serde_json::Value, String> {
-    if !data_url.starts_with("data:") {
-        return Err("Artifact data_url is not a data: URL".to_string());
-    }
-    Ok(serde_json::json!({
-        "type": "image_url",
-        "image_url": { "url": data_url },
-    }))
-}
-
-fn image_mime_for_path(path: &Path) -> &'static str {
-    let ext = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "tiff" | "tif" => "image/tiff",
-        "heic" => "image/heic",
-        "heif" => "image/heif",
-        _ => "image/png",
     }
 }
 
@@ -7033,203 +6368,6 @@ mod tests {
             model_overrides: HashMap::new(),
             compress_request_body: false,
         }
-    }
-
-    #[test]
-    fn auto_auxiliary_vision_picks_enabled_vision_model_when_main_is_text_only() {
-        let mut settings = Settings::default();
-        let main_provider = test_provider("main", "Main", vec!["deepseek-v4-flash"]);
-        let vision_provider = test_provider("vision", "Vision", vec!["gpt-4o"]);
-        settings.providers = vec![main_provider.clone(), vision_provider];
-
-        let selected = auxiliary_vision_model_for_images(
-            &settings,
-            Some(&main_provider),
-            "deepseek-v4-flash",
-            &[PathBuf::from("image.png")],
-            None,
-        )
-        .expect("auto should select a vision-capable model");
-
-        assert_eq!(selected.provider_id, "vision");
-        assert_eq!(selected.model, "gpt-4o");
-    }
-
-    #[test]
-    fn auto_auxiliary_vision_keeps_images_on_main_when_main_supports_vision() {
-        let mut settings = Settings::default();
-        let main_provider = test_provider("main", "Main", vec!["gpt-4o"]);
-        let vision_provider = test_provider("vision", "Vision", vec!["gemini-2.0-flash"]);
-        settings.providers = vec![main_provider.clone(), vision_provider];
-
-        assert_eq!(
-            auxiliary_vision_model_for_images(
-                &settings,
-                Some(&main_provider),
-                "gpt-4o",
-                &[PathBuf::from("image.png")],
-                None,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn explicit_vision_model_does_not_hijack_vision_capable_main_model() {
-        // 用户给主模型在 model_overrides 里手动开了 vision=true，同时设置里又配了独立视觉模型。
-        // 期望：图片直接发给会看图的主模型，不走 mixer。回归 #vision-mixer-hijack。
-        use crate::settings::{ModelCapabilities, ModelInfo};
-
-        let mut main_provider = test_provider("main", "Main", vec!["models/gemini-3.1-flash-lite"]);
-        main_provider.model_overrides.insert(
-            "models/gemini-3.1-flash-lite".to_string(),
-            ModelInfo {
-                capabilities: Some(ModelCapabilities {
-                    vision: Some(true),
-                    ..ModelCapabilities::default()
-                }),
-                ..ModelInfo::default()
-            },
-        );
-        let vision_provider = test_provider("vision", "Vision", vec!["gpt-4o"]);
-
-        let mut settings = Settings::default();
-        settings.providers = vec![main_provider.clone(), vision_provider];
-        // 显式配置一个独立视觉模型（旧逻辑会因此把所有图片都劫持到 mixer）。
-        settings.default_models.vision.provider_id = "vision".to_string();
-        settings.default_models.vision.model = "gpt-4o".to_string();
-
-        assert_eq!(
-            auxiliary_vision_model_for_images(
-                &settings,
-                Some(&main_provider),
-                "models/gemini-3.1-flash-lite",
-                &[PathBuf::from("image.png")],
-                None,
-            ),
-            None,
-            "vision-capable main model should keep images, not route to the mixer"
-        );
-    }
-
-    fn image_artifact(name: &str, mime_type: &str, payload: &[u8]) -> ChatToolArtifact {
-        ChatToolArtifact {
-            name: name.to_string(),
-            mime_type: mime_type.to_string(),
-            data_url: format!(
-                "data:{mime_type};base64,{}",
-                general_purpose::STANDARD.encode(payload)
-            ),
-            size_bytes: None,
-            path: None,
-        }
-    }
-
-    #[test]
-    fn select_image_artifacts_filters_non_image_and_empty_data_url() {
-        let artifacts = vec![
-            // 非图片 artifact：直接跳过，不计入护栏统计。
-            ChatToolArtifact {
-                name: "notes.txt".to_string(),
-                mime_type: "text/plain".to_string(),
-                data_url: "data:text/plain;base64,aGVsbG8=".to_string(),
-                size_bytes: None,
-                path: None,
-            },
-            // data_url 为空的图片 artifact：同样跳过。
-            ChatToolArtifact {
-                name: "empty.png".to_string(),
-                mime_type: "image/png".to_string(),
-                data_url: String::new(),
-                size_bytes: None,
-                path: None,
-            },
-            image_artifact("shot.png", "image/png", b"tiny-png-bytes"),
-        ];
-
-        let (accepted, guard_note) =
-            select_image_artifacts_for_attach(&artifacts, 8 * 1024 * 1024, 4);
-
-        assert_eq!(accepted.len(), 1);
-        assert_eq!(accepted[0].0.name, "shot.png");
-        assert!(guard_note.is_none());
-    }
-
-    #[test]
-    fn select_image_artifacts_no_images_passes_through_unchanged() {
-        let artifacts = vec![ChatToolArtifact {
-            name: "notes.txt".to_string(),
-            mime_type: "text/plain".to_string(),
-            data_url: "data:text/plain;base64,aGVsbG8=".to_string(),
-            size_bytes: None,
-            path: None,
-        }];
-
-        let (accepted, guard_note) =
-            select_image_artifacts_for_attach(&artifacts, 8 * 1024 * 1024, 4);
-
-        assert!(accepted.is_empty());
-        assert!(guard_note.is_none());
-    }
-
-    #[test]
-    fn select_image_artifacts_skips_oversize_image_with_note() {
-        let artifacts = vec![image_artifact("big.png", "image/png", &[0u8; 64])];
-
-        // max_bytes 故意设得比 payload 小，触发「过大」护栏。
-        let (accepted, guard_note) = select_image_artifacts_for_attach(&artifacts, 16, 4);
-
-        assert!(accepted.is_empty());
-        let note = guard_note.expect("oversize image should produce a guard note");
-        assert!(note.contains("1 张图片超过"), "note was: {note}");
-    }
-
-    #[test]
-    fn select_image_artifacts_caps_at_max_images_and_notes_overflow() {
-        let artifacts: Vec<ChatToolArtifact> = (0..6)
-            .map(|i| image_artifact(&format!("img{i}.png"), "image/png", format!("payload-{i}").as_bytes()))
-            .collect();
-
-        let (accepted, guard_note) =
-            select_image_artifacts_for_attach(&artifacts, 8 * 1024 * 1024, 4);
-
-        assert_eq!(accepted.len(), 4);
-        let note = guard_note.expect("overflow beyond the cap should produce a guard note");
-        assert!(note.contains("另有 2 张图片超出单结果 4 张上限"), "note was: {note}");
-    }
-
-    #[test]
-    fn data_url_image_part_wraps_data_url_and_rejects_non_data_url() {
-        let part = data_url_image_part("data:image/png;base64,AAAA").expect("valid data url");
-        assert_eq!(part["type"], "image_url");
-        assert_eq!(part["image_url"]["url"], "data:image/png;base64,AAAA");
-
-        assert!(data_url_image_part("https://example.com/shot.png").is_err());
-    }
-
-    #[test]
-    fn image_extension_for_mime_matches_common_types() {
-        assert_eq!(image_extension_for_mime("image/jpeg"), "jpg");
-        assert_eq!(image_extension_for_mime("image/webp"), "webp");
-        assert_eq!(image_extension_for_mime("image/png"), "png");
-        assert_eq!(image_extension_for_mime("image/unknown"), "png");
-    }
-
-    #[test]
-    fn append_tool_result_note_handles_empty_and_non_empty_content() {
-        let mut result = mcp::types::McpToolCallResult {
-            content: String::new(),
-            is_error: false,
-            raw: Value::Null,
-            artifacts: Vec::new(),
-            structured_content: None,
-            follow_up_user_messages: Vec::new(),
-        };
-        append_tool_result_note(&mut result, "note one");
-        assert_eq!(result.content, "note one");
-
-        append_tool_result_note(&mut result, "note two");
-        assert_eq!(result.content, "note one\n\nnote two");
     }
 
     #[test]

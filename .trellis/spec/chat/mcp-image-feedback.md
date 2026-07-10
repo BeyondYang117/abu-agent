@@ -14,7 +14,7 @@ Any MCP server whose tool result contains `{ "type": "image", "data": <base64>, 
 ### 2. Signatures
 
 ```rust
-// chat/commands.rs
+// chat/commands.rs — compatibility entrypoint kept for mcp/registry.rs
 pub(crate) async fn attach_image_artifacts_for_model(
     app: &AppHandle,
     settings: &Settings,
@@ -23,6 +23,16 @@ pub(crate) async fn attach_image_artifacts_for_model(
     result: &mut mcp::types::McpToolCallResult,
 )
 
+// chat/vision.rs — crate-internal implementation behind the compatibility entrypoint
+pub(super) async fn attach_image_artifacts_for_model(
+    app: &AppHandle,
+    settings: &Settings,
+    conversation_id: &str,
+    message_id: &str,
+    result: &mut mcp::types::McpToolCallResult,
+)
+
+// chat/mcp_image_feedback.rs
 // Pure helper (unit-tested guardrails): filters image artifacts, enforces caps
 fn select_image_artifacts_for_attach(artifacts, MAX_IMAGE_BYTES, MAX_IMAGES)
     -> (Vec<(ChatToolArtifact, Vec<u8>)>, Option<String /*guard note*/>)
@@ -34,7 +44,7 @@ fn data_url_image_part(data_url: &str) -> Result<Value, String>
 ### 3. Contracts
 
 - **Parse layer stays dumb**: `mcp/client.rs::parse_tool_result` converts image blocks to `ChatToolArtifact { mime_type, data_url, ... }` + text placeholder `[image: <mime>]`, `follow_up_user_messages` empty. It has no settings/conversation access — vision decisions do NOT belong there.
-- **Vision main model** (`model_supports_vision(provider, model) == Some(true)`): ONE follow-up user message `{"role":"user","content":[<image parts>]}` pushed to `result.follow_up_user_messages` — the exact pipe `read_image_as_tool_result` (commands.rs) already proved across all four protocol adapters (Anthropic merges it into the same user turn as the tool_result).
+- **Vision main model** (`model_supports_vision(provider, model) == Some(true)`): ONE follow-up user message `{"role":"user","content":[<image parts>]}` pushed to `result.follow_up_user_messages` — the exact pipe implemented in `chat/vision.rs::read_image_as_tool_result` and exposed through `chat::commands::read_image_as_tool_result` already proved across all four protocol adapters (Anthropic merges it into the same user turn as the tool_result).
 - **Non-vision main model**: images written to `temp_dir()/kivio-mcpimg-<uuid>.<ext>`, analyzed via `auxiliary_vision_model_for_images` + `analyze_chat_images_with_auxiliary_model` (review-oriented prompt, see below), analysis text appended to `result.content`, temp files removed on every exit path. `kivio-mcpimg-` prefix is GC'd at startup by `screenshot.rs::cleanup_orphan_temp_files`.
 - **Guardrails**: max 4 images per result; single image ≤ 8MB after base64 decode (true byte length, not estimate). Skipped images append an explanatory note to `result.content`.
 - **Review material is not a deliverable**: after images are successfully fed to the model (either branch), `result.artifacts` is **cleared** so the chat gallery does not display review screenshots. Final-product preview is the live-preview channel / delivery directory. The frontend "last-round gallery" logic (`MessageBubble.tsx::selectGalleryImageArtifacts`) stays as generic fallback for images that did NOT go through this pipe.
@@ -53,7 +63,7 @@ fn data_url_image_part(data_url: &str) -> Result<Value, String>
 
 ### 5. Tests Required
 
-In `chat/commands.rs` test module: artifact filtering (non-image / empty data_url), oversize skip + note, cap + overflow note, no-image passthrough, `data_url_image_part` rejects non-data URLs. Run via `scripts/win-cargo-test.ps1` (plain cargo test binaries fail on Windows, 0xC0000139).
+In `chat/mcp_image_feedback.rs`: artifact filtering (non-image / empty data_url), oversize skip + note, cap + overflow note, no-image passthrough, and `data_url_image_part` validation. In `chat/vision.rs`: auxiliary-model auto/explicit selection. Keep the commands-level message-builder regression test in `chat/commands.rs`. Run via `scripts/win-cargo-test.ps1` (plain cargo test binaries fail on Windows, 0xC0000139).
 
 ### 6. Wrong vs Correct
 
@@ -65,9 +75,28 @@ Runtime feeds tool-result images to whichever vision path exists; prompts need n
 
 ---
 
+## Module boundary after `commands.rs` extraction
+
+- `chat/vision.rs` owns auxiliary vision selection, prompts, provider-backed image analysis, `read_image_as_tool_result`, and the MCP artifact attachment implementation.
+- `chat/model_call.rs` owns the provider dispatch shared by normal chat orchestration and auxiliary vision; this prevents `vision -> commands` coupling.
+- `chat/mcp_image_feedback.rs` remains pure and owns only artifact filtering, guard-note composition, MIME extension mapping, and data-URL content-part construction.
+- `chat/commands.rs` keeps the two crate-visible compatibility entrypoints because `mcp/native_registry.rs` and `mcp/registry.rs` intentionally retain their existing paths. Do not bypass these paths during unrelated refactors.
+
+Allowed dependency direction:
+
+```text
+commands -> vision -> model_call
+commands ------------> model_call
+vision -> storage / model_metadata / mcp_image_feedback
+```
+
+Forbidden: `vision -> commands` or `model_call -> commands`.
+
+---
+
 ## Auxiliary vision prompt is REVIEW-oriented
 
-`auxiliary_vision_system_prompt` (commands.rs, zh+en) must demand explicit defect reporting — truncated/overflowing text, overlapping elements, literal escape sequences visible as text (`\n`, `\t`), misalignment, low-contrast — item by item, and only claim "no visual defects" when none found. A describe-only prompt loses defect information and re-creates the fake-PASS bug for every non-vision main model.
+`auxiliary_vision_system_prompt` (`chat/vision.rs`, zh+en) must demand explicit defect reporting — truncated/overflowing text, overlapping elements, literal escape sequences visible as text (`\n`, `\t`), misalignment, low-contrast — item by item, and only claim "no visual defects" when none found. A describe-only prompt loses defect information and re-creates the fake-PASS bug for every non-vision main model.
 
 ---
 
