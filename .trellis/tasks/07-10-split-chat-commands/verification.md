@@ -138,3 +138,25 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including slash-trigger, plan-filter, and inline-code-filter tests.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; existing skill runtime and connector-gating contracts remain unchanged, so no `.trellis/spec/` update is required.
+
+## Round 7: post-commit verification
+
+- Commit: `ce718cd refactor(chat): extract tool filters`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 8 began.
+
+## Round 8: assistant message lifecycle extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/messages.rs`: 809 lines extracted across 23 functions.
+- `src-tauri/src/chat/commands.rs`: 5,535 -> 4,760 lines.
+- Moved assistant message construction, orphan tool reconciliation, segment normalization/synthesis, partial snapshots, final persistence, edit replay rebuilding, and agent todo/plan state capture.
+- Preserved `chat::commands::push_assistant_message` through a crate-visible re-export for `external_agents::run`.
+- Updated `catalog.rs` to depend directly on `commands::messages::reconcile_orphan_tool_segments`; behavior and visibility remain unchanged.
+- This round contains no Tauri command, so command registration paths and IPC names are unchanged.
+- The formatted new module exactly matches the message-lifecycle block extracted from `ce718cd`; only visibility, imports, module formatting, and the owning import path changed.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/messages.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including message construction, segment normalization, edit replay, and orphan reconciliation tests.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; no reusable runtime contract changed, so no `.trellis/spec/` update is required.

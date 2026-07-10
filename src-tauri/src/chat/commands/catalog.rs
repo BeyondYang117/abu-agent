@@ -22,7 +22,7 @@ use crate::settings::Settings;
 use crate::skills;
 use crate::state::AppState;
 
-use super::reconcile_orphan_tool_segments;
+use super::messages::reconcile_orphan_tool_segments;
 
 /// 外部入口（如 Lens 交接）预置会话历史时的一条消息。
 #[derive(Debug, Clone, serde::Deserialize)]

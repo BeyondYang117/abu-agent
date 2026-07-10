@@ -135,4 +135,16 @@
 - [x] Confirm this round moves no Tauri command and requires no registration-path change.
 - [x] Compare the formatted extraction exactly against the functions from `4bee8b1`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 7 and rerun post-commit verification before starting round 8.
+- [x] Commit round 7 and rerun post-commit verification before starting round 8.
+
+## Step 17 - Continuous split: assistant message lifecycle (round 8)
+
+- [x] Add `src-tauri/src/chat/commands/messages.rs`.
+- [x] Move assistant message construction, orphan tool reconciliation, segment normalization/synthesis, partial snapshot persistence, final push/upsert, edit replay rebuilding, and agent todo/plan state capture.
+- [x] Preserve the crate-visible `chat::commands::push_assistant_message` compatibility path through a re-export for `external_agents`.
+- [x] Update `catalog.rs` to import orphan-tool reconciliation from the owning `messages` module.
+- [x] Keep existing parent-module tests intact through narrow test-only imports.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare the formatted extraction exactly against the functions from `ce718cd`; no business logic changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 8 and rerun post-commit verification before starting round 9.
