@@ -300,4 +300,4 @@
 - [x] Keep every test body and helper function unchanged; only the test module import surface moves.
 - [x] Reduce `commands.rs` to a compact module declaration, production alias, and compatibility re-export facade.
 - [x] Verify targeted test-file formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 21 and rerun post-commit verification before declaring the large-file split complete.
+- [x] Commit round 21 and rerun post-commit verification before declaring the large-file split complete.

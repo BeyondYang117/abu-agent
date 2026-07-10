@@ -445,3 +445,12 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed with unchanged test paths.
 - `git diff --check`: passed.
 - This round changes only test dependency placement and facade cleanup, so no `.trellis/spec/` update is required.
+
+## Round 21: post-commit verification and split completion
+
+- Commit: `6ea5d6a refactor(chat): clean command facade`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed with unchanged test paths.
+- Working tree was clean after the final implementation round.
+- `src-tauri/src/chat/commands.rs` has converged from the original 9,320-line mixed-responsibility file to a 65-line command-module facade.
+- Production implementation, compatibility proxies, and the former inline regression suite now live in responsibility-scoped child modules; no additional file-shape migration to `commands/mod.rs` is needed for the large-file split objective.
