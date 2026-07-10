@@ -104,4 +104,14 @@
 - [x] Move 12 Tauri registration paths to `chat::commands::interaction::*` without changing IPC command names.
 - [x] Keep plan-approval and tool-approval-summary tests in the parent test module through test-only imports.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, Tauri command parity, and diff cleanliness.
-- [ ] Commit round 4 and rerun post-commit verification before starting round 5.
+- [x] Commit round 4 and rerun post-commit verification before starting round 5.
+
+
+## Step 14 ? Continuous split: attachment commands (round 5)
+
+- [x] Add `src-tauri/src/chat/commands/attachments.rs`.
+- [x] Move attachment preview/open commands, generated-artifact open/reveal commands, pasted file/image persistence commands, and clipboard file intake.
+- [x] Remove command-only attachment and shell imports from the parent while retaining reply-orchestration attachment helpers there.
+- [x] Move 7 Tauri registration paths to `chat::commands::attachments::*` without changing IPC command names.
+- [x] Verify exact formatted extraction against `1ea93a4`, formatting, compilation, full commands tests, Tauri command parity, and diff cleanliness.
+- [ ] Commit round 5 and rerun post-commit verification before starting round 6.

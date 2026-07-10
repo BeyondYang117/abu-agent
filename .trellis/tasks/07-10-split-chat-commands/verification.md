@@ -77,3 +77,23 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; no new reusable runtime contract required a `.trellis/spec/` update.
+
+
+## Round 4: post-commit verification
+
+- Commit: `1ea93a4 refactor(chat): extract interaction commands`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 5 began.
+
+## Round 5: attachment command extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/attachments.rs`: 136 lines extracted.
+- `src-tauri/src/chat/commands.rs`: 6,032 -> 5,903 lines.
+- Moved 7 Tauri command registrations; chat command basenames remain 50/50 with no missing, added, or duplicate entries compared with `1ea93a4`.
+- The formatted new module exactly matches the functions extracted from `1ea93a4`; only module imports and registration paths changed.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/attachments.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; no `.trellis/spec/` behavior contract changed.
