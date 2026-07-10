@@ -672,6 +672,19 @@ impl AppState {
             guard.state = McpServerState::Disconnected;
         }
     }
+
+    /// 断开并移除单个 server 的持久会话（插件关闭 / 卸载时用）。
+    pub async fn mcp_disconnect_server(&self, server_id: &str) {
+        let session = {
+            let mut pool = self.mcp_sessions.lock().await;
+            pool.remove(server_id)
+        };
+        if let Some(session) = session {
+            let mut guard = session.lock().await;
+            guard.transport = McpTransport::None;
+            guard.state = McpServerState::Disconnected;
+        }
+    }
 }
 
 /// 状态命令返回给前端的快照。

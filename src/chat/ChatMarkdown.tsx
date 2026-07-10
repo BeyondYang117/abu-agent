@@ -11,6 +11,7 @@ import { normalizeMarkdownForRender } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
 import type { ChatToolArtifact } from './types'
 import { artifactDataUrl } from './artifacts'
+import { loadArtifactDataUrl } from './attachmentPreview'
 import type { KbHitView } from './knowledgeBaseHits'
 import { remarkCitations } from './citations'
 import { api } from '../api/tauri'
@@ -20,6 +21,8 @@ import { IconButton } from '../components/Button'
 interface ChatMarkdownProps {
   content: string
   artifacts?: ChatToolArtifact[]
+  /** 用于把外置 artifact（path + 缩略图）还原成整图 */
+  conversationId?: string | null
   onImageClick?: (src: string, alt: string, name?: string) => void
   variant?: 'default' | 'reasoning' | 'lens' | 'lens-muted'
   /** 知识库引用：把答案里的 `[n]` 渲染成可点来源片段（n → 命中片段）。 */
@@ -712,15 +715,84 @@ const chatMarkdownUrlTransform: UrlTransform = (url, key, node) => {
   return defaultUrlTransform(url)
 }
 
-function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, string> {
-  const lookup = new Map<string, string>()
+function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, ChatToolArtifact> {
+  const lookup = new Map<string, ChatToolArtifact>()
   for (const artifact of artifacts) {
+    if (!artifact.name) continue
     const dataUrl = artifactDataUrl(artifact)
-    if (!artifact.name || !dataUrl.startsWith('data:image/')) continue
-    lookup.set(artifactKey(artifact.name), dataUrl)
-    lookup.set(artifactBasename(artifact.name), dataUrl)
+    const hasImage =
+      dataUrl.startsWith('data:image/') ||
+      Boolean((artifact.path ?? '').trim()) ||
+      (artifact.mimeType ?? artifact.mime_type ?? '').toLowerCase().startsWith('image/')
+    if (!hasImage) continue
+    // 同 basename 多张图时保留第一张，避免后写覆盖；唯一文件名应在 MCP 侧保证
+    const key = artifactKey(artifact.name)
+    const base = artifactBasename(artifact.name)
+    if (!lookup.has(key)) lookup.set(key, artifact)
+    if (!lookup.has(base)) lookup.set(base, artifact)
   }
   return lookup
+}
+
+/** Markdown 内图片：有 path 时懒加载整图，缩略图仅作占位（重载对话后不再显示 256px 小图）。 */
+function MarkdownArtifactImage({
+  rawSrc,
+  alt,
+  artifact,
+  conversationId,
+  onImageClick,
+}: {
+  rawSrc: string
+  alt: string
+  artifact?: ChatToolArtifact
+  conversationId?: string | null
+  onImageClick?: (src: string, alt: string, name?: string) => void
+}) {
+  const inline = artifact ? artifactDataUrl(artifact) : ''
+  const initial =
+    inline ||
+    (isExternalOrAbsoluteImageSrc(rawSrc) ? rawSrc : '')
+  const [src, setSrc] = useState(initial)
+
+  useEffect(() => {
+    let cancelled = false
+    if (artifact?.path && conversationId) {
+      if (inline) setSrc(inline)
+      void loadArtifactDataUrl(artifact, conversationId).then((loaded) => {
+        if (!cancelled && loaded) setSrc(loaded)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    if (inline) {
+      setSrc(inline)
+      return
+    }
+    if (isExternalOrAbsoluteImageSrc(rawSrc)) setSrc(rawSrc)
+    return () => {
+      cancelled = true
+    }
+  }, [artifact, conversationId, inline, rawSrc])
+
+  if (!src) return null
+  return (
+    <button
+      type="button"
+      className="my-3 block max-w-full cursor-zoom-in rounded-md p-0 text-left"
+      onClick={() => {
+        onImageClick?.(src, alt, rawSrc)
+      }}
+      aria-label="预览图片"
+    >
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
+      />
+    </button>
+  )
 }
 
 const katexShadowCss = `${katexCss}
@@ -878,6 +950,7 @@ const remarkRehypeOptions = {
 function ChatMarkdownComponent({
   content,
   artifacts = [],
+  conversationId = null,
   onImageClick,
   variant = 'default',
   citations,
@@ -906,30 +979,24 @@ function ChatMarkdownComponent({
       },
       img: ({ src, alt }) => {
         const rawSrc = typeof src === 'string' ? src : ''
-        const resolvedSrc = rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)
-          ? artifactLookup.get(artifactKey(rawSrc)) ?? artifactLookup.get(artifactBasename(rawSrc)) ?? rawSrc
-          : rawSrc
         const altText = alt ?? ''
+        const artifact =
+          rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)
+            ? artifactLookup.get(artifactKey(rawSrc)) ??
+              artifactLookup.get(artifactBasename(rawSrc))
+            : undefined
         return (
-          <button
-            type="button"
-            className="my-3 block max-w-full cursor-zoom-in rounded-md p-0 text-left"
-            onClick={() => {
-              if (resolvedSrc) onImageClick?.(resolvedSrc, altText, rawSrc)
-            }}
-            aria-label="预览图片"
-          >
-            <img
-              src={resolvedSrc}
-              alt={altText}
-              loading="lazy"
-              className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
-            />
-          </button>
+          <MarkdownArtifactImage
+            rawSrc={rawSrc}
+            alt={altText}
+            artifact={artifact}
+            conversationId={conversationId}
+            onImageClick={onImageClick}
+          />
         )
       },
     }
-  }, [artifacts, onImageClick, citations])
+  }, [artifacts, conversationId, onImageClick, citations])
 
   return (
     <div className={markdownProseClass(variant)}>

@@ -1390,13 +1390,17 @@ pub fn skill_connector_satisfied(
     true
 }
 
-/// Global skill gate: Settings enable list + connector prerequisites.
+/// Global skill gate: Settings enable list + connector prerequisites + 插件门闸。
+/// 插件附属 skill（如 officecli）仅在对应插件「已安装且启用」时可用。
 pub fn skill_globally_available(
     chat_tools: &ChatToolsConfig,
     skill_id: &str,
     email_accounts: &[EmailAccountConfig],
     obsidian_vault_configured: bool,
 ) -> bool {
+    if !crate::plugins::plugin_skill_available(skill_id) {
+        return false;
+    }
     is_skill_enabled(chat_tools, skill_id)
         && skill_connector_satisfied(skill_id, email_accounts, obsidian_vault_configured)
 }
@@ -1409,6 +1413,14 @@ pub fn skill_global_unavailable_error(
     obsidian_vault_configured: bool,
     skill_name: &str,
 ) -> Option<String> {
+    if !crate::plugins::plugin_skill_available(skill_id) {
+        if let Some(plugin_id) = crate::plugins::skill_owned_by_plugin(skill_id) {
+            return Some(format!(
+                "Skill is managed by plugin «{plugin_id}» — enable it in 扩展 → 插件: {skill_name}"
+            ));
+        }
+        return Some(format!("Skill is unavailable: {skill_name}"));
+    }
     if !is_skill_enabled(chat_tools, skill_id) {
         return Some(format!("Skill is disabled in Settings: {skill_name}"));
     }

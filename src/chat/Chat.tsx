@@ -119,6 +119,10 @@ const SkillCenter = lazy(() => import('./SkillCenter').then((module) => ({
   default: module.SkillCenter,
 })))
 
+const PluginCenter = lazy(() => import('./PluginCenter').then((module) => ({
+  default: module.PluginCenter,
+})))
+
 const MessageList = lazy(() => import('./MessageList').then((module) => ({
   default: module.MessageList,
 })))
@@ -139,7 +143,7 @@ function MessageListLoading() {
   )
 }
 
-type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'onboarding'
+type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'plugins' | 'onboarding'
 
 interface ChatProps {
   onSettingsChange: () => void
@@ -169,6 +173,10 @@ function isChatOnboardingRoute(path: string): boolean {
 
 function isChatSkillCenterPath(path: string): boolean {
   return path === 'chat/skill' || path.startsWith('chat/skill/')
+}
+
+function isChatPluginCenterPath(path: string): boolean {
+  return path === 'chat/plugins' || path.startsWith('chat/plugins/')
 }
 
 function scheduleIdleTask(callback: () => void, timeout = 1200): () => void {
@@ -608,6 +616,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isChatSettingsPath(path)) return 'settings'
     if (isChatAssistantCenterPath(path)) return 'assistants'
     if (isChatSkillCenterPath(path)) return 'skill'
+    if (isChatPluginCenterPath(path)) return 'plugins'
     return 'conversation'
   })
   // 首屏就绪只发一次。初始视图是设置页则等 SettingsShell.onReady；否则挂载后即发。
@@ -1228,6 +1237,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }
   }, [])
 
+  const syncPluginCenterRoute = useCallback(() => {
+    if (window.location.hash !== '#chat/plugins') {
+      window.location.hash = '#chat/plugins'
+    }
+  }, [])
+
   const refreshSidebar = useCallback(() => {
     setSidebarRefreshKey((key) => key + 1)
   }, [])
@@ -1311,6 +1326,11 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     syncSkillCenterRoute()
   }, [syncSkillCenterRoute])
 
+  const openPluginCenter = useCallback(() => {
+    setChatView('plugins')
+    syncPluginCenterRoute()
+  }, [syncPluginCenterRoute])
+
   const openExtensionsItem = useCallback((item: ExtensionsNavItem) => {
     setExtensionsNavItem(item)
     if (item === 'assistants') {
@@ -1321,12 +1341,17 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       openSkillCenter()
       return
     }
+    if (item === 'plugins') {
+      openPluginCenter()
+      return
+    }
     openEmbeddedSettings(item)
-  }, [openAssistantCenter, openSkillCenter, openEmbeddedSettings])
+  }, [openAssistantCenter, openSkillCenter, openPluginCenter, openEmbeddedSettings])
 
   const extensionsActive = useMemo<ExtensionsNavItem | null>(() => {
     if (chatView === 'assistants') return 'assistants'
     if (chatView === 'skill') return 'skill'
+    if (chatView === 'plugins') return 'plugins'
     if (chatView === 'settings' && extensionsNavItem === 'knowledge') return 'knowledge'
     return null
   }, [chatView, extensionsNavItem])
@@ -1351,6 +1376,11 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     syncConversationRoute(currentConversationIdRef.current)
     void loadSkills()
   }, [loadSkills, syncConversationRoute])
+
+  const handlePluginCenterClose = useCallback(() => {
+    setChatView('conversation')
+    syncConversationRoute(currentConversationIdRef.current)
+  }, [syncConversationRoute])
 
   const runAfterLeavingSettings = useCallback((action: () => void) => {
     if (chatView !== 'settings') {
@@ -2113,6 +2143,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         setChatView('skill')
         return
       }
+      if (isChatPluginCenterPath(path)) {
+        setChatView('plugins')
+        return
+      }
       setChatView('conversation')
       const conversationId = getRouteConversationId()
       if (!conversationId) {
@@ -2736,6 +2770,57 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   // 避免其依赖抖动导致订阅 effect 反复 cleanup/重订阅（重订阅缝隙会丢掉外部发送事件）。
   const handleSendMessageRef = useRef(handleSendMessage)
   handleSendMessageRef.current = handleSendMessage
+
+  /** 插件页「让 AI 安装」：取规范 brief → 回聊天 → 新开对话并自动发送安装任务 */
+  const handleRequestPluginAiInstall = useCallback(async (pluginId: string) => {
+    const brief = await api.pluginsInstallBrief(pluginId)
+    setExtensionsNavItem(null)
+    setChatView('conversation')
+    setAssistantStreamStatsByMessageId({})
+    try {
+      let conv = await chatApi.createConversation(
+        activeProviderId || undefined,
+        activeModel || undefined,
+        selectedProject?.name,
+        selectedProject?.id ?? null,
+        undefined,
+        selectedSet?.id ?? null,
+      )
+      try {
+        conv = await chatApi.updateConversation(conv.id, {
+          title: brief.conversationTitle,
+        })
+      } catch {
+        // 标题失败不阻断
+      }
+      currentConversationIdRef.current = conv.id
+      applyConversation(conv)
+      restoreStreamingPreview(conv.id)
+      syncConversationRoute(conv.id)
+      refreshSidebar()
+      const accepted = await handleSendMessageRef.current(brief.userMessage, [], {
+        forceNewConversation: false,
+        conversationOverride: conv,
+      })
+      if (!accepted) {
+        throw new Error('发送安装任务失败（可能当前模型未配置或正在生成）')
+      }
+    } catch (err) {
+      console.error('Failed to start plugin install chat:', err)
+      setStreamError(typeof err === 'string' ? err : (err as Error).message || '无法开始插件安装对话')
+      throw err
+    }
+  }, [
+    activeModel,
+    activeProviderId,
+    applyConversation,
+    refreshSidebar,
+    restoreStreamingPreview,
+    selectedProject?.id,
+    selectedProject?.name,
+    selectedSet?.id,
+    syncConversationRoute,
+  ])
 
   // 历史预置（Lens「在 AI 客户端继续」交接）：用最新 reactive 值（provider/model/project）创建带历史的新会话。
   // 同 handleSendMessageRef 思路用 ref 持有，保持 drainExternalSends 稳定身份。
@@ -3435,6 +3520,15 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
               <SkillCenter
                 onClose={handleSkillCenterClose}
                 onSkillsChanged={() => void loadSkills()}
+              />
+            </Suspense>
+          </div>
+        ) : chatView === 'plugins' ? (
+          <div className="chat-win-titlebar-safe flex min-h-0 min-w-0 flex-1 flex-col">
+            <Suspense fallback={<ChatPaneLoading />}>
+              <PluginCenter
+                onClose={handlePluginCenterClose}
+                onRequestAiInstall={handleRequestPluginAiInstall}
               />
             </Suspense>
           </div>

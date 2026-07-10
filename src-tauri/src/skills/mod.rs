@@ -40,10 +40,17 @@ pub fn chat_skills_list(
     match build_registry_metadata(&app, &paths) {
         Ok(registry) => {
             let settings = state.settings_read();
+            // 插件附属 skill（source=plugin）一并返回，技能页单独分区展示；
+            // 开关仍由「扩展 → 插件」统一管理（前端禁止在技能页改插件 skill）。
             let skills = registry
                 .metas()
                 .into_iter()
                 .filter(|meta| {
+                    if meta.source == "plugin"
+                        || crate::plugins::skill_owned_by_plugin(&meta.id).is_some()
+                    {
+                        return true;
+                    }
                     crate::settings::skill_connector_satisfied(
                         &meta.id,
                         &settings.email_accounts,

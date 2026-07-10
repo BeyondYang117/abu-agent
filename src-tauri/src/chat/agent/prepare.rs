@@ -390,6 +390,21 @@ pub fn build_chat_system_prompt_with_segments(
         );
     }
 
+    // 能力插件：仅「已安装且启用」时注入短 systemHint；关闭则零注入。
+    if let Some(text) = crate::plugins::enabled_system_prompt()
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "runtime_context",
+            "Runtime context",
+            text,
+        );
+    }
+
     if let Some(plan) = agent_plan_prompt
         .map(str::trim)
         .filter(|value| !value.is_empty())

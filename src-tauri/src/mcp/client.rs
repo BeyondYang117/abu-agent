@@ -636,8 +636,12 @@ fn image_block_to_artifact(item: &Value, index: usize) -> Option<ChatToolArtifac
         .next()
         .filter(|ext| !ext.is_empty())
         .unwrap_or("png");
+    // 文件名必须全局唯一：同一消息里多次 MCP 截图若都叫 mcp-image-1.png，
+    // 重载后按 basename 解析会互相覆盖，且外置缩略图只显示 256px 小图。
+    let unique = uuid::Uuid::new_v4().to_string();
+    let short = unique.get(..8).unwrap_or(unique.as_str());
     Some(ChatToolArtifact {
-        name: format!("mcp-image-{}.{}", index + 1, extension),
+        name: format!("mcp-image-{}-{}.{}", index + 1, short, extension),
         mime_type: mime_type.clone(),
         data_url: format!("data:{};base64,{}", mime_type, data.trim()),
         size_bytes,

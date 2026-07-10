@@ -246,7 +246,19 @@ pub async fn list_enabled_tool_defs(
             .chat_tools
             .servers
             .iter()
-            .filter(|server| server.enabled)
+            .filter(|server| {
+                if !server.enabled {
+                    return false;
+                }
+                // 插件附属 MCP：仅当对应插件已启用时暴露（防 settings 与 meta 不同步残留）
+                if let Some(cid) = server.connector_id.as_deref() {
+                    if let Some(plugin_id) = cid.strip_prefix("plugin:") {
+                        return crate::plugins::is_enabled(plugin_id)
+                            && crate::plugins::is_installed(plugin_id);
+                    }
+                }
+                true
+            })
             .collect();
         let listings = enabled_servers.iter().map(|server| async move {
             let result = state.mcp_list_tools(app, server).await;
@@ -448,7 +460,20 @@ pub async fn call_tool(
         .cloned()
         .ok_or_else(|| "MCP server is disabled or missing".to_string())?;
     // 走持久连接池：复用长连接、liveness 探活 + 透明重连、按 server_id 隔离。
-    state.mcp_call_tool(app, &server, &tool.name, arguments).await
+    let mut result = state
+        .mcp_call_tool(app, &server, &tool.name, arguments.clone())
+        .await?;
+    // OfficeCLI 插件：文档写/改成功后默认拉起 live preview（浏览器实时看）
+    if let Some(note) =
+        crate::plugins::note_after_officecli_tool(app, state, tool, &arguments, &result)
+    {
+        if result.content.trim().is_empty() {
+            result.content = note;
+        } else {
+            result.content = format!("{}\n\n{note}", result.content.trim_end());
+        }
+    }
+    Ok(result)
 }
 
 async fn list_server_tools(

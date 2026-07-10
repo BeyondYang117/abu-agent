@@ -62,10 +62,42 @@ fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
         return;
     };
     let settings = state.settings_read();
-    if let Some((key, value)) =
-        himalaya::kivio_himalaya_path_env_when_active(&settings.email_accounts)
-    {
-        cmd.env(key, value);
+    // PATH 合并：启用插件 bin 目录 +（可选）himalaya 目录，再接系统 Path。
+    // 任一侧需要注入时都走统一拼装，避免后写覆盖先写。
+    let plugin_dirs = crate::plugins::enabled_bin_dirs();
+    let himalaya_dir = himalaya::kivio_himalaya_path_env_when_active(&settings.email_accounts)
+        .and_then(|_| himalaya::kivio_himalaya_bin_dir());
+    if !plugin_dirs.is_empty() || himalaya_dir.is_some() {
+        #[cfg(windows)]
+        let sep = ";";
+        #[cfg(not(windows))]
+        let sep = ":";
+        #[cfg(windows)]
+        let key = "Path";
+        #[cfg(not(windows))]
+        let key = "PATH";
+
+        let mut next = std::ffi::OsString::new();
+        for dir in &plugin_dirs {
+            if !next.is_empty() {
+                next.push(sep);
+            }
+            next.push(dir.as_os_str());
+        }
+        if let Some(dir) = himalaya_dir {
+            if !next.is_empty() {
+                next.push(sep);
+            }
+            next.push(dir.as_os_str());
+        }
+        let existing = std::env::var_os(key).unwrap_or_default();
+        if !existing.is_empty() {
+            if !next.is_empty() {
+                next.push(sep);
+            }
+            next.push(existing);
+        }
+        cmd.env(key, next);
     }
 }
 

@@ -9,7 +9,11 @@ export function artifactMimeType(artifact: ChatToolArtifact): string {
 }
 
 export function isImageArtifact(artifact: ChatToolArtifact): boolean {
-  return artifactDataUrl(artifact).startsWith('data:image/') || artifactMimeType(artifact).startsWith('image/')
+  // 外置后可能只剩 path + 空/缩略 data_url；mime 或 path 扩展名也算图
+  if (artifactDataUrl(artifact).startsWith('data:image/')) return true
+  if (artifactMimeType(artifact).startsWith('image/')) return true
+  const path = (artifact.path ?? '').toLowerCase()
+  return /\.(png|jpe?g|gif|webp|svg)$/i.test(path)
 }
 
 export function isFileArtifact(artifact: ChatToolArtifact): boolean {

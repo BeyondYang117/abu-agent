@@ -56,8 +56,13 @@ function isBuiltinSkill(skill: SkillMeta): boolean {
   return skill.source === 'builtin'
 }
 
+function isPluginSkill(skill: SkillMeta): boolean {
+  return skill.source === 'plugin'
+}
+
 function skillSourceLabel(skill: SkillMeta): string {
   if (skill.source === 'builtin') return '内置'
+  if (skill.source === 'plugin') return '插件'
   if (skill.source === 'external') return '工作区'
   return '个人'
 }
@@ -108,11 +113,14 @@ function SkillRow({
   enabled,
   onToggleEnabled,
   onPreview,
+  manageLocked = false,
 }: {
   skill: SkillMeta
   enabled: boolean
   onToggleEnabled: (skillId: string, enabled: boolean) => void
   onPreview: (skillId: string) => void
+  /** 插件附属：开关在插件页，此处只展示 */
+  manageLocked?: boolean
 }) {
   return (
     <div
@@ -140,7 +148,16 @@ function SkillRow({
         </span>
       </button>
       <span className="shrink-0 text-[13px] text-neutral-400 dark:text-neutral-500">{skillSourceLabel(skill)}</span>
-      <Switch checked={enabled} onChange={(next) => onToggleEnabled(skill.id, next)} ariaLabel={`启用 ${skill.name}`} />
+      {manageLocked ? (
+        <span
+          className="shrink-0 text-[12px] text-neutral-400 dark:text-neutral-500"
+          title="请在 扩展 → 插件 中启用/关闭整包插件"
+        >
+          {enabled ? '插件已启用' : '随插件关闭'}
+        </span>
+      ) : (
+        <Switch checked={enabled} onChange={(next) => onToggleEnabled(skill.id, next)} ariaLabel={`启用 ${skill.name}`} />
+      )}
     </div>
   )
 }
@@ -155,6 +172,7 @@ function SkillSection({
   onPreview,
   collapsible = false,
   defaultCollapsed = false,
+  manageLocked = false,
 }: {
   title: string
   note?: string
@@ -165,6 +183,7 @@ function SkillSection({
   onPreview: (skillId: string) => void
   collapsible?: boolean
   defaultCollapsed?: boolean
+  manageLocked?: boolean
 }) {
   const [collapsed, setCollapsed] = useState(collapsible && defaultCollapsed)
   const enabledCount = skills.filter((skill) => !disabledSkillIds.includes(skill.id)).length
@@ -197,9 +216,10 @@ function SkillSection({
             <SkillRow
               key={skill.id}
               skill={skill}
-              enabled={!disabledSkillIds.includes(skill.id)}
+              enabled={manageLocked ? true : !disabledSkillIds.includes(skill.id)}
               onToggleEnabled={onToggleEnabled}
               onPreview={onPreview}
+              manageLocked={manageLocked}
             />
           ))}
         </div>
@@ -391,8 +411,16 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
     () => skills.filter((skill) => isBuiltinSkill(skill) && skillMatches(skill, normalizedQuery)),
     [skills, normalizedQuery],
   )
+  const pluginSkills = useMemo(
+    () => skills.filter((skill) => isPluginSkill(skill) && skillMatches(skill, normalizedQuery)),
+    [skills, normalizedQuery],
+  )
   const userSkills = useMemo(
-    () => skills.filter((skill) => !isBuiltinSkill(skill) && skillMatches(skill, normalizedQuery)),
+    () =>
+      skills.filter(
+        (skill) =>
+          !isBuiltinSkill(skill) && !isPluginSkill(skill) && skillMatches(skill, normalizedQuery),
+      ),
     [skills, normalizedQuery],
   )
 
@@ -599,6 +627,20 @@ export function SkillCenter({ onClose, onSkillsChanged }: SkillCenterProps) {
               </div>
             ) : (
               <>
+                <SkillSection
+                  title="插件技能"
+                  note="由扩展 → 插件 统一启用/关闭"
+                  emptyText={
+                    normalizedQuery
+                      ? '没有匹配的插件技能。'
+                      : '启用插件后，其附属 Skill 会出现在这里（当前无已启用插件技能）。'
+                  }
+                  skills={pluginSkills}
+                  disabledSkillIds={disabledSkillIds}
+                  onToggleEnabled={handleToggleSkillEnabled}
+                  onPreview={handlePreviewSkill}
+                  manageLocked
+                />
                 <SkillSection
                   title="内置技能"
                   note="随应用内置提供"

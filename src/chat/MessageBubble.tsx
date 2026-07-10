@@ -103,34 +103,59 @@ function artifactIsReferenced(content: string, artifact: ChatToolArtifact): bool
   return false
 }
 
+/** MCP 默认名 mcp-image-*.png 是技术附件 id，不适合当用户可读标题。 */
+function isTechnicalMcpImageName(name: string | undefined | null): boolean {
+  if (!name) return false
+  return /^mcp-image-[\w.-]+\.(png|jpe?g|gif|webp)$/i.test(name.trim())
+}
+
+function artifactCaption(artifact: ChatToolArtifact, index: number, total: number): string | null {
+  const name = (artifact.name ?? '').trim()
+  if (!name) return null
+  if (isTechnicalMcpImageName(name)) {
+    // 多张时显示「截图 1/3」，单张只写「截图」
+    return total > 1 ? `截图 ${index + 1}/${total}` : '截图'
+  }
+  return name
+}
+
 function ArtifactImage({
   artifact,
   conversationId,
+  caption,
 }: {
   artifact: ChatToolArtifact
   conversationId?: string | null
+  caption?: string | null
 }) {
   const inline = artifactDataUrl(artifact)
+  const path = (artifact.path ?? '').trim()
+  // 有 path 时 data_url 通常是 256px 缩略图（落盘外置后）；聊天区应显示整图，缩略图仅作秒显占位。
   const [src, setSrc] = useState<string>(inline)
 
-  // 正常情况下 data_url 是内联缩略图(秒显);仅当缩略图生成失败为空时,用 path 懒加载原图兜底。
   useEffect(() => {
+    let cancelled = false
+    if (path && conversationId) {
+      if (inline) setSrc(inline)
+      void loadArtifactDataUrl(artifact, conversationId).then((loaded) => {
+        if (!cancelled && loaded) setSrc(loaded)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
     if (inline) {
       setSrc(inline)
       return
     }
-    if (!artifact.path) return
-    let cancelled = false
-    void loadArtifactDataUrl(artifact, conversationId).then((loaded) => {
-      if (!cancelled && loaded) setSrc(loaded)
-    })
     return () => {
       cancelled = true
     }
-  }, [inline, artifact, conversationId])
+  }, [inline, path, artifact, conversationId])
 
   if (!src) return null
   const name = artifact.name || 'Generated image'
+  const label = caption === undefined ? name : caption
   return (
     <figure className="m-0">
       <button
@@ -139,7 +164,7 @@ function ArtifactImage({
         onClick={() =>
           openChatImageViewer({
             src,
-            alt: name,
+            alt: label || name,
             name: artifact.name,
             path: artifact.path,
             conversationId,
@@ -149,18 +174,55 @@ function ArtifactImage({
       >
         <img
           src={src}
-          alt={name}
+          alt={label || name}
           loading="lazy"
           className="max-h-[420px] max-w-full rounded-md border border-neutral-200/90 bg-white object-contain dark:border-neutral-700 dark:bg-neutral-900"
         />
       </button>
-      {artifact.name && (
+      {label ? (
         <figcaption className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">
-          {artifact.name}
+          {label}
         </figcaption>
-      )}
+      ) : null}
     </figure>
   )
+}
+
+/**
+ * 答案下方图片画廊：
+ * - 消息级 artifacts 优先（明确交付物）
+ * - 工具产生的截图只保留「最后一轮」有图的 tool calls，避免 3 轮×3 页堆出 9 张同名小图
+ */
+function selectGalleryImageArtifacts(
+  messageArtifacts: ChatToolArtifact[],
+  toolCalls: ToolCallRecord[],
+  contentForRefs: string,
+): ChatToolArtifact[] {
+  const notReferenced = (a: ChatToolArtifact) =>
+    isImageArtifact(a) && !artifactIsReferenced(contentForRefs, a)
+
+  const fromMessage = messageArtifacts.filter(notReferenced)
+  if (fromMessage.length > 0) return fromMessage
+
+  // 找最后一个产生图片的 round，只展示该轮（通常是最终 screenshot 验收）
+  let lastImageRound: number | null = null
+  for (const tc of toolCalls) {
+    const hasImg = (tc.artifacts ?? []).some(isImageArtifact)
+    if (!hasImg) continue
+    const r = tc.round ?? 0
+    if (lastImageRound == null || r >= lastImageRound) lastImageRound = r
+  }
+  if (lastImageRound == null) return []
+
+  const fromLastRound: ChatToolArtifact[] = []
+  for (const tc of toolCalls) {
+    const r = tc.round ?? 0
+    if (r !== lastImageRound) continue
+    for (const a of tc.artifacts ?? []) {
+      if (notReferenced(a)) fromLastRound.push(a)
+    }
+  }
+  return fromLastRound
 }
 
 function GeneratedImageArtifacts({
@@ -172,14 +234,16 @@ function GeneratedImageArtifacts({
 }) {
   const imageArtifacts = artifacts.filter(isImageArtifact)
   if (imageArtifacts.length === 0) return null
+  const total = imageArtifacts.length
 
   return (
     <div className="mt-3 space-y-3">
       {imageArtifacts.map((artifact, index) => (
         <ArtifactImage
-          key={`${artifact.name}-${index}`}
+          key={`${artifact.path || artifact.name || 'img'}-${index}`}
           artifact={artifact}
           conversationId={conversationId}
+          caption={artifactCaption(artifact, index, total)}
         />
       ))}
     </div>
@@ -281,10 +345,12 @@ function TimelineTextSegment({
   segment,
   artifacts,
   citations,
+  conversationId,
 }: {
   segment: ChatMessageSegment
   artifacts: ChatToolArtifact[]
   citations?: Map<number, KbHitView>
+  conversationId?: string | null
 }) {
   const text = segmentText(segment).trim()
   if (!text) return null
@@ -294,6 +360,7 @@ function TimelineTextSegment({
       <ChatMarkdown
         content={text}
         artifacts={artifacts}
+        conversationId={conversationId}
         citations={citations}
         onImageClick={handleChatImageClick}
       />
@@ -308,6 +375,7 @@ function TimelineSegmentNode({
   toolCalls,
   artifacts,
   citations,
+  conversationId,
   reasoningStreaming,
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
@@ -319,6 +387,7 @@ function TimelineSegmentNode({
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
   citations?: Map<number, KbHitView>
+  conversationId?: string | null
   reasoningStreaming: boolean
   reasoningDurationMs?: number | null
   reasoningDurationMsBySegmentId?: Record<string, number>
@@ -342,7 +411,14 @@ function TimelineSegmentNode({
     )
   }
   if (!segmentText(segment).trim()) return null
-  return <TimelineTextSegment segment={segment} artifacts={artifacts} citations={citations} />
+  return (
+    <TimelineTextSegment
+      segment={segment}
+      artifacts={artifacts}
+      citations={citations}
+      conversationId={conversationId}
+    />
+  )
 }
 
 function TimelineStepsIcon({ size = 16, className }: { size?: number; className?: string }) {
@@ -439,6 +515,7 @@ function TimelineGroupBlock({
   toolCalls,
   artifacts,
   citations,
+  conversationId,
   isLastGroup,
   messageStreaming,
   reasoningStreaming,
@@ -450,6 +527,7 @@ function TimelineGroupBlock({
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
   citations?: Map<number, KbHitView>
+  conversationId?: string | null
   isLastGroup: boolean
   messageStreaming: boolean
   reasoningStreaming: boolean
@@ -523,6 +601,7 @@ function TimelineGroupBlock({
                   toolCalls={toolCalls}
                   artifacts={artifacts}
                   citations={citations}
+                  conversationId={conversationId}
                   reasoningStreaming={reasoningStreaming && isLastGroup}
                   reasoningDurationMs={reasoningDurationMs}
                   reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
@@ -553,6 +632,7 @@ function TimelineSegments({
   segments,
   toolCalls,
   artifacts,
+  conversationId,
   messageStreaming,
   reasoningStreaming,
   reasoningDurationMs,
@@ -561,6 +641,7 @@ function TimelineSegments({
   segments: ChatMessageSegment[]
   toolCalls: ToolCallRecord[]
   artifacts: ChatToolArtifact[]
+  conversationId?: string | null
   messageStreaming: boolean
   reasoningStreaming: boolean
   reasoningDurationMs?: number | null
@@ -605,7 +686,12 @@ function TimelineSegments({
           // 每个时间线分段单独淡入：流式中新分段顺次出现而非"啪"地弹出。
           return (
             <div key={item.segment.id} className="chat-motion-fade">
-              <TimelineTextSegment segment={item.segment} artifacts={artifacts} citations={citations} />
+              <TimelineTextSegment
+                segment={item.segment}
+                artifacts={artifacts}
+                citations={citations}
+                conversationId={conversationId}
+              />
             </div>
           )
         }
@@ -630,6 +716,7 @@ function TimelineSegments({
               toolCalls={toolCalls}
               artifacts={artifacts}
               citations={citations}
+              conversationId={conversationId}
               isLastGroup={index === lastGroupIndex}
               messageStreaming={messageStreaming}
               reasoningStreaming={reasoningStreaming}
@@ -676,6 +763,7 @@ function MessageBubbleComponent({
   const hasTimelineSegments = !isEditing && timelineSegments.length > 0
   const messageArtifacts = message.artifacts ?? []
   const toolArtifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? [])
+  // Markdown 解析仍用全量 artifacts（含历史轮截图路径/dataUrl）
   const renderArtifacts = [...messageArtifacts, ...toolArtifacts]
   const isDirectImageGenerationPending =
     !isUser && message.content.trim() === DIRECT_IMAGE_GENERATION_PENDING
@@ -683,12 +771,15 @@ function MessageBubbleComponent({
     message.content,
     ...timelineSegments.map((segment) => segmentText(segment)),
   ].join('\n\n')
-  const unreferencedImageArtifacts = renderArtifacts.filter(
-    (artifact) => isImageArtifact(artifact) && !artifactIsReferenced(artifactReferenceContent, artifact),
+  // 答案下方画廊：只挂「未引用 + 最后一轮截图」，避免 3 轮验收堆 9 张同名图
+  const galleryImageArtifacts = selectGalleryImageArtifacts(
+    messageArtifacts,
+    toolCalls,
+    artifactReferenceContent,
   )
   const generatedFileArtifacts = renderArtifacts.filter((artifact) => !isImageArtifact(artifact))
   const hasAnswerContent = !isDirectImageGenerationPending && message.content.trim().length > 0
-  const hasGeneratedImages = unreferencedImageArtifacts.length > 0
+  const hasGeneratedImages = galleryImageArtifacts.length > 0
   const hasGeneratedFiles = generatedFileArtifacts.length > 0
   const [draft, setDraft] = useState(message.content)
   const [saving, setSaving] = useState(false)
@@ -945,6 +1036,7 @@ function MessageBubbleComponent({
               segments={timelineSegments}
               toolCalls={toolCalls}
               artifacts={renderArtifacts}
+              conversationId={conversationId}
               messageStreaming={messageStreaming}
               reasoningStreaming={reasoningStreaming}
               reasoningDurationMs={reasoningDurationMs}
@@ -952,7 +1044,7 @@ function MessageBubbleComponent({
             />
             {hasGeneratedImages && (
               <GeneratedImageArtifacts
-                artifacts={unreferencedImageArtifacts}
+                artifacts={galleryImageArtifacts}
                 conversationId={conversationId}
               />
             )}
@@ -970,12 +1062,13 @@ function MessageBubbleComponent({
                 <ChatMarkdown
                   content={message.content}
                   artifacts={renderArtifacts}
+                  conversationId={conversationId}
                   onImageClick={handleChatImageClick}
                 />
               )}
               {hasGeneratedImages && (
                 <GeneratedImageArtifacts
-                  artifacts={unreferencedImageArtifacts}
+                  artifacts={galleryImageArtifacts}
                   conversationId={conversationId}
                 />
               )}

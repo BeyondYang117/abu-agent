@@ -39,12 +39,13 @@ function resolveChatUserProfile(
 
 const modLabel = isMac ? '⌘' : 'Ctrl'
 
-export type ExtensionsNavItem = 'assistants' | 'skill' | 'knowledge'
+export type ExtensionsNavItem = 'assistants' | 'skill' | 'knowledge' | 'plugins'
 
 const extensionSubItems: Array<{ id: ExtensionsNavItem; label: string }> = [
   { id: 'assistants', label: '助手' },
   { id: 'skill', label: '技能' },
   { id: 'knowledge', label: '知识库' },
+  { id: 'plugins', label: '插件' },
 ]
 
 const PROJECT_PREVIEW_LIMIT = 5
@@ -224,7 +225,7 @@ function ExtensionsNav({
         <span className="flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 transition duration-300 ease-out will-change-transform group-hover:text-neutral-800 group-active:scale-90 group-hover:rotate-3 group-hover:scale-110 dark:text-neutral-400 dark:group-hover:text-neutral-200">
           <LayoutGrid size={17} strokeWidth={1.75} />
         </span>
-        <span className="min-w-0 flex-1 truncate">插件</span>
+        <span className="min-w-0 flex-1 truncate">扩展</span>
         <ChevronRight
           size={14}
           strokeWidth={2}

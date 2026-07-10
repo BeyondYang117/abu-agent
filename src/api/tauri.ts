@@ -851,6 +851,53 @@ export type HimalayaInstallResult = {
   message: string
 }
 
+/** 能力插件（领域 CLI 等）状态 —— 扩展 → 插件 */
+export type PluginStatus = {
+  id: string
+  name: string
+  description: string
+  binary: string
+  tags: string[]
+  homepage: string
+  repo: string
+  installed: boolean
+  enabled: boolean
+  version: string | null
+  path: string | null
+  /** kivio | system | none */
+  source: string
+  /** 安装时落盘、启用才注入的 Skill */
+  hasSkill: boolean
+  /** 启用时挂到 chatTools.servers 的 MCP */
+  hasMcp: boolean
+  skillIds: string[]
+  /** 本插件配置的 Skill 数量 */
+  skillCount: number
+  /** 本插件配置的 MCP 数量（通常 0/1） */
+  mcpCount: number
+  /** 启用后 Skill 文件是否已就绪 */
+  skillActive: boolean
+  /** 启用后 MCP 是否已写入 settings 且 enabled */
+  mcpActive: boolean
+  mcpServerId: string | null
+}
+
+export type PluginActionResult = {
+  ok: boolean
+  message: string
+  status: PluginStatus
+}
+
+/** 交给 Kivio AI 的安装任务（含官方 README URL + Kivio 契约） */
+export type PluginInstallBrief = {
+  pluginId: string
+  pluginName: string
+  conversationTitle: string
+  /** 官方 README raw URL，安装时须先 fetch */
+  readmeUrls: string[]
+  userMessage: string
+}
+
 /** kivio-code CLI 的独立配置(存于 <app_data>/kivio-code/config.json,与共享 Settings 分开)。 */
 export type KivioCodeConfig = {
   /** 读取 CLAUDE.md / .claude 上下文文件(默认 true)。 */
@@ -1390,6 +1437,14 @@ export const api = {
   himalayaStatus: () => invoke<HimalayaStatus>('himalaya_status_cmd'),
 
   himalayaInstall: () => invoke<HimalayaInstallResult>('himalaya_install_cmd'),
+
+  /** 能力插件列表（目录 + 安装/启用状态） */
+  pluginsList: () => invoke<PluginStatus[]>('plugins_list'),
+  /** 取「让 AI 安装」任务 brief（含标准化安装文档） */
+  pluginsInstallBrief: (id: string) => invoke<PluginInstallBrief>('plugins_install_brief', { id }),
+  pluginsSetEnabled: (id: string, enabled: boolean) =>
+    invoke<PluginActionResult>('plugins_set_enabled', { id, enabled }),
+  pluginsUninstall: (id: string) => invoke<PluginActionResult>('plugins_uninstall', { id }),
 
   testHimalayaEmail: (account: EmailAccountConfig, existingAccounts?: EmailAccountConfig[]) =>
     invoke<string>('test_himalaya_email_cmd', { account, existingAccounts }),

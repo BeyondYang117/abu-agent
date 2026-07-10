@@ -491,6 +491,13 @@ impl AppState {
         set_cached(&self.chat_tool_list_cache, cache_key, tools);
     }
 
+    /// 插件启用/关闭、MCP 配置变更后清空工具列表缓存，下次收集强制重拉。
+    pub fn clear_chat_tool_list_cache(&self) {
+        if let Ok(mut guard) = self.chat_tool_list_cache.lock() {
+            guard.clear();
+        }
+    }
+
     pub fn get_cached_external_slash_commands(
         &self,
         cache_key: &str,

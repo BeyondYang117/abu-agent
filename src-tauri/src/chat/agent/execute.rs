@@ -285,9 +285,9 @@ pub async fn execute_tool_call(
         }
         Err(_) => {
             record.status = ToolCallStatus::Error;
-            let err =
-                format!("工具调用超时（{timeout_ms}ms）。请缩小任务，或在设置中调高工具超时时间。");
+            let err = format_tool_timeout_error(tool, timeout_ms, &call.arguments);
             record.error = Some(err.clone());
+            // 让模型在 tool result 里也能读到完整说明（不只在 error 字段）
             err
         }
     };
@@ -588,7 +588,60 @@ fn effective_tool_timeout_ms(
     if tool.source == "native" && tool.name == crate::chat::sub_agent::AGENT_TOOL_NAME {
         return crate::chat::sub_agent::SUB_AGENT_TOOL_TIMEOUT_MS.max(default_timeout_ms);
     }
+    // MCP 与其它工具一样走设置里的「工具超时」，不单独封顶。
     default_timeout_ms
+}
+
+/// 超时错误给模型用：含工具名、时限、简短参数摘要与可执行建议（避免只回一句「超时」）。
+fn format_tool_timeout_error(
+    tool: &ChatToolDefinition,
+    timeout_ms: u64,
+    arguments: &Value,
+) -> String {
+    let secs = timeout_ms as f64 / 1000.0;
+    let arg_summary = timeout_argument_summary(arguments);
+    let mut msg = format!(
+        "工具调用超时（已中止，限时 {secs:.0}s）。工具：`{}`（source={}）。",
+        tool.name, tool.source
+    );
+    if !arg_summary.is_empty() {
+        msg.push_str(&format!(" 参数摘要：{arg_summary}"));
+    }
+    msg.push_str(
+        " 请勿原样重试同一条调用。建议：缩小单次任务（拆成更小的步骤）；\
+核对路径与语法后换一版参数再试。需要更长等待可在设置中提高「工具超时」。",
+    );
+    msg
+}
+
+fn timeout_argument_summary(arguments: &Value) -> String {
+    // 优先 command 字段（officecli MCP / bash）
+    let raw = arguments
+        .get("command")
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .or_else(|| {
+            arguments
+                .get("cmd")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| {
+            let s = arguments.to_string();
+            if s.len() > 240 {
+                format!("{}…", s.chars().take(240).collect::<String>())
+            } else {
+                s
+            }
+        });
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() > 220 {
+        format!("{}…", compact.chars().take(220).collect::<String>())
+    } else {
+        compact
+    }
 }
 
 pub fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -1221,5 +1274,58 @@ mod tests {
             effective_tool_timeout_ms(&settings, &bash, &serde_json::json!({})),
             300_000
         );
+    }
+
+    #[test]
+    fn mcp_tool_timeout_follows_settings_like_other_tools() {
+        let mut settings = Settings::default();
+        settings.chat_tools.tool_timeout_ms = 300_000;
+        let tool = ChatToolDefinition {
+            id: "mcp__plugin-officecli__officecli".into(),
+            name: "officecli".into(),
+            description: String::new(),
+            source: "mcp".into(),
+            server_id: Some("plugin-officecli".into()),
+            server_name: Some("OfficeCLI".into()),
+            input_schema: serde_json::json!({}),
+            sensitive: false,
+            annotations: None,
+            output_schema: None,
+        };
+        assert_eq!(
+            effective_tool_timeout_ms(
+                &settings,
+                &tool,
+                &serde_json::json!({ "command": "batch …" })
+            ),
+            300_000
+        );
+    }
+
+    #[test]
+    fn tool_timeout_error_mentions_tool_and_actionable_hint() {
+        let tool = ChatToolDefinition {
+            id: "mcp__plugin-officecli__officecli".into(),
+            name: "officecli".into(),
+            description: String::new(),
+            source: "mcp".into(),
+            server_id: Some("plugin-officecli".into()),
+            server_name: Some("OfficeCLI".into()),
+            input_schema: serde_json::json!({}),
+            sensitive: false,
+            annotations: None,
+            output_schema: None,
+        };
+        let err = format_tool_timeout_error(
+            &tool,
+            300_000,
+            &serde_json::json!({
+                "command": "batch \"deck.pptx\" --commands \"[{...}]\""
+            }),
+        );
+        assert!(err.contains("超时"));
+        assert!(err.contains("officecli"));
+        assert!(err.contains("300") || err.contains("300s") || err.contains("300.0"));
+        assert!(err.contains("勿原样重试") || err.contains("缩小"));
     }
 }

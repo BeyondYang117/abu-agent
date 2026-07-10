@@ -137,7 +137,7 @@ export interface SettingsShellProps {
   reserveTrafficLightSpace?: boolean
   /** 打开设置面板时选中的侧栏项（如 Chat 内嵌设置默认 AI 客户端） */
   initialTab?: SettingsTab
-  /** embedded 单页模式：隐藏左侧设置导航，只显示 initialTab 对应页（如从插件点「知识库」进入） */
+  /** embedded 单页模式：隐藏左侧设置导航，只显示 initialTab 对应页（如从扩展点「知识库」进入） */
   hideNav?: boolean
 }
 
@@ -3545,17 +3545,26 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     </Button>
                   </div>
 
-                  {chatTools.servers.length === 0 && (
+                  {(() => {
+                    const userMcpServers = chatTools.servers.filter((s) => !s.connectorId)
+                    const pluginMcpServers = chatTools.servers.filter((s) =>
+                      (s.connectorId ?? '').startsWith('plugin:'),
+                    )
+                    return (
+                      <>
+                  {userMcpServers.length === 0 && (
                     <div className="kv-panel">
-                      <div className="kv-panel-title">{lang === 'zh' ? '暂无 MCP 服务器' : 'No MCP servers'}</div>
+                      <div className="kv-panel-title">{lang === 'zh' ? '暂无手动添加的 MCP 服务器' : 'No manual MCP servers'}</div>
                       <div className="kv-panel-body">
-                        {lang === 'zh' ? '添加或导入服务器后，需要手动启用才会暴露给模型。' : 'Added or imported servers stay disabled until you enable them.'}
+                        {lang === 'zh'
+                          ? '可在此添加/导入服务器。插件注册的 MCP 见下方「插件 MCP」。'
+                          : 'Add or import servers here. Plugin-managed MCP servers are listed below.'}
                       </div>
                     </div>
                   )}
 
                   <div className="space-y-3 py-2">
-                    {chatTools.servers.filter((s) => !s.connectorId).map((server) => {
+                    {userMcpServers.map((server) => {
                       const feedback = mcpTestFeedback[server.id]
                       const knownTools = [
                         ...(feedback?.tools ?? []),
@@ -3794,6 +3803,95 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       )
                     })}
                   </div>
+
+                  {pluginMcpServers.length > 0 && (
+                    <div className="mt-4 space-y-3 border-t border-[var(--border)] pt-4">
+                      <div className="px-0.5">
+                        <div className="text-[13px] font-semibold text-[var(--text)]">
+                          {lang === 'zh' ? '插件 MCP' : 'Plugin MCP'}
+                        </div>
+                        <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">
+                          {lang === 'zh'
+                            ? '由「扩展 → 插件」启用时自动注册。请在插件页开关整包，勿在此删除。'
+                            : 'Registered when you enable a plugin under Extensions → Plugins. Manage there.'}
+                        </p>
+                      </div>
+                      {pluginMcpServers.map((server) => {
+                        const liveState = mcpServerStates[server.id]
+                        const stateKind = liveState?.kind
+                        const stateDotClass =
+                          stateKind === 'connected'
+                            ? 'on'
+                            : stateKind === 'connecting'
+                              ? 'warn'
+                              : stateKind === 'error'
+                                ? 'err'
+                                : server.enabled
+                                  ? 'warn'
+                                  : 'off'
+                        const stateLabel =
+                          stateKind === 'connected'
+                            ? (lang === 'zh' ? '已连接' : 'Connected')
+                            : stateKind === 'connecting'
+                              ? (lang === 'zh' ? '连接中' : 'Connecting')
+                              : stateKind === 'error'
+                                ? (lang === 'zh' ? '错误' : 'Error')
+                                : server.enabled
+                                  ? (lang === 'zh' ? '已启用' : 'Enabled')
+                                  : (lang === 'zh' ? '未启用' : 'Disabled')
+                        return (
+                          <div key={server.id} className="kv-panel">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <span className={`kv-provider-dot ${stateDotClass}`} />
+                              <div className="min-w-0 flex-1 text-[13px] font-medium text-[var(--text)]">
+                                {server.name}
+                              </div>
+                              <span className="rounded-md bg-[var(--bg-input-subtle)] px-1.5 py-0.5 text-[11px] text-[var(--text-muted)]">
+                                {lang === 'zh' ? '插件' : 'Plugin'}
+                              </span>
+                              <span className="text-[12px] text-[var(--text-muted)]">{stateLabel}</span>
+                            </div>
+                            <div className="space-y-1 font-mono text-[11.5px] text-[var(--text-muted)]">
+                              <div className="truncate" title={server.command}>
+                                {lang === 'zh' ? '命令：' : 'Command: '}
+                                {server.command}
+                                {server.args?.length ? ` ${server.args.join(' ')}` : ''}
+                              </div>
+                              <div>id: {server.id}</div>
+                              {server.connectorId && <div>connector: {server.connectorId}</div>}
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                onClick={() => void handleTestMcpServer(server)}
+                                data-tauri-drag-region="false"
+                              >
+                                {lang === 'zh' ? '测试连接' : 'Test'}
+                              </Button>
+                            </div>
+                            {mcpTestFeedback[server.id] && (
+                              <div
+                                className={`mt-2 text-[12px] ${
+                                  mcpTestFeedback[server.id]?.ok
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : 'text-red-600 dark:text-red-400'
+                                }`}
+                              >
+                                {mcpTestFeedback[server.id]?.ok
+                                  ? (lang === 'zh'
+                                      ? `连接成功，工具 ${mcpTestFeedback[server.id]?.tools?.length ?? 0} 个`
+                                      : `OK, ${mcpTestFeedback[server.id]?.tools?.length ?? 0} tools`)
+                                  : mcpTestFeedback[server.id]?.message || (lang === 'zh' ? '失败' : 'Failed')}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                      </>
+                    )
+                  })()}
                 </SettingsGroup>
               </>
             )}

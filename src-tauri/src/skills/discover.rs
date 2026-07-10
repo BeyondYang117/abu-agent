@@ -52,6 +52,13 @@ fn scan_root_entries(
         path: user_skills_dir(app)?,
         source: "user",
     });
+    // 仅「已启用」插件的附属 Skill 进入扫描；关闭插件后立刻从 registry 消失。
+    for path in crate::plugins::enabled_skill_roots() {
+        roots.push(SkillScanRoot {
+            path,
+            source: "plugin",
+        });
+    }
     append_external_roots(&mut roots, extra_paths);
     Ok(roots)
 }
@@ -88,6 +95,12 @@ fn scan_root_entries_headless(extra_paths: &[String]) -> Vec<SkillScanRoot> {
         roots.push(SkillScanRoot {
             path,
             source: "user",
+        });
+    }
+    for path in crate::plugins::enabled_skill_roots() {
+        roots.push(SkillScanRoot {
+            path,
+            source: "plugin",
         });
     }
     append_external_roots(&mut roots, extra_paths);
