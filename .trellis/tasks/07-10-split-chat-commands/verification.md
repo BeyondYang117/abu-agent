@@ -97,3 +97,23 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; no `.trellis/spec/` behavior contract changed.
+
+## Round 5: post-commit verification
+
+- Commit: `372c09b refactor(chat): extract attachment commands`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 6 began.
+
+## Round 6: title generation extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/title.rs`: 158 lines extracted.
+- `src-tauri/src/chat/commands.rs`: 5,903 -> 5,765 lines.
+- Moved title resolution, model-backed generation, prompt construction, output sanitization, and deterministic fallback generation.
+- This round contains no Tauri command, so command registration paths and IPC names are unchanged.
+- The formatted new module exactly matches the title functions extracted from `372c09b`; only visibility, imports, and module formatting changed.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/title.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including all four title-specific tests.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; no `.trellis/spec/` behavior contract changed.

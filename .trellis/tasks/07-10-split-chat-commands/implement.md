@@ -114,4 +114,14 @@
 - [x] Remove command-only attachment and shell imports from the parent while retaining reply-orchestration attachment helpers there.
 - [x] Move 7 Tauri registration paths to `chat::commands::attachments::*` without changing IPC command names.
 - [x] Verify exact formatted extraction against `1ea93a4`, formatting, compilation, full commands tests, Tauri command parity, and diff cleanliness.
-- [ ] Commit round 5 and rerun post-commit verification before starting round 6.
+- [x] Commit round 5 and rerun post-commit verification before starting round 6.
+
+## Step 15 - Continuous split: title generation (round 6)
+
+- [x] Add `src-tauri/src/chat/commands/title.rs`.
+- [x] Move conversation-title resolution, model-backed title generation, title prompts, sanitization, and fallback generation.
+- [x] Keep only narrow parent imports, plus test-only imports for the existing parent-module title tests.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare the formatted extraction exactly against the functions from `372c09b`; no business logic changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 6 and rerun post-commit verification before starting round 7.
