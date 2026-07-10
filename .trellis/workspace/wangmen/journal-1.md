@@ -447,3 +447,39 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Complete chat commands split
+
+**Date**: 2026-07-11
+**Task**: Complete chat commands split
+**Branch**: `main`
+
+### Summary
+
+Extracted vision compatibility proxies and the complete command regression suite, moved test-only support imports into the test module, and reduced chat/commands.rs to a 65-line facade. All rounds passed cargo check and 72/72 command tests before and after commits.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b6ea3c` | (see git log) |
+| `7515100` | (see git log) |
+| `6ea5d6a` | (see git log) |
+| `a99fe88` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
