@@ -227,3 +227,26 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including both image-payload sanitizer tests.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; no reusable runtime contract changed, so no `.trellis/spec/` update is required.
+
+
+## Round 11: post-commit verification
+
+- Commit: `0101271 refactor(chat): extract model input sanitization`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 12 began.
+
+## Round 12: debug probe runtime extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/probe_runtime.rs`: 141 lines extracted.
+- `src-tauri/src/chat/commands.rs`: 3,805 -> 3,682 lines.
+- Moved the debug-only `run_chat_probe` orchestration and preserved `chat::commands::run_chat_probe` through a debug-only compatibility re-export.
+- Moved the complete probe documentation from its accidental attachment in `agent_host.rs` back to the owning probe function.
+- Removed probe-only storage and catalog imports from the parent module.
+- This round contains no Tauri command, so registration paths and IPC names are unchanged.
+- The formatted extraction exactly matches the original probe block from `bb982ca`: expected and actual SHA-256 are both `7748d69c3b7d729f20648be7f267c61f7529fe2379aa718fb0357ee8584575cb`.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/agent_host.rs src-tauri/src/chat/commands/probe_runtime.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; no reusable runtime contract changed, so no `.trellis/spec/` update is required.

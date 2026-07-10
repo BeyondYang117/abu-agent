@@ -250,11 +250,6 @@ impl crate::chat::agent::AgentHost for ProbeAgentHost<'_> {
     }
 }
 
-/// 无头测试通道的一次生成编排（仅 debug）：把 scratch 会话绑到一个**固定复用**的
-/// 「Chat Probe」项目（根为请求的 cwd，使文件工具相对路径可解析）→ 推入 user 消息 →
-/// 走与 GUI 完全相同的生成核心（`complete_assistant_reply_inner`，probe=true 自动放行）→
-/// 取回生成的 assistant 消息。**会话与项目都保留**（不删除），以便在会话列表里观察调试。
-
 pub(super) struct RegistryToolExecutor<'a> {
     pub(super) app: AppHandle,
     pub(super) state: &'a AppState,

@@ -184,4 +184,16 @@
 - [x] Confirm this round moves no Tauri command and requires no registration-path change.
 - [x] Compare the formatted extraction exactly against the sanitization block from `7381884`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
-- [ ] Commit round 11 and rerun post-commit verification before starting round 12.
+- [x] Commit round 11 and rerun post-commit verification before starting round 12.
+
+## Step 21 - Continuous split: debug probe runtime (round 12)
+
+- [x] Add `src-tauri/src/chat/commands/probe_runtime.rs`.
+- [x] Move debug-only `run_chat_probe` orchestration.
+- [x] Preserve `chat::commands::run_chat_probe` through a debug-only re-export.
+- [x] Move the complete probe documentation to the owning module.
+- [x] Remove probe-only storage/catalog imports from the parent.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare the formatted extraction exactly against the original block from `bb982ca`; no business logic changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 12 and rerun post-commit verification before starting round 13.
