@@ -383,3 +383,24 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including thinking-level resolution coverage.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; reasoning defaults and model capability lookup are unchanged, so no `.trellis/spec/` update is required.
+
+## Round 18: post-commit verification
+
+- Commit: `74677ad refactor(chat): extract reasoning controls`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 19 began.
+
+## Round 19: vision compatibility proxy extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/vision_compat.rs`: 38 lines containing the two crate-visible compatibility proxies.
+- `src-tauri/src/chat/commands.rs`: 2,399 -> 2,361 lines.
+- Parent re-exports preserve `chat::commands::read_image_as_tool_result` and `chat::commands::attach_image_artifacts_for_model`, so both MCP registry callers retain their existing paths and signatures.
+- The delegated `chat::vision` implementations, MCP result behavior, image guardrails, fallback strategy, and error handling are unchanged.
+- This round contains no Tauri command, so registration paths and IPC names are unchanged.
+- Comparing against `74677ad` confirms both proxy bodies differ only by the owning-module path (`vision::` instead of the former parent-relative `super::vision::`) and standalone rustfmt wrapping.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/vision_compat.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including the auxiliary-vision integration regression.
+- `git diff --check`: passed.
+- This round is a behavior-neutral compatibility-boundary extraction; the existing `.trellis/spec/chat/mcp-image-feedback.md` compatibility-path contract remains satisfied and requires no update.

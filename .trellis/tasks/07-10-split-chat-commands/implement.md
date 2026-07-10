@@ -267,4 +267,16 @@
 - [x] Remove the reasoning metadata import from `commands.rs`.
 - [x] Compare the moved block exactly against `2a275dc`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, registration basenames, and diff cleanliness.
-- [ ] Commit round 18 and rerun post-commit verification before starting round 19.
+- [x] Commit round 18 and rerun post-commit verification before starting round 19.
+
+## Step 28 - Continuous split: vision compatibility proxies (round 19)
+
+- [x] Add `src-tauri/src/chat/commands/vision_compat.rs`.
+- [x] Move the two crate-visible vision compatibility entrypoints without changing their signatures or delegated behavior.
+- [x] Preserve `chat::commands::read_image_as_tool_result` and `chat::commands::attach_image_artifacts_for_model` through parent re-exports.
+- [x] Keep `mcp/native_registry.rs` and `mcp/registry.rs` unchanged and compiling against the legacy paths.
+- [x] Remove proxy-only production imports from `commands.rs` while retaining test-only imports behind `#[cfg(test)]`.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare both proxy bodies against `74677ad`; only the owning-module path and rustfmt wrapping changed.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 19 and rerun post-commit verification before starting round 20.
