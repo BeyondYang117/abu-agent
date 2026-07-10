@@ -32,6 +32,9 @@ const PREVIEW_HTML_NAME: &str = "live-preview.html";
 const PREVIEW_REFRESH_SECS: u32 = 2;
 /// 合并连续 MCP 写操作，避免每条工具都跑一次 view
 const PREVIEW_DEBOUNCE_MS: u64 = 450;
+/// 静默期：最后一次编辑后这么久没有新编辑，就摘掉 meta refresh 让浏览器停刷。
+/// （上游 `officecli watch` 是 HTTP server 推送、天然会停；file:// 轮询必须自己收口）
+const PREVIEW_QUIESCE_SECS: u64 = 45;
 
 #[derive(Debug, Default)]
 struct PreviewRuntime {
@@ -99,6 +102,21 @@ pub fn note_after_officecli_tool(
         }
         if let Err(err) = refresh_html_preview(&app, &path_for_task).await {
             eprintln!("[plugins/preview] refresh failed: {err}");
+        }
+
+        // 静默收口：一段时间没有新编辑就摘掉 meta refresh，浏览器自然停刷。
+        // （meta refresh 是浏览器端无限轮询，任务结束没人通知它；这里补上终止信号）
+        tokio::time::sleep(Duration::from_secs(PREVIEW_QUIESCE_SECS)).await;
+        {
+            let mut guard = PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.generation != gen {
+                return; // 期间又有编辑，交给最新一次调度收口
+            }
+            // 下次编辑重新打开浏览器视为新会话（旧标签页已停刷）
+            guard.browser_opened = false;
+        }
+        if let Err(err) = finalize_html_preview().await {
+            eprintln!("[plugins/preview] finalize failed: {err}");
         }
     });
 
@@ -176,11 +194,12 @@ async fn refresh_html_preview(app: &AppHandle, doc_path: &str) -> Result<(), Str
         ));
     }
 
-    // 注入自动刷新，使浏览器在 Agent 继续改文档时无需 F5
+    // 注入自动刷新 + 滚动位置保持，使浏览器在 Agent 继续改文档时无需 F5
     let mut html = tokio::fs::read_to_string(&out)
         .await
         .map_err(|e| format!("read preview html: {e}"))?;
     html = inject_meta_refresh(&html, PREVIEW_REFRESH_SECS);
+    html = inject_scroll_keeper(&html);
     // 标注来源，方便排查
     if !html.contains("kivio-live-preview") {
         html = html.replacen(
@@ -270,6 +289,84 @@ fn inject_meta_refresh(html: &str, secs: u32) -> String {
         }
     }
     format!("{tag}\n{html}")
+}
+
+/// meta refresh 触发的是「新导航」而非 reload，Chrome 不恢复滚动位置——每 2 秒
+/// 被拽回顶部，预览翻不了页。注入一小段 JS：卸载前把各滚动容器的位置存
+/// sessionStorage（file:// 下按目录同源，可用），加载后恢复。幂等。
+fn inject_scroll_keeper(html: &str) -> String {
+    const MARK: &str = "data-kivio-scroll-keeper";
+    if html.contains(MARK) {
+        return html.to_string();
+    }
+    let script = format!(
+        r#"<script {MARK}="1">(function(){{
+var KEY='kivio-preview-scroll';
+function containers(){{
+  var all=document.querySelectorAll('*'),out=[document.scrollingElement||document.documentElement];
+  for(var i=0;i<all.length;i++){{var e=all[i];if(e.scrollHeight>e.clientHeight+4&&e.clientHeight>0)out.push(e);}}
+  return out;
+}}
+function keyOf(e,i){{return e.id?('#'+e.id):(e.className&&typeof e.className==='string'?e.tagName+'.'+e.className.split(' ')[0]:e.tagName)+'@'+i;}}
+function save(){{
+  try{{var m={{}};var cs=containers();for(var i=0;i<cs.length;i++){{var e=cs[i];if(e.scrollTop||e.scrollLeft)m[keyOf(e,i)]=[e.scrollTop,e.scrollLeft];}}
+  sessionStorage.setItem(KEY,JSON.stringify(m));}}catch(_e){{}}
+}}
+function restore(){{
+  try{{var raw=sessionStorage.getItem(KEY);if(!raw)return;var m=JSON.parse(raw);var cs=containers();
+  for(var i=0;i<cs.length;i++){{var e=cs[i],v=m[keyOf(e,i)];if(v){{e.scrollTop=v[0];e.scrollLeft=v[1];}}}}}}catch(_e){{}}
+}}
+window.addEventListener('pagehide',save);
+window.addEventListener('beforeunload',save);
+if(document.readyState==='complete'||document.readyState==='interactive')setTimeout(restore,0);
+else document.addEventListener('DOMContentLoaded',function(){{setTimeout(restore,0);}});
+window.addEventListener('load',function(){{setTimeout(restore,50);}});
+}})();</script>"#
+    );
+    if let Some(idx) = html.find("</body>") {
+        let mut out = String::with_capacity(html.len() + script.len() + 2);
+        out.push_str(&html[..idx]);
+        out.push_str(&script);
+        out.push('\n');
+        out.push_str(&html[idx..]);
+        return out;
+    }
+    format!("{html}\n{script}")
+}
+
+/// 从 HTML 里摘掉我们注入的 meta refresh 标签（浏览器下一次自刷拿到无刷新版，
+/// 自然停止轮询）。滚动脚本保留无害。
+fn strip_meta_refresh(html: &str) -> String {
+    let Some(start) = html.find(r#"<meta http-equiv="refresh""#) else {
+        return html.to_string();
+    };
+    // 只摘带我们标记的那个
+    let Some(end_rel) = html[start..].find('>') else {
+        return html.to_string();
+    };
+    let tag = &html[start..start + end_rel + 1];
+    if !tag.contains("data-kivio-preview-refresh") {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len());
+    out.push_str(&html[..start]);
+    out.push_str(&html[start + end_rel + 1..]);
+    out
+}
+
+/// 静默收口：把当前 live-preview.html 重写为无 meta refresh 版本。
+async fn finalize_html_preview() -> Result<(), String> {
+    let out = preview_html_path().ok_or_else(|| "app data unavailable".to_string())?;
+    let html = tokio::fs::read_to_string(&out)
+        .await
+        .map_err(|e| format!("read preview html: {e}"))?;
+    let stripped = strip_meta_refresh(&html);
+    if stripped.len() != html.len() {
+        tokio::fs::write(&out, stripped)
+            .await
+            .map_err(|e| format!("write preview html: {e}"))?;
+    }
+    Ok(())
 }
 
 fn html_escape_attr(s: &str) -> String {
@@ -474,6 +571,29 @@ mod tests {
         assert!(out.contains("data-kivio-preview-refresh"));
         assert!(out.contains("content=\"2\""));
         assert!(out.find("<head>").unwrap() < out.find("data-kivio-preview-refresh").unwrap());
+    }
+
+    #[test]
+    fn strip_refresh_removes_only_our_tag() {
+        let html = "<!DOCTYPE html><html><head><meta charset=utf-8></head><body>hi</body></html>";
+        let injected = inject_meta_refresh(html, 2);
+        let stripped = strip_meta_refresh(&injected);
+        assert!(!stripped.contains("http-equiv=\"refresh\""));
+        assert!(stripped.contains("<meta charset=utf-8>"));
+        // 非我们注入的 refresh 不动
+        let foreign = r#"<head><meta http-equiv="refresh" content="9"></head>"#;
+        assert_eq!(strip_meta_refresh(foreign), foreign);
+        // 幂等
+        assert_eq!(strip_meta_refresh(&stripped), stripped);
+    }
+
+    #[test]
+    fn scroll_keeper_injected_before_body_close_and_idempotent() {
+        let html = "<html><head></head><body>hi</body></html>";
+        let out = inject_scroll_keeper(html);
+        assert!(out.contains("data-kivio-scroll-keeper"));
+        assert!(out.find("data-kivio-scroll-keeper").unwrap() < out.find("</body>").unwrap());
+        assert_eq!(inject_scroll_keeper(&out), out);
     }
 
     #[test]
