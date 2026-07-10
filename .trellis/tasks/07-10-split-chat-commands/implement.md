@@ -244,4 +244,16 @@
 - [x] Keep parent tests intact through narrow test-only imports for helpers that remain tested there.
 - [x] Compare the moved command block exactly against `62a3a0d`; no business logic changed.
 - [x] Verify formatting, compilation, the full `chat::commands::tests` suite, registration basenames, and diff cleanliness.
-- [ ] Commit round 16 and rerun post-commit verification before starting round 17.
+- [x] Commit round 16 and rerun post-commit verification before starting round 17.
+
+## Step 26 - Continuous split: core reply execution (round 17)
+
+- [x] Add `src-tauri/src/chat/commands/reply.rs`.
+- [x] Move the single-reply wrapper, shared single/fan-out reply executor, and run-entry label as one core reply-execution boundary.
+- [x] Keep send, mutation, fan-out, and parent-test callers stable through narrow parent aliases.
+- [x] Import agent host, model selection, vision, tooling, context, message, and runtime dependencies directly from their owning modules.
+- [x] Remove reply-execution-only imports from `commands.rs` while retaining only aliases required by sibling modules and tests.
+- [x] Confirm this round moves no Tauri command and requires no registration-path change.
+- [x] Compare the formatted extraction exactly against `dfbc34b`; no business logic changed beyond module-scoped visibility.
+- [x] Verify formatting, compilation, the full `chat::commands::tests` suite, and diff cleanliness.
+- [ ] Commit round 17 and rerun post-commit verification before starting round 18.

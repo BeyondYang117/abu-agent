@@ -1,0 +1,650 @@
+use std::{path::PathBuf, time::Instant};
+
+use tauri::{AppHandle, State};
+use uuid::Uuid;
+
+use crate::chat::agent::execute::truncate_chars;
+use crate::chat::agent::prepare as agent_prepare;
+use crate::chat::model_call::{
+    chat_missing_model_error, format_chat_missing_api_key_error, session_model_for_conversation,
+};
+use crate::chat::model_metadata::{
+    chat_max_output_tokens_for_model, model_can_generate_images_directly,
+};
+use crate::chat::storage::find_set_by_id;
+use crate::chat::vision::{
+    analyze_chat_images_with_auxiliary_model, auxiliary_vision_model_for_images,
+    auxiliary_vision_tool_record, finish_auxiliary_vision_tool_record,
+    user_content_with_auxiliary_vision_result,
+};
+use crate::chat::{Conversation, ToolCallStatus};
+use crate::skills;
+use crate::state::AppState;
+
+#[cfg(debug_assertions)]
+use super::agent_host::ProbeAgentHost;
+use super::agent_host::{ChatAgentHost, RegistryToolExecutor};
+use super::catalog::{
+    chat_memory_prompt_for_request, is_builder_conversation, project_prompt_context_for,
+};
+use super::context::{build_chat_api_messages, resolve_usage_anchor};
+use super::direct_image::complete_direct_image_generation_reply;
+use super::interaction::{
+    emit_chat_stream_delta, emit_chat_stream_done, emit_chat_tool_record, wait_for_chat_cancel,
+};
+use super::messages::{
+    auxiliary_tool_segments, build_assistant_message, capture_agent_plan_draft_if_needed,
+    merge_latest_agent_plan_state, merge_latest_agent_todo_state, push_assistant_message,
+    tool_segment_for_record,
+};
+use super::reply_runtime::{ArmReplyOutcome, ChatReplyGuard, ReplyArm};
+use super::resolve_thinking;
+use super::tooling::{
+    append_agent_ask_user_tools, append_agent_todo_tools, apply_agent_plan_tool_filter,
+    apply_inline_code_request_tool_filter, list_tools_for_chat, resolve_forced_skill_id,
+};
+
+pub(super) async fn complete_assistant_reply(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    title_from_first_user: Option<&str>,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+    active_skill_id: Option<&str>,
+    entry: crate::chat::agent::AgentRunEntry,
+) -> Result<(), String> {
+    complete_assistant_reply_inner(
+        app,
+        state,
+        conversation,
+        title_from_first_user,
+        last_user_api_content,
+        last_user_image_paths,
+        active_skill_id,
+        entry,
+        None,
+        false,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// 共享实现：`arm = None` 为单模型现状（直接落盘，返回 `Ok(())` 语义不变）；
+/// `arm = Some(..)` 为多模型臂（用臂的 provider/model、自动批准工具、**不落盘**，
+/// 把产出的 assistant 消息通过 `ArmReplyOutcome.message` 返回给协调者）。
+pub(super) async fn complete_assistant_reply_inner(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    conversation: &mut Conversation,
+    title_from_first_user: Option<&str>,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+    active_skill_id: Option<&str>,
+    entry: crate::chat::agent::AgentRunEntry,
+    arm: Option<&ReplyArm>,
+    probe: bool,
+) -> Result<ArmReplyOutcome, String> {
+    if conversation.agent_runtime.is_external() {
+        // 外部 CLI 路径在 run.rs 内自带 generation；这里登记一条 per-run 回复槽位，
+        // 让 `conversation_has_active_reply` 在外部回复期间也能拒绝并发新发送（防回归）。
+        let ext_generation = state.next_chat_generation(&conversation.id);
+        let ext_run_id = format!("chat-run-ext-{}-{}", ext_generation, Uuid::new_v4());
+        let _ext_reply_guard =
+            ChatReplyGuard::try_new(state.inner(), &conversation.id, &ext_run_id, ext_generation);
+        let latest_user = conversation
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        return crate::external_agents::run_external_cli_reply(
+            app,
+            state,
+            conversation,
+            title_from_first_user,
+            &latest_user,
+            active_skill_id,
+            entry,
+        )
+        .await
+        .map(|_| ArmReplyOutcome { message: None });
+    }
+
+    let settings = state.settings_read().clone();
+    // 多模型臂用自己的 provider/model；单模型用会话级（行为不变）。
+    // 提前转成 owned，避免对 `conversation` 的长期不可变借用挡住后续的 `&mut conversation`。
+    let resolved_provider_id = arm
+        .map(|a| a.provider_id.clone())
+        .unwrap_or_else(|| conversation.provider_id.clone());
+    let resolved_model = arm
+        .map(|a| a.model.clone())
+        .unwrap_or_else(|| conversation.model.clone());
+    let provider = settings
+        .get_provider(&resolved_provider_id)
+        .ok_or_else(|| "Chat provider not found".to_string())?
+        .clone();
+    if provider.api_keys.is_empty() {
+        return Err(format_chat_missing_api_key_error(&provider.name));
+    }
+    if resolved_model.trim().is_empty() {
+        return Err(chat_missing_model_error());
+    }
+
+    let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
+    let language = crate::settings::resolve_chat_language(&settings);
+    let stream_enabled = settings.chat.stream_enabled;
+    // 思考：每对话等级覆盖全局开关。None=跟随全局（现状）；"off"=强制关；low/medium/high=按家族注入。
+    let (thinking_enabled, thinking_level) = resolve_thinking(
+        conversation.thinking_level.as_deref(),
+        settings.chat.thinking_enabled,
+    );
+    let retry_attempts = if settings.retry_enabled {
+        settings.retry_attempts as usize
+    } else {
+        1
+    };
+    let run_generation = state.next_chat_generation(&conversation.id);
+    let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
+    let assistant_message_id = format!("msg_{}", Uuid::new_v4());
+    // per-run 回复槽位 + 活跃 generation 守卫：本函数任意退出路径（含早返回的直接生图 /
+    // 辅助视觉分支）都会 drop 它，释放该 run 的槽位并退役其 generation。同会话多模型并发时
+    // 每条 run 各持一个守卫，互不影响。`next_chat_generation` 已登记 generation，这里仅补登
+    // run_id 槽位；run_id 由 generation + uuid 拼成，必不重复，try_new 不会返回 None。
+    let _reply_guard =
+        ChatReplyGuard::try_new(state.inner(), &conversation.id, &run_id, run_generation);
+    let plan_mode = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
+    let orchestrate_mode = crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);
+    if !plan_mode && model_can_generate_images_directly(&provider, &resolved_model) {
+        if arm.is_some() {
+            // 多答 fan-out MVP 不支持「直接生图模型」作为并行臂（生图路径自行落盘，
+            // 与多臂统一合并落盘冲突）。该臂直接报错，其它臂不受影响。
+            return Err(
+                "多模型并行回答暂不支持直接生图模型，请在多答选择中移除该模型。".to_string(),
+            );
+        }
+        return complete_direct_image_generation_reply(
+            app,
+            state,
+            &settings,
+            &provider,
+            conversation,
+            title_from_first_user,
+            last_user_api_content,
+            last_user_image_paths,
+            active_skill_id,
+            &run_id,
+            assistant_message_id,
+            run_generation,
+            retry_attempts,
+            entry,
+        )
+        .await
+        .map(|_| ArmReplyOutcome { message: None });
+    }
+    let session = session_model_for_conversation(conversation);
+    let auxiliary_vision_model = auxiliary_vision_model_for_images(
+        &settings,
+        Some(&provider),
+        &resolved_model,
+        last_user_image_paths,
+        Some(session),
+    );
+    let mut auxiliary_tool_records = Vec::new();
+    let auxiliary_vision_result = if let Some(auxiliary_vision_model) = auxiliary_vision_model {
+        let mut record = auxiliary_vision_tool_record(
+            &settings,
+            &auxiliary_vision_model,
+            last_user_image_paths.len(),
+        );
+        let started = Instant::now();
+        emit_chat_stream_delta(
+            app,
+            &conversation.id,
+            &run_id,
+            &assistant_message_id,
+            "",
+            None,
+            Some(&tool_segment_for_record(&record, 100, None)),
+        );
+        emit_chat_tool_record(
+            app,
+            &conversation.id,
+            &run_id,
+            &assistant_message_id,
+            &record,
+        );
+        let analysis = tokio::select! {
+            result = analyze_chat_images_with_auxiliary_model(
+                state,
+                &settings,
+                &auxiliary_vision_model,
+                &conversation.id,
+                &assistant_message_id,
+                last_user_api_content,
+                last_user_image_paths,
+                retry_attempts,
+                &language,
+            ) => result,
+            _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
+                finish_auxiliary_vision_tool_record(
+                    &mut record,
+                    ToolCallStatus::Cancelled,
+                    started,
+                    None,
+                    Some("Mixer vision analysis cancelled".to_string()),
+                );
+                emit_chat_tool_record(app, &conversation.id, &run_id, &assistant_message_id, &record);
+                auxiliary_tool_records.push(record);
+                emit_chat_stream_done(
+                    app,
+                    &conversation.id,
+                    &run_id,
+                    &assistant_message_id,
+                    "cancelled",
+                    "",
+                );
+                return Err("cancelled".to_string());
+            }
+        };
+        match analysis {
+            Ok(result) => {
+                finish_auxiliary_vision_tool_record(
+                    &mut record,
+                    ToolCallStatus::Success,
+                    started,
+                    Some(truncate_chars(result.content.trim(), 1000)),
+                    None,
+                );
+                emit_chat_tool_record(
+                    app,
+                    &conversation.id,
+                    &run_id,
+                    &assistant_message_id,
+                    &record,
+                );
+                auxiliary_tool_records.push(record);
+                Some(result)
+            }
+            Err(err) => {
+                finish_auxiliary_vision_tool_record(
+                    &mut record,
+                    ToolCallStatus::Error,
+                    started,
+                    None,
+                    Some(err.clone()),
+                );
+                emit_chat_tool_record(
+                    app,
+                    &conversation.id,
+                    &run_id,
+                    &assistant_message_id,
+                    &record,
+                );
+                auxiliary_tool_records.push(record);
+                return Err(err);
+            }
+        }
+    } else {
+        None
+    };
+    let empty_image_paths: &[PathBuf] = &[];
+    let main_image_paths = if auxiliary_vision_result.is_some() {
+        empty_image_paths
+    } else {
+        last_user_image_paths
+    };
+    let augmented_last_user_content = auxiliary_vision_result.as_ref().map(|result| {
+        user_content_with_auxiliary_vision_result(last_user_api_content, result, &language)
+    });
+    let last_user_content_for_main = augmented_last_user_content
+        .as_deref()
+        .or(last_user_api_content);
+    let skill_registry =
+        skills::build_registry(app, &settings.chat_tools.skill_scan_paths).unwrap_or_default();
+    let requested_skill_id = active_skill_id.or(conversation.active_skill_id.as_deref());
+    let skill_id = resolve_forced_skill_id(
+        &settings.chat_tools,
+        conversation.assistant_snapshot.as_ref(),
+        &skill_registry,
+        requested_skill_id,
+        &settings.email_accounts,
+        crate::settings::obsidian_connector_configured(&settings.obsidian_vault_path),
+    );
+    if skill_id.is_none() && conversation.active_skill_id.is_some() {
+        conversation.active_skill_id = None;
+    }
+    let active_skill_record = skill_id
+        .as_deref()
+        .and_then(|id| skill_registry.find(id))
+        .cloned();
+    let active_skill_detail = skill_id.as_deref().and_then(|id| {
+        skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
+    });
+    let mut effective_chat_tools = settings.chat_tools.clone();
+    if arm.is_some() || probe {
+        // 多答 fan-out（决策 D1 注）：N 条并行 run 若各自弹工具审批会产生 N 倍弹窗、
+        // 且无法对应到具体列。多模型臂内一律自动批准（静默执行）。单模型保持原审批策略。
+        // probe（无头测试通道）同理：无 GUI 可应答审批，必须自动放行，否则挂起。
+        effective_chat_tools.approval_policy = "auto".to_string();
+    }
+    let (memory_prompt, memory_warning) = chat_memory_prompt_for_request(app, &settings);
+    if let Some(warning) = memory_warning.as_ref() {
+        conversation.context_state.warning = Some(warning.clone());
+    }
+    let tools_capable = agent_prepare::chat_tools_capable(
+        &effective_chat_tools,
+        settings.chat_memory.enabled,
+        crate::settings::chat_image_generation_enabled_for_session(
+            &settings,
+            Some(session_model_for_conversation(conversation)),
+        ),
+    );
+    let mut tools = list_tools_for_chat(
+        app,
+        state.inner(),
+        &settings,
+        Some(session_model_for_conversation(conversation)),
+    )
+    .await;
+    agent_prepare::apply_assistant_mcp_restrictions(
+        &mut tools,
+        conversation.assistant_snapshot.as_ref(),
+    );
+    let builder_mode = is_builder_conversation(conversation);
+    if builder_mode {
+        // 搭建会话只暴露 save_assistant,屏蔽文件/命令/MCP/技能等,保持聚焦。
+        tools.clear();
+        tools.push(crate::mcp::types::native_save_assistant_tool());
+    }
+    if let Some(skill) = active_skill_record.as_ref() {
+        agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
+    }
+    apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
+    let blocked_tool_calls = apply_agent_plan_tool_filter(&mut tools, plan_mode);
+    let user_tools_available = tools_capable && !tools.is_empty();
+    agent_prepare::apply_skill_fallback_when_tools_unavailable(
+        &mut effective_chat_tools,
+        skill_id.as_deref(),
+        user_tools_available,
+    );
+    let ask_user_tools_available = append_agent_ask_user_tools(&mut tools);
+    let todo_tools_available = append_agent_todo_tools(&mut tools);
+    // Multi-agent spawn tool (P3): exposure is mode-controlled. Act and
+    // Orchestrate both expose the `agent` tool; Plan mode excludes it (spawn is a
+    // side-effecting, non-read-only capability).
+    if !plan_mode && !builder_mode {
+        crate::chat::sub_agent::append_tool_definitions(&mut tools, true);
+    }
+    // Orchestrate mode raises the autonomy budget: a single user message may
+    // need more tool rounds to plan, fan out sub-agents, and aggregate. We lift
+    // max_tool_rounds to max(configured, ORCHESTRATE_MIN_TOOL_ROUNDS) but keep
+    // unlimited (None) as-is rather than forcing a cap.
+    if orchestrate_mode {
+        effective_chat_tools.max_tool_rounds = effective_chat_tools
+            .max_tool_rounds
+            .map(|rounds| rounds.max(crate::settings::ORCHESTRATE_MIN_TOOL_ROUNDS));
+    }
+    let runtime_tools_available = !tools.is_empty();
+    let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
+    let agent_todo_prompt =
+        crate::chat::todo::format_prompt(&conversation.agent_todo_state, todo_tools_available);
+    let agent_ask_user_prompt = crate::chat::ask_user::format_prompt(ask_user_tools_available);
+    let agent_plan_prompt = crate::chat::plan::format_prompt(&conversation.agent_plan_state);
+    let project_prompt_context = project_prompt_context_for(app, conversation);
+    // Persistent per-conversation delivery directory surfaced to the model so it
+    // can write deliverable files there (which auto-render as downloadable cards).
+    let delivery_dir = crate::native_tools::delivery_dir(&conversation.id)
+        .ok()
+        .map(|path| path.display().to_string());
+    // 集的系统提示词：按对话 set_id 实时取（不冻结），随集编辑立即对集内对话生效。
+    let set_system_prompt = conversation
+        .set_id
+        .as_deref()
+        .and_then(|id| find_set_by_id(app, id).ok())
+        .map(|set| set.system_prompt)
+        .filter(|prompt| !prompt.trim().is_empty());
+    let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
+        .then_some(settings.obsidian_vault_path.as_str());
+    let himalaya_binary =
+        crate::connectors::himalaya::resolve_himalaya_binary_when_active(&settings.email_accounts)
+            .map(|path| path.display().to_string());
+    let email_accounts_prompt = crate::settings::email_accounts_system_prompt(
+        &settings.email_accounts,
+        himalaya_binary.as_deref(),
+    );
+    let system_prompt = agent_prepare::build_chat_system_prompt(
+        &language,
+        !main_image_paths.is_empty(),
+        thinking_enabled,
+        &skill_registry,
+        &effective_chat_tools,
+        runtime_tools_available,
+        &available_builtin_tools,
+        skill_id.as_deref(),
+        active_skill_detail.as_ref(),
+        conversation.assistant_snapshot.as_ref(),
+        set_system_prompt.as_deref(),
+        settings.chat.system_prompt.as_str(),
+        memory_prompt.as_deref(),
+        Some(&agent_plan_prompt),
+        Some(&agent_ask_user_prompt),
+        Some(&agent_todo_prompt),
+        project_prompt_context.as_ref(),
+        delivery_dir.as_deref(),
+        obsidian_vault_path,
+        &settings.email_accounts,
+        email_accounts_prompt.as_deref(),
+    );
+
+    let runtime_messages = build_chat_api_messages(
+        &system_prompt,
+        conversation,
+        last_user_idx,
+        last_user_content_for_main,
+        main_image_paths,
+    )?;
+    let mut fallback_chat_tools = effective_chat_tools.clone();
+    if skill_id.is_some() && fallback_chat_tools.skill_fallback_mode == "progressive" {
+        fallback_chat_tools.skill_fallback_mode = "skill_md_only".to_string();
+    }
+    let provider_tools_fallback_system_prompt = agent_prepare::build_chat_system_prompt(
+        &language,
+        !main_image_paths.is_empty(),
+        thinking_enabled,
+        &skill_registry,
+        &fallback_chat_tools,
+        false,
+        &[],
+        skill_id.as_deref(),
+        active_skill_detail.as_ref(),
+        conversation.assistant_snapshot.as_ref(),
+        set_system_prompt.as_deref(),
+        settings.chat.system_prompt.as_str(),
+        memory_prompt.as_deref(),
+        Some(&agent_plan_prompt),
+        Some(&crate::chat::ask_user::format_prompt(false)),
+        Some(&crate::chat::todo::format_prompt(
+            &conversation.agent_todo_state,
+            false,
+        )),
+        project_prompt_context.as_ref(),
+        delivery_dir.as_deref(),
+        obsidian_vault_path,
+        &settings.email_accounts,
+        email_accounts_prompt.as_deref(),
+    );
+
+    let chat_host = ChatAgentHost {
+        app: app.clone(),
+        state: state.inner(),
+        // 多模型臂不直接落盘（最终由协调者统一 upsert + save），因此抑制 loop 的
+        // mid-run 部分快照写盘，避免 N 条并发 run 同写 conversations/{id}.json 的竞态。
+        suppress_partial_persist: arm.is_some(),
+    };
+    // probe（无头测试通道，仅 debug）：换用自动放行审批/consent/ask_user 的 host，
+    // 否则模型调用敏感工具或 ask_user 会 await GUI 应答而永久挂起。
+    #[cfg(debug_assertions)]
+    let probe_host = ProbeAgentHost {
+        state: state.inner(),
+    };
+    let host: &dyn crate::chat::agent::AgentHost = {
+        #[cfg(debug_assertions)]
+        {
+            if probe {
+                &probe_host
+            } else {
+                &chat_host
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = probe;
+            &chat_host
+        }
+    };
+    let executor = RegistryToolExecutor {
+        app: app.clone(),
+        state: state.inner(),
+    };
+    let max_output_tokens = chat_max_output_tokens_for_model(
+        Some(&provider),
+        &resolved_model,
+        settings.chat.max_output_tokens,
+    );
+    // 真实用量锚点：run 首次压缩检查前，用上一轮落盘 usage 把上下文占用锚定到 provider 实报值
+    // （对齐 pi/opencode 的 ground-truth 口径，避免字符估算低估导致压缩过晚/超窗）。
+    let (initial_anchor_total_tokens, initial_anchor_trailing_estimate) =
+        resolve_usage_anchor(conversation, Some(&provider));
+    let result = crate::chat::agent::run_agent_loop(
+        crate::chat::agent::AgentRunConfig {
+            state: state.inner(),
+            conversation_id: conversation.id.clone(),
+            tool_conversation_id: conversation.id.clone(),
+            depth: 0,
+            run_id: run_id.clone(),
+            message_id: assistant_message_id.clone(),
+            generation: run_generation,
+            provider,
+            model: resolved_model.clone(),
+            runtime_messages,
+            tools,
+            blocked_tool_calls,
+            settings: settings.clone(),
+            effective_chat_tools,
+            language,
+            thinking_enabled,
+            thinking_level,
+            stream_enabled,
+            max_output_tokens,
+            retry_attempts,
+            assistant_snapshot: conversation.assistant_snapshot.clone(),
+            provider_tools_fallback_system_prompt,
+            initial_anchor_total_tokens,
+            initial_anchor_trailing_estimate,
+        },
+        host,
+        &executor,
+    )
+    .await;
+    let result = result?;
+
+    merge_latest_agent_todo_state(app, conversation);
+    merge_latest_agent_plan_state(app, conversation);
+    let message_plan = capture_agent_plan_draft_if_needed(
+        app,
+        conversation,
+        plan_mode,
+        &result.content,
+        result.stream_outcome.as_str(),
+    );
+    let mut segments = auxiliary_tool_segments(&auxiliary_tool_records);
+    segments.extend(result.segments);
+    let mut tool_records = auxiliary_tool_records;
+    tool_records.extend(result.tool_records);
+    let run_entry = agent_run_entry_label(entry);
+    if let Some(arm) = arm {
+        // 多模型臂：构造 assistant 消息但**不落盘**，交协调者统一合并 + 一次性 save。
+        let message = build_assistant_message(
+            assistant_message_id,
+            result.content,
+            result.reasoning,
+            Vec::new(),
+            tool_records,
+            result.api_messages,
+            segments,
+            skill_id.as_deref(),
+            Some(run_entry),
+            Some(result.stream_outcome.as_str()),
+            result.usage,
+            result.last_step_usage,
+            message_plan,
+            Some((
+                arm.group_id.clone(),
+                resolved_provider_id.clone(),
+                resolved_model.clone(),
+            )),
+        );
+        return Ok(ArmReplyOutcome {
+            message: Some(message),
+        });
+    }
+    if let Some(boundary) = result.compaction_boundary.clone() {
+        conversation
+            .context_state
+            .compaction_boundaries
+            .push(boundary);
+    }
+    // L2 压缩对齐落盘路径：run 结束时把 L2 产出的 summary 写回 context_state.summary +
+    // compression_count（不再只 push boundary）。质量兜底已在 compaction 核心拦截，此处直接采用。
+    if let Some(mut summary) = result.compaction_summary.clone() {
+        // L2 产出的 summary.source_message_ids 为空（运行时侧拿不到完整 UI id 列表）——
+        // 在此按 source_until_message_id 从 conversation 累积（含旧 summary 覆盖范围），
+        // 与落盘路径 compact_conversation_inner 口径一致。必须在替换 summary **之前**读旧 S1。
+        summary.source_message_ids = crate::chat::agent::compaction::accumulate_source_ids(
+            conversation,
+            &summary.source_until_message_id,
+        );
+        conversation.context_state.last_compressed_at = Some(summary.created_at);
+        conversation.context_state.compressed_message_count = summary.source_message_ids.len();
+        conversation.context_state.compression_count = conversation
+            .context_state
+            .compression_count
+            .saturating_add(1);
+        conversation.context_state.summary = Some(summary);
+        // R-4：多次链式压缩后提示准确性下降（与 compact_conversation 口径一致）。
+        conversation.context_state.warning = crate::chat::agent::compaction::decay_warning_for(
+            conversation.context_state.compression_count,
+        );
+    }
+    push_assistant_message(
+        app,
+        state,
+        &settings,
+        conversation,
+        assistant_message_id,
+        result.content,
+        result.reasoning,
+        Vec::new(),
+        tool_records,
+        result.api_messages,
+        segments,
+        skill_id.as_deref(),
+        title_from_first_user,
+        Some(run_entry),
+        Some(result.stream_outcome.as_str()),
+        result.usage,
+        result.last_step_usage,
+        message_plan,
+    )
+    .await?;
+    Ok(ArmReplyOutcome { message: None })
+}
+
+pub(super) fn agent_run_entry_label(entry: crate::chat::agent::AgentRunEntry) -> &'static str {
+    match entry {
+        crate::chat::agent::AgentRunEntry::Send => "send",
+        crate::chat::agent::AgentRunEntry::Regenerate => "regenerate",
+    }
+}

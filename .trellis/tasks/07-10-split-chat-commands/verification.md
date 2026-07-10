@@ -341,3 +341,24 @@
 - `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed.
 - `git diff --check`: passed.
 - This round is a behavior-neutral extraction; send, compaction, fan-out, and persistence contracts are unchanged, so no `.trellis/spec/` update is required.
+
+## Round 16: post-commit verification
+
+- Commit: `dfbc34b refactor(chat): extract send command`.
+- Post-commit `cargo check`: passed with only existing baseline warnings.
+- Post-commit `chat::commands::tests`: 72/72 passed.
+- Working tree was clean before round 17 began.
+
+## Round 17: core reply execution extraction (pre-commit)
+
+- `src-tauri/src/chat/commands/reply.rs`: 650 lines, containing the single-reply wrapper, shared single/fan-out reply executor, and run-entry label.
+- `src-tauri/src/chat/commands.rs`: 3,055 -> 2,426 lines.
+- Moved provider/model resolution, reply-slot/generation lifecycle, direct-image and auxiliary-vision branches, tool preparation/filtering, agent host execution, cancellation/error persistence, compaction result merging, and final assistant-message construction.
+- Parent aliases preserve existing callers in `send.rs`, `mutations.rs`, `fan_out.rs`, and the parent regression test while ownership moves to `reply.rs`.
+- This round contains no Tauri command, so registration paths and IPC names are unchanged.
+- Formatting the block extracted from `dfbc34b` with the new direct imports and parent-scoped visibility exactly matches the new module; expected and actual SHA-256 are both `caa0f50a7651d1a9ab1db78e1dd782a18acd50c4a92fdf73760c2f80203a5e1f`.
+- `rustfmt --edition 2021 --check --config skip_children=true src-tauri/src/chat/commands/reply.rs`: passed.
+- `cargo check --manifest-path src-tauri/Cargo.toml`: passed with only existing baseline warnings.
+- `./scripts/win-cargo-test.ps1 --lib chat::commands::tests`: 72/72 passed, including reply-entry, model-history, compaction, vision, fan-out, and error-column regressions.
+- `git diff --check`: passed.
+- This round is a behavior-neutral extraction; reply execution, tool, compaction, cancellation, and persistence contracts are unchanged, so no `.trellis/spec/` update is required.
