@@ -151,7 +151,7 @@ pub fn build_chat_system_prompt(
     agent_ask_user_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
     project_context: Option<&ProjectPromptContext>,
-    delivery_dir: Option<&str>,
+    workbench_dir: Option<&str>,
     obsidian_vault_path: Option<&str>,
     email_accounts: &[EmailAccountConfig],
     email_accounts_prompt: Option<&str>,
@@ -174,7 +174,7 @@ pub fn build_chat_system_prompt(
         agent_ask_user_prompt,
         agent_todo_prompt,
         project_context,
-        delivery_dir,
+        workbench_dir,
         None,
         obsidian_vault_path,
         email_accounts,
@@ -222,7 +222,7 @@ pub fn build_chat_system_prompt_with_segments(
     agent_ask_user_prompt: Option<&str>,
     agent_todo_prompt: Option<&str>,
     project_context: Option<&ProjectPromptContext>,
-    delivery_dir: Option<&str>,
+    workbench_dir: Option<&str>,
     knowledge_base_prompt: Option<&str>,
     obsidian_vault_path: Option<&str>,
     email_accounts: &[EmailAccountConfig],
@@ -409,9 +409,10 @@ pub fn build_chat_system_prompt_with_segments(
         {
             action_examples.push("asking the user a blocking clarification");
         }
-        if available_builtin_tools.iter().any(|tool| {
-            matches!(tool.as_str(), "read" | "grep" | "glob")
-        }) {
+        if available_builtin_tools
+            .iter()
+            .any(|tool| matches!(tool.as_str(), "read" | "grep" | "glob"))
+        {
             action_examples.push("reading or searching project files");
         }
         if available_builtin_tools
@@ -452,9 +453,7 @@ pub fn build_chat_system_prompt_with_segments(
             "Runtime context",
             &runtime,
         );
-        if let Some(native_prompt) =
-            native_tools_prompt(available_builtin_tools, delivery_dir)
-        {
+        if let Some(native_prompt) = native_tools_prompt(available_builtin_tools, workbench_dir) {
             append_context_segment(
                 &mut prompt,
                 &mut segments,
@@ -483,13 +482,12 @@ pub fn build_chat_system_prompt_with_segments(
             );
         }
         // Generic tool-hygiene rules (all conversations with tools enabled, not
-        // an officecli/plugin-specific hint): intermediate files vs. the delivery
-        // directory, cleanup before finishing, and absolute paths for stdio MCP
-        // tools whose working directory is unpredictable.
+        // a plugin-specific hint): keep disposable intermediates out of the workbench,
+        // clean up before finishing, and use absolute paths for stdio MCP tools.
         let tool_hygiene = "Working directory hygiene:\n\
-- Intermediate working files you create mid-task (batch/job descriptor JSONs, review screenshots, scratch drafts) go in the system temp directory, not the delivery directory — only final deliverables belong there.\n\
-- Before finishing a multi-step task, delete the intermediate files you created so the delivery directory holds only final artifacts.\n\
-- When passing file paths to MCP tools (stdio servers), always use absolute paths — the server's working directory is unpredictable.";
+- Keep disposable batch/job descriptor JSONs, review screenshots, and scratch drafts in the system temp directory rather than cluttering the default workbench.\n\
+- Before finishing a multi-step task, delete intermediate files you created so the workbench keeps only useful outputs.\n\
+- When passing file paths to MCP tools (stdio servers), always use absolute paths; the server's working directory is unpredictable.";
         append_context_segment(
             &mut prompt,
             &mut segments,
@@ -506,7 +504,8 @@ pub fn build_chat_system_prompt_with_segments(
         let obsidian_vault_configured = obsidian_vault_path
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
-        let catalog = skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
+        let catalog =
+            skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
             skill_allowed_for_conversation(
                 chat_tools,
                 assistant_snapshot,
@@ -613,11 +612,16 @@ fn append_context_segment(
 fn assistant_prompt_segment(assistant: &ChatAssistantSnapshot) -> String {
     let mut parts = vec![format!("Active assistant: {}", assistant.name)];
     if !assistant.description.trim().is_empty() {
-        parts.push(format!("Assistant purpose: {}", assistant.description.trim()));
+        parts.push(format!(
+            "Assistant purpose: {}",
+            assistant.description.trim()
+        ));
     }
     let assistant_system_prompt = assistant.system_prompt.trim();
     if !assistant_system_prompt.is_empty() {
-        parts.push(format!("Assistant instructions:\n{assistant_system_prompt}"));
+        parts.push(format!(
+            "Assistant instructions:\n{assistant_system_prompt}"
+        ));
     }
     parts.join("\n\n")
 }
@@ -726,7 +730,7 @@ pub(crate) fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommend
 
 fn native_tools_prompt(
     available_builtin_tools: &[String],
-    delivery_dir: Option<&str>,
+    workbench_dir: Option<&str>,
 ) -> Option<String> {
     let native_tool_names = available_builtin_tools
         .iter()
@@ -784,12 +788,8 @@ fn native_tools_prompt(
     let has_write = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "write");
-    let has_edit = native_tool_names
-        .iter()
-        .any(|tool| tool.as_str() == "edit");
-    let has_bash = native_tool_names
-        .iter()
-        .any(|tool| tool.as_str() == "bash");
+    let has_edit = native_tool_names.iter().any(|tool| tool.as_str() == "edit");
+    let has_bash = native_tool_names.iter().any(|tool| tool.as_str() == "bash");
     // 代码工作纪律：仅当具备改文件/跑命令能力时注入（纯聊天/只读工具集不污染）。
     // 对齐 opencode 的 Following conventions / Code style / Doing tasks / Tool usage /
     // Code References，取神不取形（注释用温和的「除非要求不加」）。
@@ -798,12 +798,10 @@ fn native_tools_prompt(
     } else {
         ""
     };
-    // The delivery directory is surfaced (with its absolute path) only when the
-    // write tool is available — that's the channel the model writes deliverables
-    // into. Without write, there is no plain-file delivery path to mention.
-    let delivery_dir = delivery_dir
+    // Surface the resolved workbench whenever an enabled native tool can use it.
+    let workbench_dir = workbench_dir
         .map(str::trim)
-        .filter(|dir| !dir.is_empty() && has_write);
+        .filter(|dir| !dir.is_empty() && (has_write || has_edit || has_bash || has_run_python));
     let live_access_hint = match (has_web_search, has_web_fetch) {
         (true, true) => {
             "Use search_web/web_fetch or the relevant Skill script for live web/API access."
@@ -825,25 +823,25 @@ fn native_tools_prompt(
         } else {
             ""
         };
-        let generated_file_hint = match (delivery_dir, has_run_python) {
+        let generated_file_hint = match (workbench_dir, has_run_python) {
             (Some(dir), true) => format!(
-                "\n- File delivery has three modes — pick by intent: a finished file FOR THE USER (report/data/code/CSV/JSON/MD/HTML, etc.) → write it into the delivery directory `{dir}` (it automatically shows a downloadable file card); editing a file in the user's project → write to the project path (no card); content that needs computation, data analysis, charts/plots, or a Python library to generate (e.g. a formatted XLSX, PDF, or rendered image) → run_python (its artifacts land in the delivery directory automatically and show a card). Do not call run_python merely to write out content you already have."
+                "\n- Current default workbench: `{dir}`. When the user does not specify a location, use relative paths or the default cwd so files, basic work, and run_python artifacts land here. This is NOT a sandbox or access restriction: if the user names Desktop, an absolute path, `~/...`, or another directory, use that exact location instead. Files produced in the ordinary conversation workbench and run_python artifacts are shown as downloadable cards. Do not call run_python merely to write out content you already have."
             ),
             (Some(dir), false) => format!(
-                "\n- File delivery has two modes — pick by intent: a finished file FOR THE USER (report/data/code/CSV/JSON/MD/HTML, etc.) → write it into the delivery directory `{dir}` (it automatically shows a downloadable file card); editing a file in the user's project → write to the project path (no card)."
+                "\n- Current default workbench: `{dir}`. When the user does not specify a location, use relative paths or the default cwd so files and basic work land here. This is NOT a sandbox or access restriction: if the user names Desktop, an absolute path, `~/...`, or another directory, use that exact location instead."
             ),
-            (None, true) => "\n- Use run_python for downloadable files that need computation, data analysis, charts/plots, or a Python library to generate (e.g. a formatted XLSX, PDF, or rendered image); its output is delivered as a file card. To edit files in the user's project/workspace, use write/edit. Do not call run_python merely to write out content you already have.".to_string(),
+            (None, true) => "\n- Use run_python for files that require computation, data analysis, charts/plots, or a Python library. Do not call run_python merely to write out content you already have.".to_string(),
             (None, false) => String::new(),
         };
         format!(
             "Built-in tools enabled: {list}. Only call tools in this list.\n\
-- In project conversations, relative paths in file/command tools resolve from the project root; writing an explicit absolute or ~/ path (e.g. ~/Desktop/x.html) targets that global location outside the project. Non-project conversations use absolute or ~/ paths.\n\
+- Relative file paths and omitted command cwd resolve from the current default workbench (the bound project root for project conversations, or the per-conversation workbench otherwise). Explicit absolute or ~/ paths remain unrestricted and always take precedence.\n\
 - Touch files only when the user explicitly asks to save/modify/delete local files or gives a target path: edit for small edits, write for new files or whole-file overwrites. If asked for a code block without saving, answer inline. After a write, state the path briefly; do not repeat the file content.\n\
 - Write/edit tools and bash may need user approval; memory_read (L2 on demand; L1 is auto-injected), memory_search (keyword search over L2; prefer it when you are unsure of the exact heading), and memory_modify do not.\n\
 - Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax ({shell_syntax_hint}). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that, or use run_python — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project.\n\
-- bash runs on the host shell from the project root; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_python (sandbox) or run_command (host); never use host pip to bypass the run_python sandbox.\n\
+- bash runs on the host shell from the current default workbench; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev commands such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_python (sandbox) or run_command (host); never use host pip to bypass the run_python sandbox.\n\
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
-- run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write into the delivery directory for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
+- run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write in the current workbench for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio auto-captures them and shows file cards. No base64 printing.\n\
 - {live_access_hint}"
         ) + &generated_file_hint + image_generation_hint + advisor_hint + code_discipline
     };
@@ -964,17 +962,19 @@ mod tests {
             None,
         );
 
-        // run_python (no delivery dir) → only-run_python arm: scope it to
+        // run_python without a resolved workbench: scope it to
         // compute/library deliverables and explicitly discourage using it just
         // to write out existing content.
         assert!(prompt.contains("run_python"));
         assert!(prompt.contains("file card"));
         assert!(prompt.contains("report.xlsx"));
-        assert!(prompt.contains("Do not call run_python merely to write out content you already have"));
+        assert!(
+            prompt.contains("Do not call run_python merely to write out content you already have")
+        );
     }
 
     #[test]
-    fn chat_prompt_offers_three_way_split_with_delivery_dir() {
+    fn chat_prompt_surfaces_default_workbench_without_confinement() {
         let registry = skills::SkillRegistry::default();
         let mut chat_tools = crate::settings::ChatToolsConfig::default();
         chat_tools.native_tools.run_python = true;
@@ -987,10 +987,7 @@ mod tests {
             &registry,
             &chat_tools,
             true,
-            &[
-                "run_python".to_string(),
-                "write".to_string(),
-            ],
+            &["run_python".to_string(), "write".to_string()],
             None,
             None,
             None,
@@ -1001,19 +998,22 @@ mod tests {
             None,
             None,
             None,
-            Some("/Users/me/Kivio/outputs/conv_abc"),
+            Some("/Users/me/Kivio/workspace/conv_abc"),
             None,
             &[],
             None,
         );
 
-        // Delivery dir + run_python + write → three-way split: the delivery dir
-        // absolute path is surfaced, all three routes are mentioned, and the
-        // run_python catch-all guard remains.
-        assert!(prompt.contains("/Users/me/Kivio/outputs/conv_abc"));
-        assert!(prompt.contains("delivery directory"));
+        // Workbench + run_python + write: surface the absolute workbench path,
+        // keep explicit external paths allowed, and retain the run_python guard.
+        assert!(prompt.contains("/Users/me/Kivio/workspace/conv_abc"));
+        assert!(prompt.contains("Current default workbench"));
+        assert!(prompt.contains("NOT a sandbox or access restriction"));
+        assert!(prompt.contains("use that exact location instead"));
         assert!(prompt.contains("run_python"));
-        assert!(prompt.contains("Do not call run_python merely to write out content you already have"));
+        assert!(
+            prompt.contains("Do not call run_python merely to write out content you already have")
+        );
         // The removed deliver_file tool must not appear anywhere.
         assert!(!prompt.contains("deliver_file"));
     }
@@ -1111,10 +1111,7 @@ mod tests {
     #[test]
     fn assistant_empty_mcp_list_drops_all_mcp_tools() {
         let assistant = test_assistant_snapshot(vec![], vec![]);
-        let mut tools = vec![
-            crate::mcp::types::native_web_fetch_tool(),
-            test_mcp_tool(),
-        ];
+        let mut tools = vec![crate::mcp::types::native_web_fetch_tool(), test_mcp_tool()];
 
         apply_assistant_mcp_restrictions(&mut tools, Some(&assistant));
 
@@ -1150,7 +1147,13 @@ mod tests {
             false,
         ));
         // 无助手 = 不限(只看全局 enable)。
-        assert!(skill_allowed_for_conversation(&chat_tools, None, "pdf", &[], false));
+        assert!(skill_allowed_for_conversation(
+            &chat_tools,
+            None,
+            "pdf",
+            &[],
+            false
+        ));
     }
 
     #[test]
@@ -1245,12 +1248,18 @@ mod tests {
         // 避免污染纯聊天场景。
         let with_bash = vec!["bash".to_string(), "read".to_string()];
         let p = native_tools_prompt(&with_bash, None).expect("prompt");
-        assert!(p.contains("file_path:line_number"), "bash present should add discipline: {p}");
+        assert!(
+            p.contains("file_path:line_number"),
+            "bash present should add discipline: {p}"
+        );
 
         // 只有只读工具（无 write/edit/bash）时不注入。
         let read_only = vec!["read".to_string(), "glob".to_string()];
         let p2 = native_tools_prompt(&read_only, None).expect("prompt");
-        assert!(!p2.contains("file_path:line_number"), "read-only should omit discipline: {p2}");
+        assert!(
+            !p2.contains("file_path:line_number"),
+            "read-only should omit discipline: {p2}"
+        );
     }
 
     #[test]

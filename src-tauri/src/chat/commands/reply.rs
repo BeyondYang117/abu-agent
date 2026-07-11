@@ -388,9 +388,13 @@ pub(super) async fn complete_assistant_reply_inner(
     let agent_ask_user_prompt = crate::chat::ask_user::format_prompt(ask_user_tools_available);
     let agent_plan_prompt = crate::chat::plan::format_prompt(&conversation.agent_plan_state);
     let project_prompt_context = project_prompt_context_for(app, conversation);
-    // Persistent per-conversation delivery directory surfaced to the model so it
-    // can write deliverable files there (which auto-render as downloadable cards).
-    let delivery_dir = crate::native_tools::delivery_dir(&conversation.id)
+    // Default workbench surfaced to the model. It is an ergonomic default, not
+    // a sandbox; explicit user paths continue to take precedence.
+    let workbench_dir = crate::chat::storage::resolve_conversation_working_directory(
+        app,
+        conversation,
+        &settings.chat_tools.native_tools.working_directory,
+    )
         .ok()
         .map(|path| path.display().to_string());
     // 集的系统提示词：按对话 set_id 实时取（不冻结），随集编辑立即对集内对话生效。
@@ -427,7 +431,7 @@ pub(super) async fn complete_assistant_reply_inner(
         Some(&agent_ask_user_prompt),
         Some(&agent_todo_prompt),
         project_prompt_context.as_ref(),
-        delivery_dir.as_deref(),
+        workbench_dir.as_deref(),
         obsidian_vault_path,
         &settings.email_accounts,
         email_accounts_prompt.as_deref(),
@@ -472,7 +476,7 @@ pub(super) async fn complete_assistant_reply_inner(
             false,
         )),
         project_prompt_context.as_ref(),
-        delivery_dir.as_deref(),
+        workbench_dir.as_deref(),
         obsidian_vault_path,
         &settings.email_accounts,
         email_accounts_prompt.as_deref(),

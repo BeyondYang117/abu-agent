@@ -200,8 +200,33 @@ fn apply_settings(
         return Err(err);
     }
 
+    let old_working_directory = &previous_settings.chat_tools.native_tools.working_directory;
+    let new_working_directory = &sanitized.chat_tools.native_tools.working_directory;
+    let workspace_root_changed = old_working_directory.trim() != new_working_directory.trim();
+    if workspace_root_changed {
+        if let Err(err) = crate::chat::storage::migrate_ordinary_conversation_workspaces(
+            app,
+            old_working_directory,
+            new_working_directory,
+        ) {
+            restore_runtime_settings(app, state, &previous_settings);
+            return Err(format!("Failed to migrate conversation workspaces: {err}"));
+        }
+    }
+
     if let Err(err) = persist_settings(app, &sanitized) {
         eprintln!("Failed to save settings: {err}");
+        if workspace_root_changed {
+            if let Err(rollback_err) =
+                crate::chat::storage::migrate_ordinary_conversation_workspaces(
+                    app,
+                    new_working_directory,
+                    old_working_directory,
+                )
+            {
+                eprintln!("Failed to roll back conversation workspace migration: {rollback_err}");
+            }
+        }
         restore_runtime_settings(app, state, &previous_settings);
         return Err(err);
     }

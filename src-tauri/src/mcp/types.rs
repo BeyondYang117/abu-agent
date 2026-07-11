@@ -568,7 +568,7 @@ pub fn native_run_python_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_python".to_string(),
         name: "run_python".to_string(),
-        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for computation, statistics, data analysis (numpy/pandas), reading and analyzing documents (PDF/XLSX), charts and plots (matplotlib), sandbox-compatible package installs, and generating files that REQUIRE a Python library to produce (formatted XLSX, PDF, rendered images). Its generated files are delivered to the user as file cards. Do NOT use run_python merely to write a file from content you already have — for that, use write_file (to the delivery directory for a downloadable card, or to a project path to edit the user's workspace). Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as the read tool; in project conversations these resolve from the project root by default. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. report.xlsx, chart.png, summary.csv); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts into the conversation's delivery directory (~/Kivio/outputs/<conversation>/) and shows them as downloadable file cards. In chart text (titles, labels, legends, annotations) use only Latin and Chinese/Japanese/Korean characters; the sandbox bundles only a CJK+Latin font and has no emoji or symbol fonts, so emoji and decorative glyphs render as empty boxes—omit them. stdout/stderr are returned.".to_string(),
+        description: "Execute Python code in a Pyodide sandbox with no direct host filesystem access. Use for computation, statistics, data analysis (numpy/pandas), reading and analyzing documents (PDF/XLSX), charts and plots (matplotlib), sandbox-compatible package installs, and generating files that REQUIRE a Python library to produce (formatted XLSX, PDF, rendered images). Its generated files are delivered to the user as file cards. Do NOT use run_python merely to write a file from content you already have — for that, use write_file (to the current workbench for a downloadable card, or to an explicit path requested by the user). Bundled packages auto-load on import: numpy, matplotlib, pandas, pillow, seaborn, openpyxl, xlrd, et_xmlfile, pypdf, micropip. Prefer plain import statements; do not write await micropip.install in sync code. To analyze local files, pass paths in files using the same syntax as the read tool; in project conversations these resolve from the project root by default. Mounted paths appear in KIVIO_INPUT_FILES. Save outputs to relative filenames in the Pyodide cwd (e.g. report.xlsx, chart.png, summary.csv); do not write host paths such as /Users or ~/Desktop inside Python. Kivio auto-captures images plus csv/json/md/txt/html/xlsx artifacts into the current default workbench and shows them as downloadable file cards. In chart text (titles, labels, legends, annotations) use only Latin and Chinese/Japanese/Korean characters; the sandbox bundles only a CJK+Latin font and has no emoji or symbol fonts, so emoji and decorative glyphs render as empty boxes—omit them. stdout/stderr are returned.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -980,7 +980,7 @@ mod tests {
         assert!(tool.description.contains("report.xlsx"));
         assert!(tool.description.contains("Kivio auto-captures"));
         // The old "just write a file" catch-all language is gone, and it now
-        // points at write_file (to the delivery dir) for content you already have.
+        // points at write for content you already have.
         assert!(!tool
             .description
             .contains("user-requested chat deliverable files"));
@@ -988,10 +988,10 @@ mod tests {
             .description
             .contains("does not need to mention Python or run_python"));
         // No reference to the removed deliver_file tool; deliverables are a
-        // path-driven channel via write_file into the delivery directory.
+        // path-driven channel via write into the conversation workbench.
         assert!(!tool.description.contains("deliver_file"));
         assert!(tool.description.contains("use write_file"));
-        assert!(tool.description.contains("delivery directory"));
+        assert!(tool.description.contains("current workbench"));
     }
 
     #[test]

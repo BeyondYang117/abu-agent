@@ -47,8 +47,8 @@ use tokio::sync::Semaphore;
 use crate::chat::agent::prepare::{available_builtin_tool_names, build_chat_system_prompt};
 use crate::chat::agent::types::AgentRunResult;
 use crate::chat::agent::{
-    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, ToolExecutionContext,
-    ToolExecutor, ToolExecutorFuture,
+    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, ToolExecutionContext, ToolExecutor,
+    ToolExecutorFuture,
 };
 use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
 use crate::chat::types::{ChatMessageSegment, ToolCallRecord, ToolCallStatus};
@@ -681,15 +681,13 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
     let state: &AppState = &state;
     let sub_conversation_id = format!("subagent-{}", req.task_id);
 
-    let mut last_outcome: Result<AgentRunResult, String> =
-        Err("Sub-agent did not run".to_string());
+    let mut last_outcome: Result<AgentRunResult, String> = Err("Sub-agent did not run".to_string());
 
     for attempt in 0..SUB_AGENT_MAX_ATTEMPTS {
         // A cascade cancel between attempts must short-circuit: never retry once
         // the parent generation is gone.
         if attempt > 0
-            && !state
-                .is_chat_generation_active(&req.parent_conversation_id, req.parent_generation)
+            && !state.is_chat_generation_active(&req.parent_conversation_id, req.parent_generation)
         {
             return Err("cancelled".to_string());
         }
@@ -874,7 +872,6 @@ fn clip(text: &str, max: usize) -> String {
     format!("{truncated}…")
 }
 
-
 /// Spawn handler (the `agent` tool). Async (Box::pin). Drives `run_sub_agent`
 /// to completion and returns the result inline (BLOCKING, single-result — the
 /// Claude Code Task model). Parallelism comes from the model emitting multiple
@@ -883,8 +880,9 @@ fn clip(text: &str, max: usize) -> String {
 /// model token loop.
 pub fn handle_agent_spawn<'a>(
     ctx: SubAgentCallCtx<'a>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<McpToolCallResult, String>> + Send + 'a>>
-{
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<McpToolCallResult, String>> + Send + 'a>,
+> {
     Box::pin(async move {
         // Depth guard (research doc 05 §1.3 / acceptance #2): an agent at depth
         // >= MAX cannot spawn. Soft failure (Ok with is_error) so the parent
@@ -919,10 +917,8 @@ pub fn handle_agent_spawn<'a>(
         let language = crate::settings::resolve_chat_language(&settings);
 
         // Resolve agent definition (built-in + user + project layers).
-        let project_root = crate::chat::storage::resolve_conversation_project(
-            ctx.app,
-            &parent_conversation,
-        )
+        let project_root =
+            crate::chat::storage::resolve_conversation_project(ctx.app, &parent_conversation)
         .ok()
         .flatten()
         .and_then(|p| p.root_path)
@@ -959,7 +955,9 @@ pub fn handle_agent_spawn<'a>(
             ));
         }
         if model.trim().is_empty() {
-            return Ok(err_result("No model available for the sub-agent.".to_string()));
+            return Ok(err_result(
+                "No model available for the sub-agent.".to_string(),
+            ));
         }
 
         // Build the sub-agent's toolset: full enabled set, narrowed by the
@@ -1003,10 +1001,12 @@ pub fn handle_agent_spawn<'a>(
             None,
             None,
             None,
-            // Sub-agent native tools run against the PARENT conversation
-            // (tool_conversation_id), so deliverables land in the parent's
-            // delivery directory — surface that exact path.
-            crate::native_tools::delivery_dir(&parent_conversation_id)
+            // Sub-agent tools use the parent conversation's same default workbench.
+            crate::chat::storage::resolve_conversation_working_directory(
+                ctx.app,
+                &parent_conversation,
+                &settings.chat_tools.native_tools.working_directory,
+            )
                 .ok()
                 .map(|path| path.display().to_string())
                 .as_deref(),
@@ -1358,14 +1358,26 @@ mod tests {
         let mut p = ProgressState::default();
         // 6 distinct web_search calls done, 2 still running.
         for i in 0..6 {
-            p.upsert_tool(&format!("ws-done-{i}"), "web_search", ToolCallStatus::Success);
+            p.upsert_tool(
+                &format!("ws-done-{i}"),
+                "web_search",
+                ToolCallStatus::Success,
+            );
         }
         for i in 0..2 {
-            p.upsert_tool(&format!("ws-run-{i}"), "web_search", ToolCallStatus::Running);
+            p.upsert_tool(
+                &format!("ws-run-{i}"),
+                "web_search",
+                ToolCallStatus::Running,
+            );
         }
         // 3 read_file done, 1 failed.
         for i in 0..3 {
-            p.upsert_tool(&format!("rf-done-{i}"), "read_file", ToolCallStatus::Success);
+            p.upsert_tool(
+                &format!("rf-done-{i}"),
+                "read_file",
+                ToolCallStatus::Success,
+            );
         }
         p.upsert_tool("rf-fail", "read_file", ToolCallStatus::Error);
 
@@ -1389,7 +1401,10 @@ mod tests {
         let mut tools = Vec::new();
         append_tool_definitions(&mut tools, false);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(!names.contains(&"agent"), "spawn tool must be hidden in sub-agents");
+        assert!(
+            !names.contains(&"agent"),
+            "spawn tool must be hidden in sub-agents"
+        );
     }
 
     #[test]
@@ -1627,10 +1642,7 @@ mod tests {
         assert!(!result.is_error);
         let structured = result.structured_content.expect("structured");
         assert_eq!(structured["status"], "completed");
-        assert_eq!(
-            manager.get("ok").unwrap().status,
-            SubAgentStatus::Completed
-        );
+        assert_eq!(manager.get("ok").unwrap().status, SubAgentStatus::Completed);
     }
 
     /// A cancelled run (Ok with stream_outcome == "cancelled") maps to Cancelled,
@@ -1664,7 +1676,10 @@ mod tests {
             &finalize_params("fail"),
             Err("boom".to_string()),
         );
-        assert!(result.is_error, "a real failure must surface as a tool error");
+        assert!(
+            result.is_error,
+            "a real failure must surface as a tool error"
+        );
         let structured = result.structured_content.expect("structured");
         assert_eq!(structured["status"], "failed");
         assert_eq!(structured["error"], "boom");
@@ -1738,8 +1753,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::chat::agent::{
-        run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig,
-        ToolExecutionContext, ToolExecutor, ToolExecutorFuture,
+        run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, ToolExecutionContext,
+        ToolExecutor, ToolExecutorFuture,
     };
     use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
     use crate::settings::{ChatToolsConfig, ModelProvider, Settings};
@@ -1819,8 +1834,7 @@ mod tests {
         // fall back to the parent rather than failing the spawn.
         let mut keyless = named_provider("cheap-p");
         keyless.api_keys.clear();
-        let mut settings =
-            settings_with_providers(vec![named_provider("parent-p"), keyless]);
+        let mut settings = settings_with_providers(vec![named_provider("parent-p"), keyless]);
         settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
         settings.chat_tools.sub_agent_model = "cheap-model".to_string();
         let (provider, model) =
@@ -1880,7 +1894,9 @@ mod tests {
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 1024];
                     let header_end = loop {
-                        let Ok(n) = stream.read(&mut chunk) else { break 0 };
+                        let Ok(n) = stream.read(&mut chunk) else {
+                            break 0;
+                        };
                         if n == 0 {
                             break 0;
                         }
@@ -1892,15 +1908,16 @@ mod tests {
                     if header_end == 0 {
                         continue;
                     }
-                    let headers =
-                        String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+                    let headers = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
                     let content_length = headers
                         .lines()
                         .find_map(|line| line.strip_prefix("content-length:"))
                         .and_then(|value| value.trim().parse::<usize>().ok())
                         .unwrap_or(0);
                     while buf.len() < header_end + content_length {
-                        let Ok(n) = stream.read(&mut chunk) else { break };
+                        let Ok(n) = stream.read(&mut chunk) else {
+                            break;
+                        };
                         if n == 0 {
                             break;
                         }
@@ -2154,11 +2171,7 @@ mod tests {
     #[tokio::test]
     async fn three_agent_calls_in_one_round_run_concurrently_and_all_return() {
         let orchestrator = MockOrchestratorServer::start(vec![
-            fanout_agent_calls_json(&[
-                ("call_a", "A"),
-                ("call_b", "B"),
-                ("call_c", "C"),
-            ]),
+            fanout_agent_calls_json(&[("call_a", "A"), ("call_b", "B"), ("call_c", "C")]),
             final_answer_json("All three workers finished."),
         ]);
         let state = Arc::new(crate::state::test_app_state());

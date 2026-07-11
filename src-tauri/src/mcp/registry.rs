@@ -579,7 +579,12 @@ async fn call_mixer_tool(
     match tool.name.as_str() {
         "mixer_generate_image" => {
             let conversation_id = native_ctx.as_ref().map(|ctx| ctx.conversation_id.as_str());
-            crate::chat::image_generation::tool_generate_image(app, state, conversation_id, &arguments)
+            crate::chat::image_generation::tool_generate_image(
+                app,
+                state,
+                conversation_id,
+                &arguments,
+            )
                 .await
         }
         other => Err(format!("Unknown mixer tool: {other}")),
@@ -606,8 +611,7 @@ async fn call_skill_tool(
             .cloned()
             .ok_or_else(|| format!("Skill not found: {skill_name}"))?
     } else {
-        let registry =
-            crate::skills::build_registry(app, &settings.chat_tools.skill_scan_paths)?;
+        let registry = crate::skills::build_registry(app, &settings.chat_tools.skill_scan_paths)?;
         crate::skills::lookup_skill(&registry, &skill_name)
             .cloned()
             .ok_or_else(|| format!("Skill not found: {skill_name}"))?
@@ -708,7 +712,7 @@ async fn call_native_tool(
     let settings = state.settings_read().clone();
     let workspace = resolve_native_workspace(
         app,
-        &settings.chat_tools.native_tools.workspace_roots,
+        &settings.chat_tools.native_tools.working_directory,
         native_ctx.as_ref(),
     )?;
 
@@ -722,10 +726,9 @@ async fn call_native_tool(
         NativeToolCall::BlockingMutation(call) => {
             let result = run_blocking_file_mutation(&workspace, &arguments, *call).await?;
             let mut tool_result = file_mutation_tool_result(result)?;
-            // Delivery channel: if `write` landed a file inside the conversation's
-            // persistent delivery directory (~/Kivio/outputs/<conversation>/),
-            // attach a downloadable file-card artifact. Writes anywhere else (the
-            // project/workspace) get no artifact — behavior unchanged.
+            // If an ordinary-chat `write` lands inside that conversation's
+            // workbench, attach a downloadable file-card artifact. Explicit writes
+            // elsewhere and project edits do not become delivery cards.
             if tool.name == "write" {
                 if let Some(artifact) =
                     delivery_artifact_for_write(&workspace, &arguments, native_ctx.as_ref())
@@ -809,10 +812,9 @@ pub fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCa
     })
 }
 
-/// Delivery channel for `write_file`: build a downloadable file-card artifact
-/// when (and only when) the written path resolves inside the conversation's
-/// persistent delivery directory `~/Kivio/outputs/<conversation>/`. Returns
-/// `None` for project/workspace/temp writes (no card) and for standalone calls
+/// Build a downloadable file-card artifact when an ordinary-chat `write` resolves
+/// inside that conversation's workbench. Returns `None` for project/external/temp
+/// writes and for standalone calls
 /// without a conversation context. Re-resolves the write path the same way
 /// `write_file` did (pure path resolution, no IO) so the absolute on-disk path
 /// is reliable across project vs. global workspaces.
@@ -821,10 +823,11 @@ fn delivery_artifact_for_write(
     arguments: &Value,
     native_ctx: Option<&NativeToolContext>,
 ) -> Option<crate::mcp::types::ChatToolArtifact> {
-    let native_ctx = native_ctx?;
+    native_ctx?;
     let raw_path = arguments.get("path").and_then(|v| v.as_str())?;
     let resolved = resolve_tool_write_path(workspace, raw_path).ok()?;
-    if !crate::native_tools::path_under_delivery_dir(&native_ctx.conversation_id, &resolved) {
+    let directory = workspace.conversation_directory()?;
+    if !crate::native_tools::path_under_directory(directory, &resolved) {
         return None;
     }
     crate::native_tools::build_delivery_artifact_for_path(&resolved).ok()
@@ -880,22 +883,29 @@ fn format_read_file_for_model(result: &ReadFileResult) -> String {
 
 fn resolve_native_workspace(
     app: &AppHandle,
-    workspace_roots: &[String],
+    working_directory: &str,
     native_ctx: Option<&NativeToolContext>,
 ) -> Result<NativeToolWorkspace, String> {
     let Some(native_ctx) = native_ctx else {
-        return Ok(NativeToolWorkspace::global(workspace_roots));
+        return Ok(NativeToolWorkspace::standalone());
     };
-    let conversation = crate::chat::storage::load_conversation(app, &native_ctx.conversation_id)
-        .map_err(|err| {
-            format!(
-                "Resolve native tool workspace failed for conversation {}: {err}",
-                native_ctx.conversation_id
-            )
-        })?;
+    let mut conversation =
+        crate::chat::storage::load_conversation(app, &native_ctx.conversation_id).map_err(
+            |err| {
+                format!(
+                    "Resolve native tool workspace failed for conversation {}: {err}",
+                    native_ctx.conversation_id
+                )
+            },
+        )?;
     let Some(project) = crate::chat::storage::resolve_conversation_project(app, &conversation)?
     else {
-        return Ok(NativeToolWorkspace::global(workspace_roots));
+        let directory = crate::chat::storage::prepare_ordinary_conversation_workspace(
+            app,
+            &mut conversation,
+            working_directory,
+        )?;
+        return Ok(NativeToolWorkspace::conversation(directory));
     };
     Ok(NativeToolWorkspace::project(
         project.id,
@@ -926,16 +936,19 @@ pub(super) async fn run_python_via_pyodide(
         .clamp(1_000, 300_000);
     let input_files = collect_python_input_files(app, workspace, arguments)?;
     let run_id = uuid::Uuid::new_v4().to_string();
+    let output_directory = workspace.default_output_directory()?;
     let export_ctx = native_ctx
         .map(|ctx| crate::native_tools::SandboxExportContext {
             conversation_id: ctx.conversation_id,
             message_id: ctx.message_id,
             tool_call_id: ctx.tool_call_id,
+            output_directory: output_directory.clone(),
         })
         .unwrap_or_else(|| crate::native_tools::SandboxExportContext {
             conversation_id: "standalone".to_string(),
             message_id: run_id.clone(),
             tool_call_id: None,
+            output_directory,
         });
     let (tx, rx) = oneshot::channel();
     {
@@ -979,8 +992,7 @@ pub(super) async fn run_python_via_pyodide(
             } else {
                 let mut content = result.content;
                 let mut artifacts = result.artifacts;
-                match crate::native_tools::export_sandbox_artifacts(&export_ctx, &artifacts)
-                {
+                match crate::native_tools::export_sandbox_artifacts(&export_ctx, &artifacts) {
                     Ok(exported_artifacts) => {
                         for exported in &exported_artifacts {
                             if let Some(artifact) = artifacts.get_mut(exported.artifact_index) {

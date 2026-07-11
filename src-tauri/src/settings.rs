@@ -583,16 +583,10 @@ fn resolve_mixer_side_model(
     settings: &Settings,
 ) -> (String, String) {
     if selection.is_configured() {
-        return (
-            selection.provider_id.clone(),
-            selection.model.clone(),
-        );
+        return (selection.provider_id.clone(), selection.model.clone());
     }
     if let Some(session) = session.filter(|session| session.is_set()) {
-        return (
-            session.provider_id.to_string(),
-            session.model.to_string(),
-        );
+        return (session.provider_id.to_string(), session.model.to_string());
     }
     settings.effective_chat_model()
 }
@@ -742,6 +736,12 @@ pub struct ChatNativeToolsConfig {
     pub run_python: bool,
     #[serde(default = "default_true")]
     pub knowledge_search: bool,
+    /// Default root for ordinary (non-project) conversation workbenches.
+    /// Missing legacy configs deserialize to an empty string so sanitize can
+    /// migrate `workspace_roots[0]` before falling back to the platform default.
+    #[serde(default)]
+    pub working_directory: String,
+    /// Legacy compatibility only. Runtime code must not use this as a path boundary.
     #[serde(default)]
     pub workspace_roots: Vec<String>,
 }
@@ -778,9 +778,18 @@ impl Default for ChatNativeToolsConfig {
             run_command: true,
             run_python: true,
             knowledge_search: true,
+            working_directory: default_chat_working_directory(),
             workspace_roots: Vec::new(),
         }
     }
+}
+
+pub fn default_chat_working_directory() -> String {
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().join("Kivio").join("workspace"))
+        .unwrap_or_else(|| std::path::PathBuf::from("Kivio").join("workspace"))
+        .to_string_lossy()
+        .to_string()
 }
 
 fn default_skill_auto_match() -> bool {
@@ -1051,13 +1060,7 @@ pub fn email_account_id_from_address(email: &str) -> String {
         .trim()
         .to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let trimmed = slug.trim_matches('-');
     if trimmed.is_empty() {
@@ -1849,7 +1852,13 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             trimmed.to_string()
         }
     };
-    if settings.lens.web_search.grok_system_prompt.trim().is_empty() {
+    if settings
+        .lens
+        .web_search
+        .grok_system_prompt
+        .trim()
+        .is_empty()
+    {
         settings.lens.web_search.grok_system_prompt = default_grok_system_prompt();
     }
     settings.lens.web_search.exa_mcp_url = {
@@ -1861,7 +1870,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         }
     };
     // 未知/占位服务商回退到 Tavily，避免选中尚未接入的源导致搜索直接报错。
-    if matches!(settings.lens.web_search.provider, WebSearchProvider::Unknown) {
+    if matches!(
+        settings.lens.web_search.provider,
+        WebSearchProvider::Unknown
+    ) {
         settings.lens.web_search.provider = WebSearchProvider::Tavily;
     }
     settings.lens.web_search.max_results = settings.lens.web_search.max_results.clamp(1, 10);
@@ -1975,6 +1987,28 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .native_tools
         .workspace_roots
         .retain(|path| seen_roots.insert(path.clone()));
+    settings.chat_tools.native_tools.working_directory = settings
+        .chat_tools
+        .native_tools
+        .working_directory
+        .trim()
+        .to_string();
+    if settings
+        .chat_tools
+        .native_tools
+        .working_directory
+        .is_empty()
+    {
+        settings.chat_tools.native_tools.working_directory = settings
+            .chat_tools
+            .native_tools
+            .workspace_roots
+            .first()
+            .cloned()
+            .unwrap_or_else(default_chat_working_directory);
+    }
+    // Persist only the new single-directory setting after legacy migration.
+    settings.chat_tools.native_tools.workspace_roots.clear();
     for server in &mut settings.chat_tools.servers {
         server.id = server.id.trim().to_string();
         if server.id.is_empty() {
@@ -2813,7 +2847,10 @@ mod tests {
             serde_json::from_str("{}").expect("empty chat tools config should load");
         assert_eq!(cfg.max_tool_rounds, Some(CHAT_TOOL_DEFAULT_ROUNDS));
         // 缺省字段经 serde default 补成默认截断值（而非 None/不截断）。
-        assert_eq!(cfg.max_tool_output_chars, Some(DEFAULT_MAX_TOOL_OUTPUT_CHARS));
+        assert_eq!(
+            cfg.max_tool_output_chars,
+            Some(DEFAULT_MAX_TOOL_OUTPUT_CHARS)
+        );
     }
 
     #[test]
@@ -3672,8 +3709,8 @@ mod tests {
             email: "user@example.com".into(),
             ..Default::default()
         };
-        let prompt = email_accounts_system_prompt(&[account], Some("/opt/kivio/himalaya"))
-            .expect("prompt");
+        let prompt =
+            email_accounts_system_prompt(&[account], Some("/opt/kivio/himalaya")).expect("prompt");
         assert!(prompt.contains("user@example.com"));
         assert!(prompt.contains("Kivio Email connector"));
         assert!(prompt.contains("Himalaya binary: /opt/kivio/himalaya"));
@@ -3700,7 +3737,11 @@ mod tests {
             &[],
             false,
         ));
-        assert!(!skill_connector_satisfied(EMAIL_CONNECTOR_SKILL_ID, &[], false));
+        assert!(!skill_connector_satisfied(
+            EMAIL_CONNECTOR_SKILL_ID,
+            &[],
+            false
+        ));
         // pdf is not connector-gated
         assert!(skill_globally_available(&chat_tools, "pdf", &[], false));
     }
@@ -3779,6 +3820,34 @@ mod tests {
                 "obsidian-markdown"
             ),
             None
+        );
+    }
+
+    #[test]
+    fn sanitize_native_tools_migrates_first_legacy_workspace_root() {
+        let mut settings = Settings::default();
+        settings.chat_tools.native_tools.working_directory.clear();
+        settings.chat_tools.native_tools.workspace_roots = vec![
+            "  C:/legacy/workspace  ".to_string(),
+            "C:/ignored".to_string(),
+        ];
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.native_tools.working_directory,
+            "C:/legacy/workspace"
+        );
+        assert!(settings.chat_tools.native_tools.workspace_roots.is_empty());
+    }
+
+    #[test]
+    fn sanitize_native_tools_uses_platform_default_when_directory_is_missing() {
+        let mut settings = Settings::default();
+        settings.chat_tools.native_tools.working_directory.clear();
+        settings.chat_tools.native_tools.workspace_roots.clear();
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat_tools.native_tools.working_directory,
+            default_chat_working_directory()
         );
     }
 }

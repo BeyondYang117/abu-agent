@@ -409,6 +409,8 @@ export type ChatNativeToolsConfig = {
   runCommand?: boolean
   runPython?: boolean
   knowledgeSearch?: boolean
+  workingDirectory?: string
+  /** Legacy settings compatibility only. */
   workspaceRoots?: string[]
 }
 
@@ -450,6 +452,7 @@ export function defaultNativeTools(): ChatNativeToolsConfig {
     runCommand: true,
     runPython: true,
     knowledgeSearch: true,
+    workingDirectory: '',
     workspaceRoots: [],
   }
 }
@@ -1138,6 +1141,9 @@ function normalizeChatTools(config?: Partial<ChatToolsConfig> | null): ChatTools
     nativeTools: {
       ...defaultNativeTools(),
       ...current.nativeTools,
+      workingDirectory: typeof current.nativeTools?.workingDirectory === 'string'
+        ? current.nativeTools.workingDirectory
+        : (Array.isArray(current.nativeTools?.workspaceRoots) ? current.nativeTools.workspaceRoots[0] ?? '' : ''),
       workspaceRoots: Array.isArray(current.nativeTools?.workspaceRoots)
         ? current.nativeTools.workspaceRoots
         : [],

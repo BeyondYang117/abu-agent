@@ -439,11 +439,7 @@ pub fn save_conversation(app: &AppHandle, conversation: &Conversation) -> Result
     let mut index = load_index_or_scan(app)?;
     let list_item = ConversationListItem::from(to_save);
 
-    if let Some(pos) = index
-        .conversations
-        .iter()
-        .position(|c| c.id == to_save.id)
-    {
+    if let Some(pos) = index.conversations.iter().position(|c| c.id == to_save.id) {
         index.conversations[pos] = list_item;
     } else {
         index.conversations.insert(0, list_item);
@@ -464,22 +460,54 @@ pub fn save_conversation_without_index(
 
 /// 删除对话
 pub fn delete_conversation(app: &AppHandle, id: &str) -> Result<(), String> {
-    // 删除对话文件
+    validate_conversation_id(id)?;
     let path = conversation_file_path(app, id)?;
+    let mut index = load_index_or_scan(app)?;
+    let indexed_item = index.conversations.iter().find(|item| item.id == id);
+
+    // A missing conversation file must not prevent removing its stale index entry.
+    // When metadata is also missing, stay conservative and leave any workbench alone.
+    let remove_workspace = if path.exists() {
+        let conversation = load_conversation(app, id)?;
+        !conversation_has_project_binding(app, &conversation)?
+    } else if let Some(item) = indexed_item {
+        !conversation_list_item_has_project_binding(app, item)?
+    } else {
+        false
+    };
+
+    if remove_workspace {
+        let state = app.state::<crate::state::AppState>();
+        let settings = state.settings_read();
+        let workspace = crate::native_tools::conversation_workspace_directory(
+            &settings.chat_tools.native_tools.working_directory,
+            id,
+        )?;
+        drop(settings);
+        if workspace.exists() {
+            if !workspace.is_dir() {
+                return Err(format!(
+                    "Conversation workspace is not a directory: {}",
+                    workspace.display()
+                ));
+            }
+            fs::remove_dir_all(&workspace)
+                .map_err(|e| format!("delete conversation workspace: {e}"))?;
+        }
+    }
+
     if path.exists() {
         fs::remove_file(&path).map_err(|e| format!("delete conversation file: {e}"))?;
     }
 
-    // 删除附件目录
     let attachments_dir = conversations_dir(app)?.join(format!("{}_attachments", id));
     if attachments_dir.exists() {
         fs::remove_dir_all(&attachments_dir).map_err(|e| format!("delete attachments dir: {e}"))?;
     }
 
+    // Sweep legacy outputs/runs left by older versions. This never touches a project root.
     crate::native_tools::remove_sandbox_exports_for_conversation(id);
 
-    // 更新索引
-    let mut index = load_index_or_scan(app)?;
     index.conversations.retain(|c| c.id != id);
     save_index(app, &index)
 }
@@ -557,8 +585,7 @@ pub fn search_conversations(
     index.conversations.retain(|c| {
         c.title.to_lowercase().contains(&needle)
             || c.preview.to_lowercase().contains(&needle)
-            || c
-                .folder
+            || c.folder
                 .as_deref()
                 .map(|f| f.to_lowercase().contains(&needle))
                 .unwrap_or(false)
@@ -1092,6 +1119,199 @@ fn clear_set_from_conversations(app: &AppHandle, set_id: &str) -> Result<(), Str
     Ok(())
 }
 
+fn has_non_empty_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn legacy_folder_is_project(app: &AppHandle, folder: Option<&str>) -> Result<bool, String> {
+    let Some(folder) = folder.map(str::trim).filter(|folder| !folder.is_empty()) else {
+        return Ok(false);
+    };
+    Ok(find_project_by_name(app, folder)?.is_some())
+}
+
+fn conversation_has_project_binding(
+    app: &AppHandle,
+    conversation: &Conversation,
+) -> Result<bool, String> {
+    if has_non_empty_value(conversation.project_id.as_deref()) {
+        return Ok(true);
+    }
+    legacy_folder_is_project(app, conversation.folder.as_deref())
+}
+
+fn conversation_list_item_has_project_binding(
+    app: &AppHandle,
+    item: &ConversationListItem,
+) -> Result<bool, String> {
+    if has_non_empty_value(item.project_id.as_deref()) {
+        return Ok(true);
+    }
+    legacy_folder_is_project(app, item.folder.as_deref())
+}
+
+fn rewrite_conversation_artifact_paths(
+    conversation: &mut Conversation,
+    mappings: &[(PathBuf, PathBuf)],
+) -> bool {
+    fn rewrite(path: &mut Option<String>, mappings: &[(PathBuf, PathBuf)]) -> bool {
+        let Some(raw) = path.as_deref() else {
+            return false;
+        };
+        let current = Path::new(raw);
+        for (source, target) in mappings {
+            if let Ok(relative) = current.strip_prefix(source) {
+                *path = Some(target.join(relative).to_string_lossy().to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    let mut changed = false;
+    for message in &mut conversation.messages {
+        for artifact in &mut message.artifacts {
+            changed |= rewrite(&mut artifact.path, mappings);
+        }
+        for tool_call in &mut message.tool_calls {
+            for artifact in &mut tool_call.artifacts {
+                changed |= rewrite(&mut artifact.path, mappings);
+            }
+        }
+    }
+    changed
+}
+
+pub fn prepare_ordinary_conversation_workspace(
+    app: &AppHandle,
+    conversation: &mut Conversation,
+    ordinary_working_root: &str,
+) -> Result<PathBuf, String> {
+    if resolve_conversation_project(app, conversation)?.is_some() {
+        return resolve_conversation_working_directory(app, conversation, ordinary_working_root);
+    }
+    let target = crate::native_tools::conversation_workspace_directory(
+        ordinary_working_root,
+        &conversation.id,
+    )?;
+    let legacy = crate::native_tools::legacy_outputs_dir(&conversation.id)?;
+    if legacy.exists() {
+        crate::native_tools::merge_directory_without_overwrite(&legacy, &target)?;
+        if rewrite_conversation_artifact_paths(conversation, &[(legacy.clone(), target.clone())]) {
+            save_conversation_without_index(app, conversation)?;
+        }
+    }
+    Ok(target)
+}
+
+pub fn migrate_ordinary_conversation_workspaces(
+    app: &AppHandle,
+    old_root: &str,
+    new_root: &str,
+) -> Result<(), String> {
+    if old_root.trim() == new_root.trim() {
+        return Ok(());
+    }
+
+    struct WorkspaceMigration {
+        conversation: Option<Conversation>,
+        old_dir: PathBuf,
+        legacy_dir: PathBuf,
+        new_dir: PathBuf,
+    }
+
+    let index = load_index_or_scan(app)?;
+    let mut migrations = Vec::new();
+    for item in index.conversations {
+        let path = conversation_file_path(app, &item.id)?;
+        let conversation = if path.exists() {
+            Some(load_conversation(app, &item.id)?)
+        } else {
+            None
+        };
+        let project_bound = match conversation.as_ref() {
+            Some(conversation) => conversation_has_project_binding(app, conversation)?,
+            None => conversation_list_item_has_project_binding(app, &item)?,
+        };
+        if project_bound {
+            continue;
+        }
+        migrations.push(WorkspaceMigration {
+            conversation,
+            old_dir: crate::native_tools::conversation_workspace_directory(old_root, &item.id)?,
+            legacy_dir: crate::native_tools::legacy_outputs_dir(&item.id)?,
+            new_dir: crate::native_tools::conversation_workspace_directory(new_root, &item.id)?,
+        });
+    }
+
+    // Validate every conversation before moving the first file. This prevents a
+    // later name conflict from leaving earlier conversations on the new root.
+    for migration in &migrations {
+        if migration.old_dir.exists() {
+            crate::native_tools::preflight_directory_merge(&migration.old_dir, &migration.new_dir)?;
+        }
+        if migration.legacy_dir.exists() {
+            crate::native_tools::preflight_directory_merge(
+                &migration.legacy_dir,
+                &migration.new_dir,
+            )?;
+            if migration.old_dir.exists() {
+                crate::native_tools::preflight_directory_merge(
+                    &migration.legacy_dir,
+                    &migration.old_dir,
+                )?;
+            }
+        }
+    }
+
+    for mut migration in migrations {
+        let mut mappings = Vec::new();
+        if migration.old_dir.exists() {
+            crate::native_tools::merge_directory_without_overwrite(
+                &migration.old_dir,
+                &migration.new_dir,
+            )?;
+            mappings.push((migration.old_dir, migration.new_dir.clone()));
+        }
+        if migration.legacy_dir.exists() {
+            crate::native_tools::merge_directory_without_overwrite(
+                &migration.legacy_dir,
+                &migration.new_dir,
+            )?;
+            mappings.push((migration.legacy_dir, migration.new_dir.clone()));
+        }
+        if let Some(conversation) = migration.conversation.as_mut() {
+            if !mappings.is_empty() && rewrite_conversation_artifact_paths(conversation, &mappings)
+            {
+                save_conversation_without_index(app, conversation)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn resolve_conversation_working_directory(
+    app: &AppHandle,
+    conversation: &Conversation,
+    ordinary_working_root: &str,
+) -> Result<PathBuf, String> {
+    if let Some(project) = resolve_conversation_project(app, conversation)? {
+        let root = project
+            .root_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Project {} has no working directory configured",
+                    project.name
+                )
+            })?;
+        return Ok(PathBuf::from(root));
+    }
+    crate::native_tools::conversation_workspace_directory(ordinary_working_root, &conversation.id)
+}
+
 pub fn resolve_conversation_project(
     app: &AppHandle,
     conversation: &Conversation,
@@ -1228,6 +1448,77 @@ fn move_project_conversations(
 }
 
 #[cfg(test)]
+mod conversation_workspace_tests {
+    use super::*;
+
+    fn artifact(path: &Path) -> serde_json::Value {
+        serde_json::json!({
+            "name": "report.txt",
+            "mime_type": "text/plain",
+            "data_url": "",
+            "path": path.to_string_lossy()
+        })
+    }
+
+    #[test]
+    fn rewrites_message_and_tool_call_artifact_paths() {
+        let source = PathBuf::from("C:/old/conv_test");
+        let target = PathBuf::from("D:/new/conv_test");
+        let outside = PathBuf::from("C:/Desktop/keep.txt");
+        let direct = source.join("direct.txt");
+        let nested = source.join("nested/tool.txt");
+        let mut conversation: Conversation = serde_json::from_value(serde_json::json!({
+            "id": "conv_test",
+            "title": "test",
+            "provider_id": "provider",
+            "model": "model",
+            "created_at": 1,
+            "updated_at": 1,
+            "messages": [{
+                "id": "msg_1",
+                "role": "assistant",
+                "content": "done",
+                "timestamp": 1,
+                "artifacts": [artifact(&direct), artifact(&outside)],
+                "tool_calls": [{
+                    "id": "tool_1",
+                    "name": "write",
+                    "status": "success",
+                    "artifacts": [artifact(&nested)]
+                }]
+            }]
+        }))
+        .expect("conversation");
+
+        assert!(rewrite_conversation_artifact_paths(
+            &mut conversation,
+            &[(source, target.clone())]
+        ));
+        assert_eq!(
+            conversation.messages[0].artifacts[0].path.as_deref(),
+            Some(target.join("direct.txt").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            conversation.messages[0].artifacts[1].path.as_deref(),
+            Some(outside.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            conversation.messages[0].tool_calls[0].artifacts[0]
+                .path
+                .as_deref(),
+            Some(target.join("nested/tool.txt").to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn explicit_project_id_is_treated_as_project_binding() {
+        assert!(has_non_empty_value(Some("proj_missing")));
+        assert!(!has_non_empty_value(Some("  ")));
+        assert!(!has_non_empty_value(None));
+    }
+}
+
+#[cfg(test)]
 mod builtin_assistant_tests {
     use super::*;
 
@@ -1256,18 +1547,30 @@ mod builtin_assistant_tests {
         let mut ids: Vec<&str> = defs.iter().map(|d| d.id.as_str()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), defs.len(), "built-in assistant ids must be unique");
+        assert_eq!(
+            ids.len(),
+            defs.len(),
+            "built-in assistant ids must be unique"
+        );
 
         for d in &defs {
             // ids must satisfy validate_assistant_id (asst_ prefix + safe chars).
-            assert!(d.id.starts_with("asst_") && d.id.len() > "asst_".len(), "{}", d.id);
+            assert!(
+                d.id.starts_with("asst_") && d.id.len() > "asst_".len(),
+                "{}",
+                d.id
+            );
             assert!(d.built_in, "{} must be built_in", d.id);
             assert_eq!(d.source, "builtin", "{}", d.id);
             assert!(d.enabled && d.installed && !d.archived, "{}", d.id);
             // Inherit the user's selected model — never pin a provider/model.
             assert!(d.provider_id.is_empty() && d.model.is_empty(), "{}", d.id);
             // Honor normalize_assistant constraints so a later edit won't reject them.
-            assert!(!d.name.trim().is_empty() && d.name.chars().count() <= 64, "{}", d.id);
+            assert!(
+                !d.name.trim().is_empty() && d.name.chars().count() <= 64,
+                "{}",
+                d.id
+            );
             assert!(d.description.chars().count() <= 240, "{}", d.id);
             assert!(d.icon.chars().count() <= 8, "{}", d.id);
             assert!(!d.system_prompt.trim().is_empty(), "{}", d.id);
@@ -1279,7 +1582,10 @@ mod builtin_assistant_tests {
         let defs = builtin_assistant_definitions(1_700_000_000);
         let data = defs.iter().find(|d| d.id == "asst_builtin_data").unwrap();
         for skill in ["pdf", "docx", "xlsx"] {
-            assert!(data.skill_ids.iter().any(|s| s == skill), "missing skill {skill}");
+            assert!(
+                data.skill_ids.iter().any(|s| s == skill),
+                "missing skill {skill}"
+            );
         }
         // Researcher/coder need no document skills.
         let coder = defs.iter().find(|d| d.id == "asst_builtin_coder").unwrap();

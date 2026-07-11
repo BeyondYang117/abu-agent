@@ -7,8 +7,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use crate::commands::apply_launch_at_startup;
 use crate::lens_commands::{
     lens_request, lens_request_internal, lens_request_replace, lens_request_translate,
-    lens_request_translate_text,
-    request_lens_close,
+    lens_request_translate_text, request_lens_close,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -662,8 +661,9 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                         hotkey: replace_hotkey.clone(),
                         raw: None,
                     });
-                } else if let Err(err) =
-                    shortcut_manager.on_shortcut(replace_hotkey.as_str(), move |app, _shortcut, event| {
+                } else if let Err(err) = shortcut_manager.on_shortcut(
+                    replace_hotkey.as_str(),
+                    move |app, _shortcut, event| {
                         if event.state == ShortcutState::Pressed {
                             if lens_is_active(app) {
                                 let _ = request_lens_close(app);
@@ -676,8 +676,8 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                                 });
                             }
                         }
-                    })
-                {
+                    },
+                ) {
                     errors.push(classify_hotkey_error(
                         HotkeyScope::ScreenshotReplace,
                         replace_hotkey,
@@ -821,6 +821,9 @@ pub(crate) fn restore_runtime_settings(
         let mut guard = state.settings_write();
         *guard = previous.clone();
     }
+    state
+        .sub_agents
+        .set_concurrency(previous.chat_tools.sub_agent_concurrency);
 
     if let Err(err) = register_hotkeys(app) {
         eprintln!(

@@ -4,6 +4,7 @@ import {
   ExternalLink, Download, Upload, ChevronRight, Wrench, Sparkles, FolderOpen, Eye, EyeOff, Info,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
+import { homeDir, join } from '@tauri-apps/api/path'
 import { ChatMarkdown } from '../chat/ChatMarkdown'
 import {
   api,
@@ -2803,6 +2804,51 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </SettingRow>
                 </SettingsGroup>
 
+                <SettingsGroup title={lang === 'zh' ? '工作目录' : 'Workspace'}>
+                  <SettingRow label={lang === 'zh' ? '普通对话工作目录' : 'Conversation workspace'} stack>
+                    <div className="flex w-full flex-col gap-2">
+                      <div className="flex gap-2">
+                        <Input
+                          className="min-w-0 flex-1"
+                          value={chatTools.nativeTools?.workingDirectory ?? ''}
+                          placeholder={lang === 'zh' ? '默认：~/Kivio/workspace' : 'Default: ~/Kivio/workspace'}
+                          onChange={(workingDirectory) => updateNativeTools({ workingDirectory })}
+                        />
+                        <Button
+                          size="sm"
+                          className="shrink-0"
+                          onClick={async () => {
+                            const selected = await open({ directory: true, multiple: false })
+                            if (!selected || typeof selected !== 'string') return
+                            updateNativeTools({ workingDirectory: selected })
+                          }}
+                          data-tauri-drag-region="false"
+                        >
+                          <FolderOpen size={11} />
+                          {lang === 'zh' ? '选择' : 'Choose'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="shrink-0"
+                          onClick={async () => {
+                            const defaultPath = await join(await homeDir(), 'Kivio', 'workspace')
+                            updateNativeTools({ workingDirectory: defaultPath })
+                          }}
+                          data-tauri-drag-region="false"
+                        >
+                          <RefreshCw size={11} />
+                          {lang === 'zh' ? '恢复默认' : 'Reset'}
+                        </Button>
+                      </div>
+                      <p className="kv-row-desc">
+                        {lang === 'zh'
+                          ? '未绑定项目的普通对话会在此目录下按对话 ID 使用独立工作台；用户明确指定的其他路径不受限制。'
+                          : 'Ordinary chats get a per-conversation workbench here. Explicit paths chosen by the user remain unrestricted.'}
+                      </p>
+                    </div>
+                  </SettingRow>
+                </SettingsGroup>
+
                 <SettingsGroup title={t.defaultModelsSection}>
                   <SettingRow
                     label={t.defaultChatModel}
@@ -3308,48 +3354,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       checked={chatTools.nativeTools?.webFetch === true}
                       onChange={(webFetch) => updateNativeTools({ webFetch })}
                     />
-                  </SettingRow>
-                  <SettingRow label={lang === 'zh' ? '工作区根目录（可选）' : 'Workspace roots (optional)'} stack>
-                    <div className="flex w-full flex-col gap-2">
-                      {(chatTools.nativeTools?.workspaceRoots ?? []).map((path, index) => (
-                        <div key={`${path}-${index}`} className="flex gap-2">
-                          <Input
-                            className="min-w-0 flex-1"
-                            value={path}
-                            onChange={(value) => {
-                              const roots = [...(chatTools.nativeTools?.workspaceRoots ?? [])]
-                              roots[index] = value
-                              updateNativeTools({ workspaceRoots: roots })
-                            }}
-                          />
-                          <Button
-                            size="sm"
-                            className="shrink-0"
-                            onClick={() => {
-                              const roots = (chatTools.nativeTools?.workspaceRoots ?? []).filter((_, i) => i !== index)
-                              updateNativeTools({ workspaceRoots: roots })
-                            }}
-                            data-tauri-drag-region="false"
-                          >
-                            <Minus size={11} />
-                          </Button>
-                        </div>
-                      ))}
-                      <Button
-                        size="sm"
-                        className="self-start"
-                        onClick={async () => {
-                          const selected = await open({ directory: true, multiple: false })
-                          if (!selected || typeof selected !== 'string') return
-                          const roots = [...(chatTools.nativeTools?.workspaceRoots ?? []), selected]
-                          updateNativeTools({ workspaceRoots: roots })
-                        }}
-                        data-tauri-drag-region="false"
-                      >
-                        <FolderOpen size={11} />
-                        {lang === 'zh' ? '添加工作区目录' : 'Add workspace folder'}
-                      </Button>
-                    </div>
                   </SettingRow>
                 </SettingsGroup>
 

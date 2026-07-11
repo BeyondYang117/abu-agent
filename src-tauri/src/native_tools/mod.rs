@@ -3,17 +3,19 @@ mod files;
 mod sandbox_exports;
 mod shell;
 
-pub use fetch::web_fetch;
 pub(crate) use fetch::html_to_text;
+pub use fetch::web_fetch;
 pub use files::{
     edit_file, glob_files, list_dir, read_file, search_files, write_file, FileMutationResult,
     ReadFileResult, ReadFileState,
 };
+pub(crate) use sandbox_exports::preflight_directory_merge;
 pub use sandbox_exports::{
-    build_delivery_artifact_for_path, cleanup_stale_sandbox_exports, delivery_dir,
-    export_sandbox_artifacts, format_export_error, format_exported_paths,
-    path_under_delivery_dir, remove_sandbox_exports_for_conversation,
-    resolve_sandbox_export_file_path, SandboxExportContext,
+    build_delivery_artifact_for_path, cleanup_stale_sandbox_exports, export_sandbox_artifacts,
+    format_export_error, format_exported_paths, legacy_outputs_dir,
+    merge_directory_without_overwrite, path_under_directory,
+    remove_sandbox_exports_for_conversation, resolve_sandbox_export_file_path,
+    SandboxExportContext,
 };
 pub use shell::run_command;
 pub use shell::{
@@ -38,14 +40,34 @@ pub struct ProjectWorkspaceContext {
 #[derive(Debug, Clone)]
 pub struct NativeToolWorkspace {
     pub project: Option<ProjectWorkspaceContext>,
-    pub workspace_roots: Vec<String>,
+    /// Default workbench for a non-project conversation. This is an ergonomic
+    /// base path, never a sandbox or permission boundary.
+    pub default_directory: Option<PathBuf>,
 }
 
 impl NativeToolWorkspace {
+    /// Compatibility constructor for tests and standalone callers. The first
+    /// legacy root, when present, acts only as a default base directory.
     pub fn global(workspace_roots: &[String]) -> Self {
+        workspace_roots
+            .iter()
+            .map(|root| root.trim())
+            .find(|root| !root.is_empty())
+            .map(|root| Self::conversation(PathBuf::from(root)))
+            .unwrap_or_else(Self::standalone)
+    }
+
+    pub fn standalone() -> Self {
         Self {
             project: None,
-            workspace_roots: workspace_roots.to_vec(),
+            default_directory: None,
+        }
+    }
+
+    pub fn conversation(default_directory: PathBuf) -> Self {
+        Self {
+            project: None,
+            default_directory: Some(default_directory),
         }
     }
 
@@ -56,13 +78,48 @@ impl NativeToolWorkspace {
                 project_name,
                 root_path: root_path.map(PathBuf::from),
             }),
-            workspace_roots: Vec::new(),
+            default_directory: None,
         }
     }
 
     pub fn has_project(&self) -> bool {
         self.project.is_some()
     }
+
+    pub fn conversation_directory(&self) -> Option<&Path> {
+        if self.project.is_none() {
+            self.default_directory.as_deref()
+        } else {
+            None
+        }
+    }
+
+    pub fn default_output_directory(&self) -> Result<PathBuf, String> {
+        if self.has_project() {
+            project_root_required(self)
+        } else if let Some(path) = self.default_directory.as_ref() {
+            ensure_directory(path)
+        } else {
+            user_home_dir()
+        }
+    }
+}
+
+pub fn conversation_workspace_directory(
+    working_directory: &str,
+    conversation_id: &str,
+) -> Result<PathBuf, String> {
+    let valid = conversation_id.starts_with("conv_")
+        && conversation_id.len() > "conv_".len()
+        && conversation_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if !valid {
+        return Err(format!("Invalid conversation id: {conversation_id}"));
+    }
+    let root = candidate_path(working_directory)?;
+    let root = fs_canonicalize_existing_or_self(&root)?;
+    Ok(root.join(conversation_id))
 }
 
 pub fn user_home_dir() -> Result<PathBuf, String> {
@@ -80,10 +137,8 @@ pub fn user_home_dir() -> Result<PathBuf, String> {
     }
 }
 
-/// Resolve any path to an absolute, canonical form. No sandbox: absolute/`~`
-/// paths are taken as-is, relative paths are joined to the user home. Disk-wide
-/// access is gated by per-conversation session consent, not by path rules.
-/// `workspace_roots` is no longer a write boundary (kept for signature/back-compat).
+/// Legacy standalone resolver. Runtime tool calls should use the workspace-aware
+/// helpers below. There is no path confinement: absolute/`~` paths are honored.
 pub fn resolve_workspace_path(
     raw_path: &str,
     _workspace_roots: &[String],
@@ -96,32 +151,37 @@ pub fn resolve_tool_read_path(
     workspace: &NativeToolWorkspace,
     raw_path: &str,
 ) -> Result<PathBuf, String> {
-    if workspace.has_project() {
-        // An explicit absolute or ~/ path may leave the project root for reads,
-        // matching non-project conversations (reads are unrestricted there).
-        let expanded = expand_home_prefix(raw_path)?;
-        if Path::new(&expanded).is_absolute() {
-            return resolve_read_path(raw_path);
-        }
-        return resolve_project_path(workspace, raw_path, false);
-    }
-    resolve_read_path(raw_path)
+    resolve_tool_path(workspace, raw_path, false)
 }
 
 pub fn resolve_tool_write_path(
     workspace: &NativeToolWorkspace,
     raw_path: &str,
 ) -> Result<PathBuf, String> {
-    if workspace.has_project() {
-        // An explicit absolute or ~/ path may write anywhere on disk; a relative
-        // path resolves against the project root for ergonomics.
-        let expanded = expand_home_prefix(raw_path)?;
-        if Path::new(&expanded).is_absolute() {
-            return resolve_read_path(raw_path);
-        }
-        return resolve_project_path(workspace, raw_path, true);
+    resolve_tool_path(workspace, raw_path, true)
+}
+
+fn resolve_tool_path(
+    workspace: &NativeToolWorkspace,
+    raw_path: &str,
+    allow_missing: bool,
+) -> Result<PathBuf, String> {
+    let expanded = expand_home_prefix(raw_path)?;
+    if expanded.trim().is_empty() {
+        return Err("File path cannot be empty".to_string());
     }
-    resolve_workspace_path(raw_path, &workspace.workspace_roots)
+    let raw = Path::new(&expanded);
+    if raw.is_absolute() {
+        return canonicalize_existing_or_missing(raw, allow_missing);
+    }
+    if workspace.has_project() {
+        return resolve_project_path(workspace, raw_path, allow_missing);
+    }
+    let base = match workspace.default_directory.as_ref() {
+        Some(path) => ensure_directory(path)?,
+        None => user_home_dir()?,
+    };
+    canonicalize_existing_or_missing(&base.join(raw), allow_missing)
 }
 
 pub fn resolve_tool_existing_dir(
@@ -129,10 +189,20 @@ pub fn resolve_tool_existing_dir(
     raw_path: Option<&str>,
 ) -> Result<PathBuf, String> {
     if workspace.has_project() {
-        let path = match raw_path.map(str::trim).filter(|path| !path.is_empty()) {
-            Some(path) => resolve_project_path(workspace, path, false)?,
-            None => project_root_required(workspace)?,
-        };
+        if let Some(cwd_arg) = raw_path.map(str::trim).filter(|path| !path.is_empty()) {
+            let expanded = expand_home_prefix(cwd_arg)?;
+            if Path::new(&expanded).is_absolute() {
+                let path = resolve_read_path(cwd_arg)?;
+                if !path.is_dir() {
+                    return Err(format!(
+                        "Working directory is not a directory: {}",
+                        path.display()
+                    ));
+                }
+                return Ok(path);
+            }
+        }
+        let path = resolve_project_path(workspace, raw_path.unwrap_or("."), false)?;
         if !path.is_dir() {
             return Err(format!(
                 "Working directory is not a directory: {}",
@@ -142,34 +212,35 @@ pub fn resolve_tool_existing_dir(
         return Ok(path);
     }
 
-    if let Some(cwd_arg) = raw_path.map(str::trim).filter(|path| !path.is_empty()) {
-        let path = resolve_read_path(cwd_arg)?;
-        if !path.is_dir() {
-            return Err(format!(
-                "Working directory is not a directory: {}",
-                path.display()
-            ));
-        }
-        return Ok(path);
+    let path = match raw_path.map(str::trim).filter(|path| !path.is_empty()) {
+        Some(raw) => resolve_tool_path(workspace, raw, false)?,
+        None => match workspace.default_directory.as_ref() {
+            Some(path) => ensure_directory(path)?,
+            None => user_home_dir()?,
+        },
+    };
+    if !path.is_dir() {
+        return Err(format!(
+            "Working directory is not a directory: {}",
+            path.display()
+        ));
     }
+    Ok(path)
+}
 
-    if let Some(root) = workspace
-        .workspace_roots
-        .iter()
-        .map(|root| root.trim())
-        .find(|root| !root.is_empty())
-    {
-        let path = resolve_read_path(root)?;
-        if !path.is_dir() {
-            return Err(format!(
-                "Working directory is not a directory: {}",
-                path.display()
-            ));
-        }
-        return Ok(path);
-    }
-
-    user_home_dir()
+fn ensure_directory(path: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(path).map_err(|err| {
+        format!(
+            "Create conversation workspace failed ({}): {err}",
+            path.display()
+        )
+    })?;
+    fs::canonicalize(path).map_err(|err| {
+        format!(
+            "Resolve conversation workspace failed ({}): {err}",
+            path.display()
+        )
+    })
 }
 
 pub fn workspace_display_path(workspace: &NativeToolWorkspace, path: &Path) -> String {
@@ -366,5 +437,54 @@ mod tests {
         assert_eq!(resolved, fs::canonicalize(&file).expect("canonical file"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conversation_relative_paths_use_and_create_default_workbench() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_workspace_{}", uuid::Uuid::new_v4().simple()));
+        let workspace = NativeToolWorkspace::conversation(root.clone());
+        assert!(!root.exists());
+        let resolved = resolve_tool_write_path(&workspace, "reports/result.txt").expect("resolve");
+        assert!(root.is_dir());
+        assert_eq!(
+            resolved,
+            fs::canonicalize(&root).unwrap().join("reports/result.txt")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_absolute_path_does_not_create_conversation_workbench() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_workspace_{}", uuid::Uuid::new_v4().simple()));
+        let explicit = std::env::temp_dir().join(format!(
+            "kivio_explicit_{}.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let workspace = NativeToolWorkspace::conversation(root.clone());
+        let resolved =
+            resolve_tool_write_path(&workspace, &explicit.to_string_lossy()).expect("resolve");
+        let expected = fs::canonicalize(explicit.parent().expect("temp file parent"))
+            .expect("canonical temp dir")
+            .join(explicit.file_name().expect("temp file name"));
+        assert_eq!(resolved, expected);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn omitted_command_cwd_creates_and_uses_conversation_workbench() {
+        let root =
+            std::env::temp_dir().join(format!("kivio_workspace_{}", uuid::Uuid::new_v4().simple()));
+        let workspace = NativeToolWorkspace::conversation(root.clone());
+        let cwd = resolve_tool_existing_dir(&workspace, None).expect("cwd");
+        assert_eq!(cwd, fs::canonicalize(&root).unwrap());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conversation_workspace_directory_rejects_path_like_ids() {
+        assert!(conversation_workspace_directory("C:/tmp", "../conv_bad").is_err());
+        assert!(conversation_workspace_directory("C:/tmp", "conv_good-123").is_ok());
     }
 }
