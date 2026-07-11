@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kivio (formerly KeyLingo through v2.4.4; currently v2.7.x) is a desktop **AI assistant** built with **Tauri v2** (Rust backend) and **React 18 + Vite + TailwindCSS v4** (frontend). It runs on macOS and Windows. It began as a screen-level utility — global hotkey-triggered text translation, screenshot OCR/translation, and a Lens capture-then-ask vision overlay — and has grown a full **agentic chat application** (`src/chat/` + `src-tauri/src/chat/`) with a tool-calling agent loop, MCP servers, Skills, sub-agents, a Pyodide code sandbox, and a provider-agnostic model layer (OpenAI-compatible, Anthropic Messages, Gemini native, and OpenAI Responses). All AI calls go through user-configured providers.
+Kivio (formerly KeyLingo through v2.4.4) is a desktop **AI assistant** built with **Tauri v2** (Rust backend) and **React 18 + Vite + TailwindCSS v4** (frontend). It runs on macOS and Windows. It began as a screen-level utility — global hotkey-triggered text translation, screenshot OCR/translation, and a Lens capture-then-ask vision overlay — and has grown a full **agentic chat application** (`src/chat/` + `src-tauri/src/chat/`) with a tool-calling agent loop, MCP servers, Skills, sub-agents, a Pyodide code sandbox, and a provider-agnostic model layer (OpenAI-compatible, Anthropic Messages, Gemini native, and OpenAI Responses). All AI calls go through user-configured providers.
 
 **The codebase is now several products sharing one agent core.** The `chat::agent::run_agent_loop` loop is decoupled via the `AgentHost` trait and reused, unchanged, across four surfaces:
 - **GUI chat** (`chat/`) — the primary in-window agentic chat.
@@ -28,7 +28,7 @@ Use `npm` (lockfile is `package-lock.json`). Rust tooling is managed by Tauri.
 - `npm run lint` — run ESLint on `.ts` and `.tsx` files (`--max-warnings 0`, so warnings fail).
 - `npm run typecheck` — run `tsc --noEmit` for strict TypeScript checks.
 - `npm test` — run the **Vitest** frontend test suite once (`npm run test:watch` for watch mode). Run a single file with `npx vitest run src/chat/segments.test.ts`; filter by name with `-t "<pattern>"`.
-- `cargo test --manifest-path src-tauri/Cargo.toml` — run Rust unit tests (the agent loop has substantial coverage in `chat/agent/loop_tests.rs`; `kivio_code/` and `external_agents/` also carry meaningful test suites).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — run Rust unit tests (the agent loop has substantial coverage in `chat/agent/loop_tests.rs`; `kivio_code/` and `external_agents/` also carry meaningful test suites). **On Windows**, run Rust tests via `scripts/win-cargo-test.ps1` — plain `cargo test` test binaries fail to launch (`0xC0000139`). `--lib` also has ~14 pre-existing env/locale/path failures on a clean HEAD that are **not** regressions; compare against that baseline.
 
 There is no e2e runner; manual smoke testing is still required after changes that affect app flows (capture, hotkeys, streaming).
 
