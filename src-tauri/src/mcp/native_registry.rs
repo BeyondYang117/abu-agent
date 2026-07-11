@@ -29,7 +29,10 @@ use std::pin::Pin;
 use serde_json::Value;
 use tauri::AppHandle;
 
-use crate::native_tools::{FileMutationResult, NativeToolWorkspace};
+use crate::native_tools::{
+    build_delivery_artifact_for_path, resolve_tool_read_path, FileMutationResult,
+    NativeToolWorkspace,
+};
 use crate::settings::{ChatNativeToolsConfig, Settings};
 use crate::state::AppState;
 
@@ -40,8 +43,8 @@ use super::types::{
     native_memory_modify_tool, native_memory_read_tool, native_memory_search_tool,
     native_present_artifacts_tool, native_read_file_tool, native_run_command_tool,
     native_run_python_tool, native_save_assistant_tool, native_search_files_tool,
-    native_web_fetch_tool, native_web_search_tool, native_write_file_tool, ChatToolDefinition,
-    McpToolCallResult,
+    native_web_fetch_tool, native_web_search_tool, native_write_file_tool, ChatToolArtifact,
+    ChatToolDefinition, McpToolCallResult,
 };
 
 /// Gate signature mirrors `list_native_builtin_tool_defs(native,
@@ -865,26 +868,57 @@ fn call_save_assistant(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     })
 }
 
-fn call_present_artifacts(
-    _workspace: &NativeToolWorkspace,
-    arguments: &Value,
-) -> Result<McpToolCallResult, String> {
-    let raw_ids = arguments
-        .get("artifact_ids")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "present_artifacts requires artifact_ids".to_string())?;
-    let mut artifact_ids = Vec::new();
-    for value in raw_ids {
-        let Some(id) = value.as_str().map(str::trim).filter(|id| !id.is_empty()) else {
+fn string_list_argument(arguments: &Value, name: &str) -> Result<Vec<String>, String> {
+    let Some(values) = arguments.get(name) else {
+        return Ok(Vec::new());
+    };
+    let values = values
+        .as_array()
+        .ok_or_else(|| format!("present_artifacts {name} must be an array"))?;
+    let mut items = Vec::new();
+    for value in values {
+        let Some(item) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        else {
             continue;
         };
-        if !artifact_ids.iter().any(|existing| existing == id) {
-            artifact_ids.push(id.to_string());
+        if !items.iter().any(|existing| existing == item) {
+            items.push(item.to_string());
         }
     }
-    if artifact_ids.is_empty() {
-        return Err("present_artifacts requires at least one artifact ID".to_string());
+    Ok(items)
+}
+
+fn local_file_artifact(
+    workspace: &NativeToolWorkspace,
+    path: &str,
+) -> Result<ChatToolArtifact, String> {
+    let resolved = resolve_tool_read_path(workspace, path)?;
+    if !resolved.is_file() {
+        return Err(format!("Not a readable file: {path}"));
     }
+    build_delivery_artifact_for_path(&resolved)
+}
+
+fn call_present_artifacts(
+    workspace: &NativeToolWorkspace,
+    arguments: &Value,
+) -> Result<McpToolCallResult, String> {
+    let artifact_ids = string_list_argument(arguments, "artifact_ids")?;
+    let paths = string_list_argument(arguments, "paths")?;
+    if artifact_ids.is_empty() && paths.is_empty() {
+        return Err("present_artifacts requires artifact_ids or paths".to_string());
+    }
+    if artifact_ids.len() + paths.len() > 16 {
+        return Err("present_artifacts accepts at most 16 files".to_string());
+    }
+
+    let artifacts = paths
+        .iter()
+        .map(|path| local_file_artifact(workspace, path))
+        .collect::<Result<Vec<_>, _>>()?;
     let caption = arguments
         .get("caption")
         .and_then(Value::as_str)
@@ -899,10 +933,10 @@ fn call_present_artifacts(
         structured["caption"] = Value::String(caption);
     }
     Ok(McpToolCallResult {
-        content: "Selected artifacts will be displayed at this point in the response.".to_string(),
+        content: "Selected files will be displayed at this point in the response.".to_string(),
         is_error: false,
         raw: structured.clone(),
-        artifacts: Vec::new(),
+        artifacts,
         structured_content: Some(structured),
         follow_up_user_messages: Vec::new(),
     })
@@ -1255,5 +1289,38 @@ mod tests {
             }))
         );
         assert!(result.artifacts.is_empty());
+    }
+
+    #[test]
+    fn present_artifacts_loads_existing_local_file() {
+        let path = std::env::temp_dir().join(format!(
+            "kivio-present-artifact-{}.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&path, b"hello").expect("write test file");
+        let workspace = NativeToolWorkspace::standalone();
+        let result = call_present_artifacts(
+            &workspace,
+            &serde_json::json!({ "paths": [path.to_string_lossy()] }),
+        )
+        .expect("presentation result");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(result.artifacts.len(), 1);
+        assert_eq!(
+            result.artifacts[0].name,
+            path.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(result.artifacts[0].mime_type, "text/plain");
+        assert!(result.artifacts[0].path.as_deref().is_some_and(
+            |value| value.ends_with(path.file_name().unwrap().to_string_lossy().as_ref())
+        ));
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({
+                "type": "artifact_presentation",
+                "artifactIds": []
+            }))
+        );
     }
 }

@@ -506,14 +506,14 @@ pub fn build_chat_system_prompt_with_segments(
             .unwrap_or(false);
         let catalog =
             skills::format_catalog(registry, active_skill_id, tools_available, |skill_id| {
-            skill_allowed_for_conversation(
-                chat_tools,
-                assistant_snapshot,
-                skill_id,
-                email_accounts,
-                obsidian_vault_configured,
-            )
-        });
+                skill_allowed_for_conversation(
+                    chat_tools,
+                    assistant_snapshot,
+                    skill_id,
+                    email_accounts,
+                    obsidian_vault_configured,
+                )
+            });
         if !catalog.is_empty() {
             append_context_segment(&mut prompt, &mut segments, "skills", "Skills", &catalog);
         }
@@ -785,6 +785,9 @@ fn native_tools_prompt(
     let has_run_python = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "run_python");
+    let has_present_artifacts = native_tool_names
+        .iter()
+        .any(|tool| tool.as_str() == "present_artifacts");
     let has_write = native_tool_names
         .iter()
         .any(|tool| tool.as_str() == "write");
@@ -823,9 +826,15 @@ fn native_tools_prompt(
         } else {
             ""
         };
+        let presentation_hint = if has_present_artifacts {
+            "
+- When the user asks to show, preview, attach, or send a local file or image in the chat, you MUST call present_artifacts at the exact display point. Use artifact_ids for generated files and paths for existing local files. Reading or analyzing a file does NOT display it."
+        } else {
+            ""
+        };
         let generated_file_hint = match (workbench_dir, has_run_python) {
             (Some(dir), true) => format!(
-                "\n- Current default workbench: `{dir}`. When the user does not specify a location, use relative paths or the default cwd so files, basic work, and run_python artifacts land here. This is NOT a sandbox or access restriction: if the user names Desktop, an absolute path, `~/...`, or another directory, use that exact location instead. Files produced by write/run_python are registered as artifacts but are not shown automatically. When the user should see a generated file or image, call present_artifacts with the artifact IDs returned by the producing tool at the desired point in the response. Do not call run_python merely to write out content you already have."
+                "\n- Current default workbench: `{dir}`. When the user does not specify a location, use relative paths or the default cwd so files, basic work, and run_python artifacts land here. This is NOT a sandbox or access restriction: if the user names Desktop, an absolute path, `~/...`, or another directory, use that exact location instead. Files produced by write/run_python are registered as artifacts but are not shown automatically. Do not call run_python merely to write out content you already have."
             ),
             (Some(dir), false) => format!(
                 "\n- Current default workbench: `{dir}`. When the user does not specify a location, use relative paths or the default cwd so files and basic work land here. This is NOT a sandbox or access restriction: if the user names Desktop, an absolute path, `~/...`, or another directory, use that exact location instead."
@@ -843,7 +852,7 @@ fn native_tools_prompt(
 - Background commands (bash with background:true, or auto-detected dev servers): the call returns a job_id immediately and hands control back to you — keep working, do NOT poll right away. Read incremental output and exit status with bash_output (pass the job_id; use the returned next_offset for the next read), list all tracked jobs by calling bash_output with no job_id, and stop one with kill_background. Keep polling bounded (≤20 checks); status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.\n\
 - run_python runs in a Pyodide sandbox for data computation, analysis, document processing, charts, and generating files that REQUIRE a Python library (formatted XLSX, PDF, rendered images); never use it to generate or print code answers, and do not call it merely to write out content you already have (use write in the current workbench for that). Write code directly in the answer. No host filesystem access; mount files via the files parameter and use KIVIO_INPUT_FILES[n] paths. numpy, pandas, matplotlib, pillow, openpyxl, pypdf import directly. Save artifacts to relative filenames (report.xlsx, chart.png, summary.csv); Kivio captures them and returns artifact IDs. Generated files remain hidden unless you call present_artifacts at the point where the user should see them. No base64 printing.\n\
 - {live_access_hint}"
-        ) + &generated_file_hint + image_generation_hint + advisor_hint + code_discipline
+        ) + presentation_hint + &generated_file_hint + image_generation_hint + advisor_hint + code_discipline
     };
     if has_image_generation && !prompt.ends_with('.') && !prompt.ends_with('。') {
         prompt.push('.');
@@ -1016,6 +1025,40 @@ mod tests {
         );
         // The removed deliver_file tool must not appear anywhere.
         assert!(!prompt.contains("deliver_file"));
+    }
+
+    #[test]
+    fn chat_prompt_requires_present_artifacts_for_explicit_display() {
+        let registry = skills::SkillRegistry::default();
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+
+        let prompt = build_chat_system_prompt(
+            "zh-CN",
+            false,
+            false,
+            &registry,
+            &chat_tools,
+            true,
+            &["present_artifacts".to_string(), "read".to_string()],
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            None,
+        );
+
+        assert!(prompt.contains("MUST call present_artifacts"));
+        assert!(prompt.contains("paths for existing local files"));
+        assert!(prompt.contains("Reading or analyzing a file does NOT display it"));
     }
 
     #[test]

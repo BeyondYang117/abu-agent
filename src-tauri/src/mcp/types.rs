@@ -570,7 +570,7 @@ pub fn native_present_artifacts_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__present_artifacts".to_string(),
         name: "present_artifacts".to_string(),
-        description: "Display selected artifacts that were produced earlier in this assistant response. Artifact creation does not display files automatically. Call this tool exactly where the user should see the selected images or file cards, using only artifact IDs returned by previous tools in the current response. Never pass file paths or URLs. You may include a short caption. Artifacts not selected here remain hidden from the chat.".to_string(),
+        description: "Show files or images in the chat. You must call this when the user asks to show, preview, attach, or send a file; reading or describing a file does not display it. Use artifact_ids for generated files or paths for existing local files. Unselected files remain hidden.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -579,18 +579,28 @@ pub fn native_present_artifacts_tool() -> ChatToolDefinition {
             "properties": {
                 "artifact_ids": {
                     "type": "array",
-                    "description": "Artifact IDs returned by previous tool results in this response",
+                    "description": "Generated artifact IDs to display",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1,
+                    "maxItems": 16
+                },
+                "paths": {
+                    "type": "array",
+                    "description": "Existing local file paths to display",
                     "items": { "type": "string", "minLength": 1 },
                     "minItems": 1,
                     "maxItems": 16
                 },
                 "caption": {
                     "type": "string",
-                    "description": "Optional short caption shown above the artifacts",
+                    "description": "Optional short caption",
                     "maxLength": 300
                 }
             },
-            "required": ["artifact_ids"],
+            "anyOf": [
+                { "required": ["artifact_ids"] },
+                { "required": ["paths"] }
+            ],
             "additionalProperties": false
         }),
         sensitive: false,

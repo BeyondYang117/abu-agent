@@ -254,6 +254,9 @@ pub async fn execute_tool_call(
     let tool_content = match result {
         Ok(Ok(mut output)) if !output.is_error => {
             assign_artifact_ids(&mut output.artifacts);
+            if tool.name == "present_artifacts" {
+                complete_artifact_presentation(&mut output);
+            }
             record.status = ToolCallStatus::Success;
             record.artifacts = output.artifacts.clone();
             record.structured_content = output.structured_content.clone();
@@ -542,6 +545,27 @@ fn assign_artifact_ids(artifacts: &mut [ChatToolArtifact]) {
     }
 }
 
+fn complete_artifact_presentation(output: &mut McpToolCallResult) {
+    let Some(structured) = output.structured_content.as_mut() else {
+        return;
+    };
+    let Some(ids) = structured
+        .get_mut("artifactIds")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for artifact in &output.artifacts {
+        let Some(id) = artifact.id.as_deref() else {
+            continue;
+        };
+        if !ids.iter().any(|value| value.as_str() == Some(id)) {
+            ids.push(Value::String(id.to_string()));
+        }
+    }
+    output.raw = structured.clone();
+}
+
 fn artifact_presentation_hint(artifacts: &[ChatToolArtifact]) -> Option<String> {
     if artifacts.is_empty() {
         return None;
@@ -559,7 +583,7 @@ fn artifact_presentation_hint(artifacts: &[ChatToolArtifact]) -> Option<String> 
         return None;
     }
     Some(format!(
-        "Available artifacts (not shown automatically):\n{}\nCall present_artifacts with the selected artifact_ids exactly where the user should see them. Do not pass file paths or URLs.",
+        "Available artifacts (not shown automatically):\n{}\nCall present_artifacts with selected artifact_ids where the user should see them. Existing local files can be shown with paths.",
         items.join("\n")
     ))
 }
@@ -582,11 +606,19 @@ fn tool_content_with_structured_output(output: &McpToolCallResult, source: &str)
     } else {
         output.content.clone()
     };
-    if let Some(hint) = artifact_presentation_hint(&output.artifacts) {
-        if !content.trim().is_empty() {
-            content.push_str("\n\n");
+    let is_presentation = output
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str)
+        == Some("artifact_presentation");
+    if !is_presentation {
+        if let Some(hint) = artifact_presentation_hint(&output.artifacts) {
+            if !content.trim().is_empty() {
+                content.push_str("\n\n");
+            }
+            content.push_str(&hint);
         }
-        content.push_str(&hint);
     }
     content
 }
@@ -984,6 +1016,41 @@ mod tests {
     }
 
     #[test]
+    fn completes_path_based_presentation_with_assigned_ids() {
+        let mut output = McpToolCallResult {
+            content: "display".to_string(),
+            is_error: false,
+            raw: serde_json::json!({}),
+            artifacts: vec![ChatToolArtifact {
+                id: Some("art_local".to_string()),
+                name: "local.txt".to_string(),
+                mime_type: "text/plain".to_string(),
+                data_url: String::new(),
+                size_bytes: Some(5),
+                path: Some("C:\\tmp\\local.txt".to_string()),
+            }],
+            structured_content: Some(serde_json::json!({
+                "type": "artifact_presentation",
+                "artifactIds": ["art_existing"]
+            })),
+            follow_up_user_messages: Vec::new(),
+        };
+
+        complete_artifact_presentation(&mut output);
+
+        let expected = serde_json::json!({
+            "type": "artifact_presentation",
+            "artifactIds": ["art_existing", "art_local"]
+        });
+        assert_eq!(output.structured_content, Some(expected.clone()));
+        assert_eq!(output.raw, expected);
+        assert_eq!(
+            tool_content_with_structured_output(&output, "native"),
+            "display"
+        );
+    }
+
+    #[test]
     fn artifact_hint_exposes_ids_without_claiming_automatic_display() {
         let artifacts = vec![ChatToolArtifact {
             id: Some("art_report".to_string()),
@@ -999,7 +1066,7 @@ mod tests {
         assert!(hint.contains("art_report: report.txt (text/plain)"));
         assert!(hint.contains("not shown automatically"));
         assert!(hint.contains("present_artifacts"));
-        assert!(hint.contains("Do not pass file paths or URLs"));
+        assert!(hint.contains("Existing local files can be shown with paths"));
     }
 
     #[test]
