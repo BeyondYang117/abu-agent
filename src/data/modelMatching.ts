@@ -34,6 +34,17 @@ const dbKeys = Object.keys(db)
 // `claude-sonnet-4-6` 精确匹配不到 `claude-sonnet-4.6`，会前缀退化到旧的 `claude-sonnet-4`
 // → 显示成 "Claude Sonnet 4"（错）。统一把 `.` 视作 `-` 后再比对。
 const normalizeSep = (value: string): string => value.replace(/\./g, '-')
+
+// 版本延续判定：DB key 以数字结尾，且候选里紧跟其后的分段是「1~2 位纯数字」（`gpt-5` ← `gpt-5.6-luna`，
+// 归一化为 `gpt-5` ← `gpt-5-6-luna`），说明候选是更细的次级版本号（5 → 5.6），不能退化到基础版本，
+// 否则会把 `gpt-5.6-luna` 显示成 "GPT-5"。日期/快照后缀（`claude-opus-4-8-20260101`、`gpt-4-0125-…`，
+// 数字段 ≥3 位）不算版本延续，仍走正常前缀匹配。
+const isVersionContinuation = (keyNorm: string, candidate: string, endIdx: number): boolean => {
+  if (!/[0-9]/.test(keyNorm[keyNorm.length - 1])) return false
+  if (candidate[endIdx] !== '-') return false
+  const nextSegment = candidate.slice(endIdx + 1).split('-')[0]
+  return /^[0-9]{1,2}$/.test(nextSegment)
+}
 // 归一化键 → 原始键（首个占位；当前库无仅靠 `.`/`-` 区分的重复键）。
 const normalizedExact = new Map<string, string>()
 const normalizedEntries = dbKeys.map((orig) => {
@@ -84,7 +95,10 @@ export function matchModel(modelName: string): ModelInfo | null {
   const prefixMatches = normalizedEntries
     .filter((entry) =>
       normCandidates.some(
-        (candidate) => candidate.startsWith(entry.norm) && entry.norm.length < candidate.length,
+        (candidate) =>
+          candidate.startsWith(entry.norm) &&
+          entry.norm.length < candidate.length &&
+          !isVersionContinuation(entry.norm, candidate, entry.norm.length),
       ),
     )
     .sort((a, b) => b.norm.length - a.norm.length)
@@ -95,7 +109,12 @@ export function matchModel(modelName: string): ModelInfo | null {
   // 3. 包含匹配（归一化后最长 key 优先）
   const containsMatches = normalizedEntries
     .filter((entry) =>
-      normCandidates.some((candidate) => candidate.includes(entry.norm) && entry.norm !== candidate),
+      normCandidates.some((candidate) => {
+        if (entry.norm === candidate) return false
+        const idx = candidate.indexOf(entry.norm)
+        if (idx < 0) return false
+        return !isVersionContinuation(entry.norm, candidate, idx + entry.norm.length)
+      }),
     )
     .sort((a, b) => b.norm.length - a.norm.length)
   if (containsMatches.length > 0) {

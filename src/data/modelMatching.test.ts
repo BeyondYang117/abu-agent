@@ -42,6 +42,17 @@ describe('matchModel', () => {
     expect(matchModel('claude-opus-4-8-20260101')?.displayName).toBe('Claude Opus 4.8')
   })
 
+  it('does not collapse an unknown minor version onto its base entry', () => {
+    // gpt-5.6-* is not in the db; it must NOT fall back to the base "gpt-5" entry
+    // (that showed every gpt-5.6-luna/sol/terra as "GPT-5" in the enabled list).
+    expect(matchModel('gpt-5.6-luna')?.displayName).not.toBe('GPT-5')
+    expect(matchModel('gpt-5.6-luna')).toBeNull()
+    expect(matchModel('gpt-5.6-sol')).toBeNull()
+    // known minor versions still resolve exactly
+    expect(matchModel('gpt-5.5')?.displayName).toBe('GPT-5.5')
+    expect(matchModel('gpt-5')?.displayName).toBe('GPT-5')
+  })
+
   it('recognizes image generation model naming patterns', () => {
     const info = matchModel('dall-e-3')
     expect(info?.capabilities?.imageGeneration).toBe(true)
