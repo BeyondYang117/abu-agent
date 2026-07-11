@@ -168,6 +168,18 @@ pub(super) fn finish_auxiliary_vision_tool_record(
     record.error = error;
 }
 
+/// 会话里最后一条用户消息的正文（去空白，空则 None）。工具产出的图片走辅助视觉分析时，
+/// 用它补上"用户到底想问什么"的上下文，与直接附图路径（reply.rs 传 last_user_api_content）对齐。
+fn last_user_question(conversation: &super::Conversation) -> Option<&str> {
+    conversation
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.trim())
+        .filter(|c| !c.is_empty())
+}
+
 pub(super) async fn analyze_chat_images_with_auxiliary_model(
     state: &State<'_, AppState>,
     settings: &Settings,
@@ -308,7 +320,7 @@ pub(super) async fn read_image_as_tool_result(
             &aux,
             conversation_id,
             message_id,
-            None,
+            last_user_question(&conversation),
             std::slice::from_ref(&path_buf),
             retry_attempts,
             &language,
@@ -445,7 +457,7 @@ pub(super) async fn attach_image_artifacts_for_model(
         &aux,
         conversation_id,
         message_id,
-        None,
+        last_user_question(&conversation),
         &temp_paths,
         retry_attempts,
         &language,
