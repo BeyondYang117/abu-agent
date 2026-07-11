@@ -337,13 +337,15 @@ pub(super) async fn complete_assistant_reply_inner(
             Some(session_model_for_conversation(conversation)),
         ),
     );
-    let mut tools = list_tools_for_chat(
+    let tool_list = list_tools_for_chat(
         app,
         state.inner(),
         &settings,
         Some(session_model_for_conversation(conversation)),
     )
     .await;
+    let unavailable_mcp_servers = tool_list.unavailable_mcp_servers;
+    let mut tools = tool_list.tools;
     agent_prepare::apply_assistant_mcp_restrictions(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -432,15 +434,11 @@ pub(super) async fn complete_assistant_reply_inner(
     );
     // 从未成功连接的 MCP server：工具没法降级进列表，注一行说明让模型知道
     // "配置了但连不上"，而不是回答"没有这个工具"。
-    let system_prompt = match crate::mcp::registry::unreachable_mcp_servers_note(
-        state.inner(),
-        &settings,
-    )
-    .await
-    {
-        Some(note) => format!("{system_prompt}\n\n{note}"),
-        None => system_prompt,
-    };
+    let system_prompt =
+        match crate::mcp::registry::unavailable_mcp_servers_note(&unavailable_mcp_servers) {
+            Some(note) => format!("{system_prompt}\n\n{note}"),
+            None => system_prompt,
+        };
 
     let runtime_messages = build_chat_api_messages(
         &system_prompt,

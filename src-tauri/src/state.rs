@@ -16,7 +16,6 @@ use tokio::sync::oneshot;
 use crate::macos_ocr::MacOcrClient;
 use crate::mcp::manager::McpSession;
 use crate::mcp::types::{McpTool, PythonRunResult};
-use crate::mcp::ChatToolDefinition;
 use crate::native_tools::SandboxExportContext;
 use crate::rapidocr::RapidOcrClient;
 use crate::settings::Settings;
@@ -130,8 +129,6 @@ pub struct AppState {
     pub pending_python_runs: Mutex<HashMap<String, PendingPythonRun>>,
     /// 保护 Chat 空白会话复用的短临界区，避免快速多次新建时并发创建多个空白对话。
     pub chat_create_conversation_lock: Mutex<()>,
-    /// Chat MCP/native tool 列表缓存。key 由工具相关 settings 生成，避免每轮对话重复冷启动 server。
-    pub chat_tool_list_cache: Mutex<HashMap<String, (Instant, Vec<ChatToolDefinition>)>>,
     /// 外部 CLI 斜杠命令探测缓存（agent_id:cwd → 命令列表）。
     pub external_slash_commands_cache:
         Mutex<HashMap<String, (Instant, Vec<crate::external_agents::types::ExternalCliSlashCommand>)>>,
@@ -255,7 +252,6 @@ impl AppState {
             pending_chat_user_prompts: Mutex::new(HashMap::new()),
             pending_python_runs: Mutex::new(HashMap::new()),
             chat_create_conversation_lock: Mutex::new(()),
-            chat_tool_list_cache: Mutex::new(HashMap::new()),
             external_slash_commands_cache: Mutex::new(HashMap::new()),
             external_agent_models_cache: Mutex::new(HashMap::new()),
             external_detected_agents_cache: Mutex::new(None),
@@ -558,25 +554,6 @@ impl AppState {
         if let Err(err) = crate::chat::storage::atomic_write(&path, &content, "MCP tool snapshots")
         {
             eprintln!("Failed to persist MCP tool snapshots: {err}");
-        }
-    }
-
-    pub fn get_cached_chat_tools(
-        &self,
-        cache_key: &str,
-        ttl: Duration,
-    ) -> Option<Vec<ChatToolDefinition>> {
-        get_cached(&self.chat_tool_list_cache, cache_key, ttl)
-    }
-
-    pub fn set_cached_chat_tools(&self, cache_key: String, tools: Vec<ChatToolDefinition>) {
-        set_cached(&self.chat_tool_list_cache, cache_key, tools);
-    }
-
-    /// 插件启用/关闭、MCP 配置变更后清空工具列表缓存，下次收集强制重拉。
-    pub fn clear_chat_tool_list_cache(&self) {
-        if let Ok(mut guard) = self.chat_tool_list_cache.lock() {
-            guard.clear();
         }
     }
 

@@ -5,7 +5,7 @@
 //! [`collect_mcp_tools`] at startup and the executor calls [`dispatch_mcp_tool`];
 //! everything else (server connection, lifecycle, tool naming) lives here.
 //!
-//! It mirrors the GUI chat path (`chat/commands.rs::list_enabled_tool_defs` +
+//! It mirrors the GUI chat path (`chat/commands.rs::list_enabled_tool_catalog` +
 //! `call_tool`) but uses the persistent MCP session manager
 //! (`AppState::mcp_list_tools` / `AppState::mcp_call_tool`) with the unit
 //! [`McpEventSink`] (`()`) — the CLI needs no Tauri UI events, so no `AppHandle`
@@ -13,84 +13,29 @@
 //! the manager already time-boxes those (per `tool_timeout_ms`), and per-server
 //! failures are isolated so a broken server never crashes the CLI.
 
-use std::time::Duration;
-
-use crate::mcp::types::{tool_definition_from_mcp, McpToolCallResult};
+use crate::mcp::types::McpToolCallResult;
 use crate::mcp::ChatToolDefinition;
-use crate::settings::{ChatMcpServer, Settings};
+use crate::settings::Settings;
+#[cfg(test)]
+use crate::settings::ChatMcpServer;
 use crate::state::AppState;
 use serde_json::Value;
 
-/// Upper bound on how long collecting tools from a single MCP server may take
-/// before we give up and skip it, so a hung/slow server cannot block CLI
-/// startup forever. The manager has its own per-RPC timeout too; this is a
-/// belt-and-suspenders wall-clock cap around the whole connect + list.
-const COLLECT_PER_SERVER_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Connect configured & enabled MCP servers and collect their tool
-/// definitions.
+/// Collect the same enabled tool catalog used by the GUI chat path.
 ///
-/// Reads `settings.chat_tools` (the same config the GUI uses): MCP is only
-/// consulted when `chat_tools.enabled`, and only runtime-eligible servers are connected
-/// (plain servers must be enabled; plugin-backed servers must also have an enabled,
-/// installed plugin). Each server is listed concurrently via the persistent session
-/// manager; connection/listing failures are logged to stderr and that server is
-/// skipped (never panics, never aborts the others).
+/// Runtime eligibility, per-tool settings, concurrent discovery, reconnect
+/// backoff, and the matching last-known schema fallback all live in the shared
+/// MCP registry. The headless CLI deliberately adds no second timeout or
+/// fallback layer.
 pub async fn collect_mcp_tools(state: &AppState, settings: &Settings) -> Vec<ChatToolDefinition> {
-    if !settings.chat_tools.enabled {
-        return Vec::new();
-    }
-
-    let enabled_servers: Vec<&ChatMcpServer> = settings
-        .chat_tools
-        .servers
-        .iter()
-        .filter(|server| crate::mcp::registry::mcp_server_is_runtime_eligible(server))
-        .collect();
-    if enabled_servers.is_empty() {
-        return Vec::new();
-    }
-
-    // Concurrently connect + list each enabled server. Borrow `&AppState`
-    // futures and drive them with `join_all` (no 'static / spawn needed), the
-    // same pattern as the GUI's `list_enabled_tool_defs`.
-    let listings = enabled_servers.iter().map(|server| async move {
-        // Wall-clock cap around the whole connect+list so one stuck server
-        // cannot block startup; on timeout we treat it as a skip.
-        let result = match tokio::time::timeout(
-            COLLECT_PER_SERVER_TIMEOUT,
-            state.mcp_list_tools(&(), server),
-        )
+    crate::mcp::registry::collect_enabled_mcp_tool_defs(state, &(), settings)
         .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(format!(
-                "timed out after {}s",
-                COLLECT_PER_SERVER_TIMEOUT.as_secs()
-            )),
-        };
-        (*server, result)
-    });
-
-    let mut tools = Vec::new();
-    for (server, result) in futures::future::join_all(listings).await {
-        match result {
-            Ok(server_tools) => tools.extend(tools_from_mcp(server, server_tools)),
-            Err(err) => {
-                eprintln!(
-                    "kivio-code: MCP server '{}' unavailable, skipping its tools: {err}",
-                    server.name
-                );
-            }
-        }
-    }
-    tools
+        .0
 }
 
 /// Per-server connection status for the interactive `/mcp` command. A read-only
-/// view over the configured server list + a live connect probe (the same
-/// connect+list path `collect_mcp_tools` uses, with the same 20s wall-clock
-/// cap), so `/mcp` can show each server's transport, enabled flag, connection
+/// view over the configured server list + a live connect probe, so `/mcp` can
+/// show each server's transport, enabled flag, connection
 /// outcome, and the tool names it advertises (respecting `enabled_tools`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpServerStatus {
@@ -113,9 +58,9 @@ pub struct McpServerStatus {
 /// Probe configured & enabled MCP servers for the interactive `/mcp` command.
 ///
 /// Like [`collect_mcp_tools`] this reads `settings.chat_tools` (MCP only when
-/// `chat_tools.enabled`) and connects each enabled server concurrently with the
-/// same per-server wall-clock cap, but returns a per-server status (name,
-/// transport, enabled, connected, tool names, error) instead of a flat tool
+/// `chat_tools.enabled`) and connects each enabled server concurrently through
+/// the session manager, but returns a per-server status (name, transport,
+/// enabled, connected, tool names, error) instead of a flat tool
 /// list. Disabled servers are reported too (as `enabled = false`, not probed)
 /// so the user sees the full configured set. Returns an empty vec when chat
 /// tools are off or no servers are configured.
@@ -143,21 +88,10 @@ pub async fn collect_mcp_status(state: &AppState, settings: &Settings) -> Vec<Mc
                     .then(|| "backing plugin is disabled or not installed".to_string()),
             };
         }
-        let result = match tokio::time::timeout(
-            COLLECT_PER_SERVER_TIMEOUT,
-            state.mcp_list_tools(&(), server),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(format!(
-                "timed out after {}s",
-                COLLECT_PER_SERVER_TIMEOUT.as_secs()
-            )),
-        };
+        let result = state.mcp_list_tools(&(), server).await;
         match result {
             Ok(server_tools) => {
-                let tools = tools_from_mcp(server, server_tools)
+                let tools = crate::mcp::registry::tools_from_mcp(server, server_tools)
                     .into_iter()
                     .map(|tool| tool.name)
                     .collect();
@@ -184,25 +118,6 @@ pub async fn collect_mcp_status(state: &AppState, settings: &Settings) -> Vec<Mc
     });
 
     futures::future::join_all(probes).await
-}
-
-/// Filter a server's advertised tools by its `enabled_tools` allow-list (empty
-/// ⇒ allow all) and map each to a `ChatToolDefinition` (`source = "mcp"`,
-/// `server_id` set). Mirrors `chat/commands.rs::tools_from_mcp`.
-fn tools_from_mcp(
-    server: &ChatMcpServer,
-    tools: Vec<crate::mcp::types::McpTool>,
-) -> Vec<ChatToolDefinition> {
-    let allowed = server
-        .enabled_tools
-        .iter()
-        .map(|tool| tool.as_str())
-        .collect::<Vec<_>>();
-    tools
-        .into_iter()
-        .filter(|tool| allowed.is_empty() || allowed.contains(&tool.name.as_str()))
-        .map(|tool| tool_definition_from_mcp(server, tool))
-        .collect()
 }
 
 /// Dispatch a tool call to its MCP server.
@@ -408,7 +323,7 @@ mod tests {
                 annotations: None,
             },
         ];
-        let defs = tools_from_mcp(&server, mcp_tools);
+        let defs = crate::mcp::registry::tools_from_mcp(&server, mcp_tools);
         assert_eq!(defs.len(), 1, "non-enabled tool must be filtered out");
         let def = &defs[0];
         assert_eq!(def.name, "echo");
@@ -438,7 +353,7 @@ mod tests {
                 annotations: None,
             },
         ];
-        let defs = tools_from_mcp(&server, mcp_tools);
+        let defs = crate::mcp::registry::tools_from_mcp(&server, mcp_tools);
         assert_eq!(defs.len(), 2);
     }
 

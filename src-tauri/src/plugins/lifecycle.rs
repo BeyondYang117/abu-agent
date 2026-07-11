@@ -101,7 +101,6 @@ pub fn apply_enable_side_effects(
         guard.clone()
     };
     persist_settings(app, &updated)?;
-    state.clear_chat_tool_list_cache();
     Ok(())
 }
 
@@ -127,7 +126,6 @@ pub async fn apply_disable_side_effects(
     persist_settings(app, &updated)?;
 
     state.mcp_disconnect_server(&server_id).await;
-    state.clear_chat_tool_list_cache();
     // OfficeCLI 等：关掉插件时一并停掉 live preview 进程
     if plugin_id == "officecli" {
         super::preview::stop_all_previews();
@@ -185,7 +183,6 @@ pub fn ensure_officecli_mcp_flush_env(app: &AppHandle, state: &AppState) {
         guard.clone()
     };
     let _ = persist_settings(app, &updated);
-    state.clear_chat_tool_list_cache();
     // 旧 stdio 子进程没有 FLUSH=each；异步断开，下一轮工具调用会按新 env 重建
     let app2 = app.clone();
     let sid = server_id;

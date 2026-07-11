@@ -23,8 +23,6 @@ use super::{
     },
 };
 
-const TOOL_LIST_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-
 #[derive(Debug, Clone)]
 pub struct NativeToolContext {
     pub conversation_id: String,
@@ -169,39 +167,27 @@ struct CursorMcpServer {
     server_type: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct EnabledToolCatalog {
+    pub tools: Vec<ChatToolDefinition>,
+    pub unavailable_mcp_servers: Vec<String>,
+}
+
 #[tauri::command]
 pub async fn chat_mcp_list_tools(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<McpListToolsResult, String> {
-    Ok(match list_enabled_tool_defs(&app, &state).await {
-        Ok(tools) => McpListToolsResult {
-            success: true,
-            tools,
-            error: None,
-        },
-        Err(err) => McpListToolsResult {
-            success: false,
-            tools: Vec::new(),
-            error: Some(err),
-        },
+    let catalog = list_enabled_tool_catalog(&app, &state).await;
+    Ok(McpListToolsResult {
+        success: true,
+        tools: catalog.tools,
+        error: None,
     })
 }
 
-pub async fn list_enabled_tool_defs(
-    app: &AppHandle,
-    state: &AppState,
-) -> Result<Vec<ChatToolDefinition>, String> {
+pub async fn list_enabled_tool_catalog(app: &AppHandle, state: &AppState) -> EnabledToolCatalog {
     let settings = state.settings_read().clone();
-    // Resolve plugin/runtime eligibility once and use the same snapshot for both the cache key
-    // and the actual listings. This prevents plugin meta/binary state changes from reusing a
-    // native-only aggregate cached under settings that have not changed.
-    let enabled_servers = eligible_mcp_servers(&settings);
-    let cache_key = enabled_tools_cache_key(&settings, &enabled_servers);
-    if let Some(tools) = state.get_cached_chat_tools(&cache_key, TOOL_LIST_CACHE_TTL) {
-        return Ok(tools);
-    }
-
     let mut tools = list_native_builtin_tool_defs(
         &settings.chat_tools.native_tools,
         web_search_configured(&settings),
@@ -223,9 +209,6 @@ pub async fn list_enabled_tool_defs(
         tools.push(tool);
     }
 
-    // Advisor tool (executor-advisor): exposed only when an advisor model is
-    // configured. It lives in NATIVE_TOOLS (so find_entry dispatches it) but is
-    // gated out of the auto-list, so append it here like the image gen tool.
     if let Some((provider_id, model)) = settings.advisor_model() {
         let mut tool = super::types::native_advisor_tool();
         let provider_name = settings
@@ -242,60 +225,58 @@ pub async fn list_enabled_tool_defs(
         tools.push(tool);
     }
 
-    let mut failed_mcp_servers = Vec::new();
-    if settings.chat_tools.enabled {
-        // 并行从每个已启用 server 拉工具列表（持久会话，命中即复用）。失败仅置 Error
-        // 态并发事件（mcp_get_or_connect 内部已发），不阻塞其他 server。借用 &AppState 的
-        // future 用 join_all 并发驱动（无需 'static / spawn）。
-        let listings = enabled_servers.iter().map(|server| async move {
-            let result = state.mcp_list_tools(app, server).await;
-            (*server, result)
-        });
-        for (server, result) in futures::future::join_all(listings).await {
-            match result {
-                Ok(server_tools) => {
-                    tools.extend(tools_from_mcp(server, server_tools));
-                }
-                Err(err) => {
-                    eprintln!("MCP server {} failed while listing tools: {err}", server.name);
-                    // 降级：连接失败但曾成功握手过 ⇒ 复用上次的工具列表。工具仍对模型
-                    // 可见可调用；调用路径 get-or-connect 会自动重连，真不可达时把连接
-                    // 错误作为工具错误返回（模型会说"server 挂了"而非"没有这个工具"）。
-                    if let Some(cached) = state.mcp_cached_tools(server).await {
-                        tools.extend(tools_from_mcp(server, cached));
-                    }
-                    failed_mcp_servers.push(server.name.as_str());
-                }
-            }
-        }
-    }
-
-    if !failed_mcp_servers.is_empty() {
-        eprintln!(
-            "Chat tool list is incomplete and will not be cached; failed MCP servers: {}",
-            failed_mcp_servers.join(", ")
-        );
-    }
-
+    let (mcp_tools, unavailable_mcp_servers) =
+        collect_enabled_mcp_tool_defs(state, app, &settings).await;
+    tools.extend(mcp_tools);
     tools.extend(list_skill_tool_defs(&settings));
 
-    cache_tool_list_if_all_mcp_listed(state, cache_key, &tools, failed_mcp_servers.len());
-    Ok(tools)
-}
-
-fn cache_tool_list_if_all_mcp_listed(
-    state: &AppState,
-    cache_key: String,
-    tools: &[ChatToolDefinition],
-    failed_mcp_server_count: usize,
-) {
-    if failed_mcp_server_count == 0 {
-        state.set_cached_chat_tools(cache_key, tools.to_vec());
+    EnabledToolCatalog {
+        tools,
+        unavailable_mcp_servers,
     }
 }
 
-/// 把 server 返回的 McpTool 列表按 enabled_tools 过滤后映射成 ChatToolDefinition。
-fn tools_from_mcp(
+/// Discover the enabled MCP servers once. A live schema is preferred; when a
+/// connection fails, one matching last-known schema is the only fallback.
+/// There is deliberately no aggregate tool-list cache: connected sessions
+/// already retain their schema, and failed sessions already have reconnect
+/// backoff, so another cache only creates stale-state invalidation paths.
+pub(crate) async fn collect_enabled_mcp_tool_defs(
+    state: &AppState,
+    sink: &impl super::manager::McpEventSink,
+    settings: &crate::settings::Settings,
+) -> (Vec<ChatToolDefinition>, Vec<String>) {
+    let servers = eligible_mcp_servers(settings);
+    let listings = servers.iter().map(|server| async move {
+        let result = state.mcp_list_tools(sink, server).await;
+        (*server, result)
+    });
+
+    let mut tools = Vec::new();
+    let mut unavailable = Vec::new();
+    for (server, result) in futures::future::join_all(listings).await {
+        match result {
+            Ok(server_tools) => tools.extend(tools_from_mcp(server, server_tools)),
+            Err(err) => match state.mcp_cached_tools(server).await {
+                Some(last_known) => {
+                    eprintln!(
+                        "MCP server {} discovery failed; using its last-known tool schema: {err}",
+                        server.name
+                    );
+                    tools.extend(tools_from_mcp(server, last_known));
+                }
+                None => {
+                    eprintln!("MCP server {} discovery failed: {err}", server.name);
+                    unavailable.push(server.name.clone());
+                }
+            },
+        }
+    }
+    (tools, unavailable)
+}
+
+/// Apply the server's explicit per-tool setting. An empty list means all tools.
+pub(crate) fn tools_from_mcp(
     server: &ChatMcpServer,
     tools: Vec<crate::mcp::types::McpTool>,
 ) -> Vec<ChatToolDefinition> {
@@ -436,9 +417,6 @@ pub async fn chat_mcp_reload_server(
     server_id: String,
 ) -> Result<(), String> {
     state.mcp_reload_server(&app, &server_id).await;
-    // Reload is also the explicit schema-refresh action. Do not leave the aggregate tool
-    // definitions pinned to the pre-reload session for up to five minutes.
-    state.clear_chat_tool_list_cache();
     Ok(())
 }
 
@@ -568,49 +546,16 @@ fn eligible_mcp_servers(settings: &crate::settings::Settings) -> Vec<&ChatMcpSer
 
 /// 从未成功连接过（Error 态且无缓存工具）的已启用 server 说明，注入系统提示词：
 /// 让模型知道这些 server 已配置但当前不可用，而不是"不存在"。无此类 server ⇒ None。
-pub async fn unreachable_mcp_servers_note(
-    state: &AppState,
-    settings: &crate::settings::Settings,
-) -> Option<String> {
-    let unreachable = state.mcp_unreachable_server_ids().await;
-    if unreachable.is_empty() {
-        return None;
-    }
-    let names: Vec<&str> = eligible_mcp_servers(settings)
-        .into_iter()
-        .filter(|server| unreachable.iter().any(|id| id == &server.id))
-        .map(|server| server.name.as_str())
-        .collect();
+pub fn unavailable_mcp_servers_note(names: &[String]) -> Option<String> {
     if names.is_empty() {
         return None;
     }
     Some(format!(
         "MCP servers configured but currently unreachable (connection failed, tools unavailable): {}. \
          If the user asks about these tools, tell them the server is configured but failing to \
-         connect (they can check it in Settings) — do not claim the tool does not exist.",
+         connect (they can check it in Settings) ? do not claim the tool does not exist.",
         names.join(", ")
     ))
-}
-
-fn enabled_tools_cache_key(
-    settings: &crate::settings::Settings,
-    eligible_servers: &[&ChatMcpServer],
-) -> String {
-    let eligible_server_ids = eligible_servers
-        .iter()
-        .map(|server| server.id.as_str())
-        .collect::<Vec<_>>();
-    serde_json::to_string(&serde_json::json!({
-        "chatTools": settings.chat_tools,
-        "eligibleMcpServerIds": eligible_server_ids,
-        "chatMemory": settings.chat_memory,
-        "imageGeneration": settings.default_models.image_generation,
-        "advisor": settings.default_models.advisor,
-        "lensWebSearchProvider": settings.lens.web_search.provider,
-        "lensWebSearchMaxResults": settings.lens.web_search.max_results,
-        "lensWebSearchDepth": settings.lens.web_search.search_depth,
-    }))
-    .unwrap_or_else(|_| "chat-tools".to_string())
 }
 
 fn web_search_configured(settings: &crate::settings::Settings) -> bool {
@@ -1130,78 +1075,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_key_tracks_runtime_eligible_server_snapshot() {
-        let mut settings = crate::settings::Settings::default();
-        settings.chat_tools.enabled = true;
-        settings.chat_tools.servers = vec![ChatMcpServer {
-            id: "runtime-gated".to_string(),
-            name: "Runtime gated".to_string(),
-            enabled: true,
-            ..ChatMcpServer::default()
-        }];
-
-        let no_runtime_servers = enabled_tools_cache_key(&settings, &[]);
-        let runtime_servers = vec![&settings.chat_tools.servers[0]];
-        let with_runtime_server = enabled_tools_cache_key(&settings, &runtime_servers);
-
-        assert_ne!(
-            no_runtime_servers, with_runtime_server,
-            "plugin/meta eligibility changes must not reuse a native-only aggregate"
-        );
-    }
-
-    #[test]
     fn runtime_eligibility_rejects_disabled_server_and_accepts_plain_enabled_server() {
         let mut server = ChatMcpServer::default();
         assert!(!mcp_server_is_runtime_eligible(&server));
 
         server.enabled = true;
         assert!(mcp_server_is_runtime_eligible(&server));
-    }
-
-    #[test]
-    fn incomplete_mcp_tool_list_is_not_cached_and_recovery_can_replace_it() {
-        fn tool(name: &str, source: &str, server_id: Option<&str>) -> ChatToolDefinition {
-            ChatToolDefinition {
-                id: server_id
-                    .map(|server_id| format!("mcp__{server_id}__{name}"))
-                    .unwrap_or_else(|| name.to_string()),
-                name: name.to_string(),
-                description: name.to_string(),
-                source: source.to_string(),
-                server_id: server_id.map(str::to_string),
-                server_name: server_id.map(str::to_string),
-                input_schema: serde_json::json!({ "type": "object" }),
-                sensitive: false,
-                annotations: None,
-                output_schema: None,
-            }
-        }
-
-        let state = crate::state::test_app_state();
-        let cache_key = "mcp-tool-list-recovery".to_string();
-        let ttl = Duration::from_secs(60);
-        let partial = vec![tool("bash", "native", None)];
-
-        // A failed MCP listing returns native tools for graceful degradation, but the partial
-        // aggregate must not poison the five-minute cache used by the next model request.
-        cache_tool_list_if_all_mcp_listed(&state, cache_key.clone(), &partial, 1);
-        assert!(state.get_cached_chat_tools(&cache_key, ttl).is_none());
-
-        let mut complete = partial;
-        complete.push(tool("officecli", "mcp", Some("plugin-officecli")));
-        cache_tool_list_if_all_mcp_listed(&state, cache_key.clone(), &complete, 0);
-
-        let cached = state
-            .get_cached_chat_tools(&cache_key, ttl)
-            .expect("recovered complete list");
-        assert_eq!(
-            cached
-                .iter()
-                .map(|tool| tool.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["bash", "mcp__plugin-officecli__officecli"]
-        );
     }
 
     #[test]

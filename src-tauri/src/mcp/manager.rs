@@ -28,7 +28,7 @@ use reqwest::{
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, Command},
@@ -481,7 +481,7 @@ impl AppState {
         server: &ChatMcpServer,
         guard: &mut McpSession,
     ) -> Result<(), String> {
-        match self.mcp_connect_into(sink, server, guard).await {
+        match self.mcp_connect_into(server, guard).await {
             Ok(()) => {
                 guard.state = McpServerState::Connected;
                 guard.handshake_count = guard.handshake_count.saturating_add(1);
@@ -522,7 +522,6 @@ impl AppState {
     /// 建立 transport 并完成握手，把元数据写入会话（不改 state）。
     async fn mcp_connect_into(
         &self,
-        sink: &impl McpEventSink,
         server: &ChatMcpServer,
         session: &mut McpSession,
     ) -> Result<(), String> {
@@ -552,7 +551,6 @@ impl AppState {
                     server,
                     timeout_dur,
                     session.stderr_tail.clone(),
-                    sink.app_handle().cloned(),
                 )?);
                 let initialize_result = conn
                     .request("initialize", client::initialize_params(), timeout_dur)
@@ -713,7 +711,7 @@ impl AppState {
         result
     }
 
-    /// 返回某个 server 的工具列表（持久会话）。供 list_enabled_tool_defs 复用。
+    /// 返回某个 server 的工具列表（持久会话）。供 list_enabled_tool_catalog 复用。
     pub async fn mcp_list_tools(
         &self,
         sink: &impl McpEventSink,
@@ -1049,7 +1047,6 @@ fn spawn_stdio(
     server: &ChatMcpServer,
     timeout_dur: Duration,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
-    app_handle: Option<AppHandle>,
 ) -> Result<StdioConn, String> {
     if server.command.trim().is_empty() {
         return Err("MCP server command is empty".to_string());
@@ -1123,11 +1120,6 @@ fn spawn_stdio(
                                 write_stdio_message(&reader_stdin, &response, timeout_dur).await;
                         } else if method == "notifications/tools/list_changed" {
                             reader_tools_revision.fetch_add(1, Ordering::AcqRel);
-                            if let Some(app) = app_handle.as_ref() {
-                                if let Some(state) = app.try_state::<AppState>() {
-                                    state.clear_chat_tool_list_cache();
-                                }
-                            }
                         }
                         continue;
                     }

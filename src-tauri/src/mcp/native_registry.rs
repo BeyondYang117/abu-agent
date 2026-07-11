@@ -152,7 +152,7 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         def: native_advisor_tool,
         // Never auto-listed: exposure depends on `default_models.advisor` being
         // configured, which this gate can't see. Appended separately in
-        // `list_enabled_tool_defs` when configured (mirrors mixer_generate_image).
+        // `list_enabled_tool_catalog` when configured (mirrors mixer_generate_image).
         // find_entry still resolves it here for dispatch.
         enabled: |_, _, _| false,
         parallel_safe: true,

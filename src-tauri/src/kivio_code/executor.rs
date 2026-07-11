@@ -248,7 +248,7 @@ impl ToolExecutor for CliToolExecutor {
         let fallback = tool.name.clone();
         Box::pin(async move {
             // Skill tools are dispatched here (not in `dispatch`) because they
-            // need the mutable `skill_cache` to record activation / re-permit
+            // need the mutable `skill_cache` to record run-scoped activation
             // tools — mirroring `mcp::registry::call_skill_tool`.
             if tool.source == "skill" {
                 return self

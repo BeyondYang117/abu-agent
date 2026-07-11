@@ -94,23 +94,28 @@ pub(super) fn resolve_forced_skill_id(
     }
 }
 
+#[derive(Default)]
+pub(super) struct ChatToolList {
+    pub tools: Vec<ChatToolDefinition>,
+    pub unavailable_mcp_servers: Vec<String>,
+}
+
 pub(super) async fn list_tools_for_chat(
     app: &AppHandle,
     state: &AppState,
     settings: &Settings,
     session: Option<SessionModel<'_>>,
-) -> Vec<ChatToolDefinition> {
+) -> ChatToolList {
     if !(settings.chat_tools.enabled
         || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
         || crate::settings::chat_memory_tools_enabled(settings)
         || crate::settings::chat_image_generation_enabled_for_session(settings, session)
         || settings.advisor_model().is_some())
     {
-        return Vec::new();
+        return ChatToolList::default();
     }
-    let mut tools = mcp::registry::list_enabled_tool_defs(app, state)
-        .await
-        .unwrap_or_default();
+    let catalog = mcp::registry::list_enabled_tool_catalog(app, state).await;
+    let mut tools = catalog.tools;
     if let Some((provider_id, model)) =
         crate::chat::model_metadata::image_generation_model_for_session(settings, session)
     {
@@ -130,7 +135,10 @@ pub(super) async fn list_tools_for_chat(
             tools.push(tool);
         }
     }
-    tools
+    ChatToolList {
+        tools,
+        unavailable_mcp_servers: catalog.unavailable_mcp_servers,
+    }
 }
 
 pub(super) fn append_agent_todo_tools(tools: &mut Vec<ChatToolDefinition>) -> bool {

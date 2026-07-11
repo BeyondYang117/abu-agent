@@ -1,54 +1,59 @@
-# MCP Tool Discovery Cache
+# MCP Tool Discovery State
 
-> Applies to `src-tauri/src/mcp/registry.rs` aggregate chat-tool discovery, startup MCP warmup in `src-tauri/src/lib.rs`, and the headless `src-tauri/src/kivio_code/mcp_setup.rs` MCP path.
+> Applies to `src-tauri/src/mcp/registry.rs`, MCP session management, startup warmup, and the headless `src-tauri/src/kivio_code/mcp_setup.rs` path.
 
-## Completeness contract
+## Single discovery path
 
-- The long-lived chat tool-list cache may contain only a complete snapshot of every currently eligible enabled MCP server.
-- Native and skill tools may still be returned when one MCP server fails discovery so the UI remains usable, but that degraded aggregate is transient and must not enter the five-minute cache.
-- A later request must retry failed MCP discovery immediately rather than inheriting a stale native-only snapshot.
-- A running MCP child process is not proof that its tools were sent to the model. The authoritative evidence is the tool-definition array recorded for the actual model request.
+- Do not keep an aggregate chat-tool cache. Each request assembles tools from the current settings and current plugin runtime eligibility.
+- GUI chat and `kivio-code` must use the same MCP discovery function, per-tool `enabled_tools` setting, and runtime eligibility predicate.
+- Do not add outer timeouts or fallback layers around the session manager. The manager owns RPC timeouts, reconnect single-flight, and reconnect backoff.
+- Native tools, Skill definitions, and MCP tools are combined only after MCP discovery; Skill activation must never remove an enabled tool.
 
-## Startup ordering
+## Authoritative states
 
-- The chat UI may prefetch `chat_mcp_list_tools` while asynchronous MCP warmup is still running.
-- After startup warmup settles, clear the aggregate chat-tool cache. This invalidates any snapshot assembled against pre-warm session state.
-- Do not solve startup ordering with an arbitrary sleep. Session single-flight and cache invalidation are the synchronization mechanisms.
+There are only two MCP schema states:
+
+1. The live session schema retained by `McpSession` after a successful paginated `tools/list`.
+2. The persisted last-known schema snapshot for the exact same server configuration fingerprint.
+
+No third aggregate schema/cache is allowed. A running MCP process is not proof that a tool was sent to the model; the authoritative evidence is the tool-definition array recorded on the actual model request.
 
 ## Failure behavior
 
-- One failed MCP server must not block native tools or healthy MCP servers from being returned.
-- Log both the per-server listing error and that the aggregate was intentionally not cached.
-- Do not silently treat a partial list as a healthy cache hit.
-- Tool-discovery reconnects use bounded exponential cooldown after repeated failures so a dead server cannot impose a full spawn/handshake timeout on every chat turn.
-- Explicit tool execution bypasses discovery cooldown and attempts reconnection immediately; cooldown must never make a user-requested stale tool artificially unavailable.
+For every currently eligible server:
 
-## Last-known schema snapshots
+- Live discovery succeeds: use the live schema and replace the matching last-known snapshot.
+- Live discovery fails and a snapshot with the same configuration fingerprint exists: expose that last-known schema so an explicitly enabled tool does not disappear because of a temporary disconnect.
+- Live discovery fails and no matching snapshot exists: expose no tools for that server and record it as unavailable for the request prompt.
 
-- The last successful non-empty tool schema is independent from the live session and is persisted under the usage directory.
-- A snapshot is keyed by server id and a hashed fingerprint of the exact server configuration that produced it. Never persist raw credentials in the fingerprint.
-- Idle reap, reload, disconnect, and process restart may discard sessions without discarding a matching last-known schema.
-- A changed configuration must never reuse a snapshot from the previous fingerprint. Until the new configuration successfully lists tools, that server is unreachable rather than degraded-with-known-tools.
-- Successful initialization and a successful refresh after `notifications/tools/list_changed` both replace the stored snapshot.
+One failed server must not block native tools or healthy MCP servers. Explicit tool execution bypasses discovery cooldown and attempts reconnection immediately.
+
+## Configuration and eligibility
+
+- Plain MCP servers are eligible only when enabled in settings.
+- Plugin-backed MCP servers are eligible only when their settings entry is enabled and the owning plugin is installed and enabled.
+- `enabled_tools` is the only per-tool MCP allow-list. An empty list means all advertised tools are enabled.
+- A configuration fingerprint must cover the connection configuration without persisting raw credentials. A changed fingerprint must never reuse the previous schema snapshot.
+- Plugin enable/disable and configuration edits take effect on the next discovery naturally; no cache invalidation hook is required.
+
+## Startup and lifecycle
+
+- Startup warmup is only an optimization that pre-connects eligible servers. It is not part of tool-list correctness and must not populate or invalidate an aggregate cache.
+- Idle reap, reload, disconnect, and process restart may discard live sessions without discarding a matching last-known schema.
+- Reconnect attempts use the session manager's bounded backoff so an unavailable server does not impose a full handshake timeout on every request.
+
+## Dynamic schemas
+
+- Stdio `notifications/tools/list_changed` increments the connection schema revision.
+- The next discovery must refresh all `tools/list` pages and replace the live and last-known schemas.
+- Streamable HTTP push notifications remain unsupported until a persistent server-event listener exists.
 
 ## Required regression
 
-The cache-policy regression must demonstrate:
+Tests and live validation must demonstrate:
 
-1. a degraded native-only result is not cached;
-2. a subsequent recovered result containing the MCP tool can be cached;
-3. the recovered cache contains the model-facing MCP tool id.
-
-For live validation, restart Kivio, clear request-debug records, and verify that the first new model request already includes the expected `mcp__<server>__<tool>` definition without a user reminder.
-
-## Runtime eligibility and invalidation
-
-- Resolve the enabled MCP server snapshot once per aggregate build. The same snapshot must drive both the cache key and `tools/list`; do not recompute plugin gates after the cache lookup.
-- Plugin-backed servers are eligible only when the settings entry is enabled and the plugin is both enabled and installed. Include the eligible server ids in the aggregate cache key because plugin meta/binary state can change without changing settings.
-- Startup warmup, GUI aggregate discovery, headless tool collection/status probing, and both GUI/headless tool execution must share the same runtime eligibility predicate. A child process is not evidence that its tools should be exposed.
-- An explicit MCP reload is also a tool-schema refresh action and must invalidate the aggregate tool-list cache.
-- Idle session reaping does not require aggregate invalidation: reconnecting the same configuration preserves the advertised schema. Configuration fingerprints rebuild the session when server config changes.
-
-## Dynamic schema limitation
-
-Stdio `notifications/tools/list_changed` invalidates the aggregate cache and advances a per-connection revision; the next discovery fetches every page again and persists the refreshed schema. Streamable HTTP push notifications remain unsupported until a persistent server-event listener exists.
+1. GUI and headless discovery apply the same runtime eligibility and `enabled_tools` rules.
+2. Temporary discovery failure uses only a matching last-known schema.
+3. A server with no matching snapshot is reported unavailable without hiding native or healthy-server tools.
+4. The first model request after startup contains every expected `mcp__<server>__<tool>` definition.
+5. Skill activation does not change the enabled tool-definition set.

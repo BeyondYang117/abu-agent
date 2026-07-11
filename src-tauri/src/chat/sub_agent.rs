@@ -968,9 +968,9 @@ pub fn handle_agent_spawn<'a>(
         // NO todo tools, so it can never read or mutate any todo list. Task
         // delegation is top-down — the parent orchestrator owns the todos and
         // marks them itself (owner = sub-agent name) before/after the spawn.
-        let mut tools = crate::mcp::registry::list_enabled_tool_defs(ctx.app, ctx.state)
+        let mut tools = crate::mcp::registry::list_enabled_tool_catalog(ctx.app, ctx.state)
             .await
-            .unwrap_or_default();
+            .tools;
         crate::chat::agent::filter::filter_tools_for_agent(&mut tools, &def);
         let available_builtin_tools = available_builtin_tool_names(&tools);
 

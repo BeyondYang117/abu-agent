@@ -550,7 +550,8 @@ pub(super) async fn compute_context_state(
         &settings,
         Some(session_model_for_conversation(conversation)),
     )
-    .await;
+    .await
+    .tools;
     agent_prepare::apply_assistant_mcp_restrictions(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
