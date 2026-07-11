@@ -1,4 +1,8 @@
-use std::{collections::HashMap, process::Stdio, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    process::Stdio,
+    time::Duration,
+};
 
 use base64::{engine::general_purpose, Engine as _};
 use reqwest::{
@@ -17,7 +21,9 @@ use crate::settings::ChatMcpServer;
 
 use super::types::{ChatToolArtifact, McpTool, McpToolCallResult};
 
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+pub(crate) const MAX_TOOL_LIST_PAGES: usize = 100;
 
 /// JSON-RPC `initialize` params shared by every transport and the persistent
 /// session manager so handshake fields stay in one place.
@@ -32,7 +38,45 @@ pub(crate) fn initialize_params() -> Value {
     })
 }
 
-pub(crate) const MCP_PROTOCOL_VERSION_HEADER: &str = MCP_PROTOCOL_VERSION;
+pub(crate) fn negotiated_protocol_version(
+    initialize_result: &Value,
+    streamable_http: bool,
+) -> Result<String, String> {
+    let version = initialize_result
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "MCP initialize response is missing protocolVersion".to_string())?;
+    if !SUPPORTED_PROTOCOL_VERSIONS.contains(&version) {
+        return Err(format!(
+            "MCP server selected unsupported protocolVersion {version}"
+        ));
+    }
+    if streamable_http && version == "2024-11-05" {
+        return Err(
+            "MCP server selected protocolVersion 2024-11-05, which requires the legacy HTTP+SSE transport that Kivio does not support"
+                .to_string(),
+        );
+    }
+    Ok(version.to_string())
+}
+
+pub(crate) fn parse_tools_page(
+    value: &Value,
+    context: &str,
+) -> Result<(Vec<McpTool>, Option<String>), String> {
+    let tools = value
+        .get("tools")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let tools = serde_json::from_value(tools)
+        .map_err(|err| format!("{context} tools/list parse failed: {err}"))?;
+    let next_cursor = match value.get("nextCursor") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(cursor)) => Some(cursor.clone()),
+        Some(_) => return Err(format!("{context} tools/list nextCursor must be a string")),
+    };
+    Ok((tools, next_cursor))
+}
 
 pub struct StdioMcpClient {
     server: ChatMcpServer,
@@ -69,12 +113,28 @@ impl StdioMcpClient {
 
     pub async fn list_tools(&self) -> Result<Vec<McpTool>, String> {
         let mut session = self.connect().await?;
-        let value = session.request("tools/list", Value::Null).await?;
-        let tools = value
-            .get("tools")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-        serde_json::from_value(tools).map_err(|err| format!("MCP tools/list parse failed: {err}"))
+        let mut tools = Vec::new();
+        let mut cursor = None;
+        let mut seen = HashSet::new();
+        for _ in 0..MAX_TOOL_LIST_PAGES {
+            let params = cursor
+                .as_ref()
+                .map(|cursor| serde_json::json!({ "cursor": cursor }))
+                .unwrap_or(Value::Null);
+            let value = session.request("tools/list", params).await?;
+            let (page, next_cursor) = parse_tools_page(&value, "MCP")?;
+            tools.extend(page);
+            let Some(next_cursor) = next_cursor else {
+                return Ok(tools);
+            };
+            if !seen.insert(next_cursor.clone()) {
+                return Err("MCP tools/list returned a repeated nextCursor".to_string());
+            }
+            cursor = Some(next_cursor);
+        }
+        Err(format!(
+            "MCP tools/list exceeded {MAX_TOOL_LIST_PAGES} pages"
+        ))
     }
 
     pub async fn call_tool(
@@ -153,17 +213,43 @@ impl StreamableHttpMcpClient {
     }
 
     pub async fn list_tools(&self) -> Result<Vec<McpTool>, String> {
-        let session_id = self.initialize().await?;
-        let response = self
-            .request("tools/list", Value::Null, session_id.as_deref())
-            .await?;
-        let tools = response
-            .result
-            .get("tools")
-            .cloned()
-            .unwrap_or_else(|| Value::Array(Vec::new()));
-        serde_json::from_value(tools)
-            .map_err(|err| format!("MCP HTTP tools/list parse failed: {err}"))
+        let init = self.initialize().await?;
+        let result = async {
+            let mut tools = Vec::new();
+            let mut cursor = None;
+            let mut seen = HashSet::new();
+            for _ in 0..MAX_TOOL_LIST_PAGES {
+                let params = cursor
+                    .as_ref()
+                    .map(|cursor| serde_json::json!({ "cursor": cursor }))
+                    .unwrap_or(Value::Null);
+                let response = self
+                    .request(
+                        "tools/list",
+                        params,
+                        init.session_id.as_deref(),
+                        &init.protocol_version,
+                    )
+                    .await?;
+                let (page, next_cursor) = parse_tools_page(&response.result, "MCP HTTP")?;
+                tools.extend(page);
+                let Some(next_cursor) = next_cursor else {
+                    return Ok(tools);
+                };
+                if !seen.insert(next_cursor.clone()) {
+                    return Err("MCP HTTP tools/list returned a repeated nextCursor".to_string());
+                }
+                cursor = Some(next_cursor);
+            }
+            Err(format!(
+                "MCP HTTP tools/list exceeded {MAX_TOOL_LIST_PAGES} pages"
+            ))
+        }
+        .await;
+        let _ = self
+            .delete_session(init.session_id.as_deref(), &init.protocol_version)
+            .await;
+        result
     }
 
     pub async fn call_tool(
@@ -171,42 +257,46 @@ impl StreamableHttpMcpClient {
         name: &str,
         arguments: Value,
     ) -> Result<McpToolCallResult, String> {
-        let session_id = self.initialize().await?;
-        let response = self
+        let init = self.initialize().await?;
+        let result = self
             .request(
                 "tools/call",
                 serde_json::json!({
                     "name": name,
                     "arguments": arguments,
                 }),
-                session_id.as_deref(),
+                init.session_id.as_deref(),
+                &init.protocol_version,
             )
-            .await?;
-        Ok(parse_tool_result(response.result))
+            .await
+            .map(|response| parse_tool_result(response.result));
+        let _ = self
+            .delete_session(init.session_id.as_deref(), &init.protocol_version)
+            .await;
+        result
     }
 
-    async fn initialize(&self) -> Result<Option<String>, String> {
+    async fn initialize(&self) -> Result<HttpMcpInit, String> {
         let response = self
             .request(
                 "initialize",
-                serde_json::json!({
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "Kivio",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                }),
+                initialize_params(),
                 None,
+                MCP_PROTOCOL_VERSION,
             )
             .await?;
+        let protocol_version = negotiated_protocol_version(&response.result, true)?;
         self.notify(
             "notifications/initialized",
             Value::Null,
             response.session_id.as_deref(),
+            &protocol_version,
         )
         .await?;
-        Ok(response.session_id)
+        Ok(HttpMcpInit {
+            session_id: response.session_id,
+            protocol_version,
+        })
     }
 
     async fn notify(
@@ -214,6 +304,7 @@ impl StreamableHttpMcpClient {
         method: &str,
         params: Value,
         session_id: Option<&str>,
+        protocol_version: &str,
     ) -> Result<(), String> {
         let mut message = serde_json::json!({
             "jsonrpc": "2.0",
@@ -222,7 +313,9 @@ impl StreamableHttpMcpClient {
         if !params.is_null() {
             message["params"] = params;
         }
-        let response = self.post_json(message, session_id).await?;
+        let response = self
+            .post_json(message, session_id, protocol_version)
+            .await?;
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
@@ -240,75 +333,142 @@ impl StreamableHttpMcpClient {
         method: &str,
         params: Value,
         session_id: Option<&str>,
+        protocol_version: &str,
     ) -> Result<HttpMcpResponse, String> {
         let id = uuid::Uuid::new_v4().to_string();
-        let mut message = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-        });
-        if !params.is_null() {
-            message["params"] = params;
-        }
-        let response = self.post_json(message, session_id).await?;
-        let next_session_id = response
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.to_string())
-            .or_else(|| session_id.map(|value| value.to_string()));
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "MCP HTTP request failed {}: {}",
-                status.as_u16(),
-                text.chars().take(500).collect::<String>()
-            ));
-        }
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let value = if content_type.contains("text/event-stream") {
-            timeout(self.timeout, read_sse_json_rpc_response(response, &id))
-                .await
-                .map_err(|_| "MCP HTTP SSE read timed out".to_string())??
-        } else {
-            let text = timeout(self.timeout, response.text())
-                .await
-                .map_err(|_| "MCP HTTP read body timed out".to_string())?
-                .map_err(|err| format!("MCP HTTP read body failed: {err}"))?;
-            if text.trim_start().starts_with("event:") || text.trim_start().starts_with("data:") {
-                parse_sse_json_rpc(&text, &id)?
-            } else if text.trim().is_empty() {
-                Value::Null
-            } else {
-                serde_json::from_str(&text).map_err(|err| {
-                    format!(
-                        "MCP HTTP parse JSON failed: {} (body: {})",
-                        err,
-                        text.chars().take(500).collect::<String>()
-                    )
-                })?
+        let outcome = async {
+            let mut message = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id.clone(),
+                "method": method,
+            });
+            if !params.is_null() {
+                message["params"] = params;
             }
-        };
+            let response = self
+                .post_json(message, session_id, protocol_version)
+                .await?;
+            let next_session_id = response
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|value| value.to_str().ok())
+                .map(|value| value.to_string())
+                .or_else(|| session_id.map(|value| value.to_string()));
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                return Err(format!(
+                    "MCP HTTP request failed {}: {}",
+                    status.as_u16(),
+                    text.chars().take(500).collect::<String>()
+                ));
+            }
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let value = if content_type.contains("text/event-stream") {
+                timeout(self.timeout, read_sse_json_rpc_response(response, &id))
+                    .await
+                    .map_err(|_| "MCP HTTP SSE read timed out".to_string())??
+            } else {
+                let text = timeout(self.timeout, response.text())
+                    .await
+                    .map_err(|_| "MCP HTTP read body timed out".to_string())?
+                    .map_err(|err| format!("MCP HTTP read body failed: {err}"))?;
+                if text.trim_start().starts_with("event:") || text.trim_start().starts_with("data:")
+                {
+                    parse_sse_json_rpc(&text, &id)?
+                } else if text.trim().is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_str(&text).map_err(|err| {
+                        format!(
+                            "MCP HTTP parse JSON failed: {} (body: {})",
+                            err,
+                            text.chars().take(500).collect::<String>()
+                        )
+                    })?
+                }
+            };
 
-        if let Some(error) = value.get("error") {
-            return Err(format!("MCP HTTP error: {}", compact_json(error, 500)));
+            if let Some(error) = value.get("error") {
+                return Err(format!("MCP HTTP error: {}", compact_json(error, 500)));
+            }
+            Ok(HttpMcpResponse {
+                result: value.get("result").cloned().unwrap_or(Value::Null),
+                session_id: next_session_id,
+            })
         }
-        Ok(HttpMcpResponse {
-            result: value.get("result").cloned().unwrap_or(Value::Null),
-            session_id: next_session_id,
-        })
+        .await;
+
+        if method != "initialize"
+            && outcome
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.contains("timed out"))
+        {
+            let _ = self
+                .notify(
+                    "notifications/cancelled",
+                    serde_json::json!({
+                        "requestId": id,
+                        "reason": "Client request timed out",
+                    }),
+                    session_id,
+                    protocol_version,
+                )
+                .await;
+        }
+        outcome
+    }
+
+    async fn delete_session(
+        &self,
+        session_id: Option<&str>,
+        protocol_version: &str,
+    ) -> Result<(), String> {
+        let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) else {
+            return Ok(());
+        };
+        let mut headers = http_headers(&self.server.headers)?;
+        headers.insert(
+            HeaderName::from_static("mcp-session-id"),
+            HeaderValue::from_str(session_id)
+                .map_err(|err| format!("Invalid MCP session id header: {err}"))?,
+        );
+        headers.insert(
+            HeaderName::from_static("mcp-protocol-version"),
+            HeaderValue::from_str(protocol_version)
+                .map_err(|err| format!("Invalid MCP protocol version header: {err}"))?,
+        );
+        let response = timeout(
+            self.timeout.min(Duration::from_secs(5)),
+            self.http
+                .delete(self.server.url.clone())
+                .headers(headers)
+                .send(),
+        )
+        .await
+        .map_err(|_| "MCP HTTP session DELETE timed out".to_string())?
+        .map_err(|err| format!("MCP HTTP session DELETE failed: {err}"))?;
+        if response.status().is_success() || response.status().as_u16() == 404 {
+            Ok(())
+        } else {
+            Err(format!(
+                "MCP HTTP session DELETE failed {}",
+                response.status().as_u16()
+            ))
+        }
     }
 
     async fn post_json(
         &self,
         message: Value,
         session_id: Option<&str>,
+        protocol_version: &str,
     ) -> Result<reqwest::Response, String> {
         if self.server.url.trim().is_empty() {
             return Err("MCP HTTP server URL is empty".to_string());
@@ -320,7 +480,8 @@ impl StreamableHttpMcpClient {
         );
         headers.insert(
             HeaderName::from_static("mcp-protocol-version"),
-            HeaderValue::from_static(MCP_PROTOCOL_VERSION),
+            HeaderValue::from_str(protocol_version)
+                .map_err(|err| format!("Invalid MCP protocol version header: {err}"))?,
         );
         if let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) {
             let value = HeaderValue::from_str(session_id)
@@ -339,6 +500,11 @@ impl StreamableHttpMcpClient {
         .map_err(|_| "MCP HTTP request timed out".to_string())?
         .map_err(|err| format!("MCP HTTP request failed: {err}"))
     }
+}
+
+struct HttpMcpInit {
+    session_id: Option<String>,
+    protocol_version: String,
 }
 
 struct HttpMcpResponse {
@@ -379,18 +545,8 @@ pub(crate) async fn read_sse_json_rpc_response(
 
 impl StdioSession {
     async fn initialize(&mut self) -> Result<(), String> {
-        self.request(
-            "initialize",
-            serde_json::json!({
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "Kivio",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-            }),
-        )
-        .await?;
+        let result = self.request("initialize", initialize_params()).await?;
+        negotiated_protocol_version(&result, false)?;
         self.notify("notifications/initialized", Value::Null).await
     }
 
@@ -417,7 +573,23 @@ impl StdioSession {
             message["params"] = params;
         }
         self.write_message(&message).await?;
-        self.read_response(id).await
+        match self.read_response(id).await {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                if method != "initialize" && err.contains("timed out") {
+                    let _ = self
+                        .notify(
+                            "notifications/cancelled",
+                            serde_json::json!({
+                                "requestId": id,
+                                "reason": "Client request timed out",
+                            }),
+                        )
+                        .await;
+                }
+                Err(err)
+            }
+        }
     }
 
     async fn write_message(&mut self, message: &Value) -> Result<(), String> {
@@ -443,7 +615,22 @@ impl StdioSession {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            if value.get("id").and_then(|id| id.as_u64()) != Some(id) {
+            if let Some(method) = value.get("method").and_then(Value::as_str) {
+                if let Some(request_id) = value.get("id").cloned() {
+                    let response = if method == "ping" {
+                        serde_json::json!({"jsonrpc":"2.0","id":request_id,"result":{}})
+                    } else {
+                        serde_json::json!({
+                            "jsonrpc":"2.0",
+                            "id":request_id,
+                            "error":{"code":-32601,"message":"Method not found"}
+                        })
+                    };
+                    self.write_message(&response).await?;
+                }
+                continue;
+            }
+            if !json_rpc_id_matches(&value, &id.to_string()) {
                 continue;
             }
             if let Some(error) = value.get("error") {
@@ -611,7 +798,10 @@ fn content_block_text(item: &Value, artifacts: &mut Vec<ChatToolArtifact>) -> Op
     item.get("text")
         .and_then(|text| text.as_str())
         .map(|text| text.to_string())
-        .or_else(|| item.get("resource").map(|resource| compact_json(resource, 4000)))
+        .or_else(|| {
+            item.get("resource")
+                .map(|resource| compact_json(resource, 4000))
+        })
 }
 
 /// Builds a `ChatToolArtifact` from an MCP `image` content block
@@ -657,6 +847,36 @@ pub(crate) fn compact_json(value: &Value, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initialize_protocol_version_is_validated_per_transport() {
+        let current = serde_json::json!({ "protocolVersion": "2025-06-18" });
+        assert_eq!(
+            negotiated_protocol_version(&current, true).unwrap(),
+            "2025-06-18"
+        );
+
+        let legacy = serde_json::json!({ "protocolVersion": "2024-11-05" });
+        assert_eq!(
+            negotiated_protocol_version(&legacy, false).unwrap(),
+            "2024-11-05"
+        );
+        assert!(negotiated_protocol_version(&legacy, true)
+            .unwrap_err()
+            .contains("legacy HTTP+SSE"));
+
+        let unsupported = serde_json::json!({ "protocolVersion": "2099-01-01" });
+        assert!(negotiated_protocol_version(&unsupported, false)
+            .unwrap_err()
+            .contains("unsupported protocolVersion"));
+    }
+
+    #[test]
+    fn tools_page_rejects_non_string_cursor() {
+        let err = parse_tools_page(&serde_json::json!({ "tools": [], "nextCursor": 42 }), "MCP")
+            .unwrap_err();
+        assert!(err.contains("nextCursor must be a string"));
+    }
     use std::collections::HashMap;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},

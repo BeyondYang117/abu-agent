@@ -437,6 +437,17 @@ pub(super) async fn complete_assistant_reply_inner(
         &settings.email_accounts,
         email_accounts_prompt.as_deref(),
     );
+    // 从未成功连接的 MCP server：工具没法降级进列表，注一行说明让模型知道
+    // "配置了但连不上"，而不是回答"没有这个工具"。
+    let system_prompt = match crate::mcp::registry::unreachable_mcp_servers_note(
+        state.inner(),
+        &settings,
+    )
+    .await
+    {
+        Some(note) => format!("{system_prompt}\n\n{note}"),
+        None => system_prompt,
+    };
 
     let runtime_messages = build_chat_api_messages(
         &system_prompt,
