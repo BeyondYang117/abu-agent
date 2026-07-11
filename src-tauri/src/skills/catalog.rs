@@ -89,7 +89,6 @@ mod tests {
             location: PathBuf::from(format!("/skills/{id}/SKILL.md")),
             base_dir: PathBuf::from(format!("/skills/{id}")),
             body: String::new(),
-            allowed_tools: vec![],
         }
     }
 

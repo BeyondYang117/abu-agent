@@ -51,7 +51,6 @@ pub struct SkillRecord {
     pub location: PathBuf,
     pub base_dir: PathBuf,
     pub body: String,
-    pub allowed_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +235,6 @@ mod tests {
             location: PathBuf::from(format!("/skills/{id}/SKILL.md")),
             base_dir: PathBuf::from(format!("/skills/{id}")),
             body: String::new(),
-            allowed_tools: vec![],
         }
     }
 

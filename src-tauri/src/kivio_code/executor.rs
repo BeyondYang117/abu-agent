@@ -277,11 +277,9 @@ impl ToolExecutor for CliToolExecutor {
 impl CliToolExecutor {
     /// Dispatch the skill runtime tool (`skill`). Mirrors
     /// `mcp::registry::call_skill_tool`, but resolves the `SkillRecord` from the
-    /// pre-built `skill_registry` (so no `AppHandle` is required) and uses the
-    /// `skill_cache` exactly as the GUI does: activation records the activated
-    /// skill's `allowed_tools` so the loop re-permits them on the next planning
-    /// round (mid-run activation), and results are de-duplicated through the
-    /// cache when present.
+    /// pre-built `skill_registry` (so no `AppHandle` is required). Activation
+    /// injects the skill instructions and de-duplicates repeated activation; it
+    /// never changes the tools enabled for the run.
     async fn dispatch_skill(
         &self,
         tool: &ChatToolDefinition,
@@ -327,9 +325,6 @@ impl CliToolExecutor {
         let content = match tool.name.as_str() {
             "skill" => {
                 if let Some(cache) = skill_cache.as_deref_mut() {
-                    // T3: a model-activated skill narrows the tool set on later
-                    // rounds — record its allowed_tools before activating.
-                    cache.record_activated_allowed_tools(&record.allowed_tools);
                     cache.activate_with_cache(&record)
                 } else {
                     skills::activate_skill(&record)
@@ -709,7 +704,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skill_activate_records_allowed_tools_and_returns_instructions() {
+    async fn skill_activate_returns_instructions_without_changing_runtime_capabilities() {
         let (dir, executor) = skill_workspace();
         let mut cache = skills::SkillRunCache::default();
 
@@ -726,13 +721,6 @@ mod tests {
         assert!(!result.is_error);
         // Activation returns the skill instructions / body.
         assert!(result.content.contains("Do the thing"));
-        // Mid-run activation re-permits the skill's tools through the cache so
-        // the loop narrows the tool set on the next round (T3): the skill's
-        // declared allowed-tools must now be recorded in the cache.
-        assert!(
-            cache.activated_allowed_tools().iter().any(|t| t == "read"),
-            "skill's allowed_tools should be recorded for loop re-permit"
-        );
         // A second activation is recognized as already active — proving the
         // cache was mutated (activation state persisted).
         let again = executor

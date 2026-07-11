@@ -68,7 +68,7 @@ pub fn parse_list_value(value: Option<&String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn parse_allowed_tools(frontmatter: &HashMap<String, String>) -> Vec<String> {
+pub fn parse_recommended_tools(frontmatter: &HashMap<String, String>) -> Vec<String> {
     let mut tools = parse_list_value(frontmatter.get("recommended-tools"));
     tools.extend(parse_list_value(frontmatter.get("mcp-tools")));
     if let Some(raw) = frontmatter.get("allowed-tools") {
@@ -100,7 +100,7 @@ pub fn parse_skill_markdown(
         .cloned()
         .filter(|desc| !desc.trim().is_empty())
         .ok_or_else(|| "Skill description is required".to_string())?;
-    let recommended_tools = parse_allowed_tools(&frontmatter);
+    let recommended_tools = parse_recommended_tools(&frontmatter);
     let disable_model_invocation = parse_bool(
         frontmatter
             .get("disable-model-invocation")
@@ -163,19 +163,17 @@ pub fn parse_skill_record(
             detail.meta.name
         ));
     }
-    let allowed_tools = detail.meta.recommended_tools.clone();
     Ok(SkillRecord {
         meta: detail.meta,
         location: skill_md_path.to_path_buf(),
         base_dir,
         body: detail.body,
-        allowed_tools,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_allowed_tools, parse_list_value, parse_skill_markdown, split_frontmatter};
+    use super::{parse_list_value, parse_recommended_tools, parse_skill_markdown, split_frontmatter};
     use std::collections::HashMap;
 
     /// The vendored Obsidian skills must parse cleanly and their ids must match
@@ -236,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_allowed_tools_merges_recommended_mcp_and_allowed_tools() {
+    fn parse_recommended_tools_accepts_legacy_tool_declarations() {
         let mut frontmatter = HashMap::new();
         frontmatter.insert(
             "recommended-tools".to_string(),
@@ -248,7 +246,7 @@ mod tests {
             "edit_file read_file".to_string(),
         );
         assert_eq!(
-            parse_allowed_tools(&frontmatter),
+            parse_recommended_tools(&frontmatter),
             vec![
                 "edit_file".to_string(),
                 "read_file".to_string(),

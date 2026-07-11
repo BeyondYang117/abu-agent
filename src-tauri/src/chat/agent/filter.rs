@@ -2,9 +2,8 @@
 //!
 //! Narrows a tool list to an `AgentDefinition`'s allow-list and ALWAYS strips
 //! the `agent` spawn tool itself (second recursion guard alongside the depth
-//! check). Mirrors `prepare::retain_tools_for_allowed` semantics: monotonic,
-//! always keeps skill-runtime tools and Kivio built-ins that the agent is
-//! allowed, but unlike clawspring the allow-list is genuinely enforced.
+//! check). The sub-agent definition is an explicit settings-level policy: it
+//! keeps skill-runtime tools while enforcing the agent's configured tool list.
 
 use crate::agents::AgentDefinition;
 use crate::mcp::ChatToolDefinition;

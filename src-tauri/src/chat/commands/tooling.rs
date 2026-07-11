@@ -12,8 +12,8 @@ use crate::state::AppState;
 /// Returns `(skill_id, rewritten_content)` on a match. The rewrite is
 /// `"[Skill: name]\n\n{body}"` where `body` is the skill body with `$ARGUMENTS`
 /// / `$ARG_NAME` substituted from the trailing words. The resolved id then flows
-/// through the existing pin chain (resolve_forced_skill_id → active_skill_record
-/// → apply_active_skill_tool_filter + catalog/pin injection).
+/// through the existing pin chain (`resolve_forced_skill_id` -> active Skill
+/// catalog/prompt injection). Skill activation never changes enabled tools.
 ///
 /// `disable_model_invocation` only gates *model* auto-invocation, so it is
 /// intentionally ignored here — an explicit user slash command may still trigger

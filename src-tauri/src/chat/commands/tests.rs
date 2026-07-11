@@ -117,7 +117,6 @@ fn slash_skill_record(id: &str, name: &str, triggers: Vec<&str>) -> skills::Skil
         location: std::path::PathBuf::from(format!("/skills/{id}/SKILL.md")),
         base_dir: std::path::PathBuf::from(format!("/skills/{id}")),
         body: "Write a commit for: $ARGUMENTS (subject $MESSAGE)".to_string(),
-        allowed_tools: vec![],
     }
 }
 

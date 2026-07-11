@@ -14,10 +14,6 @@ pub struct SkillRunCache {
     /// Registry scanned at most once per run (T1). `None` until the first skill
     /// tool call builds it; reused for every subsequent call in the same run.
     registry: Option<SkillRegistry>,
-    /// Union of `allowed_tools` across every skill activated mid-run via the
-    /// `skill` tool (T3). The loop reads this to monotonically narrow the
-    /// tool set on subsequent planning rounds.
-    activated_allowed_tools: Vec<String>,
     /// 当前对话助手允许激活的技能 id 白名单(冻结自助手快照)。
     /// `None` = 无助手限制(全局行为);`Some(ids)` = 仅这些技能可激活,空集合 = 一个都不可。
     allowed_skill_ids: Option<Vec<String>>,
@@ -62,18 +58,6 @@ impl SkillRunCache {
             .expect("registry was just populated"))
     }
 
-    /// Accumulate a skill's allowed-tools into the run-wide set, de-duplicated.
-    pub fn record_activated_allowed_tools(&mut self, allowed_tools: &[String]) {
-        for tool in allowed_tools {
-            if !self.activated_allowed_tools.iter().any(|item| item == tool) {
-                self.activated_allowed_tools.push(tool.clone());
-            }
-        }
-    }
-
-    pub fn activated_allowed_tools(&self) -> &[String] {
-        &self.activated_allowed_tools
-    }
 
     pub fn activate_with_cache(&mut self, record: &SkillRecord) -> String {
         let key = record.meta.name.clone();
@@ -255,7 +239,6 @@ mod tests {
             location: PathBuf::from("/skills/demo/SKILL.md"),
             base_dir: PathBuf::from("/skills/demo"),
             body: "Skill body".to_string(),
-            allowed_tools: vec![],
         };
         let mut cache = SkillRunCache::default();
         let first = cache.activate_with_cache(&record);
@@ -282,16 +265,6 @@ mod tests {
         assert_eq!(builds.get(), 1, "registry must be built at most once per run");
     }
 
-    #[test]
-    fn record_activated_allowed_tools_dedupes() {
-        let mut cache = SkillRunCache::default();
-        cache.record_activated_allowed_tools(&["read_file".to_string(), "web_search".to_string()]);
-        cache.record_activated_allowed_tools(&["web_search".to_string(), "run_python".to_string()]);
-        assert_eq!(
-            cache.activated_allowed_tools(),
-            ["read_file", "web_search", "run_python"]
-        );
-    }
 
     #[test]
     fn substitute_arguments_replaces_full_and_positional() {

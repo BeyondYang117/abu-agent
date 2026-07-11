@@ -315,10 +315,6 @@ pub(super) async fn complete_assistant_reply_inner(
     if skill_id.is_none() && conversation.active_skill_id.is_some() {
         conversation.active_skill_id = None;
     }
-    let active_skill_record = skill_id
-        .as_deref()
-        .and_then(|id| skill_registry.find(id))
-        .cloned();
     let active_skill_detail = skill_id.as_deref().and_then(|id| {
         skills::read_skill_detail(app, &settings.chat_tools.skill_scan_paths, id).ok()
     });
@@ -357,9 +353,6 @@ pub(super) async fn complete_assistant_reply_inner(
         // 搭建会话只暴露 save_assistant,屏蔽文件/命令/MCP/技能等,保持聚焦。
         tools.clear();
         tools.push(crate::mcp::types::native_save_assistant_tool());
-    }
-    if let Some(skill) = active_skill_record.as_ref() {
-        agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
     }
     apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
     let blocked_tool_calls = apply_agent_plan_tool_filter(&mut tools, plan_mode);

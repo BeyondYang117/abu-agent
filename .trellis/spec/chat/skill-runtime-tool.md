@@ -22,9 +22,12 @@ skill 工具由两处派发,改一处必须同步另一处:
 - kivio_code(headless CLI,无 run_python):`kivio_code::executor::CliToolExecutor::dispatch_skill`(同样单分支)。
 两处都按 `tool.source == "skill"` 路由,按 `tool.name == "skill"` 分派。
 
-## 激活的副作用(T3 收窄,未变)
+## Skill activation and tool availability
 
-激活时 `SkillRunCache::record_activated_allowed_tools(&record.allowed_tools)` 把该 skill 的 `allowed_tools`(来自 frontmatter `recommended-tools`/`allowed-tools`)并入运行期允许集,loop 在后续轮次单调收窄工具面。助手 skill 白名单硬 gate(`skill_id_allowed`)在派发前拦截越权激活。
+- Activating a Skill only injects its instructions and resource directory into context and records whether it is already active in this run. It never changes the current or later tool lists.
+- `recommended-tools`, `mcp-tools`, and the legacy `allowed-tools` declaration are advisory metadata. They may guide the model but must never become a runtime allow-list.
+- Native and MCP tool availability is controlled only by explicit settings-level policies such as global tool settings and assistant configuration. If a tool is enabled there, activating or pinning a Skill cannot remove it.
+- The assistant `skill_id_allowed` gate remains: it controls which Skills an assistant may activate, not which tools remain available after activation.
 
 ## 验证入口
 

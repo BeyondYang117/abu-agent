@@ -881,7 +881,6 @@ mod tests {
             location: std::path::PathBuf::from("/skills/pdf/SKILL.md"),
             base_dir: std::path::PathBuf::from("/skills/pdf"),
             body: String::new(),
-            allowed_tools: vec![],
         };
         let registry = SkillRegistry {
             records: vec![record],

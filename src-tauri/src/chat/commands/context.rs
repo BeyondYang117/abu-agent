@@ -559,12 +559,6 @@ pub(super) async fn compute_context_state(
         tools.clear();
         tools.push(crate::mcp::types::native_save_assistant_tool());
     }
-    if let Some(skill) = active_skill_id
-        .as_deref()
-        .and_then(|id| skill_registry.find(id))
-    {
-        agent_prepare::apply_active_skill_tool_filter(&mut tools, skill);
-    }
     apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
     let plan_mode = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
     apply_agent_plan_tool_filter(&mut tools, plan_mode);

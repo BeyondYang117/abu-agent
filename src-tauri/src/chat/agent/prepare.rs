@@ -18,40 +18,9 @@ pub fn chat_tools_capable(
         || image_generation_enabled
 }
 
-pub fn apply_active_skill_tool_filter(
-    tools: &mut Vec<ChatToolDefinition>,
-    skill: &skills::SkillRecord,
-) {
-    retain_tools_for_allowed(tools, &skill.allowed_tools);
-}
-
-/// Narrow `tools` to those a skill's `allowed_tools` permits, while always
-/// keeping the skill-runtime tools and Kivio built-ins (so the model can still
-/// read skill files, run skill scripts, and use core tools). An empty `allowed`
-/// list is a no-op (skill declares no restriction).
-///
-/// This is intentionally **monotonic** (retain only, never re-expand): once a
-/// model-activated skill scopes the tool set, a later activation cannot widen it
-/// back. That matches the "scope tightening" semantics in the P2-B blueprint and
-/// composes order-independently with Plan-mode filtering.
-pub fn retain_tools_for_allowed(tools: &mut Vec<ChatToolDefinition>, allowed: &[String]) {
-    if allowed.is_empty() {
-        return;
-    }
-    tools.retain(|tool| {
-        tool.source == "skill"
-            || is_native_skill_tool_name(&tool.name)
-            || is_kivio_builtin_tool(tool)
-            || allowed
-                .iter()
-                .any(|recommended| tool_matches_recommended_name(tool, recommended))
-    });
-}
-
-/// 按助手白名单收窄 MCP 工具：仅保留 server_id 在 `mcp_server_ids` 内的 MCP 工具。
-/// 原生工具与技能工具不受影响（原生工具仍由全局聊天设置管控）。无助手快照 = 不限制。
-/// 注意：空 `mcp_server_ids` 必须清空所有 MCP 工具（语义与 `retain_tools_for_allowed`
-/// 的「空=不限」相反，故不能复用后者）。
+/// Apply the active assistant snapshot's explicit MCP server policy.
+/// Native and Skill tools are unaffected; `None` means unrestricted, while an
+/// empty `mcp_server_ids` list intentionally disables every MCP tool.
 pub fn apply_assistant_mcp_restrictions(
     tools: &mut Vec<ChatToolDefinition>,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
@@ -925,38 +894,6 @@ mod tests {
         assert!(is_native_skill_tool_name("skill"));
         assert!(is_native_skill_tool_name("skill_activate")); // 旧名兼容
         assert!(!is_native_skill_tool_name("web_search"));
-    }
-
-    #[test]
-    fn retain_tools_for_allowed_keeps_skill_and_builtins() {
-        let mut tools = vec![
-            crate::mcp::types::native_skill_activate_tool(),
-            crate::mcp::types::native_run_python_tool(),
-            crate::mcp::types::native_web_fetch_tool(),
-            test_mcp_tool(),
-        ];
-
-        // Allow only web_fetch among non-builtin/skill tools.
-        retain_tools_for_allowed(&mut tools, &["web_fetch".to_string()]);
-
-        // skill (skill runtime) and run_python / web_fetch (Kivio
-        // built-ins) are always kept; the MCP "search" tool is dropped because
-        // it is not skill/builtin and not in the allowed list.
-        assert!(tools.iter().any(|tool| tool.name == "skill"));
-        assert!(tools.iter().any(|tool| tool.name == "run_python"));
-        assert!(tools.iter().any(|tool| tool.name == "web_fetch"));
-        assert!(!tools.iter().any(|tool| tool.name == "search"));
-    }
-
-    #[test]
-    fn retain_tools_for_allowed_noop_when_empty() {
-        let mut tools = vec![
-            crate::mcp::types::native_skill_activate_tool(),
-            test_mcp_tool(),
-        ];
-        let before = tools.len();
-        retain_tools_for_allowed(&mut tools, &[]);
-        assert_eq!(tools.len(), before);
     }
 
     #[test]

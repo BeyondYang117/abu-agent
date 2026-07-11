@@ -653,7 +653,7 @@ async fn call_skill_tool(
 
     // Resolve the SkillRecord, preferring the run-scoped cached registry (T1).
     // Clone it out so we drop the immutable borrow on the cache before we need a
-    // mutable borrow for activate/read dispatch and T3 allowed-tools recording.
+    // mutable borrow for activate/read dispatch and run-scoped activation state.
     let mut skill_cache = skill_cache;
     let record = if let Some(cache) = skill_cache.as_deref_mut() {
         let registry = cache.registry_for(app, &settings.chat_tools.skill_scan_paths)?;
@@ -688,8 +688,6 @@ async fn call_skill_tool(
     let content = match tool.name.as_str() {
         "skill" => {
             if let Some(cache) = skill_cache.as_deref_mut() {
-                // T3: a model-activated skill narrows the tool set on later rounds.
-                cache.record_activated_allowed_tools(&record.allowed_tools);
                 cache.activate_with_cache(&record)
             } else {
                 crate::skills::activate_skill(&record)
