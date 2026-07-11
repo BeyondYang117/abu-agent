@@ -516,3 +516,36 @@ Extracted vision compatibility proxies and the complete command regression suite
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 普通对话工作台
+
+**Date**: 2026-07-11
+**Task**: 普通对话工作台
+**Branch**: `main`
+
+### Summary
+
+为未绑定项目的普通对话增加全局可配置、按对话隔离且按需创建的工作台；统一文件、命令和交付目录，支持迁移与删除，并将设置放入 AI 客户端页面。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a1cfb15` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
