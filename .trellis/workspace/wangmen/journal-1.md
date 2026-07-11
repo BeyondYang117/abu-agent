@@ -483,3 +483,36 @@ Extracted vision compatibility proxies and the complete command regression suite
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Chat commands split final cleanup
+
+**Date**: 2026-07-11
+**Task**: Chat commands split final cleanup
+**Branch**: `main`
+
+### Summary
+
+完成 chat command facade 的最终格式整理；确认拆分任务已归档、工作区干净，并成功启动当前工作区开发版供手动验收。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `09129b5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

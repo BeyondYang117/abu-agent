@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-07-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~485 | Active |
+| `journal-1.md` | ~518 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-07-11 | Chat commands split final cleanup | `09129b5` | `main` |
 | 14 | 2026-07-11 | Complete chat commands split | `3b6ea3c`, `7515100`, `6ea5d6a`, `a99fe88` | `main` |
 | 13 | 2026-07-06 | Windows 启动读取 PowerShell profile PATH 支持 fnm/nvm | `5b6df68` | `main` |
 | 12 | 2026-07-06 | 上下文 token 计量:真实用量锚点回喂(对齐 pi)+ gpt-5.x 窗口修正 | `ea15877`, `85a3056` | `feat/context-token-ground-truth` |
