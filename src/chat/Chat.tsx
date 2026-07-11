@@ -3373,6 +3373,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       const { LogicalSize } = await import('@tauri-apps/api/dpi')
       const min = sidebarCollapsed ? CHAT_MIN_SIZE_COLLAPSED : CHAT_MIN_SIZE_EXPANDED
       const win = getCurrentWindow()
+      // 最大化/全屏时不要动 min-size 或 size：Windows 上 setMinSize 会触发重排、把最大化状态取消掉
+      // （表现为切换侧边栏后窗口退出最大化）。尺寸约束对铺满屏幕的窗口也没意义，等恢复到可调窗口再应用。
+      if ((await win.isMaximized()) || (await win.isFullscreen())) return
+      if (cancelled) return
       await win.setMinSize(new LogicalSize(min.width, min.height))
       if (cancelled) return
 
