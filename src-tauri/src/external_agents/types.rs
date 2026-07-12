@@ -154,6 +154,12 @@ pub enum UnifiedAgentEvent {
     Error {
         message: String,
     },
+    /// A stdout line the stream handler could not parse as a known protocol event. Kept so an
+    /// otherwise-silent run (a CLI that printed a plain-text error/usage message instead of JSON)
+    /// surfaces its output instead of looking like it produced nothing.
+    Raw {
+        line: String,
+    },
     SlashCommands {
         commands: Vec<ExternalCliSlashCommand>,
     },
@@ -165,7 +171,14 @@ pub struct ExternalAgentSession {
     pub conversation_id: String,
     pub agent_id: String,
     pub session_id: String,
+    #[serde(default)]
     pub stable_prompt_hash: Option<String>,
+    /// Model this native session was created with. When the user's currently-selected model
+    /// differs, we start a fresh session instead of resuming (some CLIs — notably Claude — bake
+    /// the model into the session at create time and ignore `--model` on `--resume`). `None`
+    /// means "let the CLI use its default" (i.e. `--model` was not passed).
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 pub fn default_model_option() -> RuntimeModelOption {

@@ -15,6 +15,42 @@ pub struct SpawnedAgent {
     pub resolved_bin: PathBuf,
 }
 
+/// Concurrently drain the child's stderr into a JoinHandle so a CLI that reports failures on
+/// stderr doesn't (a) block on a full pipe while we read stdout, and (b) fail silently. Blank
+/// lines are dropped and the buffer is capped at `STDERR_CAP_CHARS` (keeping the tail — the last
+/// lines are usually the actual error). Call before the stdout read loop; await after `wait()`.
+pub fn drain_stderr(child: &mut Child) -> tokio::task::JoinHandle<String> {
+    const STDERR_CAP_CHARS: usize = 8192;
+    let stderr = child.stderr.take();
+    tokio::spawn(async move {
+        let Some(stderr) = stderr else {
+            return String::new();
+        };
+        let mut reader = BufReader::new(stderr).lines();
+        let mut out = String::new();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&line);
+            if out.chars().count() > STDERR_CAP_CHARS {
+                out = tail_chars(&out, STDERR_CAP_CHARS);
+            }
+        }
+        out
+    })
+}
+
+/// Keep the last `max_chars` characters of `value` (char-boundary safe).
+pub fn tail_chars(value: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let start = chars.len().saturating_sub(max_chars);
+    chars[start..].iter().collect()
+}
+
 pub async fn resolve_binary(def: &RuntimeAgentDef) -> Option<PathBuf> {
     for candidate in std::iter::once(def.bin).chain(def.fallback_bins.iter().copied()) {
         if let Some(path) = which_binary(candidate).await {

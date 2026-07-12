@@ -28,7 +28,9 @@ use crate::external_agents::session::pi_rpc::run_pi_rpc_session;
 use crate::external_agents::session::{persist_delivered_session, resolve_agent_resume_context};
 use crate::external_agents::skill_stage::{skill_cwd_alias_segment, stage_active_skill};
 use crate::external_agents::slash::{self};
-use crate::external_agents::spawn::{read_stdout_lines, resolve_binary, spawn_agent, write_prompt_stdin};
+use crate::external_agents::spawn::{
+    drain_stderr, read_stdout_lines, resolve_binary, spawn_agent, tail_chars, write_prompt_stdin,
+};
 use crate::external_agents::stream::create_stream_handler;
 use crate::external_agents::types::{
     RuntimeBuildOptions, RuntimeContext, StreamFormat, UnifiedAgentEvent,
@@ -132,6 +134,8 @@ pub async fn run_external_cli_reply(
         def.id,
         def.resumes_session_via_cli,
         &daemon_instructions,
+        conversation.agent_runtime.external_model.as_deref(),
+        is_slash,
     );
 
     let skill_dir = skill_detail
@@ -212,6 +216,7 @@ pub async fn run_external_cli_reply(
     };
     let mut content = String::new();
     let mut reasoning = String::new();
+    let mut raw_output = String::new();
     let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
     let mut tool_map: HashMap<String, usize> = HashMap::new();
     let mut usage: Option<ModelUsage> = None;
@@ -234,6 +239,7 @@ pub async fn run_external_cli_reply(
             &assistant_message_id,
             &mut content,
             &mut reasoning,
+            &mut raw_output,
             &mut tool_calls,
             &mut tool_map,
             &mut usage,
@@ -245,6 +251,13 @@ pub async fn run_external_cli_reply(
     };
 
     let cancel_check = || !state.is_chat_generation_active(&conversation_id, run_generation);
+
+    // Drain stderr concurrently with the stdout read below: keeps a full stderr pipe from
+    // blocking the child, and captures failure text a silent (non-JSON, empty-stdout) run would
+    // otherwise lose. Persistent protocols manage their own process, so there's no child here.
+    let stderr_task = spawned_opt
+        .as_mut()
+        .map(|spawned| drain_stderr(&mut spawned.child));
 
     let read_result = if persistent {
         let persistent_mcp: Vec<AcpMcpServer> = vec![];
@@ -336,25 +349,61 @@ pub async fn run_external_cli_reply(
         }
         None => None,
     };
-    if read_result.is_err() {
-        stream_outcome = "cancelled".to_string();
+    let stderr_output = match stderr_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => String::new(),
+    };
+    if let Err(err) = &read_result {
+        stream_outcome = if err == "cancelled" { "cancelled" } else { "error" }.to_string();
+        if err != "cancelled" && content.trim().is_empty() && raw_output.trim().is_empty() {
+            raw_output = format!("{} 读取输出失败：{}", def.name, err);
+        }
     } else if exit_code.map(|code| code != 0).unwrap_or(false) {
         if content.trim().is_empty() {
             stream_outcome = "error".to_string();
         }
     }
 
-    if content.trim().is_empty() && stream_outcome == "completed" {
-        if is_slash {
-            content = format!("{} 命令已执行", def.name);
-        } else {
+    // Fill empty content from the richest available fallback: captured raw stdout lines first,
+    // then stderr (as an explicit failure), then the slash / no-output placeholders.
+    if content.trim().is_empty() {
+        if !raw_output.trim().is_empty() {
+            content = raw_output.trim().to_string();
+        } else if !stderr_output.trim().is_empty() {
             stream_outcome = "error".to_string();
             content = format!(
-                "{} 未产生输出（exit={:?}，耗时 {}ms）",
+                "{} 执行失败：\n\n{}",
                 def.name,
-                exit_code,
-                started_at.elapsed().as_millis()
+                truncate_for_preview(stderr_output.trim(), 4000)
             );
+        } else if stream_outcome == "completed" {
+            if is_slash {
+                content = format!("{} 命令已执行", def.name);
+            } else {
+                stream_outcome = "error".to_string();
+                content = format!(
+                    "{} 未产生输出（exit={:?}，耗时 {}ms）",
+                    def.name,
+                    exit_code,
+                    started_at.elapsed().as_millis()
+                );
+            }
+        }
+    }
+
+    // A nonzero exit with stderr is a failure even if the CLI also produced some stdout — append
+    // the stderr (unless it's already the content) so the error is visible, not swallowed.
+    if exit_code.map(|code| code != 0).unwrap_or(false) && !stderr_output.trim().is_empty() {
+        stream_outcome = "error".to_string();
+        if !content.contains(stderr_output.trim()) {
+            if !content.trim().is_empty() {
+                content.push_str("\n\n");
+            }
+            content.push_str(&format!(
+                "{} stderr：\n\n{}",
+                def.name,
+                truncate_for_preview(stderr_output.trim(), 4000)
+            ));
         }
     }
 
@@ -377,6 +426,7 @@ pub async fn run_external_cli_reply(
         } else {
             &composed.instructions_block
         },
+        is_slash,
     )?;
 
     push_assistant_message(
@@ -711,6 +761,7 @@ fn apply_unified_event(
     message_id: &str,
     content: &mut String,
     reasoning: &mut String,
+    raw_output: &mut String,
     tool_calls: &mut Vec<ToolCallRecord>,
     tool_map: &mut HashMap<String, usize>,
     usage: &mut Option<ModelUsage>,
@@ -818,6 +869,17 @@ fn apply_unified_event(
         }
         UnifiedAgentEvent::Error { message, .. } => {
             eprintln!("[external-agent] stream error: {message}");
+        }
+        UnifiedAgentEvent::Raw { line } => {
+            // Unparsed stdout line — accumulate (capped) as a fallback surfaced only if the run
+            // produced no structured content.
+            if !raw_output.is_empty() {
+                raw_output.push('\n');
+            }
+            raw_output.push_str(&line);
+            if raw_output.chars().count() > 8192 {
+                *raw_output = tail_chars(raw_output, 8192);
+            }
         }
         _ => {}
     }
