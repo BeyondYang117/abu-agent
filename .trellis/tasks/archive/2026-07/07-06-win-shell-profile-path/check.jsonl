@@ -1,0 +1,1 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Check against AI-review false-positive patterns and pre-modification search rule; verify the profile-probe change stays read-only and cfg-isolated"}
