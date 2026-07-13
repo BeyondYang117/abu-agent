@@ -34,7 +34,14 @@ impl StreamHandler {
     pub fn handle_line(&mut self, line: &str, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
         let value = match serde_json::from_str::<Value>(line.trim()) {
             Ok(v) => v,
-            Err(_) => return,
+            Err(_) => {
+                // Not JSON — surface it as a raw line rather than dropping it, so a CLI that
+                // prints a plain-text error/notice doesn't leave the run looking empty.
+                sink(UnifiedAgentEvent::Raw {
+                    line: line.to_string(),
+                });
+                return;
+            }
         };
         match self {
             StreamHandler::Claude(state) => state.handle_value(&value, sink),

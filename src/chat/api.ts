@@ -913,6 +913,19 @@ export const chatApi = {
     return result.conversation
   },
 
+  async exportConversationMarkdown(
+    conversationId: string,
+    path: string,
+    language: 'zh' | 'en',
+  ): Promise<void> {
+    if (!isTauriRuntime()) throw new Error('Conversation export requires the desktop app')
+    await invoke<void>('chat_export_conversation_markdown', {
+      conversationId,
+      path,
+      language,
+    })
+  },
+
   // 创建新对话
   async createConversation(
     providerId?: string,

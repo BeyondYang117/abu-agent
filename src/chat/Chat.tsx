@@ -3458,6 +3458,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       <div className="flex h-full min-h-0 w-full">
         {chatView !== 'onboarding' ? (
         <Sidebar
+          lang={uiLang}
           currentConversationId={currentConversation?.id}
           generatingConversationIds={generatingConversationIds}
           optimisticConversations={optimisticSidebarConversations}

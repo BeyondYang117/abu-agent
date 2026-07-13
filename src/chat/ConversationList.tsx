@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
 import type { ChatProject, ChatSet, ConversationListItem } from './types'
+import type { Lang } from '../settings/i18n'
 import {
   ConversationContextMenu,
   type ConversationMenuAnchor,
@@ -31,6 +32,7 @@ interface ConversationListProps {
   generatingConversationIds?: ReadonlySet<string>
   projects: ChatProject[]
   sets: ChatSet[]
+  lang: Lang
   compact?: boolean
   indent?: boolean
   showAssistantName?: boolean
@@ -39,6 +41,7 @@ interface ConversationListProps {
   showFolderLabel?: boolean
   onSelectConversation: (id: string) => void
   onRenameConversation: (id: string, title: string) => Promise<void>
+  onExportConversation: (id: string, title: string) => Promise<void>
   onDeleteConversation: (id: string) => Promise<void>
   onMoveConversationToProject: (id: string, projectId: string | undefined) => Promise<void>
   onMoveConversationToSet: (id: string, setId: string | undefined) => Promise<void>
@@ -50,12 +53,14 @@ export const ConversationList = memo(function ConversationList({
   generatingConversationIds = new Set(),
   projects,
   sets,
+  lang,
   compact = false,
   indent = false,
   showAssistantName = true,
   showFolderLabel = false,
   onSelectConversation,
   onRenameConversation,
+  onExportConversation,
   onDeleteConversation,
   onMoveConversationToProject,
   onMoveConversationToSet,
@@ -234,7 +239,9 @@ export const ConversationList = memo(function ConversationList({
           conversationSetId={menuConversation.set_id ?? menuConversation.setId ?? null}
           projects={projects}
           sets={sets}
+          lang={lang}
           onRename={() => startRename(menuConversation)}
+          onExport={() => void onExportConversation(menuConversation.id, menuConversation.title)}
           onMoveToProject={(projectId) => void onMoveConversationToProject(menuConversation.id, projectId)}
           onMoveToSet={(setId) => void onMoveConversationToSet(menuConversation.id, setId)}
           onDelete={() => void onDeleteConversation(menuConversation.id)}

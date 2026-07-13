@@ -970,6 +970,7 @@ mod tests {
             UnifiedAgentEvent::ToolResult { .. } => "ToolResult",
             UnifiedAgentEvent::Usage { .. } => "Usage",
             UnifiedAgentEvent::Error { .. } => "Error",
+            UnifiedAgentEvent::Raw { .. } => "Raw",
             UnifiedAgentEvent::SlashCommands { .. } => "SlashCommands",
         }
     }

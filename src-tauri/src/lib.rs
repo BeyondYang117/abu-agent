@@ -47,6 +47,8 @@ use commands::apply_launch_at_startup;
 use native_tools::cleanup_stale_sandbox_exports;
 use screenshot::cleanup_orphan_temp_files;
 use settings::load_settings;
+#[cfg(target_os = "macos")]
+use shortcuts::set_macos_regular_activation_policy;
 use shortcuts::{
     display_hotkey_errors, open_chat_window, open_settings_window_for_activation, register_hotkeys,
     setup_tray,
@@ -201,12 +203,13 @@ pub fn run() {
 
             #[cfg(target_os = "macos")]
             {
-                let activation_policy = if launched_from_autostart {
-                    tauri::ActivationPolicy::Accessory
+                if launched_from_autostart {
+                    let _ = app
+                        .handle()
+                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
                 } else {
-                    tauri::ActivationPolicy::Regular
-                };
-                let _ = app.handle().set_activation_policy(activation_policy);
+                    set_macos_regular_activation_policy(app.handle());
+                }
             }
 
             // 清理上次崩溃 / 强杀 / 旧版本遗留的截图 PNG（24h 之前的，避免误删并发实例的活文件）
@@ -451,6 +454,7 @@ pub fn run() {
             chat::commands::interaction::chat_kill_background_command,
             chat::commands::catalog::chat_search_conversations,
             chat::commands::catalog::chat_get_conversation,
+            chat::export::chat_export_conversation_markdown,
             chat::commands::catalog::chat_create_conversation,
             chat::commands::catalog::chat_import_external_conversation,
             chat::commands::catalog::chat_create_builder_conversation,
