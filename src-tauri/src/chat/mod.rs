@@ -4,6 +4,7 @@ pub mod ask_user;
 pub mod attachments;
 pub mod commands;
 pub mod dsml_tools;
+pub mod export;
 pub mod image_generation;
 pub mod knowledge_base;
 mod mcp_image_feedback;

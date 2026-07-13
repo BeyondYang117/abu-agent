@@ -454,6 +454,7 @@ pub fn run() {
             chat::commands::interaction::chat_kill_background_command,
             chat::commands::catalog::chat_search_conversations,
             chat::commands::catalog::chat_get_conversation,
+            chat::export::chat_export_conversation_markdown,
             chat::commands::catalog::chat_create_conversation,
             chat::commands::catalog::chat_import_external_conversation,
             chat::commands::catalog::chat_create_builder_conversation,

@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { save } from '@tauri-apps/plugin-dialog'
 import {
   ChevronRight,
   Folder,
@@ -27,6 +28,8 @@ import { chatTitlebarMacInsetClass, chatTitlebarRowClass, isMac } from './platfo
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
 import type { ChatUserProfile } from './types'
 import { UserAvatar } from './UserAvatar'
+import type { Lang } from '../settings/i18n'
+import { conversationMarkdownFilename } from './conversationExport'
 
 function resolveChatUserProfile(
   chat?: { userDisplayName?: string; userAvatar?: string } | null,
@@ -95,6 +98,7 @@ function conversationProjectLabel(
 }
 
 interface SidebarProps {
+  lang: Lang
   currentConversationId?: string
   generatingConversationIds?: ReadonlySet<string>
   optimisticConversations?: ConversationListItem[]
@@ -387,6 +391,7 @@ function SearchDialog({
 }
 
 export const Sidebar = memo(function Sidebar({
+  lang,
   currentConversationId,
   generatingConversationIds = new Set(),
   optimisticConversations = [],
@@ -554,6 +559,21 @@ export const Sidebar = memo(function Sidebar({
         onConversationDeleted?.(id)
       }
       await loadSidebarData({ silent: true })
+    }
+  }
+
+  const handleExportConversation = async (id: string, title: string) => {
+    try {
+      const path = await save({
+        defaultPath: conversationMarkdownFilename(title),
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      })
+      if (!path) return
+      await chatApi.exportConversationMarkdown(id, path, lang)
+    } catch (err) {
+      const prefix = lang === 'zh' ? '导出失败：' : 'Export failed: '
+      const message = err instanceof Error ? err.message : String(err)
+      window.alert(`${prefix}${message}`)
     }
   }
 
@@ -1112,6 +1132,7 @@ export const Sidebar = memo(function Sidebar({
                           generatingConversationIds={generatingConversationIds}
                           projects={projects}
                           sets={sets}
+                          lang={lang}
                           compact
                           indent
                           showAssistantName={false}
@@ -1120,6 +1141,7 @@ export const Sidebar = memo(function Sidebar({
                             onSelectConversation(id)
                           }}
                           onRenameConversation={handleRenameConversation}
+                          onExportConversation={handleExportConversation}
                           onDeleteConversation={handleDeleteConversation}
                           onMoveConversationToProject={handleMoveConversationToProject}
                           onMoveConversationToSet={handleMoveConversationToSet}
@@ -1251,6 +1273,7 @@ export const Sidebar = memo(function Sidebar({
                               generatingConversationIds={generatingConversationIds}
                               projects={projects}
                               sets={sets}
+                              lang={lang}
                               compact
                               indent
                               showAssistantName={false}
@@ -1259,6 +1282,7 @@ export const Sidebar = memo(function Sidebar({
                                 onSelectConversation(id)
                               }}
                               onRenameConversation={handleRenameConversation}
+                              onExportConversation={handleExportConversation}
                               onDeleteConversation={handleDeleteConversation}
                               onMoveConversationToProject={handleMoveConversationToProject}
                               onMoveConversationToSet={handleMoveConversationToSet}
@@ -1311,6 +1335,7 @@ export const Sidebar = memo(function Sidebar({
                       generatingConversationIds={generatingConversationIds}
                       projects={projects}
                       sets={sets}
+                      lang={lang}
                       compact
                       showAssistantName={false}
                       showFolderLabel
@@ -1320,6 +1345,7 @@ export const Sidebar = memo(function Sidebar({
                         onSelectConversation(id)
                       }}
                       onRenameConversation={handleRenameConversation}
+                      onExportConversation={handleExportConversation}
                       onDeleteConversation={handleDeleteConversation}
                       onMoveConversationToProject={handleMoveConversationToProject}
                       onMoveConversationToSet={handleMoveConversationToSet}

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, Folder, Layers, Pencil, Trash2 } from 'lucide-react'
+import { ChevronRight, Download, Folder, Layers, Pencil, Trash2 } from 'lucide-react'
+import type { Lang } from '../settings/i18n'
 import type { ChatProject, ChatSet } from './types'
 
 export interface ConversationMenuAnchor {
@@ -15,7 +16,9 @@ interface ConversationContextMenuProps {
   conversationSetId?: string | null
   projects: ChatProject[]
   sets: ChatSet[]
+  lang: Lang
   onRename: () => void
+  onExport: () => void
   onMoveToProject: (projectId: string | undefined) => void
   onMoveToSet: (setId: string | undefined) => void
   onDelete: () => void
@@ -29,7 +32,9 @@ export function ConversationContextMenu({
   conversationSetId,
   projects,
   sets,
+  lang,
   onRename,
+  onExport,
   onMoveToProject,
   onMoveToSet,
   onDelete,
@@ -187,6 +192,19 @@ export function ConversationContextMenu({
           </div>
         </div>
       </div>
+
+      <button
+        type="button"
+        role="menuitem"
+        className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-neutral-800 transition-colors hover:bg-black/[0.04] dark:text-neutral-100 dark:hover:bg-white/[0.06]"
+        onClick={() => {
+          onExport()
+          onClose()
+        }}
+      >
+        <Download size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
+        {lang === 'zh' ? '导出' : 'Export'}
+      </button>
 
       <div className="my-1 border-t border-neutral-200/80 dark:border-neutral-700" />
 
