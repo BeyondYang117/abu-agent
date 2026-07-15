@@ -168,15 +168,16 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 
 Kivio checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.7.7
+## What's New — v2.7.8
 
-- **Multi-model collaboration (Mixer)** — assign models by task weight: a cheap/fast model for sub-agents, a stronger model as an on-demand **Advisor** the main model can consult via the `advisor` tool when stuck, and an **Orchestrate** mode where the main model plans and delegates token-heavy work to worker sub-agents.
-- **Knowledge base upgrades** — third-party document parsing services (MinerU / LlamaParse), drag-and-drop import with an indexing progress bar, a per-conversation "force retrieval" toggle, and embedding calls now counted in usage stats.
-- **High-precision offline OCR** — RapidOCR gains a high-accuracy tier (PP-OCRv6 medium, 50 languages), selectable per scenario.
-- **Usage stats rework** — token accounting anchored to real provider counts, with a model-distribution donut and multi-series trend chart, across today / 1d / 7d / 30d ranges.
-- **Chat UI** — a unified Sources popover (knowledge base / connectors / web search), stacked multi-model avatars for one-question-many-answers, and standalone Advisor / sub-agent cards in the conversation.
-- **macOS** — the Dock icon now hides again when the chat window is closed.
-- **Leaner codebase** — a large dead-code sweep across the frontend, chat core, and terminal agent.
+- **Replace translation, rebuilt** — an in-place canvas overlay redraws the translation over the original screenshot, with an original/translated toggle and drag-select to copy any region.
+- **Resizable translate result card** — drag the corner to resize; the width is remembered across sessions.
+- **Model library refreshed** — added mid-2026 flagships (GPT-5.6, Grok 4.5, Claude Fable 5 / Sonnet 5, Gemini 3.2 Pro, GLM-5.2, Kimi K2.7) with context / pricing / capability metadata for auto-fill.
+- **OfficeCLI plugin center** — one-click install and live preview for the OfficeCLI Skill / MCP.
+- **MCP tool-result images to vision** — images returned by MCP tools are fed straight to the model for visual review.
+- **Conversation workbench & artifacts** — an ordinary-chat workbench, explicit `present_artifacts` to place generated or existing files in the reply, a semantic message navigator, and Markdown export.
+- **Windows** — `run_command` now prefers Git Bash and falls back to PowerShell.
+- **Fixes** — Anthropic tool-schema compatibility on Bedrock, selected expert / project toolbar icons now show in accent color, and RapidOCR dual tier (PP-OCRv5 mobile / PP-OCRv6 medium) restored.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -373,15 +374,16 @@ Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是�
 
 Kivio 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.7.7
+## 新版本 —— v2.7.8
 
-- **多模型协作（混音器）** —— 按任务难度分配模型:子代理用便宜/快的模型,配一个更强的模型作为**顾问(Advisor)**,主模型遇到困难时可用 `advisor` 工具主动咨询;再加**编排(Orchestrate)**模式,主模型只做规划、把 token 重活派给 worker 子代理。
-- **知识库增强** —— 第三方文档解析服务(MinerU / LlamaParse)、拖拽导入 + 索引进度条、会话级「强制检索」开关,embedding 调用计入用量统计。
-- **离线高精度 OCR** —— RapidOCR 新增高精度档(PP-OCRv6 medium,50 语言),按场景选择。
-- **用量统计重做** —— token 口径对齐服务商真实计数,新增模型分布环形图与多序列趋势图,支持 当天 / 1d / 7d / 30d。
-- **Chat 界面** —— 统一的「来源」弹层(知识库 / 连接器 / 网络搜索)、一问多答的叠放头像组、对话内独立的顾问 / 子代理卡片。
-- **macOS** —— 关闭对话窗口后 Dock 图标重新隐藏。
-- **代码瘦身** —— 前端、chat core、终端 agent 的一轮大规模死代码清理。
+- **替换翻译重建** —— 原位画布覆盖层把译文重绘在原截图上,支持原文/译文一键切换,拖拽框选即可复制任意区域。
+- **翻译结果卡可缩放** —— 拖右下角调整大小,宽度跨会话记忆。
+- **模型库更新** —— 补入 2026 年中的旗舰模型(GPT-5.6、Grok 4.5、Claude Fable 5 / Sonnet 5、Gemini 3.2 Pro、GLM-5.2、Kimi K2.7),带上下文 / 定价 / 能力元数据用于自动填充。
+- **OfficeCLI 插件中心** —— OfficeCLI Skill / MCP 的一键安装与实时预览。
+- **MCP 工具结果图片直达视觉** —— MCP 工具返回的图片直接喂给模型做视觉审查。
+- **对话工作台与产物** —— 普通对话工作台、显式 `present_artifacts` 把生成/已有文件放进回复、语义消息导航器,以及对话导出为 Markdown。
+- **Windows** —— `run_command` 优先使用 Git Bash,回落 PowerShell。
+- **修复** —— Anthropic 工具 schema 在 Bedrock 上的兼容性、选中专家 / 项目的工具栏图标改为高亮色、RapidOCR 双档(PP-OCRv5 mobile / PP-OCRv6 medium)恢复。
 
 完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
