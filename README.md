@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/icon.png" width="120" height="120" alt="Kivio">
+  <img src="public/icon.png" width="120" height="120" alt="Kivio Desktop">
 </p>
 
-<h1 align="center">Kivio</h1>
+<h1 align="center">Kivio Desktop</h1>
 
 <p align="center">
   <strong>A screen-level AI assistant for macOS and Windows: an agentic AI client, plus instant translation, screenshot OCR, and visual Q&A — all one hotkey away, all on your own API keys.</strong>
@@ -32,9 +32,9 @@
 
 ---
 
-## What is Kivio?
+## What is Kivio Desktop?
 
-Kivio lives in your tray / menu bar and works at the level of your *screen*, not just inside its own window. Press a hotkey anywhere to translate what you typed, translate what you selected, translate what you see, or capture any region and ask AI about it. Open the AI client from the tray and you get a full agentic chat app: tool calls, sub-agents, Skills, MCP servers, a knowledge base, a Python sandbox, and side-by-side multi-model answers.
+Kivio Desktop lives in your tray / menu bar and works at the level of your *screen*, not just inside its own window. Press a hotkey anywhere to translate what you typed, translate what you selected, translate what you see, or capture any region and ask AI about it. Open the AI client from the tray and you get a full agentic chat app: tool calls, sub-agents, Skills, MCP servers, a knowledge base, a Python sandbox, and side-by-side multi-model answers.
 
 Design principles, as implemented in code:
 
@@ -47,7 +47,7 @@ Design principles, as implemented in code:
 ## The AI Client
 
 <p align="center">
-  <img src="docs/screenshots/chat-agent.png" width="840" alt="Kivio AI client">
+  <img src="docs/screenshots/chat-agent.png" width="840" alt="Kivio Desktop AI client">
 </p>
 
 A provider-agnostic agent runtime with a real tool loop, not a thin chat wrapper.
@@ -130,7 +130,7 @@ Screenshot translation can recognize text three ways, selectable in Settings:
 ## Settings
 
 <p align="center">
-  <img src="docs/screenshots/settings.png" width="560" alt="Kivio settings">
+  <img src="docs/screenshots/settings.png" width="560" alt="Kivio Desktop settings">
 </p>
 
 Settings live inside the AI client window: General, Translate, Screenshot, Lens, Chat, Memory, default-model routing, Kivio Code, external agents, MCP, Skills, Web Search, Connectors, Knowledge Base, Usage, Providers, and About. Highlights: a first-run wizard (provider → web search → hotkeys), settings export/import backup, theme color presets with dark mode, bilingual UI (中文/English), autostart, and a request debug panel that records recent provider calls in memory only — keys masked, copy-as-cURL.
@@ -160,24 +160,24 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 1. **[Download the latest release](https://github.com/abu/kivio/releases/latest)** — macOS: Apple Silicon `.dmg` · Windows: NSIS `-setup.exe`.
 2. **Install and launch.** The DMG is unsigned; on first launch right-click → Open, or run:
    ```bash
-   xattr -cr /Applications/Kivio.app
+   xattr -cr "/Applications/Kivio Desktop.app"
    ```
    macOS will ask for **Accessibility** (hotkeys, selected-text capture, paste-back) and **Screen Recording** (capture) permissions. Screen capture uses ScreenCaptureKit. On Windows, launching manually opens the AI client.
 3. **Follow the first-run wizard** — add a provider, optionally set up web search, confirm hotkeys.
 4. **Go.** Tray → Open AI Client for chat, tools, and documents; or press a hotkey anywhere for translation and Lens.
 
-Kivio checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
+Kivio Desktop checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.7.8
+## What's New — v2.7.9
 
-- **Replace translation, rebuilt** — an in-place canvas overlay redraws the translation over the original screenshot, with an original/translated toggle and drag-select to copy any region.
-- **Resizable translate result card** — drag the corner to resize; the width is remembered across sessions.
-- **Model library refreshed** — added mid-2026 flagships (GPT-5.6, Grok 4.5, Claude Fable 5 / Sonnet 5, Gemini 3.2 Pro, GLM-5.2, Kimi K2.7) with context / pricing / capability metadata for auto-fill.
-- **OfficeCLI plugin center** — one-click install and live preview for the OfficeCLI Skill / MCP.
-- **MCP tool-result images to vision** — images returned by MCP tools are fed straight to the model for visual review.
-- **Conversation workbench & artifacts** — an ordinary-chat workbench, explicit `present_artifacts` to place generated or existing files in the reply, a semantic message navigator, and Markdown export.
-- **Windows** — `run_command` now prefers Git Bash and falls back to PowerShell.
-- **Fixes** — Anthropic tool-schema compatibility on Bedrock, selected expert / project toolbar icons now show in accent color, and RapidOCR dual tier (PP-OCRv5 mobile / PP-OCRv6 medium) restored.
+- **Renamed to Kivio Desktop** — app, installer, window, onboarding, About, website, and release branding now use Kivio Desktop, while the `kivio` CLI, Bundle ID, and existing `~/Kivio` data paths stay compatible.
+- **Tray click opens the AI client** — left-clicking the menu-bar/tray icon now closes any active Lens-family overlay first, then opens Chat so an always-on-top overlay cannot cover it.
+- **macOS translator crash fixed** — submitting input translation while a Chinese IME session is attached now tears down the WebView safely instead of letting an AppKit/IME exception abort the process.
+- **macOS overlays stabilized** — Lens, screenshot translation, replace translation, and selected-text translation no longer flash/reorder desktop windows; Escape/cancel teardown is hardened.
+- **Remote MCP OAuth** — remote MCP servers gain an OAuth authorization entry, PKCE/dynamic registration support, and compatibility with protocol version `2025-11-25`.
+- **Onboarding and Lens improvements** — the first-run wizard can select the OCR engine, and text-only Lens conversations are now preserved in history.
+- **AI client refinement** — built-in expert assistants were rewritten, the conversation column is wider, navigation docks to the scrollbar, and Plugin/Skill/Request Debug panels are visually tightened.
+- **Release reliability** — deterministic model matching, context compaction, case-insensitive tool-call, and MCP cancellation regressions are covered by the full passing frontend and Rust suites.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -216,7 +216,7 @@ GPL-3.0-or-later © ZM. See [LICENSE](LICENSE).
 
 <a name="中文"></a>
 
-<h1 align="center">Kivio · 中文</h1>
+<h1 align="center">Kivio Desktop · 中文</h1>
 
 <p align="center">
   <strong>macOS / Windows 屏幕级 AI 助手：一个 Agentic AI 客户端，加上即时翻译、截图 OCR、视觉问答 —— 全部一键呼出，全部用你自己的 API Key。</strong>
@@ -238,9 +238,9 @@ GPL-3.0-or-later © ZM. See [LICENSE](LICENSE).
 
 ---
 
-## Kivio 是什么？
+## Kivio Desktop 是什么？
 
-Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是自己的窗口里。在任何地方按下热键：翻译你输入的、翻译你选中的、翻译你看到的，或者框选屏幕任意区域直接向 AI 提问。从托盘打开 AI 客户端，则是一个完整的 Agent 聊天应用：工具调用、子代理、Skills、MCP、知识库、Python 沙箱、多模型并排回答。
+Kivio Desktop 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是自己的窗口里。在任何地方按下热键：翻译你输入的、翻译你选中的、翻译你看到的，或者框选屏幕任意区域直接向 AI 提问。从托盘打开 AI 客户端，则是一个完整的 Agent 聊天应用：工具调用、子代理、Skills、MCP、知识库、Python 沙箱、多模型并排回答。
 
 代码里落实的三条设计原则：
 
@@ -253,7 +253,7 @@ Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是�
 ## AI 客户端
 
 <p align="center">
-  <img src="docs/screenshots/chat-agent.png" width="840" alt="Kivio AI 客户端">
+  <img src="docs/screenshots/chat-agent.png" width="840" alt="Kivio Desktop AI 客户端">
 </p>
 
 与服务商无关的 Agent 运行时，带真正的工具循环，不是聊天套壳。
@@ -336,7 +336,7 @@ Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是�
 ## 设置
 
 <p align="center">
-  <img src="docs/screenshots/settings.png" width="560" alt="Kivio 设置">
+  <img src="docs/screenshots/settings.png" width="560" alt="Kivio Desktop 设置">
 </p>
 
 设置内嵌在 AI 客户端窗口里：通用、翻译、截图、Lens、聊天、记忆、默认模型、Kivio Code、外部 Agent、MCP、Skills、联网搜索、连接器、知识库、用量、服务商、关于。亮点：首次启动分步引导（服务商 → 联网搜索 → 快捷键）、设置导出/导入备份、主题色预设与深色模式、中英双语界面、开机自启，以及一个只存内存的请求调试面板 —— 密钥自动掩码、可复制为 cURL。
@@ -366,24 +366,24 @@ Kivio 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而不只是�
 1. **[下载最新版](https://github.com/abu/kivio/releases/latest)** —— macOS：Apple Silicon `.dmg` · Windows：NSIS `-setup.exe`。
 2. **安装并启动。** DMG 未签名，首次打开请右键 → 打开，或执行：
    ```bash
-   xattr -cr /Applications/Kivio.app
+   xattr -cr "/Applications/Kivio Desktop.app"
    ```
    macOS 会请求**辅助功能**（热键、选中取词、粘回）与**屏幕录制**（截图）权限；屏幕捕获基于 ScreenCaptureKit。Windows 手动启动时默认打开 AI 客户端。
 3. **跟随首次引导** —— 添加服务商，可选配置联网搜索，确认快捷键。
 4. **开始用。** 托盘 → 打开 AI 客户端做聊天、工具与文档；或在任意界面按热键使用翻译和 Lens。
 
-Kivio 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
+Kivio Desktop 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.7.8
+## 新版本 —— v2.7.9
 
-- **替换翻译重建** —— 原位画布覆盖层把译文重绘在原截图上,支持原文/译文一键切换,拖拽框选即可复制任意区域。
-- **翻译结果卡可缩放** —— 拖右下角调整大小,宽度跨会话记忆。
-- **模型库更新** —— 补入 2026 年中的旗舰模型(GPT-5.6、Grok 4.5、Claude Fable 5 / Sonnet 5、Gemini 3.2 Pro、GLM-5.2、Kimi K2.7),带上下文 / 定价 / 能力元数据用于自动填充。
-- **OfficeCLI 插件中心** —— OfficeCLI Skill / MCP 的一键安装与实时预览。
-- **MCP 工具结果图片直达视觉** —— MCP 工具返回的图片直接喂给模型做视觉审查。
-- **对话工作台与产物** —— 普通对话工作台、显式 `present_artifacts` 把生成/已有文件放进回复、语义消息导航器,以及对话导出为 Markdown。
-- **Windows** —— `run_command` 优先使用 Git Bash,回落 PowerShell。
-- **修复** —— Anthropic 工具 schema 在 Bedrock 上的兼容性、选中专家 / 项目的工具栏图标改为高亮色、RapidOCR 双档(PP-OCRv5 mobile / PP-OCRv6 medium)恢复。
+- **更名为 Kivio Desktop** —— 应用、安装包、窗口、首次引导、关于页面、网站和 Release 统一使用新名称；`kivio` CLI、Bundle ID 与现有 `~/Kivio` 数据路径保持兼容。
+- **点击托盘打开 AI 客户端** —— 左键点击菜单栏/托盘图标会先关闭活动中的 Lens 系浮窗，再打开 Chat，避免置顶浮窗遮住客户端。
+- **修复 macOS 输入翻译闪退** —— 中文输入法会话仍挂在输入框时提交翻译，也会安全拆除 WebView，不再因 AppKit/IME 原生异常导致整个进程退出。
+- **稳定 macOS 浮窗生命周期** —— Lens、截图翻译、替换翻译和选中文本翻译不再闪烁或重排桌面窗口；Escape/取消时的销毁流程进一步加固。
+- **远程 MCP OAuth** —— 远程 MCP 服务器新增 OAuth 授权入口、PKCE/动态注册，并兼容 `2025-11-25` 协议版本。
+- **首次引导与 Lens 改进** —— 首次引导可选择 OCR 引擎；无截图的纯文本 Lens 对话也会写入历史。
+- **AI 客户端细节优化** —— 重写内置专家助手，拓宽对话列，消息导航贴近滚动条，Plugin/Skill/请求调试面板更紧凑统一。
+- **发版可靠性** —— 模型匹配、上下文压缩、工具名大小写与 MCP 取消通知的确定性回归均已补齐测试，前后端全量测试通过。
 
 完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
