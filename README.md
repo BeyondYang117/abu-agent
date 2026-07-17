@@ -168,16 +168,13 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 
 Kivio Desktop checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.7.9
+## What's New — v2.8.0
 
-- **Renamed to Kivio Desktop** — app, installer, window, onboarding, About, website, and release branding now use Kivio Desktop, while the `kivio` CLI, Bundle ID, and existing `~/Kivio` data paths stay compatible.
-- **Tray click opens the AI client** — left-clicking the menu-bar/tray icon now closes any active Lens-family overlay first, then opens Chat so an always-on-top overlay cannot cover it.
-- **macOS translator crash fixed** — submitting input translation while a Chinese IME session is attached now tears down the WebView safely instead of letting an AppKit/IME exception abort the process.
-- **macOS overlays stabilized** — Lens, screenshot translation, replace translation, and selected-text translation no longer flash/reorder desktop windows; Escape/cancel teardown is hardened.
-- **Remote MCP OAuth** — remote MCP servers gain an OAuth authorization entry, PKCE/dynamic registration support, and compatibility with protocol version `2025-11-25`.
-- **Onboarding and Lens improvements** — the first-run wizard can select the OCR engine, and text-only Lens conversations are now preserved in history.
-- **AI client refinement** — built-in expert assistants were rewritten, the conversation column is wider, navigation docks to the scrollbar, and Plugin/Skill/Request Debug panels are visually tightened.
-- **Release reliability** — deterministic model matching, context compaction, case-insensitive tool-call, and MCP cancellation regressions are covered by the full passing frontend and Rust suites.
+- **Smarter model controls** — temperature is now optional and model-scoped, provider request serialization respects model metadata, and the model detail view exposes refreshed capability/parameter information.
+- **Smoother long conversations** — bottom-follow behavior is more stable, and virtualized historical messages no longer replay entrance motion when scrolling remounts them.
+- **Leaner OCR and image replacement** — RapidOCR and inpainting model memory is released after each operation, reducing retained memory during repeated Lens/translation workflows.
+- **More reliable local Agents** — Pi can finish without a shutdown-stage `EPIPE`, while OpenCode custom provider models are discovered from global and project `opencode.jsonc` configuration.
+- **Regression coverage expanded** — model parameters, chat scrolling, OCR lifecycle, Pi shutdown, and project-scoped OpenCode discovery are covered by the passing frontend and Rust suites.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -374,16 +371,13 @@ Kivio Desktop 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而�
 
 Kivio Desktop 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.7.9
+## 新版本 —— v2.8.0
 
-- **更名为 Kivio Desktop** —— 应用、安装包、窗口、首次引导、关于页面、网站和 Release 统一使用新名称；`kivio` CLI、Bundle ID 与现有 `~/Kivio` 数据路径保持兼容。
-- **点击托盘打开 AI 客户端** —— 左键点击菜单栏/托盘图标会先关闭活动中的 Lens 系浮窗，再打开 Chat，避免置顶浮窗遮住客户端。
-- **修复 macOS 输入翻译闪退** —— 中文输入法会话仍挂在输入框时提交翻译，也会安全拆除 WebView，不再因 AppKit/IME 原生异常导致整个进程退出。
-- **稳定 macOS 浮窗生命周期** —— Lens、截图翻译、替换翻译和选中文本翻译不再闪烁或重排桌面窗口；Escape/取消时的销毁流程进一步加固。
-- **远程 MCP OAuth** —— 远程 MCP 服务器新增 OAuth 授权入口、PKCE/动态注册，并兼容 `2025-11-25` 协议版本。
-- **首次引导与 Lens 改进** —— 首次引导可选择 OCR 引擎；无截图的纯文本 Lens 对话也会写入历史。
-- **AI 客户端细节优化** —— 重写内置专家助手，拓宽对话列，消息导航贴近滚动条，Plugin/Skill/请求调试面板更紧凑统一。
-- **发版可靠性** —— 模型匹配、上下文压缩、工具名大小写与 MCP 取消通知的确定性回归均已补齐测试，前后端全量测试通过。
+- **更智能的模型参数控制** —— temperature 改为可选且按模型生效，服务商请求序列化会遵循模型元数据，模型详情页也会展示更新后的能力与参数信息。
+- **长对话滚动更顺滑** —— 底部跟随行为更稳定，历史消息因虚拟列表滚动重新挂载时不再重复播放入场动画。
+- **OCR 与图片替换更省内存** —— RapidOCR 和修复模型会在每次操作后释放内存，连续使用 Lens/翻译时不再长期占用模型内存。
+- **本地 Agent 更可靠** —— Pi 正常结束时不再在收尾阶段触发 `EPIPE`；OpenCode 可从全局及项目 `opencode.jsonc` 中发现自定义渠道模型。
+- **回归覆盖进一步完善** —— 模型参数、聊天滚动、OCR 生命周期、Pi 收尾和 OpenCode 项目级探测均有自动化测试保护，前后端测试全量通过。
 
 完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
