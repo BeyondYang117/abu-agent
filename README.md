@@ -168,13 +168,13 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 
 Kivio Desktop checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.8.0
+## What's New — v2.8.1
 
-- **Smarter model controls** — temperature is now optional and model-scoped, provider request serialization respects model metadata, and the model detail view exposes refreshed capability/parameter information.
-- **Smoother long conversations** — bottom-follow behavior is more stable, and virtualized historical messages no longer replay entrance motion when scrolling remounts them.
-- **Leaner OCR and image replacement** — RapidOCR and inpainting model memory is released after each operation, reducing retained memory during repeated Lens/translation workflows.
-- **More reliable local Agents** — Pi can finish without a shutdown-stage `EPIPE`, while OpenCode custom provider models are discovered from global and project `opencode.jsonc` configuration.
-- **Regression coverage expanded** — model parameters, chat scrolling, OCR lifecycle, Pi shutdown, and project-scoped OpenCode discovery are covered by the passing frontend and Rust suites.
+- **Extension center: MCP & Skill marketplaces** — a new MCP registry market (Official/Smithery/Glama) and a Skill store (ClawHub catalog + URL install); the knowledge base is folded into the extension center, so you browse, install, and uninstall extensions in-app.
+- **Upgraded knowledge retrieval** — retrieval moves to a measurable hybrid pipeline (vector + keyword RRF fusion, optional rerank, relevance thresholds), with a redesigned RAG settings page.
+- **Chat UI motion polish** — extension center pages rebuilt on unified motion tokens with view-switch, tab, context-menu, and modal enter/exit animations; macOS traffic lights align to the title bar and no longer jump while dragging.
+- **Stronger external agents** — added Grok CLI (xAI Grok Build); Codex uses real compaction RPC and real context windows; dangling tool_use is paired with a synthetic tool_result for Anthropic.
+- **Faster and leaner** — plugin pages open instantly (the open-time shell probe cost is gone), and long-lived runtime resources are reclaimed.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -371,13 +371,13 @@ Kivio Desktop 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而�
 
 Kivio Desktop 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.8.0
+## 新版本 —— v2.8.1
 
-- **更智能的模型参数控制** —— temperature 改为可选且按模型生效，服务商请求序列化会遵循模型元数据，模型详情页也会展示更新后的能力与参数信息。
-- **长对话滚动更顺滑** —— 底部跟随行为更稳定，历史消息因虚拟列表滚动重新挂载时不再重复播放入场动画。
-- **OCR 与图片替换更省内存** —— RapidOCR 和修复模型会在每次操作后释放内存，连续使用 Lens/翻译时不再长期占用模型内存。
-- **本地 Agent 更可靠** —— Pi 正常结束时不再在收尾阶段触发 `EPIPE`；OpenCode 可从全局及项目 `opencode.jsonc` 中发现自定义渠道模型。
-- **回归覆盖进一步完善** —— 模型参数、聊天滚动、OCR 生命周期、Pi 收尾和 OpenCode 项目级探测均有自动化测试保护，前后端测试全量通过。
+- **扩展中心：MCP 与技能市场** —— 新增 MCP 注册表市场（Official/Smithery/Glama）和技能商店（ClawHub 目录 + URL 安装），知识库也整合进扩展中心，可直接在应用内浏览、安装、卸载扩展。
+- **知识库检索升级** —— 检索改为可度量的混合管线（向量 + 关键词 RRF 融合、可选重排、相关度阈值），并重做 RAG 设置页。
+- **聊天界面动效打磨** —— 扩展中心页面重构并统一动效令牌，视图切换、标签切换、右键菜单与弹窗都有入场/退场动画；macOS 交通灯对齐顶栏，拖动窗口时不再跳动。
+- **外部 Agent 增强** —— 新增 Grok CLI（xAI Grok Build）；Codex 走真实压缩 RPC 与真实上下文窗口；为 Anthropic 补齐悬空 tool_use 的合成 tool_result。
+- **更快更省内存** —— 插件页秒开（消除打开时的 shell 探测开销），长时运行的运行时资源会被主动回收。
 
 完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
