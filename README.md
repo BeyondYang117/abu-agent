@@ -168,13 +168,13 @@ All hotkeys act as toggles and are remappable in Settings (with conflict detecti
 
 Kivio Desktop checks GitHub Releases for updates shortly after launch (can be disabled) and can download and install the update in-app.
 
-## What's New — v2.8.1
+## What's New — v2.8.2
 
-- **Extension center: MCP & Skill marketplaces** — a new MCP registry market (Official/Smithery/Glama) and a Skill store (ClawHub catalog + URL install); the knowledge base is folded into the extension center, so you browse, install, and uninstall extensions in-app.
-- **Upgraded knowledge retrieval** — retrieval moves to a measurable hybrid pipeline (vector + keyword RRF fusion, optional rerank, relevance thresholds), with a redesigned RAG settings page.
-- **Chat UI motion polish** — extension center pages rebuilt on unified motion tokens with view-switch, tab, context-menu, and modal enter/exit animations; macOS traffic lights align to the title bar and no longer jump while dragging.
-- **Stronger external agents** — added Grok CLI (xAI Grok Build); Codex uses real compaction RPC and real context windows; dangling tool_use is paired with a synthetic tool_result for Anthropic.
-- **Faster and leaner** — plugin pages open instantly (the open-time shell probe cost is gone), and long-lived runtime resources are reclaimed.
+- **Notes center upgrade** — the notes center gains folder-based organization and a Milkdown live-preview editor; move cards into folders and manage folders from an inline popover.
+- **Richer message interactions** — select text to "add to chat" as a quote in the input, a built-in right-click menu copies the selection or the whole message, and follow-scroll was rebuilt to fix streaming-not-following and pin-to-bottom flicker.
+- **More personalization** — customize UI font size, interface font, and code font; upload a local avatar image; the last-used model and reasoning level are remembered as the default (the "default model" setting is gone), and translate/profile settings were trimmed.
+- **More reliable connection testing** — test connection now dispatches the correct protocol per provider api_format, tests models in batch, and password fields no longer show a duplicate native reveal icon.
+- **External agents & polish** — local CLIs accept image/file attachments, availability and model probing are split (no more constant re-detection), and the Kivio Code terminal agent was removed; dark-mode visibility fixes; a polished retrieval panel and knowledge-base tab; the Lens input bar sits above the capture selection.
 
 Full history: [GitHub Releases](https://github.com/abu/kivio/releases).
 
@@ -371,13 +371,13 @@ Kivio Desktop 常驻托盘 / 菜单栏，工作在整个**屏幕**层面，而�
 
 Kivio Desktop 启动后会检查 GitHub Releases 的新版本（可关闭），并支持应用内直接下载安装更新。
 
-## 新版本 —— v2.8.1
+## 新版本 —— v2.8.2
 
-- **扩展中心：MCP 与技能市场** —— 新增 MCP 注册表市场（Official/Smithery/Glama）和技能商店（ClawHub 目录 + URL 安装），知识库也整合进扩展中心，可直接在应用内浏览、安装、卸载扩展。
-- **知识库检索升级** —— 检索改为可度量的混合管线（向量 + 关键词 RRF 融合、可选重排、相关度阈值），并重做 RAG 设置页。
-- **聊天界面动效打磨** —— 扩展中心页面重构并统一动效令牌，视图切换、标签切换、右键菜单与弹窗都有入场/退场动画；macOS 交通灯对齐顶栏，拖动窗口时不再跳动。
-- **外部 Agent 增强** —— 新增 Grok CLI（xAI Grok Build）；Codex 走真实压缩 RPC 与真实上下文窗口；为 Anthropic 补齐悬空 tool_use 的合成 tool_result。
-- **更快更省内存** —— 插件页秒开（消除打开时的 shell 探测开销），长时运行的运行时资源会被主动回收。
+- **笔记中心升级** —— 笔记中心加入文件夹式管理和 Milkdown 实时预览编辑器，可把卡片移动到文件夹、用内联弹框管理文件夹。
+- **消息区交互增强** —— 划词可「添加到聊天」直接引用进输入框，内置右键菜单支持复制选中/复制整条消息，并重构了跟随滚动，修复流式不跟随与钉底闪动。
+- **界面更个性化** —— 可自定义 UI 字号、界面字体与代码字体；头像改为本地图片上传；记住上次使用的模型与思考等级作为默认（移除「默认模型」设置），并精简翻译/资料设置。
+- **连接测试更可靠** —— 测试连接按供应商 api_format 分派正确协议，改为模型批量测试，密码框去掉重复的原生眼睛图标。
+- **外部 Agent 与体验细节** —— 本地 CLI 可接收图片/文件附件，可用性与模型探测拆分（不再频繁重复检测），移除 Kivio Code 终端 agent；修复暗色模式可见性；优化检索面板与知识库 tab；Lens 输入栏置于截图选区之上。
 
 完整历史:[GitHub Releases](https://github.com/abu/kivio/releases)。
 
