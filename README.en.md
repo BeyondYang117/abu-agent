@@ -37,8 +37,7 @@ Bring your own keys. No account, no proxy, no telemetry. Data stays on disk.
 <a href="https://api.abuai.chat"><img src="docs/sponsors/hezubus.png" alt="abu-api" width="150"></a>
 </td>
 <td>
-Thanks to <a href="https://api.abuai.chat">abu-api</a> for sponsoring this project. <a href="https://api.abuai.chat">abu-api</a> provides official, stable, high-speed API relay for GPT, Claude, and other models, with enterprise customization, invoicing, and 7×16h dedicated support. It also offers a purpose-built WebSocket connection for faster time-to-first-token. Codex subsidy rates go as low as 0.08×. <a href="https://api.abuai.chat">Register here</a>.<br><br>
-In Kivio: Settings → Providers → <strong>Add</strong>, pick the heart-marked <strong>abu-api</strong> preset. It prefills <code>https://api.abuai.chat/</code>.
+Thanks to <a href="https://api.abuai.chat">abu-api</a> for sponsoring this project. <a href="https://api.abuai.chat">abu-api</a> provides official, stable, high-speed API relay for GPT, Claude, and other models, with enterprise customization, invoicing, and 7×16h dedicated support. It also offers a purpose-built WebSocket connection for faster time-to-first-token. Codex subsidy rates go as low as 0.08×. <a href="https://api.abuai.chat">Register here</a>.
 </td>
 </tr>
 </table>
