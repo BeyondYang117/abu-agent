@@ -33,12 +33,11 @@ Bring your own keys. No account, no proxy, no telemetry. Data stays on disk.
 
 <table>
 <tr>
-<td width="180" align="center" valign="top">
-<a href="https://api.abuai.chat/"><strong>abu-api</strong></a><br>
-abu-api
+<td width="180" align="center" valign="middle">
+<a href="https://api.abuai.chat"><img src="docs/sponsors/hezubus.png" alt="abu-api" width="150"></a>
 </td>
 <td>
-Thanks to <a href="https://api.abuai.chat/">abu-api</a> for sponsoring this project. abu-api is a unified API gateway: change the base URL and call OpenAI, Claude, and other models from the clients you already use. Manage keys, balance, routing, and channel health in the console: <a href="https://api.abuai.chat/console">api.abuai.chat/console</a>.<br><br>
+Thanks to <a href="https://api.abuai.chat">abu-api</a> for sponsoring this project. <a href="https://api.abuai.chat">abu-api</a> provides official, stable, high-speed API relay for GPT, Claude, and other models, with enterprise customization, invoicing, and 7×16h dedicated support. It also offers a purpose-built WebSocket connection for faster time-to-first-token. Codex subsidy rates go as low as 0.08×. <a href="https://api.abuai.chat">Register here</a>.<br><br>
 In Kivio: Settings → Providers → <strong>Add</strong>, pick the heart-marked <strong>abu-api</strong> preset. It prefills <code>https://api.abuai.chat/</code>.
 </td>
 </tr>

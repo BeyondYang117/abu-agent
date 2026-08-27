@@ -33,12 +33,11 @@
 
 <table>
 <tr>
-<td width="180" align="center" valign="top">
-<a href="https://api.abuai.chat/"><strong>abu-api</strong></a><br>
-abu-api
+<td width="180" align="center" valign="middle">
+<a href="https://api.abuai.chat"><img src="docs/sponsors/hezubus.png" alt="abu-api abu-api" width="150"></a>
 </td>
 <td>
-感谢 <a href="https://api.abuai.chat/">abu-api（abu-api）</a> 赞助本项目。abu-api是统一 API 网关：改一下 Base URL，即可在现有客户端与工具链里调用 OpenAI、Claude 等主流模型。控制台可管理密钥、余额、路由与渠道健康：<a href="https://api.abuai.chat/console">api.abuai.chat/console</a>。<br><br>
+感谢 <a href="https://api.abuai.chat">abu-api</a> 赞助本项目。<a href="https://api.abuai.chat">abu-api</a> 提供 GPT / Claude 等多款模型的官方稳定极速 API 中转服务，支持企业级定制、报销开票、7×16h 专属技术支持，更有独家适配的 WebSocket 连接方式，畅享极速首字速度。Codex 补贴倍率低至 0.08。<a href="https://api.abuai.chat">点此注册</a>。<br><br>
 在 Kivio 中：设置 → 供应商 → <strong>添加驱动</strong>，选带爱心标记的 <strong>abu-api</strong>，会预填 <code>https://api.abuai.chat/</code>。
 </td>
 </tr>
