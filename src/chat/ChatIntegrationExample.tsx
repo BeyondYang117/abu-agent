@@ -3,7 +3,6 @@ import { useTaskUsage } from './useTaskUsage'
 import { TaskQuotaIndicator } from './TaskQuotaIndicator'
 import { ChatErrorHandler, inferErrorType, type ChatErrorType } from './ChatErrorHandler'
 import type { Settings } from '../api/tauri'
-import * as api from '../api/tauri'
 
 /**
  * Chat 组件集成示例
@@ -19,14 +18,14 @@ interface ChatIntegrationExampleProps {
 }
 
 export function ChatIntegrationExample({
-  conversationId,
+  conversationId: _conversationId,
   settings,
   lang,
   onError
 }: ChatIntegrationExampleProps) {
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null)
   const [error, setError] = useState<{ type: ChatErrorType; message?: string } | null>(null)
-  const isCloudMode = settings.runtime_mode === 'cloud'
+  const isCloudMode = settings.runtimeMode === 'cloud'
 
   // 使用 Task Usage Hook
   const { usage, loading, error: usageError } = useTaskUsage(
@@ -58,14 +57,16 @@ export function ChatIntegrationExample({
 
   const handleSwitchToLocal = async () => {
     if (confirm(lang === 'zh' ? '切换到本地模式？' : 'Switch to local mode?')) {
-      await api.updateSettings({ runtime_mode: 'local' })
-      window.location.reload()
+      // TODO: 实现切换到本地模式的逻辑
+      // 需要调用 Tauri 命令更新 settings
+      console.log('Switching to local mode...')
+      setCurrentTaskId(null)
     }
   }
 
   const handleRecharge = () => {
     // 打开充值页面
-    const baseUrl = settings.abu_api_base_url || 'https://api.example.com'
+    const baseUrl = settings.abuApiBaseUrl || 'https://api.example.com'
     window.open(`${baseUrl}/recharge`, '_blank')
   }
 

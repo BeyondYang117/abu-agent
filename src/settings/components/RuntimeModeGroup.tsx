@@ -1,5 +1,5 @@
 import { AlertCircle, Cloud, HardDrive } from 'lucide-react'
-import { SettingsGroup, SettingRow } from '../components'
+import { SettingsGroup } from '../components'
 import type { Settings as SettingsData } from '../../api/tauri'
 
 export function RuntimeModeGroup({
@@ -11,7 +11,7 @@ export function RuntimeModeGroup({
   lang: 'zh' | 'en'
   onUpdateSettings: (updates: Partial<SettingsData>) => void
 }) {
-  const currentMode = settings.runtime_mode || 'local'
+  const currentMode = settings.runtimeMode || 'local'
 
   const handleModeChange = (mode: 'cloud' | 'local') => {
     if (mode === currentMode) return
@@ -26,15 +26,17 @@ export function RuntimeModeGroup({
         : 'Switching to Local mode will use locally configured API keys. Please ensure providers are configured.'
 
     if (confirm(message)) {
-      onUpdateSettings({ runtime_mode: mode })
+      onUpdateSettings({ runtimeMode: mode })
     }
   }
 
   return (
     <SettingsGroup
       title={lang === 'zh' ? '运行模式' : 'Runtime Mode'}
-      description={lang === 'zh' ? '选择模型调用方式' : 'Choose how to call models'}
     >
+      <div className="mb-2 text-sm text-neutral-600 dark:text-neutral-400">
+        {lang === 'zh' ? '选择模型调用方式' : 'Choose how to call models'}
+      </div>
       <div className="space-y-3">
         {/* 提示信息 */}
         <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">

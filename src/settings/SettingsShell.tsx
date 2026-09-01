@@ -1909,7 +1909,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {activeTab === 'general' && (
               <>
                 <AccountInfoCard
-                  t={t}
                   lang={lang}
                   onLogout={async () => {
                     if (confirm(lang === 'zh' ? '确定要退出登录吗？' : 'Are you sure you want to log out?')) {
@@ -2194,7 +2193,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== 设备管理标签页 ===== */}
             {activeTab === 'devices' && (
               <DevicesTab
-                t={t}
                 lang={lang}
               />
             )}
@@ -2231,9 +2229,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </button>
                 </div>
                 {usageView === 'stats' ? (
-                  settings.runtime_mode === 'cloud' ? (
+                  settings.runtimeMode === 'cloud' ? (
                     <UsageTab
-                      t={t}
                       lang={lang}
                       settings={settings}
                     />

@@ -9,7 +9,7 @@ export interface TaskUsage {
   completion_tokens: number
   soft_cap_exceeded: boolean
   hard_cap_exceeded: boolean
-  status: string
+  status?: string
 }
 
 interface UseTaskUsageOptions {
@@ -69,8 +69,8 @@ export function useTaskUsage(
   const [error, setError] = useState<string | null>(null)
   const [isPolling, setIsPolling] = useState(false)
 
-  const pollingTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const retryTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryAttemptsRef = useRef(0)
   const isMountedRef = useRef(true)
 
@@ -116,17 +116,19 @@ export function useTaskUsage(
       }
 
       // 调用 API
-      const data = await abuApi.getTaskUsage(id)
+      const apiData = await abuApi.getTaskUsage(id)
 
       if (!isMountedRef.current) return
 
-      // 计算是否超过上限（假设默认上限）
-      const softCap = 500
-      const hardCap = 2000
+      // 转换 API 响应格式到组件使用的格式
       const enrichedData: TaskUsage = {
-        ...data,
-        soft_cap_exceeded: data.consumed_quota >= softCap,
-        hard_cap_exceeded: data.consumed_quota >= hardCap
+        task_id: apiData.task_id,
+        consumed_quota: apiData.consumed_quota,
+        total_tokens: apiData.prompt_tokens + apiData.output_tokens,
+        prompt_tokens: apiData.prompt_tokens,
+        completion_tokens: apiData.output_tokens,
+        soft_cap_exceeded: apiData.soft_cap_exceeded,
+        hard_cap_exceeded: apiData.hard_cap_exceeded
       }
 
       setUsage(enrichedData)

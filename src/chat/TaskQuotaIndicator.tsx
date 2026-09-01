@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react'
-import { AlertCircle, TrendingUp, DollarSign } from 'lucide-react'
+import { AlertCircle, TrendingUp } from 'lucide-react'
 import { useTaskUsage } from './useTaskUsage'
 
 interface TaskQuotaIndicatorProps {
@@ -61,7 +60,7 @@ export function TaskQuotaIndicator({
   lang,
   className = ''
 }: TaskQuotaIndicatorProps) {
-  const { usage, loading, error, refresh } = useTaskUsage(taskId)
+  const { usage, loading, error } = useTaskUsage(taskId)
 
   // 如果没有 taskId 或处于本地模式，不显示
   if (!taskId) {

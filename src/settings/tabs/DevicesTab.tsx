@@ -1,32 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Trash2, Monitor, Smartphone, Tablet, RefreshCw, CheckCircle } from 'lucide-react'
+import { Trash2, RefreshCw, CheckCircle } from 'lucide-react'
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import * as abuApi from '../../api/abuApi'
-import type { I18n } from '../i18n'
+import type { AgentDevice } from '../../api/abuApi'
 
-interface Device {
-  id: string
-  name: string
-  platform: string
-  last_seen_at: string
-  created_at: string
-  is_current: boolean
-}
+// 使用 API 返回的设备类型
+type Device = AgentDevice
 
-function getDeviceIcon(platform: string) {
-  const p = platform.toLowerCase()
-  if (p.includes('mobile') || p.includes('ios') || p.includes('android')) {
-    return Smartphone
-  }
-  if (p.includes('tablet') || p.includes('ipad')) {
-    return Tablet
-  }
-  return Monitor
-}
-
-function formatLastSeen(timestamp: string, lang: 'zh' | 'en'): string {
-  const date = new Date(timestamp)
+function formatLastSeen(timestamp: number, lang: 'zh' | 'en'): string {
+  const date = new Date(timestamp * 1000) // Unix timestamp to milliseconds
   const now = new Date()
   const diff = now.getTime() - date.getTime()
   const minutes = Math.floor(diff / 60000)
@@ -49,10 +32,8 @@ function formatLastSeen(timestamp: string, lang: 'zh' | 'en'): string {
 }
 
 export function DevicesTab({
-  t,
   lang,
 }: {
-  t: I18n
   lang: 'zh' | 'en'
 }) {
   const [devices, setDevices] = useState<Device[]>([])
@@ -101,10 +82,10 @@ export function DevicesTab({
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <SettingsGroup
-        title={lang === 'zh' ? '设备管理' : 'Device Management'}
-        description={lang === 'zh' ? '管理已登录的设备' : 'Manage logged-in devices'}
-      >
+      <SettingsGroup title={lang === 'zh' ? '设备管理' : 'Device Management'}>
+        <div className="mb-2 text-sm text-neutral-600 dark:text-neutral-400">
+          {lang === 'zh' ? '管理已登录的设备' : 'Manage logged-in devices'}
+        </div>
         <div className="flex justify-end mb-4">
           <Button
             size="sm"
@@ -129,8 +110,7 @@ export function DevicesTab({
         ) : (
           <div className="space-y-3">
             {devices.map((device) => {
-              const DeviceIcon = getDeviceIcon(device.platform)
-              const isCurrent = device.is_current
+              const isCurrent = device.status === 'active'
 
               return (
                 <div
@@ -144,14 +124,10 @@ export function DevicesTab({
                   `}
                 >
                   <div className="flex items-center gap-3 flex-1">
-                    <DeviceIcon
-                      size={20}
-                      className={isCurrent ? 'text-blue-600 dark:text-blue-400' : 'text-neutral-500 dark:text-neutral-400'}
-                    />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-neutral-900 dark:text-neutral-100 truncate">
-                          {device.name}
+                          {device.device_name}
                         </span>
                         {isCurrent && (
                           <span className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 whitespace-nowrap">

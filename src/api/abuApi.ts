@@ -355,3 +355,26 @@ export function getAbuApiClient(): AbuApiClient {
 export function isAbuApiInitialized(): boolean {
   return defaultClient !== null
 }
+
+// ==================== 便捷导出函数 ====================
+
+export async function listDevices(): Promise<AgentDevice[]> {
+  return getAbuApiClient().listDevices()
+}
+
+export async function revokeDevice(deviceId: string): Promise<void> {
+  return getAbuApiClient().revokeDevice(deviceId)
+}
+
+export async function listTasks(params?: {
+  limit?: number
+  offset?: number
+  status?: string
+  device_id?: string
+}): Promise<AgentTask[]> {
+  return getAbuApiClient().listTasks(params)
+}
+
+export async function getTaskUsage(taskId: string): Promise<AgentTaskUsage> {
+  return getAbuApiClient().getTaskUsage(taskId)
+}

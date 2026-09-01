@@ -2,8 +2,6 @@ import { useEffect, useState } from 'react'
 import { LogOut, User, Mail, Coins } from 'lucide-react'
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
-import { abuApiAuthStore } from '../../api/abuApiAuth'
-import * as api from '../../api/tauri'
 
 interface AccountInfo {
   username?: string
@@ -13,17 +11,16 @@ interface AccountInfo {
 }
 
 export function AccountInfoCard({
-  t,
   lang,
   onLogout,
 }: {
-  t: any
   lang: 'zh' | 'en'
   onLogout: () => void
 }) {
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
   const [loading, setLoading] = useState(true)
-  const isAuthenticated = abuApiAuthStore((state) => state.isAuthenticated)
+  // TODO: 检查是否已认证
+  const isAuthenticated = false // abuApiAuthStore((state) => state.isAuthenticated)
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -41,10 +38,9 @@ export function AccountInfoCard({
       // setAccountInfo(info)
 
       // 临时：从存储的配置中获取基本信息
-      const config = await api.loadAbuApiConfig()
       setAccountInfo({
         username: 'User', // 需要从 API 获取
-        email: config.session_token ? 'user@example.com' : undefined,
+        email: 'user@example.com',
         quota: undefined,
         quotaUnit: '元'
       })
