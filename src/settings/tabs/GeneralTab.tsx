@@ -7,6 +7,10 @@ import { UI_FONT_PX_MIN, UI_FONT_PX_MAX } from '../uiFont'
 import type { I18n, Lang } from '../i18n'
 import type { Settings as SettingsData, PermissionStatus } from '../../api/tauri'
 
+// 导出账户信息和运行模式组件
+export { AccountInfoCard } from '../components/AccountInfoCard'
+export { RuntimeModeGroup } from '../components/RuntimeModeGroup'
+
 /**
  * 可搜索字体选择器：聚焦展开、输入过滤，每项以自身字体预览。界面字体/代码字体共用。
  * 原在 SettingsShell 模块作用域，只被外观设置使用，随之搬来。

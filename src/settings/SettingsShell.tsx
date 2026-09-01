@@ -51,8 +51,10 @@ import { MemoryTab } from './tabs/MemoryTab'
 import { ChatTab } from './tabs/ChatTab'
 import { ProvidersTab } from './tabs/ProvidersTab'
 import { HooksTab } from './tabs/HooksTab'
-import { AppearanceGroup, BehaviorGroup, PermissionsGroup } from './tabs/GeneralTab'
+import { AppearanceGroup, BehaviorGroup, PermissionsGroup, AccountInfoCard, RuntimeModeGroup } from './tabs/GeneralTab'
 import { AppInfoGroup, UpdateGroup } from './tabs/AboutTab'
+import { DevicesTab } from './tabs/DevicesTab'
+import { UsageTab } from './tabs/UsageTab'
 import { MEMORY_L1_MAX_BYTES, utf8ByteLength, type MemoryLayerKey } from './memoryLayers'
 import { ModelDetailDrawer } from '../components/ModelDetailDrawer'
 import { ProviderModelTestModal } from '../components/ProviderModelTestModal'
@@ -71,7 +73,7 @@ import { ConnectorsPanel } from './ConnectorsPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 import { defaultChatTools } from './chatToolsShared'
 
-export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'devices' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -1725,6 +1727,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'connectors' as const, label: t.tabConnectors, icon: ConnectorsIcon },
     { id: 'plugins' as const, label: t.tabPlugins, icon: PluginsIcon },
     { id: 'sessions' as const, label: t.tabSessions, icon: SessionsIcon },
+    { id: 'devices' as const, label: lang === 'zh' ? '设备管理' : 'Devices', icon: SessionsIcon },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
     { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: UsageIcon },
     // 关于固定在分类列表最末
@@ -1791,6 +1794,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       title: t.tabSessions,
       subtitle: t.chatSessionSubtitle,
     },
+    devices: {
+      title: lang === 'zh' ? '设备管理' : 'Devices',
+      subtitle: lang === 'zh'
+        ? '管理已登录的设备，查看最后在线时间并注销设备。'
+        : 'Manage logged-in devices, view last seen time, and revoke devices.',
+    },
     webSearch: {
       title: t.tabWebSearch,
       subtitle: lang === 'zh'
@@ -1800,8 +1809,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     usage: {
       title: lang === 'zh' ? '用量统计' : 'Usage',
       subtitle: lang === 'zh'
-        ? '查看本地模型请求、Token、成本估算和来源分布；请求调试并入此页。'
-        : 'Inspect local model requests, tokens, cost, and usage distribution; request debug lives here too.',
+        ? '查看模型请求、Token、成本和来源分布；Cloud 模式显示任务统计。'
+        : 'Inspect model requests, tokens, cost, and usage; Cloud mode shows task statistics.',
     },
     providers: {
       title: t.tabModels,
@@ -1899,6 +1908,27 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             {/* ===== 基础设置标签页 ===== */}
             {activeTab === 'general' && (
               <>
+                <AccountInfoCard
+                  t={t}
+                  lang={lang}
+                  onLogout={async () => {
+                    if (confirm(lang === 'zh' ? '确定要退出登录吗？' : 'Are you sure you want to log out?')) {
+                      try {
+                        await api.clearAbuApiSession()
+                        window.location.reload()
+                      } catch (error) {
+                        console.error('Logout failed:', error)
+                      }
+                    }
+                  }}
+                />
+
+                <RuntimeModeGroup
+                  settings={settings}
+                  lang={lang}
+                  onUpdateSettings={updateSettings}
+                />
+
                 <AppearanceGroup
                   settings={settings}
                   t={t}
@@ -2161,6 +2191,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               />
             )}
 
+            {/* ===== 设备管理标签页 ===== */}
+            {activeTab === 'devices' && (
+              <DevicesTab
+                t={t}
+                lang={lang}
+              />
+            )}
+
             {/* ===== 网络搜索标签页 ===== */}
             {activeTab === 'webSearch' && (
               <WebSearchPanel
@@ -2193,7 +2231,15 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </button>
                 </div>
                 {usageView === 'stats' ? (
-                  <UsageStatsPanel lang={lang} />
+                  settings.runtime_mode === 'cloud' ? (
+                    <UsageTab
+                      t={t}
+                      lang={lang}
+                      settings={settings}
+                    />
+                  ) : (
+                    <UsageStatsPanel lang={lang} />
+                  )
                 ) : (
                   <RequestDebugPanel
                     lang={lang}
