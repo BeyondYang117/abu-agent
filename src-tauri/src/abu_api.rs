@@ -162,7 +162,7 @@ pub fn get_default_device_name() -> Result<String, String> {
 #[command]
 pub async fn save_abu_api_config(
     app: AppHandle,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     config: AbuApiConfig,
 ) -> Result<(), String> {
     let mut settings = crate::settings::load_settings(&app);
@@ -197,7 +197,7 @@ pub async fn load_abu_api_config(app: AppHandle) -> Result<AbuApiConfig, String>
 #[command]
 pub async fn clear_abu_api_session(
     app: AppHandle,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
 ) -> Result<(), String> {
     let mut settings = crate::settings::load_settings(&app);
 

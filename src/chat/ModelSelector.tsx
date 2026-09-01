@@ -7,6 +7,7 @@ import { isProviderEnabled } from '../settings/utils'
 import { ModelIcon } from './ModelIcon'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import { chatTitlebarPillButtonClass } from './platform'
+import { abuApi, ABU_API_PROVIDER_ID } from '../api/abuApi'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -31,13 +32,47 @@ function ModelSelectorBase({
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
+  const [cloudModels, setCloudModels] = useState<string[] | null>(null)
+  const [cloudError, setCloudError] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const maxH = usePopoverMaxHeight(open, menuRef, 'down', 400)
 
   const loadSettings = useCallback(async () => {
     try {
       const settings = await getSettingsCached()
-      setProviders(settings.providers || [])
+      const isCloud = settings.runtimeMode?.trim().toLowerCase() === 'cloud'
+
+      if (isCloud) {
+        // Cloud 模式：从 abuApi.listModels() 获取模型列表
+        setCloudError(null)
+        try {
+          const response = await abuApi.listModels()
+          setCloudModels(response.models)
+          // 构造虚拟 Provider（用于 UI 渲染，实际调用时 Rust 侧会替换）
+          const virtualProvider: ModelProvider = {
+            id: ABU_API_PROVIDER_ID,
+            name: 'ABU Cloud',
+            apiKeys: [],
+            baseUrl: '',
+            availableModels: response.models,
+            enabledModels: response.models,
+            enabled: true,
+            apiFormat: 'openai_chat',
+          }
+          setProviders([virtualProvider])
+        } catch (err) {
+          console.error('Failed to load cloud models:', err)
+          setCloudError(err instanceof Error ? err.message : String(err))
+          setProviders([])
+          setCloudModels([])
+        }
+      } else {
+        // Local 模式：使用本地配置的 providers
+        setCloudModels(null)
+        setCloudError(null)
+        setProviders(settings.providers || [])
+      }
+
       setFavorites(settings.favoriteModels || [])
     } catch (err) {
       console.error('Failed to load providers:', err)
@@ -201,7 +236,23 @@ function ModelSelectorBase({
               </div>
             ))}
             {visibleProviders.length === 0 && (
-              <div className="px-4 py-6 text-center text-sm text-neutral-500">{t.chatNoModels}</div>
+              <div className="px-4 py-6 text-center text-sm text-neutral-500">
+                {cloudError ? (
+                  <>
+                    <div>{t.chatNoModels}</div>
+                    <div className="mt-2 text-xs text-red-500">{cloudError}</div>
+                    <button
+                      type="button"
+                      onClick={() => void loadSettings()}
+                      className="mt-3 rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                    >
+                      {t.onboardingRetry || 'Retry'}
+                    </button>
+                  </>
+                ) : (
+                  t.chatNoModels
+                )}
+              </div>
             )}
           </div>
         </>

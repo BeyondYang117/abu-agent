@@ -17,3 +17,21 @@ export const ONBOARDING_STEPS: OnboardingStepId[] = [
   'hotkey',
   'done',
 ]
+
+/** Cloud 模式下的引导步骤：跳过 provider 配置，模型列表来自服务端。 */
+export const ONBOARDING_STEPS_CLOUD: OnboardingStepId[] = [
+  'welcome',
+  'login',
+  'webSearch',
+  'hotkey',
+  'done',
+]
+
+/**
+ * 根据 runtime_mode 返回适用的步骤序列。
+ * Cloud 模式跳过 provider 步（无需手填 API Key，模型来自 `abuApi.listModels()`）。
+ */
+export function getOnboardingSteps(runtimeMode?: string): OnboardingStepId[] {
+  const isCloud = runtimeMode?.trim().toLowerCase() === 'cloud'
+  return isCloud ? ONBOARDING_STEPS_CLOUD : ONBOARDING_STEPS
+}

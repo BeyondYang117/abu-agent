@@ -11,6 +11,9 @@
  */
 export const DEFAULT_ABU_API_BASE_URL = 'https://api.abuai.chat'
 
+/** Cloud 模式的虚拟 Provider ID（与 Rust 侧 ABU_API_PROVIDER_ID 对应） */
+export const ABU_API_PROVIDER_ID = 'abu-api-relay'
+
 export interface DeviceAuthResponse {
   device_code: string
   user_code: string

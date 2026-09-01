@@ -5,7 +5,7 @@ import { getSettingsCached, saveSettingsCached } from '../api/settingsCache'
 import { i18n, type Lang } from '../settings/i18n'
 import { usesNativeTitlebar } from '../chat/platform'
 import { Button } from '../components/Button'
-import { ONBOARDING_STEPS, type OnboardingStepId } from './types'
+import { ONBOARDING_STEPS, getOnboardingSteps, type OnboardingStepId } from './types'
 import { canCompleteOnboarding, validateProviderStep } from './validation'
 import { DoneStep } from './steps/DoneStep'
 import { HotkeyStep } from './steps/HotkeyStep'
@@ -42,7 +42,9 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const [loginCompleted, setLoginCompleted] = useState(false)
 
   const { isAuthenticated } = useAbuApiAuth()
-  const stepId = ONBOARDING_STEPS[stepIndex] ?? 'welcome'
+  // Cloud 模式跳过 provider 步，步骤序列动态计算。
+  const steps = useMemo(() => getOnboardingSteps(settings?.runtimeMode), [settings?.runtimeMode])
+  const stepId = steps[stepIndex] ?? 'welcome'
   const lang = (settings?.settingsLanguage || 'zh') as Lang
   const t = i18n[lang]
 
@@ -148,8 +150,8 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   }, [onComplete, persistSettings, providerBypass, settings])
 
   const goNext = () => {
-    if (stepIndex >= ONBOARDING_STEPS.length - 1) return
-    setStepIndex((index) => Math.min(index + 1, ONBOARDING_STEPS.length - 1))
+    if (stepIndex >= steps.length - 1) return
+    setStepIndex((index) => Math.min(index + 1, steps.length - 1))
   }
 
   const goBack = () => {
@@ -241,7 +243,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
           <span className="onboarding-side-brand-name">ABU Agent</span>
         </div>
         <nav className="onboarding-side-steps">
-          {ONBOARDING_STEPS.map((step, index) => {
+          {steps.map((step, index) => {
             const done = index < stepIndex
             const active = index === stepIndex
             return (

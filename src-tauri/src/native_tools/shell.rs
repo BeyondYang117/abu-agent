@@ -60,7 +60,7 @@ fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
     let Some(state) = state else {
         return;
     };
-    let settings = state.settings_read();
+    let _settings = state.settings_read();
     // PATH 合并：启用插件 bin 目录，再接系统 Path。
     let plugin_dirs = crate::plugins::enabled_bin_dirs();
     if !plugin_dirs.is_empty() {
