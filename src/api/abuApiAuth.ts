@@ -1,220 +1,126 @@
 /**
- * ABU API 认证状态管理
- *
- * 提供统一的认证状态访问、session token 存储和设备注册。
+ * ABU API 认证状态管理（无第三方依赖，纯 React）
  */
 
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-import { AbuApiClient, initAbuApiClient, type AgentDevice } from './abuApi'
-import { api } from './tauri'
+import { useEffect, useState } from 'react'
 
 export interface AbuApiAuthState {
-  // 认证状态
-  isAuthenticated: boolean
+  isLoggedIn: boolean
+  isAuthenticated: boolean // alias for isLoggedIn
   sessionToken: string | null
   deviceId: string | null
-  baseUrl: string
-
-  // 用户信息（可选，需要额外接口）
-  user: {
-    id: number
-    username: string
-    email?: string
-    quota: number
-    group: string
-  } | null
-
-  // 设备信息
-  currentDevice: AgentDevice | null
-
-  // 操作
-  setSessionToken: (token: string) => void
-  setDeviceId: (deviceId: string) => void
-  setUser: (user: AbuApiAuthState['user']) => void
-  setCurrentDevice: (device: AgentDevice) => void
-  logout: () => Promise<void>
-  initialize: () => Promise<void>
+  baseUrl: string | null
 }
 
-export const useAbuApiAuth = create<AbuApiAuthState>()(
-  persist(
-    (set, get) => ({
-      isAuthenticated: false,
-      sessionToken: null,
-      deviceId: null,
-      baseUrl: 'https://api.abuai.com',
-      user: null,
-      currentDevice: null,
+type Listener = () => void
 
-      setSessionToken: (token: string) => {
-        set({ sessionToken: token, isAuthenticated: true })
-        initAbuApiClient(get().baseUrl, token)
-      },
-
-      setDeviceId: (deviceId: string) => {
-        set({ deviceId })
-      },
-
-      setUser: (user) => {
-        set({ user })
-      },
-
-      setCurrentDevice: (device) => {
-        set({ currentDevice: device })
-      },
-
-      logout: async () => {
-        const { sessionToken, baseUrl } = get()
-        if (sessionToken) {
-          try {
-            const client = new AbuApiClient(baseUrl, sessionToken)
-            await client.logout()
-          } catch (err) {
-            console.error('Logout API call failed:', err)
-          }
-        }
-
-        // 清除本地状态
-        set({
-          isAuthenticated: false,
-          sessionToken: null,
-          user: null,
-        })
-
-        // 清除 Tauri 存储
-        try {
-          await api.clearAbuApiSession()
-        } catch (err) {
-          console.error('Failed to clear Tauri session:', err)
-        }
-
-        // 重新初始化客户端（无 token）
-        initAbuApiClient(get().baseUrl)
-      },
-
-      initialize: async () => {
-        try {
-          // 从 Tauri settings 加载配置
-          const config = await api.loadAbuApiConfig()
-
-          set({
-            baseUrl: config.base_url || 'https://api.abuai.com',
-            sessionToken: config.session_token || null,
-            deviceId: config.device_id || null,
-            isAuthenticated: !!config.session_token,
-          })
-
-          // 初始化 API 客户端
-          initAbuApiClient(config.base_url, config.session_token || undefined)
-
-          // 如果有 session token，尝试注册/更新设备
-          if (config.session_token) {
-            await registerOrUpdateDevice()
-          }
-        } catch (err) {
-          console.error('Failed to initialize ABU API auth:', err)
-        }
-      },
-    }),
-    {
-      name: 'abu-api-auth',
-      partialize: (state) => ({
-        // 只持久化基础配置，敏感信息走 Tauri settings
-        baseUrl: state.baseUrl,
-      }),
-    },
-  ),
-)
-
-/**
- * 注册或更新当前设备
- */
-export async function registerOrUpdateDevice(): Promise<AgentDevice> {
-  const { sessionToken, baseUrl, deviceId, setDeviceId, setCurrentDevice } =
-    useAbuApiAuth.getState()
-
-  if (!sessionToken) {
-    throw new Error('Not authenticated')
+class AbuApiAuthStore {
+  private state: AbuApiAuthState = {
+    isLoggedIn: false,
+    isAuthenticated: false,
+    sessionToken: null,
+    deviceId: null,
+    baseUrl: null,
   }
 
-  const client = new AbuApiClient(baseUrl, sessionToken)
+  private listeners = new Set<Listener>()
 
-  // 获取设备信息
-  const fingerprint = await api.getDeviceFingerprint()
-  const platform = await api.getPlatform()
-  const clientVersion = await api.getClientVersion()
-  const deviceName = await api.getDefaultDeviceName()
+  getState(): AbuApiAuthState {
+    return this.state
+  }
 
-  // 注册/更新设备
-  const device = await client.registerDevice({
-    fingerprint,
-    platform,
-    client_version: clientVersion,
-    device_name: deviceName,
-    capabilities: JSON.stringify({
-      features: ['chat', 'translate', 'lens', 'screenshot'],
-      protocols: ['openai', 'anthropic', 'gemini'],
-    }),
-  })
+  setState(partial: Partial<AbuApiAuthState>) {
+    this.state = { ...this.state, ...partial }
+    this.emit()
+  }
 
-  // 保存设备 ID
-  if (device.id !== deviceId) {
-    setDeviceId(device.id)
-    await api.saveAbuApiConfig({
-      base_url: baseUrl,
-      session_token: sessionToken,
-      device_id: device.id,
+  subscribe(listener: Listener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  private emit() {
+    this.listeners.forEach((listener) => listener())
+  }
+
+  // 业务方法
+  login(sessionToken: string, deviceId: string, baseUrl: string) {
+    this.setState({
+      isLoggedIn: true,
+      isAuthenticated: true,
+      sessionToken,
+      deviceId,
+      baseUrl,
     })
   }
 
-  setCurrentDevice(device)
-  return device
+  logout() {
+    this.setState({
+      isLoggedIn: false,
+      isAuthenticated: false,
+      sessionToken: null,
+      // deviceId 保留，供下次登录复用
+    })
+  }
+
+  updateFromSettings(config: {
+    sessionToken?: string | null
+    deviceId?: string | null
+    baseUrl?: string | null
+  }) {
+    const authenticated = !!config.sessionToken
+    this.setState({
+      isLoggedIn: authenticated,
+      isAuthenticated: authenticated,
+      sessionToken: config.sessionToken || null,
+      deviceId: config.deviceId || null,
+      baseUrl: config.baseUrl || null,
+    })
+  }
 }
 
-/**
- * 完成登录流程（Device Code 或密码登录后调用）
- */
+export const abuApiAuthStore = new AbuApiAuthStore()
+
+// React Hook (类似 zustand 的 API)
+export function useAbuApiAuth(): AbuApiAuthState {
+  const [state, setState] = useState(abuApiAuthStore.getState())
+
+  useEffect(() => {
+    const unsubscribe = abuApiAuthStore.subscribe(() => {
+      setState(abuApiAuthStore.getState())
+    })
+    return unsubscribe
+  }, [])
+
+  return state
+}
+
+// 为了兼容可能的旧代码，导出一个 actions 对象
+export const abuApiAuthActions = {
+  login: (sessionToken: string, deviceId: string, baseUrl: string) =>
+    abuApiAuthStore.login(sessionToken, deviceId, baseUrl),
+  logout: () => abuApiAuthStore.logout(),
+  updateFromSettings: (config: {
+    sessionToken?: string | null
+    deviceId?: string | null
+    baseUrl?: string | null
+  }) => abuApiAuthStore.updateFromSettings(config),
+}
+
+// 完成登录流程（在 Onboarding 中调用）
 export async function completeLogin(sessionToken: string): Promise<void> {
-  const { setSessionToken, baseUrl } = useAbuApiAuth.getState()
+  const { api } = await import('./tauri')
+  const deviceId = await api.getDeviceFingerprint()
+  const baseUrl = abuApiAuthStore.getState().baseUrl || 'https://api.abuai.com'
 
-  // 1. 设置 session token
-  setSessionToken(sessionToken)
-
-  // 2. 注册设备
-  const device = await registerOrUpdateDevice()
-
-  // 3. 保存到 Tauri settings
+  // 保存到 settings
   await api.saveAbuApiConfig({
     base_url: baseUrl,
     session_token: sessionToken,
-    device_id: device.id,
+    device_id: deviceId,
+    runtime_mode: 'cloud',
   })
 
-  // 4. 可选：获取用户信息（需要 abu-api 提供 /api/user/me 接口）
-  // const user = await client.getUserInfo()
-  // setUser(user)
-}
-
-/**
- * 检查认证状态是否有效
- */
-export async function validateAuth(): Promise<boolean> {
-  const { sessionToken, baseUrl, isAuthenticated } = useAbuApiAuth.getState()
-
-  if (!isAuthenticated || !sessionToken) {
-    return false
-  }
-
-  try {
-    // 尝试调用一个需要认证的接口（如获取模型列表）
-    const client = new AbuApiClient(baseUrl, sessionToken)
-    await client.listModels()
-    return true
-  } catch (err) {
-    console.error('Auth validation failed:', err)
-    // Session token 可能已过期，清除状态
-    useAbuApiAuth.getState().logout()
-    return false
-  }
+  // 更新内存状态
+  abuApiAuthStore.login(sessionToken, deviceId, baseUrl)
 }

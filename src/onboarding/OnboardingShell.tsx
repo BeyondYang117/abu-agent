@@ -9,9 +9,11 @@ import { ONBOARDING_STEPS, type OnboardingStepId } from './types'
 import { canCompleteOnboarding, validateProviderStep } from './validation'
 import { DoneStep } from './steps/DoneStep'
 import { HotkeyStep } from './steps/HotkeyStep'
+import { LoginStep } from './steps/LoginStep'
 import { ProviderStep } from './steps/ProviderStep'
 import { WebSearchStep } from './steps/WebSearchStep'
 import { WelcomeStep } from './steps/WelcomeStep'
+import { completeLogin, useAbuApiAuth } from '../api/abuApiAuth'
 
 type OnboardingShellProps = {
   onComplete: () => void
@@ -36,7 +38,9 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const [stepIndex, setStepIndex] = useState(0)
   const [skipConfirmOpen, setSkipConfirmOpen] = useState(false)
   const [providerBypass, setProviderBypass] = useState(false)
+  const [loginCompleted, setLoginCompleted] = useState(false)
 
+  const { isAuthenticated } = useAbuApiAuth()
   const stepId = ONBOARDING_STEPS[stepIndex] ?? 'welcome'
   const lang = (settings?.settingsLanguage || 'zh') as Lang
   const t = i18n[lang]
@@ -77,12 +81,14 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
   const canGoNext = useMemo(() => {
     switch (stepId) {
+      case 'login':
+        return loginCompleted || isAuthenticated
       case 'provider':
         return canAdvanceFromProvider
       default:
         return true
     }
-  }, [canAdvanceFromProvider, stepId])
+  }, [stepId, loginCompleted, isAuthenticated, canAdvanceFromProvider])
 
   const persistSettings = useCallback(async (status: 'completed' | 'skipped') => {
     if (!settings) return false
@@ -190,6 +196,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
   const stepLabels: Record<OnboardingStepId, string> = {
     welcome: t.onboardingStepWelcome,
+    login: t.onboardingStepLogin || '登录',
     provider: t.onboardingWelcomeStepProvider,
     webSearch: t.onboardingWelcomeStepWebSearch,
     hotkey: t.onboardingWelcomeStepHotkey,
@@ -208,6 +215,18 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
       return
     }
     goNext()
+  }
+
+  const handleLoginSuccess = async (sessionToken: string) => {
+    try {
+      await completeLogin(sessionToken)
+      setLoginCompleted(true)
+      // 自动进入下一步
+      goNext()
+    } catch (err) {
+      console.error('Failed to complete login:', err)
+      setSaveError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   return (
@@ -259,6 +278,13 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
         <div className="onboarding-body kv-scroll" data-tauri-drag-region="false">
           {stepId === 'welcome' ? <WelcomeStep t={t} /> : null}
+          {stepId === 'login' ? (
+            <LoginStep
+              t={t}
+              abuApiBaseUrl={settings?.abu_api_base_url || 'https://api.abuai.com'}
+              onLoginSuccess={handleLoginSuccess}
+            />
+          ) : null}
           {stepId === 'provider' ? (
             <ProviderStep
               t={t}
@@ -300,6 +326,16 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
             ) : null}
             <div className="onboarding-footer-spacer" />
             <div className="onboarding-footer-actions">
+              {stepId === 'login' ? (
+                <Button
+                  variant="ghost"
+                  onClick={goNext}
+                  disabled={saving}
+                  data-tauri-drag-region="false"
+                >
+                  {t.onboardingLoginSkipStep}
+                </Button>
+              ) : null}
               {stepId === 'webSearch' ? (
                 <Button
                   variant="ghost"

@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
 
+pub mod abu_api;
 pub mod agents;
 pub mod api;
 pub mod app_data;
@@ -778,6 +779,15 @@ pub fn run() {
             dock::terminal::dock_terminal_write,
             dock::terminal::dock_terminal_resize,
             dock::terminal::dock_terminal_close,
+            // ABU API 集成
+            abu_api::get_device_fingerprint,
+            abu_api::get_hostname,
+            abu_api::get_platform,
+            abu_api::get_client_version,
+            abu_api::get_default_device_name,
+            abu_api::load_abu_api_config,
+            abu_api::save_abu_api_config,
+            abu_api::clear_abu_api_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

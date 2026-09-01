@@ -9,6 +9,7 @@ pub struct AbuApiConfig {
     pub base_url: String,
     pub session_token: Option<String>,
     pub device_id: Option<String>,
+    pub runtime_mode: String, // "cloud" | "local"
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,8 +67,23 @@ pub fn get_device_fingerprint(app: AppHandle) -> Result<String, String> {
     }
 
     // 2. 主机名作为补充
-    if let Ok(hostname) = hostname::get() {
-        hostname.hash(&mut hasher);
+    #[cfg(unix)]
+    {
+        use std::ffi::CStr;
+        let mut buf = [0u8; 256];
+        unsafe {
+            if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0 {
+                if let Ok(cstr) = CStr::from_bytes_until_nul(&buf) {
+                    cstr.to_bytes().hash(&mut hasher);
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(name) = std::env::var("COMPUTERNAME") {
+            name.hash(&mut hasher);
+        }
     }
 
     // 3. 用户名作为补充
@@ -85,9 +101,24 @@ pub fn get_device_fingerprint(app: AppHandle) -> Result<String, String> {
 /// 获取主机名
 #[command]
 pub fn get_hostname() -> Result<String, String> {
-    hostname::get()
-        .map_err(|e| e.to_string())
-        .and_then(|name| name.into_string().map_err(|_| "Invalid hostname".to_string()))
+    #[cfg(unix)]
+    {
+        use std::ffi::CStr;
+        let mut buf = [0u8; 256];
+        unsafe {
+            if libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0 {
+                if let Ok(cstr) = CStr::from_bytes_until_nul(&buf) {
+                    return Ok(cstr.to_string_lossy().into_owned());
+                }
+            }
+        }
+        Err("Failed to get hostname".to_string())
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME")
+            .map_err(|_| "Failed to get hostname".to_string())
+    }
 }
 
 /// 获取平台标识
@@ -118,12 +149,6 @@ pub fn get_default_device_name() -> Result<String, String> {
     Ok(format!("{} - {}", hostname, username))
 }
 
-/// 打开外部 URL
-#[command]
-pub async fn open_external(url: String) -> Result<(), String> {
-    open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
-}
-
 /// 保存 ABU API 配置到 settings
 #[command]
 pub async fn save_abu_api_config(
@@ -131,31 +156,23 @@ pub async fn save_abu_api_config(
     state: State<'_, AppState>,
     config: AbuApiConfig,
 ) -> Result<(), String> {
-    let mut settings = crate::settings::load_settings(&app, &state)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut settings = crate::settings::load_settings(&app);
 
     // 扩展 Settings 结构体以支持 abu_api 字段
     settings.abu_api_base_url = Some(config.base_url);
     settings.abu_api_session_token = config.session_token;
     settings.abu_api_device_id = config.device_id;
+    settings.runtime_mode = config.runtime_mode;
 
-    crate::settings::persist_settings(&app, &state, &settings)
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::settings::persist_settings(&app, &settings)?;
 
     Ok(())
 }
 
 /// 加载 ABU API 配置
 #[command]
-pub async fn load_abu_api_config(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<AbuApiConfig, String> {
-    let settings = crate::settings::load_settings(&app, &state)
-        .await
-        .map_err(|e| e.to_string())?;
+pub async fn load_abu_api_config(app: AppHandle) -> Result<AbuApiConfig, String> {
+    let settings = crate::settings::load_settings(&app);
 
     Ok(AbuApiConfig {
         base_url: settings
@@ -163,6 +180,7 @@ pub async fn load_abu_api_config(
             .unwrap_or_else(|| "https://api.abuai.com".to_string()),
         session_token: settings.abu_api_session_token,
         device_id: settings.abu_api_device_id,
+        runtime_mode: settings.runtime_mode,
     })
 }
 
@@ -172,16 +190,12 @@ pub async fn clear_abu_api_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut settings = crate::settings::load_settings(&app, &state)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut settings = crate::settings::load_settings(&app);
 
     settings.abu_api_session_token = None;
     // 保留 device_id，方便下次登录时复用
 
-    crate::settings::persist_settings(&app, &state, &settings)
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::settings::persist_settings(&app, &settings)?;
 
     Ok(())
 }

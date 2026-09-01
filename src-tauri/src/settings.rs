@@ -1666,6 +1666,18 @@ pub struct Settings {
     /// 只在 chat 模型选择器里展示为顶部"收藏"组；失效项（provider 删/禁用/模型没了）展示时过滤。
     #[serde(default)]
     pub favorite_models: Vec<String>,
+    /// ABU API 服务器地址（支持自建实例）
+    #[serde(default)]
+    pub abu_api_base_url: Option<String>,
+    /// ABU API 会话令牌（登录后由客户端写入）
+    #[serde(default)]
+    pub abu_api_session_token: Option<String>,
+    /// ABU API 设备 ID（首次注册后保留，登出不清除）
+    #[serde(default)]
+    pub abu_api_device_id: Option<String>,
+    /// 运行模式：`cloud` 走 ABU API 中转，`local` 用本机配置的服务商
+    #[serde(default = "default_runtime_mode")]
+    pub runtime_mode: String,
     // 旧版字段，用于迁移
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openai: Option<OpenAIConfig>,
@@ -1817,6 +1829,10 @@ impl Default for Settings {
             image_archive_path: String::new(),
             obsidian_vault_path: String::new(),
             favorite_models: Vec::new(),
+            abu_api_base_url: None,
+            abu_api_session_token: None,
+            abu_api_device_id: None,
+            runtime_mode: default_runtime_mode(),
             openai: None,
         }
     }
@@ -3115,6 +3131,10 @@ fn default_retry_attempts() -> u8 {
 
 fn default_retry_enabled() -> bool {
     true
+}
+
+fn default_runtime_mode() -> String {
+    "local".to_string()
 }
 
 fn clamp_retry_attempts(value: u8) -> u8 {

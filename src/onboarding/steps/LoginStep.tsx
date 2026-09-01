@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ExternalLink, Loader2 } from 'lucide-react'
-import { type SettingsI18n } from '../../settings/i18n'
+import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
 import { getAbuApiClient } from '../../api/abuApi'
 import { api } from '../../api/tauri'
 
 type LoginStepProps = {
-  t: SettingsI18n
+  t: I18n
   abuApiBaseUrl: string
   onLoginSuccess: (sessionToken: string) => void
 }

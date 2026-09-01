@@ -22,6 +22,14 @@ import type { Automation, AutomationChangedEvent, AutomationMeta, AutomationRunE
 
 // ========== 类型定义 ==========
 
+/** ABU API 配置（对应 Rust Settings 中的字段） */
+export interface AbuApiConfig {
+  base_url: string | null
+  session_token: string | null
+  device_id: string | null
+  runtime_mode: 'cloud' | 'local'
+}
+
 /** 是否运行在 Tauri 运行时(而非纯浏览器/SSR) */
 export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -1172,6 +1180,14 @@ export type Settings = {
   obsidianVaultPath?: string
   /** 收藏并置顶的模型键（"providerId:model"）；顺序即置顶顺序。chat 模型选择器用。 */
   favoriteModels?: string[]
+  /** ABU API 服务器地址（支持自建实例，默认官方服务器） */
+  abu_api_base_url?: string
+  /** ABU API 会话令牌（登录后由客户端写入） */
+  abu_api_session_token?: string
+  /** ABU API 设备 ID（首次注册后保留，登出不清除） */
+  abu_api_device_id?: string
+  /** 运行模式：`cloud` 走 ABU API 中转，`local` 用本机配置的服务商 */
+  runtimeMode?: 'cloud' | 'local'
 }
 
 /** 能力插件（领域 CLI 等）状态 —— 设置 → 插件 */
@@ -1939,6 +1955,19 @@ export const api = {
 
   // 外部链接
   openExternal: (url: string) => invoke<void>('open_external', { url }),
+
+  // ABU API 集成：设备身份 + 会话配置
+  /** 设备指纹：同一台机器多次调用返回同一值，用于 abu-api 侧的设备 upsert。 */
+  getDeviceFingerprint: () => invoke<string>('get_device_fingerprint'),
+  getHostname: () => invoke<string>('get_hostname'),
+  getPlatform: () => invoke<string>('get_platform'),
+  getClientVersion: () => invoke<string>('get_client_version'),
+  getDefaultDeviceName: () => invoke<string>('get_default_device_name'),
+  loadAbuApiConfig: () => invoke<AbuApiConfig>('load_abu_api_config'),
+  saveAbuApiConfig: (config: AbuApiConfig) =>
+    invoke<void>('save_abu_api_config', { config }),
+  /** 清除 session token，保留 device_id 以便下次登录复用同一设备记录。 */
+  clearAbuApiSession: () => invoke<void>('clear_abu_api_session'),
   /**
    * 打开模型输出里的本地文件链接（file:// / 绝对路径 / 相对路径）。
    * 相对路径由后端按会话工作目录解析，故要带 conversationId。扩展名/存在性/逃逸都在后端把关。
