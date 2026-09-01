@@ -39,7 +39,7 @@ interface SkillCenterProps {
   projectCwd?: string
 }
 
-/** 本地 CLI 技能来源：只扫各家「自己的」目录。`~/.agents/skills` 是共享目录，Kivio 会直接扫描，不必再导入。 */
+/** 本地 CLI 技能来源：只扫各家「自己的」目录。`~/.agents/skills` 是共享目录，ABU Agent 会直接扫描，不必再导入。 */
 const CLI_SKILL_SOURCES = [
   { key: 'claude', label: 'Claude Code', dirs: ['.claude/skills'] },
   { key: 'codex', label: 'Codex', dirs: ['.codex/skills'] },
@@ -602,7 +602,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
     })
   }, [])
 
-  // 导入选中技能 = 逐项从 skill.path（.../<id>/SKILL.md）推出文件夹后复制进 Kivio 用户技能目录。
+  // 导入选中技能 = 逐项从 skill.path（.../<id>/SKILL.md）推出文件夹后复制进 ABU Agent 用户技能目录。
   const handleCliImportSelected = useCallback(async () => {
     if (!cliSkills) return
     const all = [...cliSkills.claude, ...cliSkills.codex, ...cliSkills.opencode, ...cliSkills.pi]

@@ -1,10 +1,10 @@
 # ACP host adaptation for local coding CLIs
 
 **Date:** 2026-08-25  
-**Scope:** How a GUI **ACP Client** (Kivio) should adapt when driving many installed **external CLI agents** over Agent Client Protocol v1. Kimi Code 0.37 Glob/Grep failure is one sample, not the whole question.  
+**Scope:** How a GUI **ACP Client** (ABU Agent) should adapt when driving many installed **external CLI agents** over Agent Client Protocol v1. Kimi Code 0.37 Glob/Grep failure is one sample, not the whole question.  
 **Not in scope:** Product code changes. Claude Code is not a native ACP server; skip except where Zed’s adapter is mentioned.
 
-Kivio terms (from `CONTEXT.md`): **external CLI agent** = installed CLI backing a conversation; **working directory** = directory the native session was created in; **native session** = the CLI’s own history, not Kivio’s.
+ABU Agent terms (from `CONTEXT.md`): **external CLI agent** = installed CLI backing a conversation; **working directory** = directory the native session was created in; **native session** = the CLI’s own history, not ABU Agent’s.
 
 ---
 
@@ -14,13 +14,13 @@ ACP lets an editor (Client) spawn a coding CLI (Agent) as a subprocess and speak
 
 That callback surface is optional. Advertising a capability is not “extra RPC for free.” For several CLIs it **replaces** the local implementation the TUI uses. A host that advertises `terminal: true` can therefore make Bash work (host exec) while breaking Glob/Grep (agent still tries to spawn `fd`/`rg` through a host path that only accepts bash-shaped argv). A host that advertises `fs.readTextFile: true` can make text reads go through unsaved editor buffers — and, for some agents, **disable** a stronger local image/binary reader.
 
-Kivio today (live chat sessions):
+ABU Agent today (live chat sessions):
 
 - Advertises `clientCapabilities.terminal: true` and implements `terminal/*`.
 - Does **not** advertise or implement `fs.readTextFile` / `fs.writeTextFile`.
 - Probe/import processes advertise `terminal: false` because they do not handle reverse RPC.
 
-Kivio’s `acp_terminal.rs` comment currently claims Kimi/Cursor/OpenCode/Gemini route Bash **and** Glob/Grep through the host. That is true for **Kimi Code 0.37’s process backend**. It is **false** as a general ACP rule (OpenCode and Gemini keep glob/grep in-agent).
+ABU Agent’s `acp_terminal.rs` comment currently claims Kimi/Cursor/OpenCode/Gemini route Bash **and** Glob/Grep through the host. That is true for **Kimi Code 0.37’s process backend**. It is **false** as a general ACP rule (OpenCode and Gemini keep glob/grep in-agent).
 
 ---
 
@@ -113,7 +113,7 @@ Official decision ([RFD: v2 Client filesystem and terminal execution](https://ag
 - Replacement for **display**: Agent-owned `terminal_update` / `terminal_output_chunk` (not Client exec).
 - `capabilities.auth.terminal` (login-in-a-terminal) is **kept**; it is not the v1 execution flag.
 
-Kivio implication: v1 still needs a portable Client surface for today’s CLIs. Do not design Kivio’s long-term adaptation around inventing more v1 Client methods (glob, etc.). v2’s official answer for host-side tools is MCP, not more ACP RPCs.
+ABU Agent implication: v1 still needs a portable Client surface for today’s CLIs. Do not design ABU Agent’s long-term adaptation around inventing more v1 Client methods (glob, etc.). v2’s official answer for host-side tools is MCP, not more ACP RPCs.
 
 ---
 
@@ -128,14 +128,14 @@ Kivio implication: v1 still needs a portable Client surface for today’s CLIs. 
 | **acpx** (`openclaw/acpx`) | Default **both true**; `--no-fs` / `--no-terminal` opt out | Yes | Yes | Host methods honor `--cwd` boundary | `src/acp/client.ts` `resolveClientCapabilities`; `docs/CLI.md`; [acpx.sh/permissions](https://acpx.sh/permissions.html). Integration test: default initialize has `terminal: true` and `fs: { readTextFile: true, writeTextFile: true }` |
 | **Paseo** (`getpaseo/paseo`) | Default **all false**; providers **opt in** | Implemented when opted in | Implemented when opted in | Default: keep I/O in the agent environment (containers / remote) | `packages/server/src/server/agent/providers/acp-agent.ts` `BASE_ACP_CLIENT_CAPABILITIES` = `{ fs: { readTextFile: false, writeTextFile: false }, terminal: false }`. Docs: [custom-providers.md](https://github.com/getpaseo/paseo/blob/main/docs/custom-providers.md). PR [#2024](https://github.com/getpaseo/paseo/pull/2024) flipped the default **away** from Zed-style full advertise |
 | **Python SDK example** (`agentclientprotocol/python-sdk` `examples/gemini.py`) | `fs` both true + `terminal` true | Example client reads/writes local files | Example implements terminal | Demo host | Reference client, not a product |
-| **Kivio** (this repo, 2026-08-25) | Live: `{ terminal: true }` only. Probe/import: `{ terminal: false }` | No | Yes (`acp_terminal.rs`, execvp `Command::new(command).args(args)`, session cwd, `TERM=dumb` / `NO_COLOR=1`) | Host exec for `terminal/*` only | `src-tauri/src/external_agents/session/acp.rs` `acp_initialize_params` |
+| **ABU Agent** (this repo, 2026-08-25) | Live: `{ terminal: true }` only. Probe/import: `{ terminal: false }` | No | Yes (`acp_terminal.rs`, execvp `Command::new(command).args(args)`, session cwd, `TERM=dumb` / `NO_COLOR=1`) | Host exec for `terminal/*` only | `src-tauri/src/external_agents/session/acp.rs` `acp_initialize_params` |
 
 **Two host philosophies:**
 
 1. **Zed / acpx / vscode-acp:** advertise the full v1 Client execution surface; agents that want local I/O simply do not call it.
 2. **Paseo (after #2024):** advertise nothing by default so agents that **replace** local spawn when they see `terminal: true` keep their TUI backends. Opt in per provider.
 
-Kivio is currently a third shape: **terminal-only**. That is legal (schema defaults fs to false) and happens to be the combination that makes Kimi 0.37 Bash work and Glob/Grep fail.
+ABU Agent is currently a third shape: **terminal-only**. That is legal (schema defaults fs to false) and happens to be the combination that makes Kimi 0.37 Bash work and Glob/Grep fail.
 
 ---
 
@@ -150,7 +150,7 @@ Kivio is currently a third shape: **terminal-only**. That is legal (schema defau
 | **Cursor (`agent acp`)** | Public docs do not document routing. Zed advertises fs+terminal to it anyway | Same | Unknown (closed source). Do not assume Kimi-style spawn replacement | Official example client uses fs false, terminal false — implies Cursor **can** run without host exec |
 | **Hermes (`hermes acp`)** | Internals: file/terminal **Hermes tools** bound to editor **cwd**, not documented as calling `fs/*`. Issue #569 listed editor fs/terminal as an **option** | `terminal` / `process` / `execute_code` are Hermes tools (`acp_adapter/tools.py` kind map). Display as `execute` | `search_files` is a Hermes tool (`kind: search`), in-agent | Tools still run in Hermes process at session cwd |
 | **pi / oh-my-pi** | Bridge sets `readTextFile` / `writeTextFile` from client caps; file tools may proxy | `BashTool` uses `createTerminal` when `terminal: true`. **Must** wrap the shell line: `wrapShellLineForClientTerminal` → `{ command: shell, args: [...shellArgs, line] }` | Not through terminal in the bash wrap PR; file search stays agent tools | Bash local; no `terminal/*` calls |
-| **Grok CLI** (not in Kivio ACP family; cited as capability-hazard) | `readTextFile: true` routes `read_file` through text-only client method → `Cannot read binary file` on PNG. `false` → local image read works | `terminal/create` fires **even in Plan mode** on tested builds | n/a | Host can withhold `readTextFile` on purpose |
+| **Grok CLI** (not in ABU Agent ACP family; cited as capability-hazard) | `readTextFile: true` routes `read_file` through text-only client method → `Cannot read binary file` on PNG. `false` → local image read works | `terminal/create` fires **even in Plan mode** on tested builds | n/a | Host can withhold `readTextFile` on purpose |
 
 ### Kimi Code 0.37 (the sample)
 
@@ -160,7 +160,7 @@ Kivio is currently a third shape: **terminal-only**. That is legal (schema defau
 
 That matches an older adapter, not 0.37’s process service.
 
-**Local 0.37 binary** (Kivio probe + embedded `packages/acp-server/src/acp-terminal/acpTerminalRunner.ts`, 2026-08-25):
+**Local 0.37 binary** (ABU Agent probe + embedded `packages/acp-server/src/acp-terminal/acpTerminalRunner.ts`, 2026-08-25):
 
 ```js
 async spawn(command, args = [], options) {
@@ -179,7 +179,7 @@ function isBashToolInvocation(args, options) {
 
 Independent corroboration that 0.37.2 expects host terminals for Bash **and** Glob/Grep: [multica-ai/multica#7323](https://github.com/multica-ai/multica/pull/7323) (“Advertise ACP terminal capability for the Kimi runtime so Kimi 0.37.2 can route Bash/Glob/Grep through the client”). That host implemented `terminal/*` so those tools could run; it does not add glob RPCs.
 
-Kivio `AcpTerminalHost` already sets `TERM=dumb` and `NO_COLOR=1` on spawn (`acp_terminal.rs`). That satisfies Kimi’s **bash** env check on the host side. It cannot help Glob/Grep: those never reach `terminal/create`.
+ABU Agent `AcpTerminalHost` already sets `TERM=dumb` and `NO_COLOR=1` on spawn (`acp_terminal.rs`). That satisfies Kimi’s **bash** env check on the host side. It cannot help Glob/Grep: those never reach `terminal/create`.
 
 **kimi-cli Python** (still useful as contrast): `MoonshotAI/kimi-cli` `src/kimi_cli/acp/tools.py` `replace_tools` only replaces `Shell`. `src/kimi_cli/acp/kaos.py` `ACPKaos.glob` / `exec` delegate to `local_kaos`. [AGENTS.md](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/acp/AGENTS.md): “If the client advertises `terminal` capability, the Shell tool is replaced by an ACP-backed Terminal tool.” Not the whole process table.
 
@@ -220,7 +220,7 @@ Kimi `create_terminal` historically passed a **raw command string** with no `arg
 | Host advertise | Kimi Code 0.37 | Gemini | OpenCode | Hermes (cwd-bound tools) | pi bash | Grok (if ever) |
 | --- | --- | --- | --- | --- | --- | --- |
 | **fs + terminal** (Zed) | Bash via host. Glob/Grep still bash-gated unless Kimi wraps `rg` as `bash -c`. Text r/w via host | Text r/w via host (in root). Glob/grep local. Shell mostly local | Unchanged local I/O; maybe buffer sync writes | Tools in Hermes at cwd; may ignore fs | Bash via host (wrapped argv). Files may proxy | Image `read_file` can break if `readTextFile` true |
-| **terminal only** (Kivio today) | Bash works. Glob/Grep throw pre-RPC. Text r/w **local** (good) | Native FS. Glob/grep local | Unchanged | Unchanged | Bash via host | `terminal/create` still fires; Plan can mutate via host exec |
+| **terminal only** (ABU Agent today) | Bash works. Glob/Grep throw pre-RPC. Text r/w **local** (good) | Native FS. Glob/grep local | Unchanged | Unchanged | Bash via host | `terminal/create` still fires; Plan can mutate via host exec |
 | **fs only** | Bash **and** glob/grep throw (`terminal` unavailable). Text r/w via host | Text r/w via host. Glob/grep local | Unchanged | Unchanged | Bash local | Image read may break; no host shell |
 | **neither** (Paseo default) | Everything that goes through `AcpProcessService` throws | Native FS + native tools | Unchanged (best match) | Unchanged | Local bash | Local tools; no host exec |
 
@@ -236,7 +236,7 @@ Kimi `create_terminal` historically passed a **raw command string** with no `arg
 - The only host-side mitigations:
   1. Keep `terminal: true` so Bash works (already done).
   2. Do **not** turn off `terminal` hoping glob returns to TUI spawn — 0.37 then fails closed on **all** process tools.
-  3. Surface the agent error as agent policy, not a Kivio bug.
+  3. Surface the agent error as agent policy, not a ABU Agent bug.
   4. Upstream: Kimi should keep `fd`/`rg` on local spawn (kimi-cli / OpenCode / Gemini pattern), or wrap them as `bash -c "rg …"` so they pass `isBashToolInvocation`.
 
 A host that **shell-interprets** `command` (contrary to spec) still never sees Glob’s `fd` argv.
@@ -257,7 +257,7 @@ A host that **shell-interprets** `command` (contrary to spec) still never sees G
 
 ---
 
-## Q5 — Portable adaptation layer for a multi-CLI host (Kivio)
+## Q5 — Portable adaptation layer for a multi-CLI host (ABU Agent)
 
 Align with **Zed’s method set**, **Paseo’s “advertising replaces backends” lesson**, and **acpx’s cwd-bounded host exec**.
 
@@ -268,9 +268,9 @@ Align with **Zed’s method set**, **Paseo’s “advertising replaces backends�
    - absolute paths;
    - `line`/`limit` on read (1-based);
    - create-on-write;
-   - prefer working-directory confinement as **host policy** (spec does not require it; Kivio already notes this in `AcpTerminalHost::set_extra_roots`).
+   - prefer working-directory confinement as **host policy** (spec does not require it; ABU Agent already notes this in `AcpTerminalHost::set_extra_roots`).
 3. **Do not advertise fs/terminal on probe/import** processes.
-4. **Later / as UI exists:** `auth.terminal` + `_meta.terminal-auth` (Kimi/OpenCode/Zed login), elicitation, session boolean config. Cursor: `_meta.parameterizedModelPicker` if Kivio grows a parameterized model picker ([zed#57571](https://github.com/zed-industries/zed/issues/57571)).
+4. **Later / as UI exists:** `auth.terminal` + `_meta.terminal-auth` (Kimi/OpenCode/Zed login), elicitation, session boolean config. Cursor: `_meta.parameterizedModelPicker` if ABU Agent grows a parameterized model picker ([zed#57571](https://github.com/zed-industries/zed/issues/57571)).
 5. **Per-agent withhold list**, not a per-agent fake glob:
    - Default: Zed-like full surface.
    - Exception candidates: agents proven to **degrade** when a flag is true (Grok `readTextFile` vs images). Measure Cursor/Hermes before assuming.
@@ -278,19 +278,19 @@ Align with **Zed’s method set**, **Paseo’s “advertising replaces backends�
 ### Methods
 
 - Baseline: `session/request_permission` (already).
-- `terminal/*`: keep execvp; do **not** wrap in `cmd /c` / `sh -c` on the host (pi’s lesson). Kivio already execvp-spawns.
+- `terminal/*`: keep execvp; do **not** wrap in `cmd /c` / `sh -c` on the host (pi’s lesson). ABU Agent already execvp-spawns.
 - `fs/*`: text only. Do not pretend binary/image reads exist (Grok lesson).
 - Embed `{type:"terminal", terminalId}` in the chat UI when present (spec SHOULD keep showing output after release).
 
 ### Permission + cwd / sandbox
 
-- `terminal: true` means Kivio **is** the exec plane. Grok Plan still sent `terminal/create` to the client ([phuryn/grok-build-vscode `docs/internal/ACP-feedback.md`](https://github.com/phuryn/grok-build-vscode/blob/main/docs/internal/ACP-feedback.md)). Gate dangerous exec on `session/request_permission` and/or host policy — do not assume the agent’s Plan mode will withhold reverse RPC.
+- `terminal: true` means ABU Agent **is** the exec plane. Grok Plan still sent `terminal/create` to the client ([phuryn/grok-build-vscode `docs/internal/ACP-feedback.md`](https://github.com/phuryn/grok-build-vscode/blob/main/docs/internal/ACP-feedback.md)). Gate dangerous exec on `session/request_permission` and/or host policy — do not assume the agent’s Plan mode will withhold reverse RPC.
 - Honor `cwd` on `terminal/create` (must be absolute). Default to the conversation **working directory**.
-- acpx: fs/terminal honor cwd boundaries. Kivio currently does **not** confine terminal cwd to extra writable roots (comment in `acp_terminal.rs`) because agents pass temp dirs. Keep that honest; document it; don’t silently expand glob.
+- acpx: fs/terminal honor cwd boundaries. ABU Agent currently does **not** confine terminal cwd to extra writable roots (comment in `acp_terminal.rs`) because agents pass temp dirs. Keep that honest; document it; don’t silently expand glob.
 
 ### MCP
 
-Pass through `mcpServers` on `session/new` (already in Kivio’s ACP path for several agents). v2’s official “host tools” story is MCP. Do not build a parallel ACP glob API.
+Pass through `mcpServers` on `session/new` (already in ABU Agent’s ACP path for several agents). v2’s official “host tools” story is MCP. Do not build a parallel ACP glob API.
 
 ---
 
@@ -308,17 +308,17 @@ Pass through `mcpServers` on `session/new` (already in Kivio’s ACP path for se
 | **Grok** (if ACP) | Withholding `readTextFile` can be the correct host choice |
 | **All** | `{type:"terminal"}` is Client-owned live output, not a glob result. Agent-local tools still show as ordinary `tool_call` cards |
 
-Do **not** special-case Kivio’s initialize payload per CLI except where advertising a flag is known to **disable** a needed local path.
+Do **not** special-case ABU Agent’s initialize payload per CLI except where advertising a flag is known to **disable** a needed local path.
 
 ---
 
-## Q7 — Recommended Kivio next steps
+## Q7 — Recommended ABU Agent next steps
 
 1. **Keep `terminal: true` on live sessions.** Turning it off does not restore Kimi TUI glob; it kills Bash too.
-2. **Implement `fs/read_text_file` + `fs/write_text_file` and advertise them** — portable IDE-class Client surface (Zed/acpx/vscode-acp). Expected wins: Gemini proxy FS, Kimi text bridge, unsaved-buffer semantics if Kivio ever has them. **Not** a Glob fix.
+2. **Implement `fs/read_text_file` + `fs/write_text_file` and advertise them** — portable IDE-class Client surface (Zed/acpx/vscode-acp). Expected wins: Gemini proxy FS, Kimi text bridge, unsaved-buffer semantics if ABU Agent ever has them. **Not** a Glob fix.
 3. **Do not emulate glob/grep** in ACP or by rewriting `terminal/create` into a search engine.
 4. **Fix the comment** in `acp_terminal.rs` that says all ACP CLIs route Glob/Grep through the host — that is Kimi 0.37 process policy.
-5. **UI:** distinguish (a) host RPC errors, (b) permission deny, (c) **agent-policy** strings (`ACP runtime only supports interactive Bash tool processes`, `ACP terminal capability is unavailable`). Do not brand (c) as a Kivio outage. Kimi can often finish via Bash `find`/`grep` after the red cards.
+5. **UI:** distinguish (a) host RPC errors, (b) permission deny, (c) **agent-policy** strings (`ACP runtime only supports interactive Bash tool processes`, `ACP terminal capability is unavailable`). Do not brand (c) as a ABU Agent outage. Kimi can often finish via Bash `find`/`grep` after the red cards.
 6. **Upstream Kimi:** keep non-shell tools on local spawn (kimi-cli pattern) **or** wrap `rg`/`fd` as bash `-c`. Point at the stale official “terminal not connected” matrix.
 7. **Do not rush ACP v2** for this: v2 *removes* Client fs/terminal. Stay on v1; when v2 stabilizes, host tools move to MCP.
 8. **Optional later:** elicitation, `auth.terminal`, Zed `_meta`, Cursor parameterized picker, Plan-mode host policy on `terminal/create`.
@@ -330,7 +330,7 @@ Do **not** special-case Kivio’s initialize payload per CLI except where advert
 
 1. **Obligated vs optional:** Host MUST initialize, treat omitted caps as unsupported, implement permission; fs/terminal/auth/elicitation are optional with schema defaults false. Agent MUST NOT call methods for false/omitted caps; MUST release terminals it created. Local fallback is not specified.
 2. **Glob/grep:** In-agent (or agent-chosen `terminal/create` / `bash -c`). Spec has **no** search methods.
-3. **Matrix:** Zed-style both-true is the common IDE host; Paseo-style neither is the safe default when agents replace backends; Kivio terminal-only is the Kimi-Bash-works / Kimi-Glob-fails cell. See tables above.
+3. **Matrix:** Zed-style both-true is the common IDE host; Paseo-style neither is the safe default when agents replace backends; ABU Agent terminal-only is the Kimi-Bash-works / Kimi-Glob-fails cell. See tables above.
 4. **Fix Kimi glob by more host methods?** No, unless Kimi uses `fs` (it doesn’t for glob) or wraps `rg` as bash `-c`.
 5. **Portable layer:** Advertise+implement v1 `terminal/*` + `fs/*` + permission + cwd/sandbox; per-agent withhold only when a flag disables a better local path; MCP for extra tools; no custom glob RPC.
 6. **Quirks:** Document Kimi spawn gate, OpenCode local I/O, Gemini FS proxy vs local search, pi execvp wrap, Cursor closed+extensions, Hermes in-agent search, Grok readTextFile/images, stale Kimi docs.
@@ -373,7 +373,7 @@ Do **not** special-case Kivio’s initialize payload per CLI except where advert
 - https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-acp.html (stale vs 0.37 on terminal)
 - MoonshotAI/kimi-cli `src/kimi_cli/acp/AGENTS.md`, `tools.py` `replace_tools`, `kaos.py` `ACPKaos`
 - https://github.com/MoonshotAI/kimi-cli/issues/1517
-- Kimi Code 0.37 embedded `acpTerminalRunner.ts` / `acpFsService.ts` (local binary + Kivio probe 2026-08-25)
+- Kimi Code 0.37 embedded `acpTerminalRunner.ts` / `acpFsService.ts` (local binary + ABU Agent probe 2026-08-25)
 - https://github.com/multica-ai/multica/pull/7323
 - google-gemini/gemini-cli `docs/cli/acp-mode.md`, `packages/cli/src/acp/acpClient.ts`, `acpFileSystemService.ts`, `packages/core/src/tools/glob.ts`
 - https://opencode.ai/docs/acp/ ; `anomalyco/opencode` `packages/opencode/src/acp/agent.ts` ; OpenVibeCoding `docs/opencode-acp-integration-memo.md`
@@ -382,7 +382,7 @@ Do **not** special-case Kivio’s initialize payload per CLI except where advert
 - can1357/oh-my-pi PR https://github.com/can1357/oh-my-pi/pull/4335 ; `packages/coding-agent/src/tools/bash.ts` `wrapShellLineForClientTerminal`
 - phuryn/grok-build-vscode `docs/internal/ACP-feedback.md`
 
-### Kivio
+### ABU Agent
 
 - `src-tauri/src/external_agents/session/acp.rs` `acp_initialize_params`
 - `src-tauri/src/external_agents/session/acp_terminal.rs`

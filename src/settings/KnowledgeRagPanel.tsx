@@ -71,8 +71,8 @@ export function KnowledgeRagPanel({
         <Zap size={16} className="mt-0.5 shrink-0 text-indigo-500" />
         <p className="min-w-0 text-xs leading-relaxed text-indigo-700/90 dark:text-indigo-300/85">
           {t(
-            'RAG 允许 AI 检索你导入的私有文档以提供更准确的回复。Kivio 在本机解析、分块并建立索引，数据不出本机。',
-            'RAG lets the AI search your own documents for grounded answers. Kivio parses, chunks and indexes everything locally — data never leaves your machine.',
+            'RAG 允许 AI 检索你导入的私有文档以提供更准确的回复。ABU Agent 在本机解析、分块并建立索引，数据不出本机。',
+            'RAG lets the AI search your own documents for grounded answers. ABU Agent parses, chunks and indexes everything locally — data never leaves your machine.',
           )}
         </p>
       </div>

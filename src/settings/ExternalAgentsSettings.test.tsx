@@ -617,7 +617,7 @@ describe('ExternalAgentsSettings', () => {
     expect(updateChat).not.toHaveBeenCalled()
   })
 
-  it('hides a native dsh relay after it is adopted into Kivio providers', async () => {
+  it('hides a native dsh relay after it is adopted into ABU Agent providers', async () => {
     mockDetect.mockResolvedValue([
       {
         id: 'dsh',

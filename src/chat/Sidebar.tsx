@@ -276,7 +276,7 @@ function SidebarUserFooter({
             className="min-w-0 flex-1 truncate text-[12.5px] text-neutral-700 dark:text-neutral-300"
             title={profile.displayName || undefined}
           >
-            {profile.displayName || 'Kivio'}
+            {profile.displayName || 'ABU Agent'}
           </span>
         </button>
         <IconButton

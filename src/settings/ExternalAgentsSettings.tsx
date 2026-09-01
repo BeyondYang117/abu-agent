@@ -883,7 +883,7 @@ function providerSubtitle(provider: ExternalCliProvider): string {
     const options = config.options as Record<string, unknown> | undefined
     if (typeof options?.baseURL === 'string') return options.baseURL
   } catch {
-    // The edit modal will surface malformed Kivio-owned JSON; keep the list usable meanwhile.
+    // The edit modal will surface malformed ABU Agent-owned JSON; keep the list usable meanwhile.
   }
   return ''
 }
@@ -1049,7 +1049,7 @@ function ProviderSection({
     setImporting(false)
   }
 
-  // Pi / OpenCode 的全部供应商写进原生配置，dsh 的全部供应商挂进 Kivio profile；currentProvider 只选默认项。
+  // Pi / OpenCode 的全部供应商写进原生配置，dsh 的全部供应商挂进 ABU Agent profile；currentProvider 只选默认项。
   const providersCoexist = agentId === 'pi' || agentId === 'opencode' || agentId === 'dsh'
   const nativeOnDisk =
     agentId === 'opencode' || agentId === 'pi' || agentId === 'grok' || agentId === 'kimi'

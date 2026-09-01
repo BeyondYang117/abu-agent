@@ -38,7 +38,7 @@
 1. **数据模型永远是单条 `NodeOutput { text, json }`**。不做 n8n 的 items 数组、隐式 per-item 循环、item linking（调研排名第一的压人来源）。将来需要批量，加一个显式的 for-each 节点，而不是改数据模型。
 2. **图形状锁死为「单 trigger 的树」**：每个 step 单入边（已有），IF 双出口，非 IF 允许扇出（每支拿 `prev` 的克隆）。**不做 Merge / 多输入**——这直接消灭了多入边合并语义问题。Switch、Merge、多 trigger 全部后置。
 3. **插值只有 `{{output}}` 和 `{{json.path}}`**，不做 `$json` JS 表达式引擎、不做跨节点引用 `$('Node')`。降低学习成本的方式是「从 INPUT 样本点选生成」，不是扩语法。
-4. **无独立 credential 系统**：agent/http 复用 Kivio 的 providers 与 settings，这是桌面 AI 助手对 n8n「App 目录 × Credentials」的天然替代。
+4. **无独立 credential 系统**：agent/http 复用 ABU Agent 的 providers 与 settings，这是桌面 AI 助手对 n8n「App 目录 × Credentials」的天然替代。
 5. **无 Webhook 触发器（v1）**：桌面场景下 hotkey 就是「外部事件入口」。要 webhook 等于要常驻 HTTP 服务，是独立课题。
 6. **无草稿/发布双版本**：一份 JSON + `enabled`，语义已够（Manual 恒可跑 = n8n 的 manual execution；enabled = published）。不做 named versions / review。
 7. **Agent 节点 = 无人值守**：工具自动批准、`ask_user` 即取消、对话不进 sidebar、工作区隔离在 `{workingDirectory}/automations/{id}`。这是明确契约，不是缺陷；风险控制靠 P2 的 run 详情可回放。

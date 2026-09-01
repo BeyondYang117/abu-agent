@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues in [`abu/kivio`](https://github.com/abu/kivio). Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues in [`abu/abu-agent-desktop`](https://github.com/abu/abu-agent-desktop). Use the `gh` CLI for all operations.
 
 ## Conventions
 

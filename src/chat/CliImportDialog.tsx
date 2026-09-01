@@ -26,7 +26,7 @@ interface CliImportDialogProps {
   onClose: () => void
   /** 导入成功后回调，交给外层刷新列表并跳转。 */
   onImported: (conversationIds: string[]) => void
-  /** 点击一条「Kivio 里已经有了」的会话时，跳到那条已存在的对话。 */
+  /** 点击一条「ABU Agent 里已经有了」的会话时，跳到那条已存在的对话。 */
   onOpenConversation: (conversationId: string) => void
 }
 
@@ -201,7 +201,7 @@ export function CliImportDialog({
                     const key = keyOf(session)
                     const checked = selected.has(key)
                     const bound = Boolean(session.boundConversationId)
-                    // 「已导入」和「Kivio 里已经有了」是两回事：后者是 Kivio 自己跑出来的会话，
+                    // 「已导入」和「ABU Agent 里已经有了」是两回事：后者是 ABU Agent 自己跑出来的会话，
                     // 用户从没导过它，标成"已导入"是在撒谎。
                     const boundLabel = session.alreadyImported ? t.chatSkillCliImported : t.chatSkillCliBound
                     return (

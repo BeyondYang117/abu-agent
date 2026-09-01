@@ -1,6 +1,6 @@
 # Chat GUI 无头测试通道（probe）
 
-**仅 debug 构建**。让自动化 / 手动通过文件驱动**运行中的 Kivio GUI 客户端**跑真实的 chat 生成，捕获模型实际调用的工具 + 回答——用于验证工具改动（如改名后模型是否还能调对）、回归测试，免去手点 GUI。
+**仅 debug 构建**。让自动化 / 手动通过文件驱动**运行中的 ABU Agent GUI 客户端**跑真实的 chat 生成，捕获模型实际调用的工具 + 回答——用于验证工具改动（如改名后模型是否还能调对）、回归测试，免去手点 GUI。
 
 release 构建里整套 probe 被 `#[cfg(debug_assertions)]` 编译掉，不存在。
 
@@ -46,5 +46,5 @@ release 构建里整套 probe 被 `#[cfg(debug_assertions)]` 编译掉，不存�
 
 ## 已知限制 / 备忘
 
-- 某些 provider 端点不接受 Kivio 发的 `prompt_cache_key`/`promptCacheKey` 会话缓存键字段（实测 Google Gemini OpenAI-compat 端点返回 `400 Unknown name "promptCacheKey"`）。probe 会把该错误如实写进 `result.json.error`。**这不是 Kivio 的 bug**——opencode 用同样的 url+key 也复现完全相同报错，是 OpenAI 风格客户端普遍撞 Gemini OpenAI-compat shim 严格校验的结果。正确方向是**以后为 Gemini 做原生接口协议适配**（peer adapter），待单独任务。
+- 某些 provider 端点不接受 ABU Agent 发的 `prompt_cache_key`/`promptCacheKey` 会话缓存键字段（实测 Google Gemini OpenAI-compat 端点返回 `400 Unknown name "promptCacheKey"`）。probe 会把该错误如实写进 `result.json.error`。**这不是 ABU Agent 的 bug**——opencode 用同样的 url+key 也复现完全相同报错，是 OpenAI 风格客户端普遍撞 Gemini OpenAI-compat shim 严格校验的结果。正确方向是**以后为 Gemini 做原生接口协议适配**（peer adapter），待单独任务。
 - probe 只记最终聚合结果（answer + tool_records），不记流式逐帧。

@@ -6,7 +6,7 @@
  *   [models."<id>/<model>"]  provider / model / max_context_size / display_name
  *   default_model = "<id>/<model>"
  *
- * 每条 Kivio 供应商存一份 TOML 片段；后端合并进现有文件，managed:kimi-code 等段不动。
+ * 每条 ABU Agent 供应商存一份 TOML 片段；后端合并进现有文件，managed:kimi-code 等段不动。
  */
 
 export type KimiApiType =
@@ -43,7 +43,7 @@ export const KIMI_API_TYPES: KimiApiType[] = [
   'google-genai',
 ]
 
-// 文案对齐 Kivio 主供应商「接口协议」下拉（ProviderDetail），避免同一概念两种叫法。
+// 文案对齐 ABU Agent 主供应商「接口协议」下拉（ProviderDetail），避免同一概念两种叫法。
 export const KIMI_API_TYPE_LABELS: Record<KimiApiType, string> = {
   openai: 'OpenAI Compatible',
   openai_responses: 'OpenAI Responses',

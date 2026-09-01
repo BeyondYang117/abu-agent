@@ -1,10 +1,10 @@
-# PRD：Kivio Chat Agent Runtime 标准化
+# PRD：ABU Agent Chat Agent Runtime 标准化
 
 | 字段 | 内容 |
 |------|------|
 | 文档版本 | v1.1 |
 | 状态 | 已评审（可进入 Phase B） |
-| 产品 | Kivio（桌面端，macOS / Windows） |
+| 产品 | ABU Agent（桌面端，macOS / Windows） |
 | 范围 | **Chat Agent 编排层**（`src-tauri/src/chat/agent/` 目标模块）；不含 Lens、不含第三方连接器（Composio 等） |
 | 目标读者 | 产品、Rust/前端研发、测试 |
 | 用户可感知变化（Phase B） | **无** — 仅后端重构与可测性提升 |
@@ -21,7 +21,7 @@
 
 ## 1. 背景与问题陈述
 
-Kivio Chat 已完成 **Model 层** 的 Provider 抽象（`chat/model`：`LanguageModelProvider`、`GenerateRequest`、`StreamPart`，支持 OpenAI Chat、Anthropic Messages、Apple 本地）。多轮工具调用、流式输出、审批、MCP/Skill/内置工具、以及 `model_messages` / `api_messages` 双轨持久化均已上线。
+ABU Agent Chat 已完成 **Model 层** 的 Provider 抽象（`chat/model`：`LanguageModelProvider`、`GenerateRequest`、`StreamPart`，支持 OpenAI Chat、Anthropic Messages、Apple 本地）。多轮工具调用、流式输出、审批、MCP/Skill/内置工具、以及 `model_messages` / `api_messages` 双轨持久化均已上线。
 
 然而 **Agent 编排层**（何时停步、每步如何准备上下文、如何执行工具、如何合成最终回复）仍集中在 [`src-tauri/src/chat/commands.rs`](../src-tauri/src/chat/commands.rs)（约 5300 行），核心函数 `complete_assistant_reply` 内含：
 
@@ -158,9 +158,9 @@ AI SDK 提供两条路：
 - **托管循环**：`stopWhen` + `prepareStep` + 可选 `tools.execute`
 - **手动循环**：[Manual Loop Control](https://ai-sdk.dev/docs/agents/loop-control)
 
-**Kivio 选择手动循环**，并在 Rust 实现等价语义：
+**ABU Agent 选择手动循环**，并在 Rust 实现等价语义：
 
-| AI SDK | Kivio（目标） |
+| AI SDK | ABU Agent（目标） |
 |--------|----------------|
 | `stepCountIs(n)` | `max_tool_rounds` + `AgentStopReason::StepLimit` |
 | `prepareStep({ stepNumber, steps, messages })` | `prepare_agent_step(...)` |

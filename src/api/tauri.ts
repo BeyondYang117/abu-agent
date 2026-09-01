@@ -498,7 +498,7 @@ export type ChatConfig = {
   defaultAgentRuntime?: AgentRuntimeConfig
   /** 本地 CLI Agent 的每-CLI 覆盖，key = agent id。 */
   externalCliAgents?: Record<string, ExternalCliAgentConfig>
-  /** Kivio Chat 运行时专属设置（与 Agent 分离）。 */
+  /** ABU Agent Chat 运行时专属设置（与 Agent 分离）。 */
   chatMode?: ChatModeConfig
 }
 
@@ -520,7 +520,7 @@ export type ExternalCliAgentConfig = {
  * grok 用 `configToml`（把 models / model 段合并进 `~/.grok/config.toml`）；
  * kimi 用 `configToml`（把 providers / models / default_model 合并进 `~/.kimi-code/config.toml`）；
  * OpenCode / Pi 用 `configJson` + `authJson` + `defaultModel` 合并进原生配置；
- * dsh 用 `configJson` 在 Kivio 私有 profile 中挂载 `llm-pi-ai`，Key 通过 `env` 注入；
+ * dsh 用 `configJson` 在 ABU Agent 私有 profile 中挂载 `llm-pi-ai`，Key 通过 `env` 注入；
  * Pi 另用 `defaultReasoning` 写入终端默认 thinking 档位。
  */
 export type ExternalCliProvider = {
@@ -533,7 +533,7 @@ export type ExternalCliProvider = {
   configToml?: string
   configJson?: string
   authJson?: string
-  /** Kivio-only model override state; never written into the CLI native config. */
+  /** ABU Agent-only model override state; never written into the CLI native config. */
   modelMetadataJson?: string
   /** Stable route/provider id used by OpenCode, Pi, and dsh model references. */
   nativeProviderId?: string
@@ -971,13 +971,13 @@ export type DocProcessorProvider = {
   enabled: boolean
 }
 
-/** 知识库文档处理配置：Kivio 内置解析 + 可选第三方解析服务。 */
+/** 知识库文档处理配置：ABU Agent 内置解析 + 可选第三方解析服务。 */
 export type DocumentProcessingConfig = {
   ocrEngine: OcrEngine
   /** RapidOCR 模型档位(ocrEngine==='rapid_ocr' 时生效)。缺省 'high'(入库要精度)。 */
   rapidOcrTier?: RapidOcrTier
   pdfStrategy: PdfStrategy
-  /** '' = Kivio 内置；否则为某第三方 provider id。 */
+  /** '' = ABU Agent 内置；否则为某第三方 provider id。 */
   activeProcessor: string
   /** 内置解析失败（如扫描版 PDF）时回退到第一个启用的第三方服务。 */
   fallbackToThirdParty: boolean
@@ -1240,7 +1240,7 @@ export type Note = {
   updatedAt: string
 }
 
-/** 交给 Kivio AI 的安装任务（含官方 README URL + Kivio 契约） */
+/** 交给 ABU Agent AI 的安装任务（含官方 README URL + ABU Agent 契约） */
 export type PluginInstallBrief = {
   pluginId: string
   pluginName: string
@@ -1847,7 +1847,7 @@ export type DefaultPromptTemplates = {
     zh: string
     en: string
   }
-  /** Built-in Kivio Chat runtime prompt (exact string injected when chatMode.systemPrompt is empty). */
+  /** Built-in ABU Agent Chat runtime prompt (exact string injected when chatMode.systemPrompt is empty). */
   chatRuntimePrompt?: string
 }
 

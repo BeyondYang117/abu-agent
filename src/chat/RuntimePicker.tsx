@@ -13,7 +13,7 @@ import './runtimePicker.css'
 const KIVIO_LOGO_SRC = '/logo-mark.png'
 
 /** Same brand mark as Agent; `variant` only changes color treatment so the shape stays identical. */
-function KivioMark({
+function ABUAgentMark({
   size = 20,
   variant = 'agent',
 }: {
@@ -152,8 +152,8 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
 
   const label = useMemo(() => {
     if (usesExternal) return currentAgent?.name ?? agentRuntime.externalAgentId ?? t.chatRuntimeLocalCli
-    if (usesChat) return 'Kivio Chat'
-    return 'Kivio Agent'
+    if (usesChat) return 'ABU Agent Chat'
+    return 'ABU Agent'
   }, [agentRuntime.externalAgentId, currentAgent?.name, t, usesChat, usesExternal])
 
   const selectBuiltin = () => {
@@ -194,11 +194,11 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
       >
         {/* Icon keys off externalAgentId directly (not the detection result) so the agent
             icon shows immediately — detection is async and the list resets per conversation,
-            which used to flash the Kivio logo until the first probe finished. */}
+            which used to flash the ABU Agent logo until the first probe finished. */}
         {usesExternal && agentRuntime.externalAgentId ? (
           <AgentIcon id={agentRuntime.externalAgentId} size={18} />
         ) : (
-          <KivioMark size={18} variant={usesChat ? 'chat' : 'agent'} />
+          <ABUAgentMark size={18} variant={usesChat ? 'chat' : 'agent'} />
         )}
       </button>
 
@@ -231,7 +231,7 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} />
                 </IconButton>
               </div>
-              {/* Kivio 自己就是一个代理，和本机 CLI 同列平铺（原先上面还有一行「模式」分段器，
+              {/* ABU Agent 自己就是一个代理，和本机 CLI 同列平铺（原先上面还有一行「模式」分段器，
                   内置/本地 CLI 二选一 —— 两级选择表达的是同一件事，去掉一级）。 */}
               <div className="kv-runtime-picker__agent-grid" role="radiogroup">
                 <button
@@ -242,8 +242,8 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   onClick={selectBuiltin}
                   className={`kv-runtime-picker__agent${usesBuiltinAgent ? ' is-active' : ''}`}
                 >
-                  <KivioMark size={20} variant="agent" />
-                  <span className="kv-runtime-picker__agent-name">Kivio Agent</span>
+                  <ABUAgentMark size={20} variant="agent" />
+                  <span className="kv-runtime-picker__agent-name">ABU Agent</span>
                 </button>
                 <button
                   type="button"
@@ -253,8 +253,8 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   onClick={selectChat}
                   className={`kv-runtime-picker__agent${usesChat ? ' is-active' : ''}`}
                 >
-                  <KivioMark size={20} variant="chat" />
-                  <span className="kv-runtime-picker__agent-name">Kivio Chat</span>
+                  <ABUAgentMark size={20} variant="chat" />
+                  <span className="kv-runtime-picker__agent-name">ABU Agent Chat</span>
                 </button>
                 {availableAgents.map((agent) => {
                   const active = usesExternal && agentRuntime.externalAgentId === agent.id

@@ -41,7 +41,7 @@ export interface CcSwitchProvider {
 
 export interface CcSwitchScan {
   providers: CcSwitchProvider[]
-  /** 认得出但 Kivio 没有落地通道而跳过的条数（grok / hermes / openclaw…）。 */
+  /** 认得出但 ABU Agent 没有落地通道而跳过的条数（grok / hermes / openclaw…）。 */
   skipped: number
 }
 

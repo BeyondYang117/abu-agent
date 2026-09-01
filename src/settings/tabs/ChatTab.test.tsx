@@ -44,8 +44,8 @@ function renderTab(overrides: Partial<MockedProps> = {}) {
     } as Props['chatConfig'],
     chatTools: { enabled: false, servers: [], nativeTools: { workingDirectory: '/w' } } as unknown as Props['chatTools'],
     chatMemory: { enabled: false } as Props['chatMemory'],
-    chatDefaults: 'You are the AI assistant inside Kivio.',
-    chatRuntimeDefaults: 'Chat runtime (internal runtime mode): this conversation uses Kivio Chat.',
+    chatDefaults: 'You are the AI assistant inside ABU Agent.',
+    chatRuntimeDefaults: 'Chat runtime (internal runtime mode): this conversation uses ABU Agent Chat.',
     effectiveChatMaxOutput: { maxOutput: 131072, source: 'override' },
     chatMaxOutputSourceLabel: '来自模型覆盖',
     chatMaxOutputModelLabel: 'p1 / gpt-4o',
@@ -102,13 +102,13 @@ describe('ChatTab', () => {
 
   it('Agent 提示词为空时显示内置 defaultText（英文原文）', () => {
     renderTab()
-    expect(screen.getByDisplayValue('You are the AI assistant inside Kivio.')).toBeTruthy()
+    expect(screen.getByDisplayValue('You are the AI assistant inside ABU Agent.')).toBeTruthy()
   })
 
   it('Chat runtime 提示词为空时显示内置 defaultText（英文原文）', () => {
     renderTab()
     expect(
-      screen.getByDisplayValue('Chat runtime (internal runtime mode): this conversation uses Kivio Chat.'),
+      screen.getByDisplayValue('Chat runtime (internal runtime mode): this conversation uses ABU Agent Chat.'),
     ).toBeTruthy()
   })
 

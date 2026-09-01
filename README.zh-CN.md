@@ -1,4 +1,4 @@
-# Kivio Desktop
+# ABU Agent Desktop
 
 中文说明已作为仓库默认 README：[README.md](README.md)
 

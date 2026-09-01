@@ -202,18 +202,18 @@ export function AgentInspector({
             role="radio"
             aria-checked={agent.runtimeKind === 'builtin'}
             className={`kv-automation-runtime-chip${agent.runtimeKind === 'builtin' ? ' is-active' : ''}`}
-            onClick={() => patch(withRuntimeKind(agent, 'builtin'), t.chatAutomationKivioAgent)}
+            onClick={() => patch(withRuntimeKind(agent, 'builtin'), t.chatAutomationABUAgentAgent)}
           >
-            {t.chatAutomationKivioAgent}
+            {t.chatAutomationABUAgentAgent}
           </button>
           <button
             type="button"
             role="radio"
             aria-checked={agent.runtimeKind === 'chat'}
             className={`kv-automation-runtime-chip${agent.runtimeKind === 'chat' ? ' is-active' : ''}`}
-            onClick={() => patch(withRuntimeKind(agent, 'chat'), t.chatAutomationKivioChat)}
+            onClick={() => patch(withRuntimeKind(agent, 'chat'), t.chatAutomationABUAgentChat)}
           >
-            {t.chatAutomationKivioChat}
+            {t.chatAutomationABUAgentChat}
           </button>
           {cliAgents.map((cli) => (
             <button

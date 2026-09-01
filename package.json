@@ -1,8 +1,8 @@
 {
-  "name": "kivio",
+  "name": "abu-agent-desktop",
   "private": true,
   "version": "2.9.5",
-  "description": "Kivio Desktop - Screen-level AI assistant for macOS and Windows",
+  "description": "ABU Agent Desktop - AI assistant for macOS and Windows",
   "license": "GPL-3.0-or-later",
   "author": "ZM",
   "type": "module",

@@ -1164,7 +1164,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   )
   const usesExternalRuntime = activeAgentRuntime.kind === 'external' && !!activeAgentRuntime.externalAgentId
   const usesChatRuntime = activeAgentRuntime.kind === 'chat'
-  // 底栏模式胶囊：内置 Agent = Act/Plan/Orchestrate；Kivio Chat 无此胶囊；本地 CLI = 沙盒档位。
+  // 底栏模式胶囊：内置 Agent = Act/Plan/Orchestrate；ABU Agent Chat 无此胶囊；本地 CLI = 沙盒档位。
   // CLI 没有档位时返回空表 → 胶囊隐藏。
   const detectedExternalAgents = useDetectedExternalAgents(currentConversation?.id ?? null)
   const activeAgentPlanMode = currentConversation?.agent_plan_state?.mode
@@ -4781,7 +4781,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             onRuntimeChange={handleRuntimeChange}
             conversationId={currentConversation?.id}
             locked={
-              // 一 agent 一对话：有消息后锁死 kind/agent（内置 Kivio 与本地 CLI 一律）。
+              // 一 agent 一对话：有消息后锁死 kind/agent（内置 ABU Agent 与本地 CLI 一律）。
               // 拉出独立窗口后主窗卸掉了消息，仍按「已有对话」锁死。
               !!currentConversation && (
                 (currentConversation.messages?.length ?? 0) > 0
@@ -5186,7 +5186,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         {pendingSessionConsent && (
           <ApprovalCard
             title="允许本次会话使用文件和命令工具？"
-            subtitle="授权后，本会话内 Kivio 可读写、删除磁盘上的任意文件并执行任意终端命令（包括项目目录之外）。仅本次会话有效，重启后需重新授权。"
+            subtitle="授权后，本会话内 ABU Agent 可读写、删除磁盘上的任意文件并执行任意终端命令（包括项目目录之外）。仅本次会话有效，重启后需重新授权。"
             error={sessionConsentError}
             actions={[
               {

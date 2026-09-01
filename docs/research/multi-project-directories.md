@@ -4,7 +4,7 @@
 **Scope:** 产品调研。场景是「base 库升级、多个业务工程一起改」——用户要在**一条对话**里读写多个互不嵌套的仓库。  
 **Not in scope:** 代码改动。
 
-Kivio 词汇（`CONTEXT.md`）：**项目** = 带一根目录的对话分组；**工作目录** = 原生会话创建时所在目录（也决定这条会话属于哪个项目、部分 CLI 能不能续上）；**集** 与项目互斥；**外部 CLI 代理** / **内置运行时** 是一条对话上二选一。本文把「主工作目录之外再授权的那些文件夹」暂称为**附加目录**——词汇表里还没有这个词。
+ABU Agent 词汇（`CONTEXT.md`）：**项目** = 带一根目录的对话分组；**工作目录** = 原生会话创建时所在目录（也决定这条会话属于哪个项目、部分 CLI 能不能续上）；**集** 与项目互斥；**外部 CLI 代理** / **内置运行时** 是一条对话上二选一。本文把「主工作目录之外再授权的那些文件夹」暂称为**附加目录**——词汇表里还没有这个词。
 
 ---
 
@@ -14,7 +14,7 @@ Kivio 词汇（`CONTEXT.md`）：**项目** = 带一根目录的对话分组；*
 
 > **一条会话有且只有一个主工作目录（相对路径从这里解）。另外再挂一份附加目录列表，用来扩文件系统授权，不改主目录。**
 
-Kivio 现在缺的是这份附加目录列表及其 UI / 下发，不是从零发明工作区。项目仍应是「对话分组 + 一根主目录」；跨仓改动挂在**对话**上（这次升级任务），而不是把一条对话同时塞进多个项目。
+ABU Agent 现在缺的是这份附加目录列表及其 UI / 下发，不是从零发明工作区。项目仍应是「对话分组 + 一根主目录」；跨仓改动挂在**对话**上（这次升级任务），而不是把一条对话同时塞进多个项目。
 
 内置运行时其实已经能写附加目录：相对路径绑项目根，绝对路径 / `~/` **不受项目根约束**。缺口是模型不知道还有哪些仓、Dock/Git 只盯一根目录、外部 CLI 的沙箱没把那些仓加进授权。
 
@@ -43,14 +43,14 @@ Kivio 现在缺的是这份附加目录列表及其 UI / 下发，不是从零�
 | 产品 | 官方名字 | 用户怎么挂 | 主目录还在吗 | 写附加目录？ | 配置挂在哪 | 已知坑 |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | `--add-dir` / `/add-dir` / `permissions.additionalDirectories` | 启动 flag、会话中 slash、settings.json | 是。改主目录用 `/cd`（v2.1.169+），跟 `/add-dir` 不是一回事 | 是，权限跟主目录同一套 | 会话级 flag；项目级 settings 持久 | settings 那条**只授权文件**，不加载对方的 skills/commands/subagents；`--add-dir` 会加载 `.claude/skills|commands|agents`。`CLAUDE.md` 默认不从附加目录读，要 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` |
-| Codex CLI | `--add-dir`；config `sandbox_workspace_write.writable_roots` | 可重复 flag；`config.toml` | 是（cwd / `-C`/`--cd`） | `workspace-write` 下把附加路径加成 writable root。官方建议用 `--add-dir`，别开 `danger-full-access` | 会话 ephemeral vs config 持久 | Kivio 已经用 app-server 的 `runtimeWorkspaceRoots`，不是 CLI `--add-dir`。社区 issue：`apply_patch` 有时不吃 `--add-dir` 白名单 |
+| Codex CLI | `--add-dir`；config `sandbox_workspace_write.writable_roots` | 可重复 flag；`config.toml` | 是（cwd / `-C`/`--cd`） | `workspace-write` 下把附加路径加成 writable root。官方建议用 `--add-dir`，别开 `danger-full-access` | 会话 ephemeral vs config 持久 | ABU Agent 已经用 app-server 的 `runtimeWorkspaceRoots`，不是 CLI `--add-dir`。社区 issue：`apply_patch` 有时不吃 `--add-dir` 白名单 |
 | Gemini CLI | `--include-directories`；`/directory add`；config `includeDirectories` | flag（可逗号/可重复）、slash、settings | 是 | 进 workspace | 启动 + 会话中 + 配置 | 官方写最多 **5** 个附加目录；restrictive sandbox 下 `/directory add` 禁用，只能启动时带 |
 | OpenCode | `/add-directory`；permission `external_directory` | slash；`opencode.json` | 是（`--dir` 才换主目录） | 授权后可读写 | 会话 permission set；全局/项目 config | 官方 CLI 没有 Claude 那种 `--add-dir`；靠 permission 规则。实验开关 `OPENCODE_EXPERIMENTAL_WORKSPACES` |
-| ACP（协议） | `additionalDirectories` | Client 在 `session/new` / `load` / `resume` 里带 | **必须**。相对路径仍以 `cwd` 为基。有效根集合 = `[cwd, ...additionalDirectories]` | 协议把根集合当成工具边界（SHOULD） | 每次生命周期请求都要**整表重发**；省略或 `[]` = 本会话没有附加根，不会从上次隐式恢复 | Client **只有** Agent 声明了 `sessionCapabilities.additionalDirectories` 才能发。Kivio 今天 **没发这个字段** |
+| ACP（协议） | `additionalDirectories` | Client 在 `session/new` / `load` / `resume` 里带 | **必须**。相对路径仍以 `cwd` 为基。有效根集合 = `[cwd, ...additionalDirectories]` | 协议把根集合当成工具边界（SHOULD） | 每次生命周期请求都要**整表重发**；省略或 `[]` = 本会话没有附加根，不会从上次隐式恢复 | Client **只有** Agent 声明了 `sessionCapabilities.additionalDirectories` 才能发。ABU Agent 今天 **没发这个字段** |
 | Cursor | Multi-root workspaces in Agents Window | 可复用的多 folder workspace | 第一根经常被当成 primary | 设计上跨仓改 | workspace 级，不是单条 Agent 会话私有 | 2026-04-24 changelog。论坛：Shell `working_directory` 会静默落到第一根；Grep 会扫全部根；非第一根的文件链接点不开。Worktree / 异步子代理是另一条线 |
 | Cline | VS Code multi-root | `File > Add Folder to Workspace` / `.code-workspace` | 第一 folder = primary | 跨 folder 读写、按仓独立认 git | 编辑器 workspace | `.clinerules` / skills / `@git` 只看 primary；checkpoints 在多根下直接关掉。`@workspace-name:path` 消歧 |
 | Aider | （无原生多仓） | `/read` / `--read` 只读外仓；或从公共父目录启动 | 一次一个 git 仓 | 外仓默认只读 | 无 | 官方 FAQ：「Currently aider can only work with one repo at a time」 |
-| Pi | 无授权目录 flag | — | 只有启动目录 | 靠 Pi 自己的文件权限，Kivio 塞 `--append-system-prompt` 是错的（已修） | — | `defs/pi.rs` 写明 `--help` 没有 `--add-dir` 等价项 |
+| Pi | 无授权目录 flag | — | 只有启动目录 | 靠 Pi 自己的文件权限，ABU Agent 塞 `--append-system-prompt` 是错的（已修） | — | `defs/pi.rs` 写明 `--help` 没有 `--add-dir` 等价项 |
 
 ### Claude Code：两套「附加」不要当成一个
 
@@ -63,7 +63,7 @@ Kivio 现在缺的是这份附加目录列表及其 UI / 下发，不是从零�
 3. **`/cd`**  
    换**主**工作目录，会加载新目录的 `CLAUDE.md`，`--resume` 也从新位置找会话。不是附加。
 
-Kivio 已经把 `--add-dir` 接到 `RuntimeContext.extra_allowed_dirs`（`defs/claude.rs`），但运行时只用来挂 **skill 扫描路径**和**附件目录**，没有用户项目。
+ABU Agent 已经把 `--add-dir` 接到 `RuntimeContext.extra_allowed_dirs`（`defs/claude.rs`），但运行时只用来挂 **skill 扫描路径**和**附件目录**，没有用户项目。
 
 ### Codex：sandbox 根，不是「第二个项目」
 
@@ -74,13 +74,13 @@ Kivio 已经把 `--add-dir` 接到 `RuntimeContext.extra_allowed_dirs`（`defs/c
 - 工作区 = 当前目录 + `/tmp` 一类临时目录；`/status` 能看到。
 - `.git` / `.codex` / `.agents` 在 writable root 里仍可能是只读保护，所以 `git commit` 还是会要审批。
 
-Kivio 走 `codex app-server`：`thread/start` / `turn/start` 的 `runtimeWorkspaceRoots`（`session/codex_app_server.rs`）。`extra_allowed_dirs_for_agent` 对 **codex 故意返回空**——附件根走另一条 `extra_writable_roots`。用户项目附加目录应并进这条 roots 列表，不要幻想 CLI `--add-dir` 会出现在 argv 里。
+ABU Agent 走 `codex app-server`：`thread/start` / `turn/start` 的 `runtimeWorkspaceRoots`（`session/codex_app_server.rs`）。`extra_allowed_dirs_for_agent` 对 **codex 故意返回空**——附件根走另一条 `extra_writable_roots`。用户项目附加目录应并进这条 roots 列表，不要幻想 CLI `--add-dir` 会出现在 argv 里。
 
 ### ACP：协议已经为 GUI host 留好了口
 
 来源：[ACP v1 session-setup](https://agentclientprotocol.com/protocol/v1/session-setup)、[v2 session-setup](https://agentclientprotocol.com/protocol/v2/session-setup)。
 
-Kivio 的 cursor / opencode / gemini / kimi / hermes / grok 都走 ACP。`session/new` 今天只发 `cwd` + `mcpServers`（`session/acp.rs::build_session_new_params`），**没有** `additionalDirectories`。`AcpTerminalHost::set_extra_roots` 是空实现，注释写明宿主不做路径围栏。
+ABU Agent 的 cursor / opencode / gemini / kimi / hermes / grok 都走 ACP。`session/new` 今天只发 `cwd` + `mcpServers`（`session/acp.rs::build_session_new_params`），**没有** `additionalDirectories`。`AcpTerminalHost::set_extra_roots` 是空实现，注释写明宿主不做路径围栏。
 
 正确接法：initialize 时看 Agent 有没有 `sessionCapabilities.additionalDirectories`；有才发；每次 new/load/resume **整表重发**。没能力的 CLI 不要发这个字段。
 
@@ -88,18 +88,18 @@ Kivio 的 cursor / opencode / gemini / kimi / hermes / grok 都走 ACP。`sessio
 
 来源：[Cursor changelog 2026-04-24](https://cursor.com/changelog/04-24-26)、[Cline multi-root docs](https://docs.cline.bot/features/multiroot-workspace)、[VS Code multi-root](https://code.visualstudio.com/docs/editor/multi-root-workspaces)。
 
-这两家把「有哪些根」放在 **IDE workspace**。聊天继承工作区，不能在一条 Agent 会话里挂、另一条不挂。Cline 把跨仓重构 / 依赖升级写成主用例，同时老实承认：规则、skills、checkpoint 仍偏向 **primary（第一根）**。Cursor 论坛里的静默 cwd 错误，和 Kivio ADR-0001 否决「跨目录 resume」的理由是同一类：模型在错误的根里写文件，比报错更危险。
+这两家把「有哪些根」放在 **IDE workspace**。聊天继承工作区，不能在一条 Agent 会话里挂、另一条不挂。Cline 把跨仓重构 / 依赖升级写成主用例，同时老实承认：规则、skills、checkpoint 仍偏向 **primary（第一根）**。Cursor 论坛里的静默 cwd 错误，和 ABU Agent ADR-0001 否决「跨目录 resume」的理由是同一类：模型在错误的根里写文件，比报错更危险。
 
-Kivio 不是多根编辑器。把 `.code-workspace` 做成项目真身，会把「聊天分组」和「编辑器工作区」焊死，也和「集 / 项目互斥」拧巴。可以**借鉴** primary + 具名根 + `@名字:相对路径`，不要把项目改成 VS Code workspace。
+ABU Agent 不是多根编辑器。把 `.code-workspace` 做成项目真身，会把「聊天分组」和「编辑器工作区」焊死，也和「集 / 项目互斥」拧巴。可以**借鉴** primary + 具名根 + `@名字:相对路径`，不要把项目改成 VS Code workspace。
 
 ### Gemini CLI / OpenCode
 
-- Gemini：[configuration](https://github.com/google-gemini/gemini-cli/blob/ecf8fba1/docs/get-started/configuration.md) `context.includeDirectories` + `--include-directories`，上限 5；会话中 `/directory add|show`。Kivio 驱的是 `gemini --experimental-acp`，附加目录应走 ACP 字段，不是再拼一套 Gemini TUI flag。
-- OpenCode：[permissions](https://opencode.ai/docs/permissions/) 的 `external_directory`；TUI `/add-directory`（[PR #14244](https://github.com/anomalyco/opencode/pull/14244)）把规则存进**该会话**。Kivio 同样应走 ACP `additionalDirectories`（若该版本声明了能力），而不是去改用户的 `opencode.json`。
+- Gemini：[configuration](https://github.com/google-gemini/gemini-cli/blob/ecf8fba1/docs/get-started/configuration.md) `context.includeDirectories` + `--include-directories`，上限 5；会话中 `/directory add|show`。ABU Agent 驱的是 `gemini --experimental-acp`，附加目录应走 ACP 字段，不是再拼一套 Gemini TUI flag。
+- OpenCode：[permissions](https://opencode.ai/docs/permissions/) 的 `external_directory`；TUI `/add-directory`（[PR #14244](https://github.com/anomalyco/opencode/pull/14244)）把规则存进**该会话**。ABU Agent 同样应走 ACP `additionalDirectories`（若该版本声明了能力），而不是去改用户的 `opencode.json`。
 
 ---
 
-## Kivio 现在绑在哪
+## ABU Agent 现在绑在哪
 
 ### 数据：一根目录，一条归属
 
@@ -180,7 +180,7 @@ UI：对话里「附加目录」chip；从已有项目里勾，或再选一个�
 
 ### D. 子代理每仓一个
 
-父对话编排，每个 `agent` 调用带不同 cwd。Kivio 子代理今天继承父工作区。即便做了，模型仍要先看见所有仓。**v2+，不能替代 A。**
+父对话编排，每个 `agent` 调用带不同 cwd。ABU Agent 子代理今天继承父工作区。即便做了，模型仍要先看见所有仓。**v2+，不能替代 A。**
 
 ### E. 只绑公共父目录
 
@@ -227,18 +227,18 @@ v2 可加可选 `root`（项目名 / 附加名），减少模型拼 Windows 路�
 
 在 `run.rs` 把对话附加目录 merge 进现有 extra-dirs 管道，按代理分流（上表）。ACP 必须 capability-gate。能力缺失时 UI 警告，不要假装沙箱已经放开。
 
-Claude：Kivio 用的是 `--add-dir`，会带上对方 `.claude/skills`。若不想跨仓技能泄漏，需要产品开关或改走「只授权」通道——Claude 的只授权通道是 settings `additionalDirectories`，Kivio 现在没写那文件。v1 先接受「`--add-dir` 会加载对方 skills」，文档写清楚。
+Claude：ABU Agent 用的是 `--add-dir`，会带上对方 `.claude/skills`。若不想跨仓技能泄漏，需要产品开关或改走「只授权」通道——Claude 的只授权通道是 settings `additionalDirectories`，ABU Agent 现在没写那文件。v1 先接受「`--add-dir` 会加载对方 skills」，文档写清楚。
 
 ### Dock / Git
 
 v1：**根切换器**（下拉：主目录 + 每个附加目录）。树 / Git / 终端跟当前选中根走，合同仍然是「看到的目录 = 选中根」，不是「看到的目录 = agent 可能写到的所有地方」。  
 v2：VS Code 式多根树；Git 按根分 tab。永远不要做一个跨仓原子 commit。
 
-Cline 的教训：checkpoint / 规则默认只认 primary。Kivio 的 `.kivio/agents`、项目 skills 继续只从**主项目根**加载，除非以后单独做「从附加目录加载 .kivio」（对标 Claude 的 CLAUDE.md 开关，默认关）。
+Cline 的教训：checkpoint / 规则默认只认 primary。ABU Agent 的 `.kivio/agents`、项目 skills 继续只从**主项目根**加载，除非以后单独做「从附加目录加载 .kivio」（对标 Claude 的 CLAUDE.md 开关，默认关）。
 
 ### 导入与续聊
 
-主工作目录不变。附加目录是 Kivio 侧授权，不是原生会话身份。导入列表仍按项目根过滤。
+主工作目录不变。附加目录是 ABU Agent 侧授权，不是原生会话身份。导入列表仍按项目根过滤。
 
 ### UI 范围（v1）
 
@@ -298,5 +298,5 @@ Cline 的教训：checkpoint / 规则默认只认 primary。Kivio 的 `.kivio/ag
 - Cline multi-root: https://docs.cline.bot/features/multiroot-workspace
 - VS Code multi-root: https://code.visualstudio.com/docs/editor/multi-root-workspaces
 - Aider FAQ（一次一个 git 仓）: https://github.com/Aider-AI/aider/blob/bdb4d9ff/aider/website/docs/faq.md
-- Kivio ADR-0001: `docs/adr/0001-imported-cli-conversations-stay-on-their-cli.md`
-- Kivio 现状：`chat/types.rs` `ChatProject` / `Conversation`；`chat/storage.rs::resolve_conversation_working_directory`；`native_tools/mod.rs`；`external_agents/workspace.rs`；`external_agents/run.rs`；`external_agents/defs/claude.rs`；`external_agents/session/codex_app_server.rs`；`external_agents/session/acp.rs`；`dock/mod.rs`；`chat/agent/prepare.rs`；`settings.rs` 里 `workspace_roots` 遗留迁移
+- ABU Agent ADR-0001: `docs/adr/0001-imported-cli-conversations-stay-on-their-cli.md`
+- ABU Agent 现状：`chat/types.rs` `ChatProject` / `Conversation`；`chat/storage.rs::resolve_conversation_working_directory`；`native_tools/mod.rs`；`external_agents/workspace.rs`；`external_agents/run.rs`；`external_agents/defs/claude.rs`；`external_agents/session/codex_app_server.rs`；`external_agents/session/acp.rs`；`dock/mod.rs`；`chat/agent/prepare.rs`；`settings.rs` 里 `workspace_roots` 遗留迁移

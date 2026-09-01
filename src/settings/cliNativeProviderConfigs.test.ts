@@ -234,7 +234,7 @@ describe('cliNativeProviderConfigs', () => {
     })
   })
 
-  it('turns a settings.yaml dsh relay into an editable Kivio provider', () => {
+  it('turns a settings.yaml dsh relay into an editable ABU Agent provider', () => {
     const provider = dshNativeDetailToProvider({
       id: 'gpt',
       name: 'gpt',

@@ -17,7 +17,7 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $releaseDir = Join-Path $repoRoot 'src-tauri\target\release'
 $exe = Join-Path $releaseDir 'kivio.exe'
 $skillsSrc = Join-Path $repoRoot 'src-tauri\resources\skills'
-$sidecarSrc = Join-Path $repoRoot 'src-tauri\binaries\kivio-ocr-helper-x86_64-pc-windows-msvc.exe'
+$sidecarSrc = Join-Path $repoRoot 'src-tauri\binaries\abu-agent-ocr-helper-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path -LiteralPath $exe)) {
   throw "kivio.exe not found at $exe. Run tauri build first."
@@ -34,7 +34,7 @@ Copy-Item -LiteralPath $exe -Destination (Join-Path $appDir 'Kivio Desktop.exe')
 Copy-Item -LiteralPath $skillsSrc -Destination (Join-Path $appDir 'skills') -Recurse
 
 if (Test-Path -LiteralPath $sidecarSrc) {
-  Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $appDir 'kivio-ocr-helper.exe')
+  Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $appDir 'abu-agent-ocr-helper.exe')
 }
 
 Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.dll' -ErrorAction SilentlyContinue |

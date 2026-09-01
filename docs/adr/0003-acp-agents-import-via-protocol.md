@@ -1,6 +1,6 @@
 # ACP 代理走协议枚举与重放，不解析它们的私有存储
 
-opencode 和 kimi 在 Kivio 里是 ACP 代理。导入它们的会话时，用 ACP 的 `session/list`（枚举）和 `session/load`（绑定/续聊），**不去读** `opencode.db` / `session_index.jsonl` 来做枚举。opencode 的 `session/load` 还会把历史**重放**成正常的 `session/update` 流——Kivio 的 `acp.rs` 本来就会渲染它，导入历史的保真度自动等同于实时聊天。
+opencode 和 kimi 在 ABU Agent 里是 ACP 代理。导入它们的会话时，用 ACP 的 `session/list`（枚举）和 `session/load`（绑定/续聊），**不去读** `opencode.db` / `session_index.jsonl` 来做枚举。opencode 的 `session/load` 还会把历史**重放**成正常的 `session/update` 流——ABU Agent 的 `acp.rs` 本来就会渲染它，导入历史的保真度自动等同于实时聊天。
 
 ## 本机实测的能力矩阵（2026-08-01）
 
@@ -11,7 +11,7 @@ opencode 和 kimi 在 Kivio 里是 ACP 代理。导入它们的会话时，用 A
 | gemini | ❌ `Method not found (-32601)` | ❌ `loadSession=false` | — |
 | cursor | 未安装，未验证 | — | — |
 
-**gemini 因此不支持导入**：Kivio 驱动 gemini 走的就是 ACP，`loadSession=false` 意味着导入后无法续聊，与 [ADR-0001](./0001-imported-cli-conversations-stay-on-their-cli.md)「导入必须能续聊」直接冲突。这是本机 gemini CLI 版本的能力；将来若它实现了 ACP 会话方法，可原样加回。
+**gemini 因此不支持导入**：ABU Agent 驱动 gemini 走的就是 ACP，`loadSession=false` 意味着导入后无法续聊，与 [ADR-0001](./0001-imported-cli-conversations-stay-on-their-cli.md)「导入必须能续聊」直接冲突。这是本机 gemini CLI 版本的能力；将来若它实现了 ACP 会话方法，可原样加回。
 
 **kimi 需要额外的历史来源**：`session/load` 能绑定但不重放，所以显示用的历史仍要读 `~/.kimi-code/sessions/<wd_*>/<session_*>/context.jsonl`（`~/.kimi-code/session_index.jsonl` 提供 `sessionId → sessionDir / workDir` 的明文映射）。枚举仍走 `session/list`。
 

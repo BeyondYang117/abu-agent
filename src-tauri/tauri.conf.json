@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Kivio Desktop",
+  "productName": "ABU Agent Desktop",
   "version": "2.9.5",
-  "identifier": "com.zmair.kivio",
+  "identifier": "com.abu.agent",
   "build": {
     "beforeDevCommand": "npm run dev:ui",
     "beforeBuildCommand": "npm run build:ui",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Kivio Desktop",
+        "title": "ABU Agent Desktop",
         "width": 392,
         "height": 152,
         "resizable": true,
@@ -36,7 +36,7 @@
       "nsis"
     ],
     "externalBin": [
-      "binaries/kivio-ocr-helper"
+      "binaries/abu-agent-ocr-helper"
     ],
     "resources": {
       "resources/skills": "skills"

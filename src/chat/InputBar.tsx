@@ -402,9 +402,9 @@ export interface InputBarProps {
   autoFocus?: boolean
   /** footer：贴底（有消息时）；inline：嵌入居中区域（空对话欢迎页） */
   layout?: 'footer' | 'inline'
-  /** 外部 CLI 模式：斜杠命令直通 Agent，不展示 Kivio 弹层 */
+  /** 外部 CLI 模式：斜杠命令直通 Agent，不展示 ABU Agent 弹层 */
   usesExternalRuntime?: boolean
-  /** Kivio Chat：不提供 /plan /orchestrate / 技能斜杠（那些是 Agent 能力） */
+  /** ABU Agent Chat：不提供 /plan /orchestrate / 技能斜杠（那些是 Agent 能力） */
   usesChatRuntime?: boolean
   externalAgentName?: string | null
   conversationId?: string | null
@@ -430,7 +430,7 @@ export interface InputBarProps {
   additionalDirectoryPrimaryRoot?: string | null
   /** 上下文用量指示器：由 Chat 注入 <ContextIndicator>，渲染在底栏右侧 Act 右边 */
   contextSlot?: ReactNode
-  /** 底栏模式胶囊的档位表，由 Chat 算好传入（内置会话 = Kivio 三档；本地 CLI 会话 =
+  /** 底栏模式胶囊的档位表，由 Chat 算好传入（内置会话 = ABU Agent 三档；本地 CLI 会话 =
    *  该 CLI 自己的沙盒/权限档位）。空表 = 无档位可选，胶囊整个不渲染。 */
   modeOptions?: ModeOption[]
   modeValue?: string

@@ -76,7 +76,7 @@ export function toAgentData(agent: NormalizedAgent): AgentData {
   }
 }
 
-/** Model id that belongs to the current runtime. The other family is ignored so a leftover Kivio model cannot show up on a CLI node (or vice versa). */
+/** Model id that belongs to the current runtime. The other family is ignored so a leftover ABU Agent model cannot show up on a CLI node (or vice versa). */
 export function agentSelectedModel(agent: NormalizedAgent): string {
   if (agent.runtimeKind === 'external') return agent.externalModel?.trim() || ''
   return agent.model?.trim() || ''
@@ -136,11 +136,11 @@ export function agentSlotLabel(slot: AgentSlot, t: I18n): string {
 }
 
 export function agentRuntimeSummary(agent: NormalizedAgent, t: I18n): string {
-  if (agent.runtimeKind === 'chat') return t.chatAutomationKivioChat
+  if (agent.runtimeKind === 'chat') return t.chatAutomationABUAgentChat
   if (agent.runtimeKind === 'external') {
     return agent.externalAgentId || t.chatAutomationExternalCli
   }
-  return t.chatAutomationKivioAgent
+  return t.chatAutomationABUAgentAgent
 }
 
 export function nodeTypeForSlot(slot: AgentSlot): AutomationNodeType {
@@ -308,10 +308,10 @@ export function explodeInlineAgents(
       spawnedEdges.push(connectSlotEdge(child.id, node.id, slot))
     }
     const runtimeLabel = agent.runtimeKind === 'chat'
-      ? 'Kivio Chat'
+      ? 'ABU Agent Chat'
       : agent.runtimeKind === 'external'
         ? (agent.externalAgentId || 'CLI')
-        : 'Kivio Agent'
+        : 'ABU Agent'
     spawn('runtime', toAgentData({
       prompt: '',
       runtimeKind: agent.runtimeKind,

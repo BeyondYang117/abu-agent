@@ -153,7 +153,7 @@ export function createLiveRowModel(): LiveRowModel {
         }
       }
 
-      // Twin aliasing only on settle (or pendingSettle lag). During stream Kivio
+      // Twin aliasing only on settle (or pendingSettle lag). During stream ABU Agent
       // filters the active messageId out of history, so aliasing mid-run would
       // either no-op or risk a double row if the filter ever missed.
     } else if (activeTurn) {

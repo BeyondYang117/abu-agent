@@ -5,7 +5,7 @@ import { ConversationLoadingState } from './ConversationLoadingState'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { useConversationTransition } from './conversationTransitionStore'
 import { InputBar, type InputBarProps } from './InputBar'
-import { KivioBlob, type KivioBlobHandle } from './KivioBlob'
+import { ABUAgentBlob, type ABUAgentBlobHandle } from './KivioBlob'
 import { useEmptyHeroJab, useEmptyHeroLine } from './emptyHero'
 import { TypewriterText } from './TypewriterText'
 import { QueuedMessages } from './QueuedMessages'
@@ -44,7 +44,7 @@ function EmptyHeroHeading({
   seed: string | null
   active: boolean
 }) {
-  const blobRef = useRef<KivioBlobHandle>(null)
+  const blobRef = useRef<ABUAgentBlobHandle>(null)
   const { jab, onPoke } = useEmptyHeroJab(lang)
   const greeting = useEmptyHeroLine({
     lang,
@@ -57,7 +57,7 @@ function EmptyHeroHeading({
   const text = jab ?? greeting
   return (
     <div className="chat-motion-fade-up chat-empty-hero-heading">
-      <KivioBlob ref={blobRef} size={56} mood="idle" pulse={greeting} onPoke={onPoke} />
+      <ABUAgentBlob ref={blobRef} size={56} mood="idle" pulse={greeting} onPoke={onPoke} />
       <h2
         className="chat-empty-hero-title cursor-pointer select-none"
         onPointerDown={(event) => {
@@ -173,7 +173,7 @@ export const ChatConversationPane = memo(function ChatConversationPane({
           role="alert"
         >
           <TriangleAlert className="shrink-0" size={15} aria-hidden="true" />
-          <span>组件版本不一致，请重启 Kivio</span>
+          <span>组件版本不一致，请重启 ABU Agent</span>
         </div>
       )}
 
@@ -235,7 +235,7 @@ export const ChatConversationPane = memo(function ChatConversationPane({
               <div className="flex justify-center px-4 pt-2">
                 <span
                   className="inline-flex max-w-full items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-400"
-                  title="这条会话在 CLI 那边继续聊过。Kivio 里的历史是导入时的快照，不会自动同步；续聊时 CLI 用的仍是它自己那份完整上下文。"
+                  title="这条会话在 CLI 那边继续聊过。ABU Agent 里的历史是导入时的快照，不会自动同步；续聊时 CLI 用的仍是它自己那份完整上下文。"
                 >
                   <span className="truncate">这条会话在 CLI 那边有新内容，此处显示的历史不完整</span>
                 </span>

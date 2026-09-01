@@ -26,7 +26,7 @@ export interface PermissionModesInput {
   agents?: DetectedExternalAgent[]
   /** 内置会话 + titlebar：工具审批策略当前值。 */
   approvalPolicy?: string | null
-  /** 内置 Agent 会话 + composer：Kivio 三档当前值。 */
+  /** 内置 Agent 会话 + composer：ABU Agent 三档当前值。 */
   agentPlanMode?: AgentPlanMode | null
 }
 
@@ -35,7 +35,7 @@ export interface PermissionModes {
   current: string
 }
 
-/** Kivio Agent 三档 —— 仅内置 Agent 运行时显示；Kivio Chat 不显示此胶囊。 */
+/** ABU Agent Agent 三档 —— 仅内置 Agent 运行时显示；ABU Agent Chat 不显示此胶囊。 */
 export const AGENT_MODE_OPTIONS: ModeOption[] = [
   { value: 'act', label: 'Act', description: '普通模式 · Normal', icon: Zap, tone: 'neutral' },
   { value: 'plan', label: 'Plan', description: '计划模式 · Enter plan mode', icon: ListChecks, tone: 'emerald' },
@@ -179,7 +179,7 @@ function externalSandboxModes(
  *
  * - 本地 CLI 会话：档位归**底栏胶囊**一处管（顶栏返回空表所以隐藏），避免两个控件
  *   写同一个设置；CLI 本身没有档位（如 opencode）时底栏也返回空表。
- * - Kivio Chat 运行时：不是 Agent，底栏不显示 Act/Plan/Orchestrate。
+ * - ABU Agent Chat 运行时：不是 Agent，底栏不显示 Act/Plan/Orchestrate。
  * - 内置 Agent 会话：底栏是 Act / Plan / Orchestrate，顶栏是工具审批策略。
  */
 export function derivePermissionModes({
@@ -197,7 +197,7 @@ export function derivePermissionModes({
     return externalSandboxModes(agentRuntime, agents)
   }
 
-  // Kivio Chat is a separate runtime (not an agent strategy mode).
+  // ABU Agent Chat is a separate runtime (not an agent strategy mode).
   if (usesChat) {
     return { options: [], current: '' }
   }

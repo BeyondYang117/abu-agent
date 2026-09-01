@@ -1,10 +1,10 @@
-# PRD：Kivio Chat 功能完善与稳定性优化
+# PRD：ABU Agent Chat 功能完善与稳定性优化
 
 | 字段 | 内容 |
 |------|------|
 | 文档版本 | v0.1 |
 | 状态 | 草案 |
-| 产品 | Kivio（桌面端，macOS / Windows） |
+| 产品 | ABU Agent（桌面端，macOS / Windows） |
 | 范围 | **Chat 模块**（`#chat` 路由、`main` 窗口）；不含 Lens 主流程改造 |
 | 目标读者 | 产品、研发、测试 |
 | 关联文档 | [CHAT_ARCHITECTURE.md](../CHAT_ARCHITECTURE.md) |
@@ -13,7 +13,7 @@
 
 ## 1. 背景与问题陈述
 
-Kivio 已从「翻译 + 截图」演进为带 **Chat 客户端** 的桌面助手：多轮对话、流式输出、多 Provider、Skill/MCP、以及一批 **Kivio 内置工具**（读写文件、终端、Pyodioe、联网搜索/抓取）。
+ABU Agent 已从「翻译 + 截图」演进为带 **Chat 客户端** 的桌面助手：多轮对话、流式输出、多 Provider、Skill/MCP、以及一批 **ABU Agent 内置工具**（读写文件、终端、Pyodioe、联网搜索/抓取）。
 
 近期迭代快速落地了大量 Chat 能力，但暴露出三类缺口：
 
@@ -72,7 +72,7 @@ Kivio 已从「翻译 + 截图」演进为带 **Chat 客户端** 的桌面助手
 
 - 对话 CRUD、分页列表、流式 SSE（`chat-stream`）、思维链展示、工具调用块（`ToolCallBlock`）
 - Skill 三件套 + MCP 服务器 + 内置工具（见 `ChatNativeToolsConfig`）
-- 设置：MCP 页「Kivio 内置工具」、审批策略、工作区根目录（可选收紧至 home 子树）
+- 设置：MCP 页「ABU Agent 内置工具」、审批策略、工作区根目录（可选收紧至 home 子树）
 - 附件图片预览、`ChatErrorBoundary` / `MarkdownErrorBoundary`
 - Skill 过度引导已做第一轮修复（取消单 Skill 自动绑定、过滤时保留内置工具）
 
@@ -149,7 +149,7 @@ flowchart TB
 | ID | 需求 | 验收标准 |
 |----|------|----------|
 | SK-01 | 不因「仅一个 Skill」自动绑定；发消息不默认带 Skill id | 新对话说「使用 python」优先 `run_python` |
-| SK-02 | Skill `allowed_tools` 过滤不得隐藏 Kivio 内置工具（`read_file`、`run_python` 等） | 激活 tavily Skill 后仍可调 `run_python` |
+| SK-02 | Skill `allowed_tools` 过滤不得隐藏 ABU Agent 内置工具（`read_file`、`run_python` 等） | 激活 tavily Skill 后仍可调 `run_python` |
 | SK-03 | System prompt / catalog 文案：Skill 可选，泛化任务优先内置工具 | 产品/运营可读的提示词规范入文档 |
 | SK-04 | （可选）对话级「钉住 Skill」：仅用户显式开启时强制 `skill_activate` | 设置或对话菜单一项，默认关 |
 | SK-05 | MCP 服务器失败时列出工具降级，不导致整轮对话失败 | 某 server 挂掉，其他工具仍可用 |
@@ -159,7 +159,7 @@ flowchart TB
 | ID | 需求 | 验收标准 |
 |----|------|----------|
 | UI-01 | 附件：图片内联预览，无多余文件名壳（已实现则回归） | 与产品视觉一致 |
-| UI-02 | 工具块：友好中文名、来源显示 Kivio / Skill / MCP | `ToolCallBlock` 覆盖内置工具名 |
+| UI-02 | 工具块：友好中文名、来源显示 ABU Agent / Skill / MCP | `ToolCallBlock` 覆盖内置工具名 |
 | UI-03 | 思维链：流式中折叠，工具后保持折叠，尾部预览 | 符合既有 UX 规范 |
 | UI-04 | 侧栏：三点菜单与列表项对齐；搜索可用 | 视觉对齐 |
 | UI-05 | 空状态 / 无 Provider：引导去设置 | 新用户可完成首次配置 |
@@ -189,7 +189,7 @@ flowchart TB
 |------|------|
 | **性能** | 对话列表 50 条内首屏 &lt; 500ms（本地 SSD）；单文件 read ≤ 2MB |
 | **安全** | 写/终端需审批；路径 home + 可选 roots；命令 denylist；`web_fetch` 仅 HTTPS |
-| **隐私** | 对话与附件存本机 app data；工具不上传本地文件内容到 Kivio 服务器（仅用户配置的 Provider） |
+| **隐私** | 对话与附件存本机 app data；工具不上传本地文件内容到 ABU Agent 服务器（仅用户配置的 Provider） |
 | **兼容** | macOS 14+、Windows 10+；与现有 Tauri 双窗口（main/lens）共存 |
 | **可维护性** | 新 Tauri 命令先进 `src/api/tauri.ts`；Rust 工具逻辑进 `native_tools/` / `mcp/registry.rs` |
 

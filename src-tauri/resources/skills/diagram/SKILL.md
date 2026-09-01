@@ -1,12 +1,12 @@
 ---
 id: diagram
 name: diagram
-description: Visualize architectures, flows, sequences, state machines, ER/data models, class structures, decision logic, mind maps, and timelines as rendered diagrams instead of prose. Activate whenever the user discusses or asks to explain a system architecture, module/deployment topology, call/request flow, interaction sequence, state machine or lifecycle, database/entity relationships, class structure, decision tree, or process — especially when they say draw / 画 / 图示 / 可视化 / 用图说明 / 画个流程图/架构图/时序图. Kivio renders mermaid code blocks inline as diagrams and html code blocks in a live preview, so emit those directly without calling any file tool.
+description: Visualize architectures, flows, sequences, state machines, ER/data models, class structures, decision logic, mind maps, and timelines as rendered diagrams instead of prose. Activate whenever the user discusses or asks to explain a system architecture, module/deployment topology, call/request flow, interaction sequence, state machine or lifecycle, database/entity relationships, class structure, decision tree, or process — especially when they say draw / 画 / 图示 / 可视化 / 用图说明 / 画个流程图/架构图/时序图. ABU Agent renders mermaid code blocks inline as diagrams and html code blocks in a live preview, so emit those directly without calling any file tool.
 ---
 
 # Diagram —— 用图表直观表达，而不是堆文字
 
-Kivio 的聊天能**直接把 ```mermaid 代码块渲染成图、把 ```html 代码块渲染成可交互预览**。
+ABU Agent 的聊天能**直接把 ```mermaid 代码块渲染成图、把 ```html 代码块渲染成可交互预览**。
 所以当一件事「画出来比写出来更清楚」时，优先出图，而不是大段文字描述。
 
 ## 何时主动画图
@@ -53,7 +53,7 @@ sequenceDiagram
 ```
 ````
 
-## Mermaid 语法安全（Kivio 用 securityLevel: strict，必须遵守，否则整张图报红或画歪）
+## Mermaid 语法安全（ABU Agent 用 securityLevel: strict，必须遵守，否则整张图报红或画歪）
 
 1. **禁用 `<br>` 和 `<br/>`（两种都禁），禁止任何文字里出现尖括号 `<` `>`。**
    strict 模式会拦截/转义它们。需要换行 → 拆成多条消息或多个节点；要表达"令牌"写 `accessToken`、`Bearer token`，**不要写 `<accessToken>`**。
@@ -83,7 +83,7 @@ stateDiagram-v2
 ## 需要交互 / 动画 / 自定义绘制时 → 内联 ```html（不要写成文件）
 
 mermaid 画不了的（动画、canvas 绘图、可点击的自定义可视化、带样式的仪表盘卡片等），
-**直接在回答里内联输出一个自包含的 ```html 代码块**（含内联 `<style>` 和 `<script>`），Kivio 会在预览框里真执行、当场就能交互：
+**直接在回答里内联输出一个自包含的 ```html 代码块**（含内联 `<style>` 和 `<script>`），ABU Agent 会在预览框里真执行、当场就能交互：
 
 ````
 ```html

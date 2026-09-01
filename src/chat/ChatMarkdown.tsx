@@ -334,7 +334,7 @@ function errorDetailsFence(detail: string): string {
 }
 
 // Older external-agent failures were persisted with literal HTML. ReactMarkdown intentionally
-// does not enable raw HTML, so migrate only Kivio's exact legacy disclosure shape into the safe
+// does not enable raw HTML, so migrate only ABU Agent's exact legacy disclosure shape into the safe
 // fenced block below. Arbitrary model-authored HTML remains inert text.
 function normalizeLegacyErrorDetails(content: string): string {
   return content.replace(
@@ -818,7 +818,7 @@ function LinkAnchor({
   /** 相对路径链接要靠它在后端解析会话工作目录；没有就只能放弃打开（但仍不导航）。 */
   conversationId?: string | null
 }) {
-  const decodedHref = decodeKivioInternalUrl(href)
+  const decodedHref = decodeABUAgentInternalUrl(href)
   const isWeb = /^https?:\/\//i.test(decodedHref)
   // 这些 scheme 保留 <a> 默认行为，由系统协议处理器接走（不会导航 webview 自身）。
   const isSystemScheme = /^(mailto|tel|sms):/i.test(decodedHref)
@@ -988,7 +988,7 @@ function safeDecodeURIComponent(value: string): string {
   }
 }
 
-function decodeKivioInternalUrl(value: string): string {
+function decodeABUAgentInternalUrl(value: string): string {
   const internalLink = /^https:\/\/kivio\.local\/__kivio-(file|local)\?target=(.*)$/i.exec(value)
   return internalLink ? safeDecodeURIComponent(internalLink[2]) : value
 }
@@ -1204,7 +1204,7 @@ function ChatMarkdownComponent({
         return <LinkAnchor href={url} conversationId={conversationId}>{children}</LinkAnchor>
       },
       img: ({ src, alt }) => {
-        const rawSrc = decodeKivioInternalUrl(typeof src === 'string' ? src : '')
+        const rawSrc = decodeABUAgentInternalUrl(typeof src === 'string' ? src : '')
         const altText = alt ?? ''
         const artifact =
           rawSrc && !isExternalOrAbsoluteImageSrc(rawSrc)

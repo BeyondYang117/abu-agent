@@ -492,9 +492,9 @@ export interface ImportableCliSession {
   /** 由导入功能带进来的。 */
   alreadyImported: boolean
   /**
-   * 已经有 Kivio 对话绑着这条原生会话时，那条对话的 id。
+   * 已经有 ABU Agent 对话绑着这条原生会话时，那条对话的 id。
    *
-   * **不等于 `alreadyImported`**：Kivio 自己创建的外部 CLI 对话运行时也会写绑定。
+   * **不等于 `alreadyImported`**：ABU Agent 自己创建的外部 CLI 对话运行时也会写绑定。
    * 两种都不能再导入（绑定是 1:1 的），但要说不同的话。
    */
   boundConversationId?: string | null

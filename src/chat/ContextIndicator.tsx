@@ -158,7 +158,7 @@ export function ContextIndicator({
       : '—'
   const sourceLabel = isExternalContext
     ? (isCliReported ? t.contextSourceCliReported : t.contextSourceCliEstimated)
-    : (isProviderReported ? t.contextSourceProviderReported : t.contextSourceKivio)
+    : (isProviderReported ? t.contextSourceProviderReported : t.contextSourceABUAgent)
   const ringRatio = usageRatio == null ? 0 : Math.max(0, Math.min(1, usageRatio))
   const lastClearUntilId = (
     contextState?.clear_boundaries ?? contextState?.clearBoundaries ?? []

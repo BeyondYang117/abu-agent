@@ -12,7 +12,7 @@ interface SessionUsageStripProps {
   /** 会话主 provider 的 apiFormat（消息没带 provider_id / 表里没有时的兜底）。 */
   defaultApiFormat?: string
   /**
-   * 覆盖「input 是否已含缓存」。外部 CLI 的用量形状跟会话挂的 Kivio provider 无关：
+   * 覆盖「input 是否已含缓存」。外部 CLI 的用量形状跟会话挂的 ABU Agent provider 无关：
    * dsh / claude / pi 已从 input 里扣掉 cache（再减一次会变成 ↑0、缓存 100%）。
    * 不传则仍按 apiFormat 判断（Anthropic 不减，其余减）。
    */

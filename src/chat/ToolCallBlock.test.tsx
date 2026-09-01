@@ -38,7 +38,7 @@ describe('ToolCallBlock', () => {
     expect(within(button).getByText('README.md')).toBeInTheDocument()
     // 已删除的后缀 / 全路径不再出现在折叠行
     expect(within(button).queryByText(/已完成/)).not.toBeInTheDocument()
-    expect(within(button).queryByText(/Kivio/)).not.toBeInTheDocument()
+    expect(within(button).queryByText(/ABU Agent/)).not.toBeInTheDocument()
     expect(within(button).queryByText(/file contents loaded/)).not.toBeInTheDocument()
     expect(within(button).queryByText(/src\/a/)).not.toBeInTheDocument()
   })
@@ -480,7 +480,7 @@ describe('ToolCallBlock', () => {
           status: 'running',
           arguments: {
             description: '读协议',
-            prompt: '把 dsh 的 session 事件对上 Kivio',
+            prompt: '把 dsh 的 session 事件对上 ABU Agent',
           },
         })}
       />,
@@ -864,7 +864,7 @@ describe('ToolCallBlock', () => {
     expect(screen.getByText('mcp__notion__searchPages')).toBeInTheDocument()
   })
 
-  it('still renders Kivio native snake_case tools unchanged', () => {
+  it('still renders ABU Agent native snake_case tools unchanged', () => {
     // 归一化不得让原生工具落空：`read_file` / `search_files` 等必须仍命中各自分支。
     render(
       <ToolCallBlock

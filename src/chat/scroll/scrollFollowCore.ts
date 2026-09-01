@@ -177,7 +177,7 @@ export function reduceFollowEvent(
         // re-pins. Detach is ONLY via explicit user input (wheel-up / touch /
         // historyKey / release) — never via scroll source classification.
         //
-        // Kivio previously detached on source==='user' so native scrollbar
+        // ABU Agent previously detached on source==='user' so native scrollbar
         // drags could win. That mis-classifies TanStack end-anchor / focus /
         // layout echoes as "user" during streaming, sets userDetached, and
         // permanently kills stick-to-bottom (screenshot: content stuck mid-
@@ -278,7 +278,7 @@ export function reduceFollowEvent(
     }
 
     case 'release': {
-      // Kivio 新增：主动脱离跟随（消息导航器跳转到上方消息时用），不钉底。
+      // ABU Agent 新增：主动脱离跟随（消息导航器跳转到上方消息时用），不钉底。
       return { state: { ...state, following: false, latchUntil: 0, userDetached: true }, pin: false }
     }
   }

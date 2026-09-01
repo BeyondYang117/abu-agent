@@ -1,4 +1,4 @@
-// 文档处理设置区（知识库页）：Kivio 内置本地解析 + 图片 OCR，
+// 文档处理设置区（知识库页）：ABU Agent 内置本地解析 + 图片 OCR，
 // 以及可选第三方解析服务（MinerU / LlamaParse，扫描版/复杂版面）。
 import { Download, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -69,7 +69,7 @@ export function DocumentProcessingPanel({
       <SettingsGroup title={t('文档解析服务', 'Parsing service')}>
         <div className="px-1 py-2">
           <div className="kv-seg w-full">
-            {[{ kind: '', name: t('Kivio 内置', 'Kivio built-in') }, ...THIRD_PARTY].map((s) => (
+            {[{ kind: '', name: t('ABU Agent 内置', 'ABU Agent built-in') }, ...THIRD_PARTY].map((s) => (
               <button
                 key={s.kind || 'builtin'}
                 type="button"
@@ -83,8 +83,8 @@ export function DocumentProcessingPanel({
           <p className="kv-row-desc mt-1.5">
             {activeKind === ''
               ? t(
-                  'Kivio 本地解析 txt / md / html / PDF 文字层 / docx / xlsx，免费离线。',
-                  'Kivio parses txt, md, html, PDF text layer, docx and xlsx locally — free and offline.',
+                  'ABU Agent 本地解析 txt / md / html / PDF 文字层 / docx / xlsx，免费离线。',
+                  'ABU Agent parses txt, md, html, PDF text layer, docx and xlsx locally — free and offline.',
                 )
               : t(
                   '文档上传到所选服务解析为 Markdown（适合扫描版 / 复杂版面），需要 API 密钥。',

@@ -82,7 +82,7 @@ jobs:
         run: npm ci
 
       - name: Build Swift sidecar
-        # macOS: real kivio-ocr-helper. Windows: empty stub for externalBin.
+        # macOS: real abu-agent-ocr-helper. Windows: empty stub for externalBin.
         run: npm run build:swift
 
       - name: Build and publish ${{ matrix.name }} installer

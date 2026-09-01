@@ -21,7 +21,7 @@ import { Toggle } from '../settings/components'
 import { useT } from '../settings/i18n'
 
 interface PluginCenterProps {
-  /** 让 Kivio AI 按规范文档安装：父级开新对话并发送 install brief */
+  /** 让 ABU Agent AI 按规范文档安装：父级开新对话并发送 install brief */
   onRequestAiInstall?: (pluginId: string) => void | Promise<void>
 }
 
@@ -141,7 +141,7 @@ function PluginCard({
               {plugin.source === 'system'
                 ? t.chatPluginSourceSystemPath
                 : plugin.source === 'kivio'
-                  ? t.chatPluginSourceKivio
+                  ? t.chatPluginSourceABUAgent
                   : ''}
             </p>
           )}

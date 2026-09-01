@@ -200,7 +200,7 @@ impl MacOcrClient {
             return Err("macOS OCR 不可用".into());
         };
 
-        let sidecar = app.shell().sidecar("kivio-ocr-helper").map_err(|err| {
+        let sidecar = app.shell().sidecar("abu-agent-ocr-helper").map_err(|err| {
             self.permanently_unavailable.store(true, Ordering::SeqCst);
             eprintln!("[macos-ocr] sidecar 不存在或未配置: {err}");
             "macOS OCR 不可用".to_string()

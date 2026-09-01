@@ -1,25 +1,25 @@
-# Kivio
+# ABU Agent
 
-Kivio 是一个桌面 AI 助手：屏幕级工具（划词翻译、截图 OCR、Lens 视觉问答）+ 一个完整的 agent 聊天应用。聊天既可以跑 Kivio 自己的 agent 循环，也可以由用户本机安装的外部编码 CLI 来承担。
+ABU Agent 是一个桌面 AI 助手：屏幕级工具（划词翻译、截图 OCR、Lens 视觉问答）+ 一个完整的 agent 聊天应用。聊天既可以跑 ABU Agent 自己的 agent 循环，也可以由用户本机安装的外部编码 CLI 来承担。
 
 ## Language
 
 ### 运行时与会话
 
 **外部 CLI 代理**：
-用户本机已安装、被 Kivio 驱动来充当某条对话后端的编码 CLI（claude、codex、grok、kimi、gemini、opencode、hermes、pi、cursor）。
+用户本机已安装、被 ABU Agent 驱动来充当某条对话后端的编码 CLI（claude、codex、grok、kimi、gemini、opencode、hermes、pi、cursor）。
 _Avoid_: 第三方 agent、外部模型
 
 **内置运行时**：
-Kivio 自己的 agent 循环。与外部 CLI 代理是同一条对话上二选一的关系。
+ABU Agent 自己的 agent 循环。与外部 CLI 代理是同一条对话上二选一的关系。
 _Avoid_: 本地 agent、原生循环
 
 **原生会话**：
-外部 CLI 自己维护的那份对话历史，存在该 CLI 自己的目录或数据库里，由该 CLI 自己的会话 id 标识。Kivio 不持有它的真身。
+外部 CLI 自己维护的那份对话历史，存在该 CLI 自己的目录或数据库里，由该 CLI 自己的会话 id 标识。ABU Agent 不持有它的真身。
 _Avoid_: CLI 会话、上游会话
 
 **会话绑定**：
-一条 Kivio 对话与一条原生会话之间的对应关系。绑定存在时，这条对话的续聊由对应的 CLI 用原生会话 id 承担。
+一条 ABU Agent 对话与一条原生会话之间的对应关系。绑定存在时，这条对话的续聊由对应的 CLI 用原生会话 id 承担。
 _Avoid_: 会话映射、session 关联
 
 **工作目录**：
@@ -29,11 +29,11 @@ _Avoid_: cwd、工作区、workspace
 ### 上下文
 
 **清空上下文**：
-用户手动切断当前对话发给模型的历史窗口。切断点之前的消息仍显示在时间线上，但不再进入后续请求，也不再进入压缩。仅内置运行时（Kivio Agent / Kivio Chat）。
+用户手动切断当前对话发给模型的历史窗口。切断点之前的消息仍显示在时间线上，但不再进入后续请求，也不再进入压缩。仅内置运行时（ABU Agent Agent / ABU Agent Chat）。
 _Avoid_: 清除对话、删除上下文、reset context、new chat
 
 **换模型回答**：
-对最后一轮同一条用户问题再请另一个模型作答。已有回答保留，新回答进入多答组；续聊默认用新回答。仅内置运行时（Kivio Agent / Kivio Chat），规划模式不可用。
+对最后一轮同一条用户问题再请另一个模型作答。已有回答保留，新回答进入多答组；续聊默认用新回答。仅内置运行时（ABU Agent Agent / ABU Agent Chat），规划模式不可用。
 _Avoid_: 切换模型、重新生成、@模型
 
 ### 侧栏分组
@@ -60,7 +60,7 @@ _Avoid_: 置顶、锁定、手动排序对话
 ### 导入
 
 **导入**：
-把一条已存在的原生会话变成一条 Kivio 对话：历史被解析出来用于显示，同时建立会话绑定。导入不复制历史的所有权——真身仍在 CLI 那边。
+把一条已存在的原生会话变成一条 ABU Agent 对话：历史被解析出来用于显示，同时建立会话绑定。导入不复制历史的所有权——真身仍在 CLI 那边。
 _Avoid_: 迁移、同步、导入历史
 
 **续聊**：

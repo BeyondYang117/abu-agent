@@ -9,44 +9,44 @@
 | iOfficeAI/AionUi | `E:\ZM database\_acp-host-refs\AionUi` | `16589d8` |
 | iOfficeAI/AionCore | `E:\ZM database\_acp-host-refs\AionCore` | `3f5c9f9` |
 
-**Kivio (this repo, read-only except this note):** `src-tauri/src/external_agents/session/acp.rs` (`acp_initialize_params`), `acp_terminal.rs`. Background: [acp-host-adaptation.md](./acp-host-adaptation.md).
+**ABU Agent (this repo, read-only except this note):** `src-tauri/src/external_agents/session/acp.rs` (`acp_initialize_params`), `acp_terminal.rs`. Background: [acp-host-adaptation.md](./acp-host-adaptation.md).
 
 AionUi is the Electron **UI**. The ACP **client/host** (initialize + reverse RPC) lives in AionCore, bundled as `aioncore`. `AionUi/packages/shared-scripts/src/prepare-aioncore.js` sets `GITHUB_OWNER = 'iOfficeAI'` and `GITHUB_REPO = 'AionCore'`. Do not treat the Electron tree as the host.
 
 ---
 
-## One-page verdict for Kivio
+## One-page verdict for ABU Agent
 
-Kivio’s live handshake (`terminal: true`, no `fs/*`) is **the same cell AionCore already ships**, not an accident unique to Kivio. Paseo is the opposite philosophy: **advertise nothing unless the operator opts in**, because advertising can replace a CLI’s local backend — especially when the agent and host do not share a filesystem (containers / remote daemons).
+ABU Agent’s live handshake (`terminal: true`, no `fs/*`) is **the same cell AionCore already ships**, not an accident unique to ABU Agent. Paseo is the opposite philosophy: **advertise nothing unless the operator opts in**, because advertising can replace a CLI’s local backend — especially when the agent and host do not share a filesystem (containers / remote daemons).
 
 **Copy from Paseo**
 
 1. Treat `clientCapabilities` as a **per-provider policy**, not a global “be like Zed.” Default false; opt in only when the host will actually execute. `BASE_ACP_CLIENT_CAPABILITIES` + `providerParams.clientCapabilities` (`paseo/packages/server/src/server/agent/providers/acp-agent.ts` `buildACPClientCapabilities`, `generic-acp-agent.ts` schema).
 2. **Do not put `terminal: true` on the Kimi catalog row** hoping glob/grep recover. Paseo’s Kimi catalog entry is `command: ["kimi", "acp"]` with **no** `params.clientCapabilities` (`paseo/packages/app/src/data/acp-provider-catalog.ts`). The Kimi TypeScript subclass only probes per-model thinking options (`kimi-acp-agent.ts` `resolveKimiCatalogModels`).
-3. Keep probe/import from owing reverse RPC you will not serve. Paseo’s probe **advertises the same flags as live** (including an override), but `buildProbeClient.createTerminal()` **throws**; live `ACPAgentSession.createTerminal` actually spawns. Kivio already splits advertise (`acp_initialize_params(true|false)`). Keep that split; if you ever opt in `fs` on live, still leave it off on probe unless the probe implements `fs/*`.
+3. Keep probe/import from owing reverse RPC you will not serve. Paseo’s probe **advertises the same flags as live** (including an override), but `buildProbeClient.createTerminal()` **throws**; live `ACPAgentSession.createTerminal` actually spawns. ABU Agent already splits advertise (`acp_initialize_params(true|false)`). Keep that split; if you ever opt in `fs` on live, still leave it off on probe unless the probe implements `fs/*`.
 4. Session-level **Auto Accept** for `session/request_permission`, not a silent YOLO on `terminal/create`. Paseo auto-selects an allow option; chooser-shaped option lists stay interactive (`requestPermission` + `isACPChooserRequest`). It does **not** gate `terminal/create`.
 5. Always send `cwd` + `mcpServers` on `session/new` **and** `session/load` even when the array is empty (Devin “Invalid params” comment on `initializeResumedSession`).
 6. Cursor-only `_meta.parameterizedModelPicker: true` (`cursor-acp-agent.ts` `CURSOR_CLIENT_CAPABILITY_META`). Do not invent other per-CLI `_meta` until measured.
 
 **Copy from AionCore / AionUi**
 
-1. **Live path is already Kivio-shaped:** `terminal: true`, `fs.readTextFile` / `writeTextFile` **false** (comment: “fs stays undeclared (P2)”), plus `session.configOptions` so gated agents still send pickers (`AionCore/crates/aionui-ai-agent/src/protocol/acp.rs` `build_initialize_request`). They did **not** special-case Kimi.
+1. **Live path is already ABU Agent-shaped:** `terminal: true`, `fs.readTextFile` / `writeTextFile` **false** (comment: “fs stays undeclared (P2)”), plus `session.configOptions` so gated agents still send pickers (`AionCore/crates/aionui-ai-agent/src/protocol/acp.rs` `build_initialize_request`). They did **not** special-case Kimi.
 2. Implement every advertised `terminal/*` method. AionCore’s `TerminalRegistry` is the real exec plane; AionUi only renders `MessageAcpTerminalOutput` and a per-command Stop (`killTerminal`).
-3. Empty-`args` shell fallback for agents that send a compound **line** as `command` (codebuddy live 2026-08-05). Spec is still execvp when `args` is present. Kivio is execvp-only today — keep that for Kimi `bash -c`, add shell **only** when `args` is empty.
+3. Empty-`args` shell fallback for agents that send a compound **line** as `command` (codebuddy live 2026-08-05). Spec is still execvp when `args` is present. ABU Agent is execvp-only today — keep that for Kimi `bash -c`, add shell **only** when `args` is empty.
 4. Permission **UI** for `session/request_permission`. AionCore’s router auto-approves **team MCP only**; everything else is a card. `terminal/create` itself is **not** permission-gated — codebuddy’s Bash card is a separate `request_permission`. YOLO is `session/set_mode` to a catalog `yolo_id`, not a host skip of reverse RPC.
-5. Pass configured `mcpServers` on `session/new` **and** `session/load`. Shipping AionCore omits the field when the list is empty (`acp_assembler.rs` `new_session_request`); the unfinished `acp_conn` path always sends the array so resume cannot regress to `[]`. Paseo always sends the key (Devin). Kivio already always sends the key.
+5. Pass configured `mcpServers` on `session/new` **and** `session/load`. Shipping AionCore omits the field when the list is empty (`acp_assembler.rs` `new_session_request`); the unfinished `acp_conn` path always sends the array so resume cannot regress to `[]`. Paseo always sends the key (Devin). ABU Agent already always sends the key.
 
 **Do not copy**
 
 - Paseo’s **default `terminal: false` on live desktop sessions** if Kimi 0.37 Bash must work. Turning the flag off does not restore TUI glob; Kimi throws `ACP terminal capability is unavailable`.
-- Paseo’s **OpenCode native HTTP adapter**. Paseo OpenCode is *not* ACP (`opencode-agent.ts`). Kivio/AionCore drive OpenCode as `opencode acp`.
+- Paseo’s **OpenCode native HTTP adapter**. Paseo OpenCode is *not* ACP (`opencode-agent.ts`). ABU Agent/AionCore drive OpenCode as `opencode acp`.
 - AionCore’s **unfinished** `aionui-session` ACP backend (`acp_conn.rs` `initialize_params`): advertises **fs false and no terminal**, then `-32601`s `fs/*` and `terminal/*`. Comment says opencode/gemini/hermes still use the **legacy** `AgentInstance::Acp` path (`AcpProtocol`). Do not treat `acp_conn` as shipping policy.
-- AionCore probe **reusing live initialize** (`terminal: true` even on try-connect). Kivio’s probe `terminal: false` is better.
+- AionCore probe **reusing live initialize** (`terminal: true` even on try-connect). ABU Agent’s probe `terminal: false` is better.
 - Inventing glob/grep RPCs. Neither host has them. Paseo’s catalog never sets `terminal: true` for Kimi to “fix” search.
 - Host-side `sh -c` wrapping of argv that already has `args` (pi/Kimi bash already wrap). Spec + Paseo: args present → execvp.
 - Advertising `fs` before implementing it. AionCore explicitly deferred that to P2; Paseo only turns it on via operator params.
 
-**Kimi 0.37 Glob/Grep:** neither host has a host-side fix. Paseo avoids the failure by **not advertising terminal** (Bash then also dies unless Kimi falls back — 0.37 does not). AionCore advertises terminal globally (Bash works, glob/grep still bash-gated). Kivio is in the AionCore cell. Next Kivio step is honesty (agent-policy errors, comment fix) + optional `fs/*` later for Gemini-class buffer sync — **not** a Kimi glob emulator.
+**Kimi 0.37 Glob/Grep:** neither host has a host-side fix. Paseo avoids the failure by **not advertising terminal** (Bash then also dies unless Kimi falls back — 0.37 does not). AionCore advertises terminal globally (Bash works, glob/grep still bash-gated). ABU Agent is in the AionCore cell. Next ABU Agent step is honesty (agent-policy errors, comment fix) + optional `fs/*` later for Gemini-class buffer sync — **not** a Kimi glob emulator.
 
 ---
 
@@ -252,7 +252,7 @@ function resolveTerminalCommand(
 - Bare executable → execvp, empty args.
 - Whitespace in `command` and no args → **bash `-c` / `cmd.exe /c`** via `buildStringCommandShellInvocation` (`string-command-shell.ts`). `shell: false` on `spawnProcess` so Node does not double-wrap; overlay clears `BASH_ENV`.
 - `cwd`: `params.cwd ?? this.config.cwd`. **No extra-root confinement.**
-- Env: agent `params.env` plus `createProviderEnvSpec`. **No forced `TERM=dumb` / `NO_COLOR=1`** (Kivio does set those).
+- Env: agent `params.env` plus `createProviderEnvSpec`. **No forced `TERM=dumb` / `NO_COLOR=1`** (ABU Agent does set those).
 
 **Why probe implements fs but default-advertises false:** methods exist if an agent ignores the spec and calls anyway; `createTerminal` is explicitly refused so a catalog probe cannot launch user commands. Diagnostic test `sends configured client capabilities in catalog and live session initialization` (`generic-acp-agent.diagnostic.test.ts`) proves **catalog probe and live session send the same** `clientCapabilities` when `providerParams` opts in — including `terminal: true`. Opting in then probing is a footgun: advertise true, `createTerminal` throws.
 
@@ -354,7 +354,7 @@ Test `initialize_request_declares_terminal_and_config_options_capabilities` (~15
 
 **Not advertised:** `auth.terminal`, elicitation, `fs`. Auth **methods** from the **agent** are stored in `agent_metadata.auth_methods` (Kimi `_meta.terminal-auth` for `kimi login` — that is **agent** capability metadata, not Client `auth.terminal`).
 
-CHANGELOG (AionUi 2.1.50 / AionCore #779): “client-hosted terminals — declare clientCapabilities.terminal and serve terminal/*”. That is when they **became** Kivio-shaped.
+CHANGELOG (AionUi 2.1.50 / AionCore #779): “client-hosted terminals — declare clientCapabilities.terminal and serve terminal/*”. That is when they **became** ABU Agent-shaped.
 
 ### Unfinished `acp_conn` (do not confuse with live)
 
@@ -371,7 +371,7 @@ fn initialize_params() -> Value {
 
 No `terminal: true`. Reverse RPC: `session/request_permission` surfaced; **any other method including `fs/*` and `terminal/*` → `-32601`** (`handle_reverse_rpc` ~1544, default arm ~1610). Comment: unhandled reverse RPC must be clean-rejected, not dropped. Elicitation: “0/24 live agents emit it — 2026-08-04 sweep” (`Command::AnswerAsk`).
 
-This is the **Paseo-like conservative handshake** sitting next to the **shipping Zed-lite terminal-only** handshake. Kivio should follow **shipping `AcpProtocol`**, not `acp_conn`, until AionCore actually migrates Gemini/Kimi onto it.
+This is the **Paseo-like conservative handshake** sitting next to the **shipping Zed-lite terminal-only** handshake. ABU Agent should follow **shipping `AcpProtocol`**, not `acp_conn`, until AionCore actually migrates Gemini/Kimi onto it.
 
 ### Reverse RPC (shipping)
 
@@ -405,7 +405,7 @@ AionUi card: `packages/desktop/src/renderer/pages/conversation/Messages/acp/Mess
 
 ### Probe vs live (AionCore)
 
-`protocol/custom_agent_probe.rs` `run_handshake` calls the **same** `AcpProtocol::connect` → **same** `build_initialize_request` → **`terminal: true` on probes**. Probe then `session/new` with `temp_dir()`, no prompt. Terminal handlers are live; a misbehaving agent could spawn during try-connect. Kivio’s probe `terminal: false` is stricter.
+`protocol/custom_agent_probe.rs` `run_handshake` calls the **same** `AcpProtocol::connect` → **same** `build_initialize_request` → **`terminal: true` on probes**. Probe then `session/new` with `temp_dir()`, no prompt. Terminal handlers are live; a misbehaving agent could spawn during try-connect. ABU Agent’s probe `terminal: false` is stricter.
 
 Probe channels for events/permissions are throwaway (`// a probe session never sends a prompt`).
 
@@ -452,7 +452,7 @@ Shipping `factory/acp.rs` loads DB MCP so they reach `session/new` (comment ELEC
 - Per-Kimi capability fork.
 - Elicitation (measured 0/24 agents, 2026-08-04).
 - Cwd confinement on host terminals.
-- Forced `TERM`/`NO_COLOR` (Kivio **does**; AionCore relies on the agent’s env — Kimi’s bash gate requires the **agent** to send those env vars on `terminal/create`).
+- Forced `TERM`/`NO_COLOR` (ABU Agent **does**; AionCore relies on the agent’s env — Kimi’s bash gate requires the **agent** to send those env vars on `terminal/create`).
 - Gating `terminal/create` on Plan/YOLO.
 - Using `acp_conn`’s conservative initialize for shipping CLIs (yet).
 - AionUi PRD skip list: Gemini-specific E2E skipped by user request; codebuddy YOLO id inconsistency noted as “待研发确认”.
@@ -461,7 +461,7 @@ Shipping `factory/acp.rs` loads DB MCP so they reach `session/new` (comment ELEC
 
 ## Side-by-side
 
-| | **Paseo** (daemon ACP) | **AionCore shipping `AcpProtocol`** | **Kivio live** | **Kivio probe/import** |
+| | **Paseo** (daemon ACP) | **AionCore shipping `AcpProtocol`** | **ABU Agent live** | **ABU Agent probe/import** |
 | --- | --- | --- | --- | --- |
 | **Advertise fs.read / fs.write** | false unless `params.clientCapabilities` | false (P2) | **omitted** (schema default false) | omitted |
 | **Advertise terminal** | false unless params | **true** (all ACP CLIs) | **true** | **false** |
@@ -482,7 +482,7 @@ Shipping `factory/acp.rs` loads DB MCP so they reach `session/new` (comment ELEC
 
 ---
 
-## Concrete Kivio next steps (from these two hosts)
+## Concrete ABU Agent next steps (from these two hosts)
 
 1. **Keep live `terminal: true`.** AionCore shipping code is the existence proof that a multi-CLI desktop host chooses this globally (codebuddy/grok/omp need it). Paseo’s default-false is for **environment isolation**, not for Kimi glob. Copy Paseo’s **opt-in fs**, not its live terminal-off default.
 
@@ -490,25 +490,25 @@ Shipping `factory/acp.rs` loads DB MCP so they reach `session/new` (comment ELEC
 
 3. **Do not advertise `fs` until `fs/read_text_file` + `fs/write_text_file` exist.** AionCore left a `P2` comment rather than advertising true. Paseo only turns flags on with implemented methods. When you add fs: absolute paths, `line`/`limit`, create-on-write, text only (Grok image lesson in the sibling note). Still omit on probe.
 
-4. **Keep probe `terminal: false`.** Do **not** copy AionCore’s probe=live initialize. Do copy Paseo’s idea that a probe must not run user commands (`createTerminal` throw) — Kivio already avoids the advertise.
+4. **Keep probe `terminal: false`.** Do **not** copy AionCore’s probe=live initialize. Do copy Paseo’s idea that a probe must not run user commands (`createTerminal` throw) — ABU Agent already avoids the advertise.
 
 5. **Empty-args shell fallback only** (AionCore `TerminalRegistry::create`, Paseo `resolveTerminalCommand`). Do **not** wrap argv that already has `args` (Kimi `bash -c` + env). Do **not** hope a host shell will see Kimi Glob’s `fd` — 0.37 rejects before RPC.
 
-6. **Keep `TERM=dumb` / `NO_COLOR=1` on host spawn** (Kivio already). AionCore does not inject them; Kimi’s gate is on the **agent-supplied** env. Harmless extra for other CLIs.
+6. **Keep `TERM=dumb` / `NO_COLOR=1` on host spawn** (ABU Agent already). AionCore does not inject them; Kimi’s gate is on the **agent-supplied** env. Harmless extra for other CLIs.
 
-7. **Stop auto-allowing every `request_permission` as the only policy.** Paseo: Auto Accept toggle + chooser exception. AionCore: real cards, team-MCP auto only. Kivio `choose_permission_outcome` always picks allow — that is stricter YOLO than either host. Especially do not treat `terminal/create` as covered by Plan mode.
+7. **Stop auto-allowing every `request_permission` as the only policy.** Paseo: Auto Accept toggle + chooser exception. AionCore: real cards, team-MCP auto only. ABU Agent `choose_permission_outcome` always picks allow — that is stricter YOLO than either host. Especially do not treat `terminal/create` as covered by Plan mode.
 
-8. **Keep sending `mcpServers` (possibly `[]`) on new + load.** Paseo: Devin rejects omitted keys. AionCore shipping omits the field when empty; `acp_conn` learned not to resume with `[]`. Kivio `build_session_new_params` already always sends the key — keep that.
+8. **Keep sending `mcpServers` (possibly `[]`) on new + load.** Paseo: Devin rejects omitted keys. AionCore shipping omits the field when empty; `acp_conn` learned not to resume with `[]`. ABU Agent `build_session_new_params` already always sends the key — keep that.
 
-9. **Cursor `_meta.parameterizedModelPicker`** when Kivio’s picker can consume parameterized model ids (Paseo `CURSOR_CLIENT_CAPABILITY_META`). Harmless if Cursor ignores it; Zed already sends it.
+9. **Cursor `_meta.parameterizedModelPicker`** when ABU Agent’s picker can consume parameterized model ids (Paseo `CURSOR_CLIENT_CAPABILITY_META`). Harmless if Cursor ignores it; Zed already sends it.
 
 10. **Declare `session.configOptions` if you already consume config-option updates.** AionCore added this so strict agents do not hide pickers. Cheap, not a glob fix.
 
-11. **UI: live `{type:terminal}` / `terminal_id` cards** (AionUi `MessageAcpTerminalOutput` + kill). Spec SHOULD keep showing output after release. Kivio implements `terminal/*` but the chat UI should not pretend Glob failures are host RPC errors.
+11. **UI: live `{type:terminal}` / `terminal_id` cards** (AionUi `MessageAcpTerminalOutput` + kill). Spec SHOULD keep showing output after release. ABU Agent implements `terminal/*` but the chat UI should not pretend Glob failures are host RPC errors.
 
-12. **Fix `acp_terminal.rs` comment** if it still implies all ACP CLIs route Glob/Grep through the host. AionCore’s own comment names **codebuddy/grok/omp**, not Kimi glob. OpenCode on both Kivio and AionCore is ACP-as-control-plane with **local** glob/grep.
+12. **Fix `acp_terminal.rs` comment** if it still implies all ACP CLIs route Glob/Grep through the host. AionCore’s own comment names **codebuddy/grok/omp**, not Kimi glob. OpenCode on both ABU Agent and AionCore is ACP-as-control-plane with **local** glob/grep.
 
-13. **Do not wait on AionCore `acp_conn` or ACP v2.** v2 drops Client fs/terminal (sibling note). `acp_conn` currently advertises **less** than Kivio live. Stay on v1 `AcpProtocol`-class surface.
+13. **Do not wait on AionCore `acp_conn` or ACP v2.** v2 drops Client fs/terminal (sibling note). `acp_conn` currently advertises **less** than ABU Agent live. Stay on v1 `AcpProtocol`-class surface.
 
 14. **OpenCode:** follow AionCore (`opencode acp`), not Paseo’s native HTTP adapter.
 
@@ -516,7 +516,7 @@ Shipping `factory/acp.rs` loads DB MCP so they reach `session/new` (comment ELEC
 
 ---
 
-## Kivio snapshot (for the table)
+## ABU Agent snapshot (for the table)
 
 ```153:165:src-tauri/src/external_agents/session/acp.rs
 fn acp_initialize_params(terminal: bool) -> Value {
@@ -527,7 +527,7 @@ fn acp_initialize_params(terminal: bool) -> Value {
         "clientCapabilities": { "terminal": terminal },
         "clientInfo": {
             "name": "kivio",
-            "title": "Kivio",
+            "title": "ABU Agent",
             "version": env!("CARGO_PKG_VERSION"),
         },
     })

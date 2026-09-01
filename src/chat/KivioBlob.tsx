@@ -6,7 +6,7 @@ import {
   BODY_R,
   CX,
   CY,
-  KivioBlobSim,
+  ABUAgentBlobSim,
   blobScheduleMs,
   type BlobMood,
 } from './kivioBlobSim'
@@ -14,11 +14,11 @@ import { prefersReducedMotion } from './utils'
 
 export type { BlobMood }
 
-export interface KivioBlobHandle {
+export interface ABUAgentBlobHandle {
   pokeAt: (clientX?: number) => void
 }
 
-interface KivioBlobProps {
+interface ABUAgentBlobProps {
   size?: number
   mood?: BlobMood
   /** 切会话覆盖层盖住时停表，避免和点阵脉冲叠两套动画。 */
@@ -34,8 +34,8 @@ function writeAttr(el: Element, name: string, value: string, prev: string): stri
   return value
 }
 
-export const KivioBlob = memo(forwardRef<KivioBlobHandle, KivioBlobProps>(function KivioBlob(
-  { size = 28, mood = 'idle', paused = false, pulse, onPoke }: KivioBlobProps,
+export const ABUAgentBlob = memo(forwardRef<ABUAgentBlobHandle, ABUAgentBlobProps>(function ABUAgentBlob(
+  { size = 28, mood = 'idle', paused = false, pulse, onPoke }: ABUAgentBlobProps,
   ref,
 ) {
   const hostRef = useRef<HTMLSpanElement>(null)
@@ -43,7 +43,7 @@ export const KivioBlob = memo(forwardRef<KivioBlobHandle, KivioBlobProps>(functi
   const bodyRef = useRef<SVGCircleElement>(null)
   const eye0Ref = useRef<SVGPathElement>(null)
   const eye1Ref = useRef<SVGPathElement>(null)
-  const simRef = useRef<KivioBlobSim | null>(null)
+  const simRef = useRef<ABUAgentBlobSim | null>(null)
   const armRef = useRef<(now?: number) => void>(() => {})
   const pausedRef = useRef(paused)
   const pulseSkipRef = useRef(true)
@@ -51,7 +51,7 @@ export const KivioBlob = memo(forwardRef<KivioBlobHandle, KivioBlobProps>(functi
   onPokeRef.current = onPoke
   pausedRef.current = paused
   if (!simRef.current) {
-    simRef.current = new KivioBlobSim({ reducedMotion: prefersReducedMotion() })
+    simRef.current = new ABUAgentBlobSim({ reducedMotion: prefersReducedMotion() })
   }
 
   const pokeAt = (clientX?: number) => {

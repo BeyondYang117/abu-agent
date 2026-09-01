@@ -19,11 +19,11 @@ describe('formatToolResultPreview', () => {
   it('summarizes Tavily search results', () => {
     const raw = JSON.stringify({
       query: 'kivio',
-      results: [{ title: 'Kivio Docs', content: 'Screen-level AI assistant', url: 'https://example.com' }],
+      results: [{ title: 'ABU Agent Docs', content: 'Screen-level AI assistant', url: 'https://example.com' }],
     })
     const preview = formatToolResultPreview(raw)
     expect(preview).toContain('1 条结果')
-    expect(preview).toContain('Kivio Docs')
+    expect(preview).toContain('ABU Agent Docs')
   })
 
   it('handles stdout: prefixed JSON bodies', () => {

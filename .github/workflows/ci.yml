@@ -50,7 +50,7 @@ jobs:
       - name: Frontend tests
         run: npm run test
 
-      # tauri-build 会校验 externalBin（kivio-ocr-helper）对应当前 target triple 的二进制存在。
+      # tauri-build 会校验 externalBin（abu-agent-ocr-helper）对应当前 target triple 的二进制存在。
       # 上面的 build:swift 在 macOS 上构建真实 Swift sidecar 满足校验，否则这一步会在 build-script 阶段失败。
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

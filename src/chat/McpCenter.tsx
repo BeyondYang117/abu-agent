@@ -276,7 +276,7 @@ export function McpCenter() {
     })
   }, [])
 
-  // 导入选中项 = 复制成 Kivio 自己的 ChatMcpServer（enabled:false，走现有安装流程）。
+  // 导入选中项 = 复制成 ABU Agent 自己的 ChatMcpServer（enabled:false，走现有安装流程）。
   const handleCliImportSelected = useCallback(async () => {
     if (!cliScan) return
     const all = [...cliScan.claude.servers, ...cliScan.codex.servers, ...cliScan.opencode.servers, ...cliScan.pi.servers]

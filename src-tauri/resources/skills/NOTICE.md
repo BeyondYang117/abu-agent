@@ -8,8 +8,8 @@ The bundled Obsidian skills in this directory —
 - `obsidian-cli/`
 
 — are adapted from **kepano/obsidian-skills** (https://github.com/kepano/obsidian-skills),
-distributed under the MIT License. Minor edits were made for the Kivio runtime
-(explicit `id:` frontmatter; wording aligned with Kivio's native file tools).
+distributed under the MIT License. Minor edits were made for the ABU Agent runtime
+(explicit `id:` frontmatter; wording aligned with ABU Agent's native file tools).
 The `defuddle` skill from the upstream repository is intentionally not bundled.
 
 ---

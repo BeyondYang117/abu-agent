@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from 'react'
-import { KivioBlob, type BlobMood } from './KivioBlob'
+import { ABUAgentBlob, type BlobMood } from './KivioBlob'
 import { getCoarse, getSnapshot } from './streamingStore'
 import { resolveBlobMood } from './kivioBlobSim'
 import { useConversationTransition } from './conversationTransitionStore'
@@ -13,7 +13,7 @@ export const StreamStatusLogo = memo(function StreamStatusLogo({
   mood?: BlobMood
   paused?: boolean
 }) {
-  return <KivioBlob size={size} mood={mood} paused={paused} />
+  return <ABUAgentBlob size={size} mood={mood} paused={paused} />
 })
 
 function toolName(tool: { tool_name?: string; toolName?: string; name?: string }): string {

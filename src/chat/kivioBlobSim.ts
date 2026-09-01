@@ -13,7 +13,7 @@ function mixHex(a: string, b: string, t: number): string {
   return `#${[0, 1, 2].map((i) => m(i).toString(16).padStart(2, '0')).join('')}`
 }
 
-/** 跟生成过程对齐的几张脸。几何是 Kivio 自己的 stadium，不是 xAI 眼环。 */
+/** 跟生成过程对齐的几张脸。几何是 ABU Agent 自己的 stadium，不是 xAI 眼环。 */
 export type BlobMood = 'idle' | 'think' | 'search' | 'work' | 'speak' | 'error'
 
 const DT = 1 / 120
@@ -404,7 +404,7 @@ export interface BlobSimDebug {
   pokes: number
 }
 
-export class KivioBlobSim {
+export class ABUAgentBlobSim {
   mood: BlobMood = 'idle'
   private random: () => number
   private reduced: boolean
@@ -716,4 +716,4 @@ export class KivioBlobSim {
   }
 }
 
-export const BLOB_REST = new KivioBlobSim({ random: () => 0.5, reducedMotion: true }).sample(0)
+export const BLOB_REST = new ABUAgentBlobSim({ random: () => 0.5, reducedMotion: true }).sample(0)

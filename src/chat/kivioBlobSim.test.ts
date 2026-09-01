@@ -8,7 +8,7 @@ import {
   consumeBlink,
   CX,
   EYE_POINTS,
-  KivioBlobSim,
+  ABUAgentBlobSim,
   polyPath,
   queueBlink,
   resolveBlobMood,
@@ -40,7 +40,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('眼环是左右各 48 点，分居圆心两侧', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5, reducedMotion: true })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5, reducedMotion: true })
     const paint = sim.sample(0)
     const parse = (d: string) =>
       [...d.matchAll(/(-?\d+\.\d+)/g)].map((m) => Number(m[1]))
@@ -56,7 +56,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('思考态弹簧把 spin 拉向负角', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('think', 0)
     let paint = sim.sample(0)
     for (let t = 16; t <= 800; t += 16) paint = sim.sample(t)
@@ -66,7 +66,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('reduced motion 钉死 pose', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5, reducedMotion: true })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5, reducedMotion: true })
     sim.setMood('think', 0)
     const paint = sim.sample(800)
     expect(sim.debug().spin).toBe(0)
@@ -75,7 +75,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('闲置眨眼结束后不钉满帧，改走呼吸节拍', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('idle', 0)
     for (let t = 0; t <= 1200; t += 16) sim.sample(t)
     expect(sim.wantsHighFps(1200)).toBe(false)
@@ -85,7 +85,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('出错间隙不钉满帧', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('error', 0)
     for (let t = 0; t <= 2500; t += 16) sim.sample(t)
     expect(sim.wantsHighFps(2500)).toBe(false)
@@ -116,7 +116,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('闲置有呼吸起伏', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('idle', 0)
     let paint = sim.sample(0)
     for (let t = 16; t <= 900; t += 16) paint = sim.sample(t)
@@ -125,14 +125,14 @@ describe('kivioBlobSim', () => {
   })
 
   it('闲置会把重心慢慢挪过去', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('idle', 0)
     for (let t = 0; t <= 10000; t += 16) sim.sample(t)
     expect(Math.abs(sim.debug().spin)).toBeGreaterThan(3)
   })
 
   it('poke 会眨眼并跳一下', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('idle', 0)
     sim.sample(0)
     sim.poke(200)
@@ -142,7 +142,7 @@ describe('kivioBlobSim', () => {
   })
 
   it('连点升温变红，换文案 nudge 不脸红', () => {
-    const sim = new KivioBlobSim({ random: () => 0.5 })
+    const sim = new ABUAgentBlobSim({ random: () => 0.5 })
     sim.setMood('idle', 0)
     sim.sample(0)
     expect(sim.sample(10).fill.toLowerCase()).toBe(BLOB_BLUE)

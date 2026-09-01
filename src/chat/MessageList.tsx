@@ -281,7 +281,7 @@ function MessageListBase({
   const streamingToolCalls = snapshot.toolCalls
   const streamingSegments = snapshot.segments
 
-  // 恢复中的 Kivio Agent 会同时有两份状态：后端为崩溃恢复写入的 interrupted
+  // 恢复中的 ABU Agent Agent 会同时有两份状态：后端为崩溃恢复写入的 interrupted
   // assistant 草稿，以及协议快照驱动的实时预览。它们共用同一个 messageId；实时
   // 气泡存在时，历史侧不能再把同 id 的消息挂出来，否则整轮回答会显示两次。
   const historyMessages = useMemo(() => {

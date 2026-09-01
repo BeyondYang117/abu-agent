@@ -304,7 +304,7 @@ export const SLOT_CATALOG: Record<AgentSlot, NodeCatalogEntry> = {
     label: (t) => t.chatAutomationAgentSlotRuntime,
     hint: (t) => t.chatAutomationAgentRuntimeHint,
     defaultData: (t) => ({
-      label: t.chatAutomationKivioAgent,
+      label: t.chatAutomationABUAgentAgent,
       agent: { prompt: '', runtimeKind: 'builtin', toolIds: [], skillIds: [] },
     }),
   },

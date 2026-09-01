@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { composeAgent, explodeInlineAgents, isAgentSlotFilled, normalizeAgent, toAgentData, agentSelectedModel } from './agentModel'
 
 describe('normalizeAgent', () => {
-  it('defaults to builtin Kivio Agent with an empty prompt', () => {
+  it('defaults to builtin ABU Agent Agent with an empty prompt', () => {
     const agent = normalizeAgent(undefined)
     expect(agent.runtimeKind).toBe('builtin')
     expect(agent.prompt).toBe('')
@@ -104,7 +104,7 @@ describe('normalizeAgent', () => {
     expect(second.changed).toBe(false)
   })
 
-  it('does not copy a Kivio model onto an exploded CLI runtime node', () => {
+  it('does not copy a ABU Agent model onto an exploded CLI runtime node', () => {
     const nodes = [{
       id: 'a',
       type: 'action.agent' as const,

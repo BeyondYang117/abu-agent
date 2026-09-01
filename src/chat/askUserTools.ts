@@ -5,7 +5,7 @@ export function foldToolName(name: string): string {
 }
 
 /**
- * 这条工具调用该不该渲染成 Kivio 的问用户卡片。
+ * 这条工具调用该不该渲染成 ABU Agent 的问用户卡片。
  *
  * 后端 `external_agents/ask_user.rs` 的 CODECS 加工具名时，这里也要加一条，
  * 否则会渲染成普通工具卡、用户没法答。`askUser` 结构化载荷是兜底

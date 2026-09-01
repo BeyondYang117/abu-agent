@@ -132,7 +132,7 @@ export function MixerIcon(props: IconProps) {
   )
 }
 
-// Kivio Code：终端
+// ABU Agent Code：终端
 export function CodeIcon(props: IconProps) {
   return (
     <svg {...svgProps(props)}>

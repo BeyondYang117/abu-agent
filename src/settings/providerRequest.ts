@@ -3,7 +3,7 @@
 
 export type ProviderCustomHeader = { key: string; value: string }
 
-/** 由 Kivio 自己管理、不允许用户覆盖的头。 */
+/** 由 ABU Agent 自己管理、不允许用户覆盖的头。 */
 // 必须与 Rust 侧 `provider_request.rs::RESERVED_HEADER_KEYS` **逐条一致**。少一条的后果是
 // 用户在面板里能填能存，保存后 sanitize_settings 把它静默删掉、列表里当场消失。
 const RESERVED_HEADER_KEYS = new Set([

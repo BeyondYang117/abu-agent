@@ -35,7 +35,7 @@ function TitlebarPills({
     firstUser?.content ?? '',
     firstUser?.attachments?.map((attachment) => attachment.name) ?? [],
   )
-  const title = displayConversationTitle(conversation?.title, titleFallback) || 'Kivio'
+  const title = displayConversationTitle(conversation?.title, titleFallback) || 'ABU Agent'
   const providerId = conversation?.provider_id ?? ''
   const model = conversation?.model ?? ''
   const locked = Boolean(conversation && (conversation.messages?.length ?? 0) > 0)
@@ -119,4 +119,3 @@ export function PopoutTitlebar(props: PopoutTitlebarProps) {
     </header>
   )
 }
-

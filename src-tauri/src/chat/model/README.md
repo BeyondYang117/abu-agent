@@ -1,4 +1,4 @@
-# Kivio Chat Runtime Model Contract
+# ABU Agent Chat Runtime Model Contract
 
 The Chat runtime owns orchestration: conversation state, prompt construction, tool loop,
 cancellation, persistence, and Tauri events.

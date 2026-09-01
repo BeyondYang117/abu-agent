@@ -1,18 +1,18 @@
 //! 无 Tauri handle 的 per-app data 目录解析。
 //!
 //! 部分模块(plugins、skills 的 headless 发现)需要在没有
-//! `AppHandle` 的情况下定位 Kivio 的 per-app data 目录。这里提供与 Tauri
+//! `AppHandle` 的情况下定位 ABU Agent 的 per-app data 目录。这里提供与 Tauri
 //! `app_data_dir` 完全一致的纯函数实现。
 
 use std::path::PathBuf;
 
 /// Tauri bundle identifier(须与 `tauri.conf.json` 一致)。
-pub const APP_IDENTIFIER: &str = "com.zmair.kivio";
+pub const APP_IDENTIFIER: &str = "com.abu.agent";
 
 /// 与 Tauri `app_data_dir` = `dirs::data_dir()/<identifier>` 完全一致:
-///   Windows: `%APPDATA%\com.zmair.kivio`(Roaming,无 `\data` 子目录)
-///   macOS:   `~/Library/Application Support/com.zmair.kivio`
-///   Linux:   `$XDG_DATA_HOME/com.zmair.kivio`(或 `~/.local/share/...`)
+///   Windows: `%APPDATA%\com.abu.agent`(Roaming,无 `\data` 子目录)
+///   macOS:   `~/Library/Application Support/com.abu.agent`
+///   Linux:   `$XDG_DATA_HOME/com.abu.agent`(或 `~/.local/share/...`)
 ///
 /// 注意:必须用 `BaseDirs::data_dir()`,不能用 `ProjectDirs::data_dir()`——
 /// 后者在 Windows 会多追加一层 `\data`,导致读到错误路径。

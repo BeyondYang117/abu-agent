@@ -1,22 +1,22 @@
 <div align="center">
 
-<img src="public/icon.png" width="120" height="120" alt="Kivio Desktop">
+<img src="public/icon.png" width="120" height="120" alt="ABU Agent Desktop">
 
-# Kivio Desktop
+# ABU Agent Desktop
 
 ### A screen-level AI assistant for macOS and Windows: an agentic client, plus translation, screenshot OCR, and visual Q&A
 
-[![Release](https://img.shields.io/github/v/release/abu/kivio?style=flat-square&color=4f46e5&label=release)](https://github.com/abu/kivio/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/abu/kivio/releases)
+[![Release](https://img.shields.io/github/v/release/abu/abu-agent-desktop?style=flat-square&color=4f46e5&label=release)](https://github.com/abu/abu-agent-desktop/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/abu/abu-agent-desktop/releases)
 [![Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange?style=flat-square)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/abu/kivio/total?style=flat-square)](https://github.com/abu/kivio/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/abu/abu-agent-desktop/total?style=flat-square)](https://github.com/abu/abu-agent-desktop/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-[中文](README.md) · **English** · [Changelog](https://github.com/abu/kivio/releases)
+[中文](README.md) · **English** · [Changelog](https://github.com/abu/abu-agent-desktop/releases)
 
-[Download](https://github.com/abu/kivio/releases/latest) · [Features](#features) · [Help](#help) · QQ **1104450740**
+[Download](https://github.com/abu/abu-agent-desktop/releases/latest) · [Features](#features) · [Help](#help) · QQ **1104450740**
 
-<img src="docs/screenshots/qq-group.png" width="220" alt="Kivio QQ group 1104450740">
+<img src="docs/screenshots/qq-group.png" width="220" alt="ABU Agent QQ group 1104450740">
 
 </div>
 
@@ -26,7 +26,7 @@ Bring your own keys. No account, no proxy, no telemetry. Data stays on disk.
 
 ## ❤️ Sponsor
 
-> Want to appear here? Reach us via [GitHub Issues](https://github.com/abu/kivio/issues) or QQ group **1104450740**.
+> Want to appear here? Reach us via [GitHub Issues](https://github.com/abu/abu-agent-desktop/issues) or QQ group **1104450740**.
 
 <details open>
 <summary>Click to collapse</summary>
@@ -44,11 +44,11 @@ Thanks to <a href="https://api.abuai.chat">abu-api</a> for sponsoring this proje
 
 </details>
 
-## Why Kivio
+## Why ABU Agent
 
-Text on screen, a captured region, and coding CLIs you already installed do not need three apps. Kivio keeps them in one tray process: hotkeys anywhere, your own providers.
+Text on screen, a captured region, and coding CLIs you already installed do not need three apps. ABU Agent keeps them in one tray process: hotkeys anywhere, your own providers.
 
-- **One loop, many hosts** — built-in Agent, research-only Kivio Chat, and local external CLIs (Claude Code, Codex, Cursor, OpenCode, Gemini, Kimi, Pi, Hermes, Grok, DeepSeek Harness) share the same chat UI
+- **One loop, many hosts** — built-in Agent, research-only ABU Agent Chat, and local external CLIs (Claude Code, Codex, Cursor, OpenCode, Gemini, Kimi, Pi, Hermes, Grok, DeepSeek Harness) share the same chat UI
 - **Screen tools** — quick, selection, screenshot, and in-place replace translation; Lens freezes the display, lets you ask and annotate, and can hand the thread back to chat
 - **Bring your own keys** — OpenAI Chat Completions / Responses, Anthropic, Gemini, Grok (xAI Responses). Translator, screenshot, Lens, and each conversation can use a different model
 - **Extensions** — Skills, MCP, knowledge base, sub-agents, plugins, connectors; a right dock with file tree, Git, and a terminal
@@ -70,12 +70,12 @@ Text on screen, a captured region, and coding CLIs you already installed do not 
 
 ## Features
 
-Full history: [Releases](https://github.com/abu/kivio/releases) · current notes: [v2.9.5](docs/releases/v2.9.5.md)
+Full history: [Releases](https://github.com/abu/abu-agent-desktop/releases) · current notes: [v2.9.5](docs/releases/v2.9.5.md)
 
 ### Chat & agent
 
 - Tool loop, sub-agents, Skills, MCP, knowledge base, attachments; one question, many models
-- Three runtimes: Kivio Agent (full tools), Kivio Chat (search / fetch / knowledge base, read-only), external CLI
+- Three runtimes: ABU Agent Agent (full tools), ABU Agent Chat (search / fetch / knowledge base, read-only), external CLI
 - Hand a conversation to Claude Code, Codex, Cursor, OpenCode, Gemini, Kimi, Pi, Hermes, Grok, or DeepSeek Harness if they are installed
 - Import native CLI sessions (pinned to the original CLI and working directory)
 
@@ -110,29 +110,29 @@ Toggles, remappable in Settings.
 - **macOS**: Apple Silicon (`.dmg` is unsigned)
 - **Windows**: Windows 10 / 11 (Edge WebView2; usually already installed)
 
-Get the latest from [Releases](https://github.com/abu/kivio/releases/latest):
+Get the latest from [Releases](https://github.com/abu/abu-agent-desktop/releases/latest):
 
-- macOS: `Kivio.Desktop_*_aarch64.dmg`
-- Windows installer: `Kivio.Desktop_*_x64-setup.exe`
-- Windows portable: `Kivio.Desktop_*_x64-portable.zip`
+- macOS: `ABU Agent.Desktop_*_aarch64.dmg`
+- Windows installer: `ABU Agent.Desktop_*_x64-setup.exe`
+- Windows portable: `ABU Agent.Desktop_*_x64-portable.zip`
 
 The DMG is unsigned. First launch: right-click → Open, or:
 
 ```bash
-xattr -cr "/Applications/Kivio Desktop.app"
+xattr -cr "/Applications/ABU Agent Desktop.app"
 ```
 
 macOS needs **Accessibility** and **Screen Recording**. Then follow the onboarding wizard.
 
 ## Help
 
-- [Changelog](https://github.com/abu/kivio/releases) — downloads and highlights
-- [Issues](https://github.com/abu/kivio/issues)
+- [Changelog](https://github.com/abu/abu-agent-desktop/releases) — downloads and highlights
+- [Issues](https://github.com/abu/abu-agent-desktop/issues)
 - QQ group **1104450740**
 
 ## Quick start
 
-1. Install Kivio and finish onboarding (provider + hotkeys).
+1. Install ABU Agent and finish onboarding (provider + hotkeys).
 2. **Add a provider**: Settings → Providers → Add → pick a preset (or custom) and paste an API key.
 3. **Chat**: `⌘⇧K` / `Ctrl+Shift+K`, pick a model, send. Switch to a local CLI from the runtime picker when you need one.
 4. **Screen**: use a translate hotkey or Lens; grant permissions in system settings.
@@ -161,7 +161,7 @@ If they are installed: Claude Code, Codex, Cursor, OpenCode, Gemini, Kimi, Pi, H
 <details>
 <summary><strong>macOS says the app is damaged / cannot be opened?</strong></summary>
 
-The build is unsigned. Right-click → Open, or run `xattr -cr "/Applications/Kivio Desktop.app"`. Screenshot and replace translation also need Screen Recording.
+The build is unsigned. Right-click → Open, or run `xattr -cr "/Applications/ABU Agent Desktop.app"`. Screenshot and replace translation also need Screen Recording.
 
 </details>
 
@@ -235,7 +235,7 @@ Module map: [CLAUDE.md](CLAUDE.md).
 
 ## Contributing
 
-[Issues](https://github.com/abu/kivio/issues) and PRs are welcome. Before a PR, please run:
+[Issues](https://github.com/abu/abu-agent-desktop/issues) and PRs are welcome. Before a PR, please run:
 
 - `npm run lint`
 - `npm run typecheck`
@@ -245,8 +245,8 @@ Open an issue first for larger features. Tracker conventions: [docs/agents/issue
 
 ## Star History
 
-[![Star History Chart](docs/star-history.svg)](https://github.com/abu/kivio/stargazers)
+[![Star History Chart](docs/star-history.svg)](https://github.com/abu/abu-agent-desktop/stargazers)
 
 ## License
 
-[GPL-3.0-or-later](LICENSE) © ZM
+[GPL-3.0-or-later](LICENSE) © ABU

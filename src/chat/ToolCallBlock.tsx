@@ -121,7 +121,7 @@ function toolRawName(toolCall: ToolCallRecord): string {
 
 /** 文件类工具的目标路径。
  *
- *  claude Code 的内置工具用 `file_path`（NotebookEdit 用 `notebook_path`），Kivio 原生工具
+ *  claude Code 的内置工具用 `file_path`（NotebookEdit 用 `notebook_path`），ABU Agent 原生工具
  *  用 `path`。只读 `path` 的话，即便工具名归一化对上了，claude 的 Read/Write/Edit 依然拿不到
  *  目标 —— 名字和字段名是两处**各自独立**的错配。 */
 function toolPathArgument(args: Record<string, unknown> | null): string {

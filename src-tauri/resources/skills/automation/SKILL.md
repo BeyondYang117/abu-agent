@@ -1,7 +1,7 @@
 ---
 id: automation
 name: automation
-description: 创建/编辑/运行 Kivio 自动化工作流（定时、热键、Agent、通知、HTTP、命令、产出 PDF/Word）。Create, edit, and run Kivio automations. Use when the user asks to 创建自动化, 工作流, 定时任务, gather news on a schedule, or build a graph of triggers and actions. Activate this skill BEFORE calling automation_upsert — do not probe node types with dry_run.
+description: 创建/编辑/运行 ABU Agent 自动化工作流（定时、热键、Agent、通知、HTTP、命令、产出 PDF/Word）。Create, edit, and run ABU Agent automations. Use when the user asks to 创建自动化, 工作流, 定时任务, gather news on a schedule, or build a graph of triggers and actions. Activate this skill BEFORE calling automation_upsert — do not probe node types with dry_run.
 recommended-tools:
   - automation_list
   - automation_get
@@ -12,9 +12,9 @@ recommended-tools:
   - automation_delete
 ---
 
-# Kivio automations
+# ABU Agent automations
 
-Kivio automations are directed graphs: one trigger, then actions and logic, stored as JSON.
+ABU Agent automations are directed graphs: one trigger, then actions and logic, stored as JSON.
 
 **Do this:** activate this skill, `automation_list` once, then `automation_upsert` with a **complete** graph in one call.
 

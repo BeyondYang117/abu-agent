@@ -1,7 +1,7 @@
 ---
 id: docx
 name: docx
-description: Read, summarize, revise, and analyze Word DOC/DOCX attachments saved by Kivio Chat.
+description: Read, summarize, revise, and analyze Word DOC/DOCX attachments saved by ABU Agent Chat.
 recommended-tools:
   - read
   - bash
@@ -13,7 +13,7 @@ Use this skill when the user attaches or references a Word document (`.doc` or `
 
 ## Inputs
 
-Kivio stores each uploaded document as a safe local copy and includes its absolute path in the user message under `Kivio 安全副本路径`. Use that host path with `bash`. You can also process any local Word document discovered via `glob` / `read` (directory listing).
+ABU Agent stores each uploaded document as a safe local copy and includes its absolute path in the user message under `ABU Agent 安全副本路径`. Use that host path with `bash`. You can also process any local Word document discovered via `glob` / `read` (directory listing).
 
 `read` does not parse binary Word files.
 

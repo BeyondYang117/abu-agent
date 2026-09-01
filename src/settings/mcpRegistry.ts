@@ -1,6 +1,6 @@
 // MCP 市场数据层：搜索三家公开注册表（Official / Smithery / Glama），把异构 JSON
 // 归一成统一的 McpRegistryCard，并推导出可直接写入 chatTools.servers 的安装草稿
-// (McpRegistryInstallDraft)。移植自 LiveAgent，适配 Kivio 的 ChatMcpServer 形状：
+// (McpRegistryInstallDraft)。移植自 LiveAgent，适配 ABU Agent 的 ChatMcpServer 形状：
 // transport 只有 'stdio' | 'streamable_http'（http/sse 都映射为 streamable_http），
 // 无 timeoutMs，且带 name/enabledTools/cwd。三家注册表均放行 tauri://localhost 跨域，
 // 故直接用 globalThis.fetch，无需 Rust 代理。
@@ -95,7 +95,7 @@ function baseServer(id: string, name: string): ChatMcpServer {
   }
 }
 
-/** 注册表 transport 提示 → Kivio 支持的 transport（http/sse 统一走 streamable_http）。 */
+/** 注册表 transport 提示 → ABU Agent 支持的 transport（http/sse 统一走 streamable_http）。 */
 function kivioTransport(hint: 'stdio' | 'http' | 'sse'): ChatMcpServer['transport'] {
   return hint === 'stdio' ? 'stdio' : 'streamable_http'
 }

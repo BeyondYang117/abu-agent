@@ -1,7 +1,7 @@
-# Kivio 视觉风格指南（Kivio Design Language）
+# ABU Agent 视觉风格指南（ABU Agent Design Language）
 
-> 适用范围：Kivio 官网及所有对外品牌页面（未来的产品页、发布页、剥离出去的子产品页均沿用此风格）。
-> 来源：v1 版官网（`website/index.html`），确立 Kivio 自己的极简工程美学。
+> 适用范围：ABU Agent 官网及所有对外品牌页面（未来的产品页、发布页、剥离出去的子产品页均沿用此风格）。
+> 来源：v1 版官网（`website/index.html`），确立 ABU Agent 自己的极简工程美学。
 > 本文档是权威来源 —— 新页面直接按此实现，不要凭记忆复刻。
 
 ---
@@ -52,7 +52,7 @@ Google Fonts 引入：`Geist:wght@300;400;500;600;700`、`Geist+Mono:wght@400;50
 **这是品牌最强的识别符号**，用户明确锁定的两处用法：
 
 - **Hero 大标题 "KIVIO"**：`font-size: clamp(3.2rem, 11vw, 8.5rem)`，`line-height: 0.94`，`letter-spacing: 0.02em`，全大写。
-- **产品区标题 "Kivio Desktop"**：`clamp(2.4rem, 5.6vw, 4.6rem)`，`line-height: 0.98`。
+- **产品区标题 "ABU Agent Desktop"**：`clamp(2.4rem, 5.6vw, 4.6rem)`，`line-height: 0.98`。
 
 规则：像素字体**只用于品牌名 / 产品名级别的大标题**（每屏最多一处），永远不用于正文、按钮、导航。它与像素抖动背景在视觉语法上是同一件事 —— "信号里长出来的字"。
 
@@ -140,4 +140,4 @@ KIVIO 五个字母和 tagline 逐字 `<span>` 拆分，`translateY(0.55em) → 0
 2. 像素字体用于正文、按钮、导航。
 3. 卡片阴影、大圆角容器。
 4. 抖动动效改成平滑灰度渐变（灵魂就在黑白二值抖动上）。
-5. 提及已剥离的产品形态（Kivio Code / 终端 CLI / 外部编码代理）—— 网站叙事聚焦 Agentic + GUI。
+5. 提及已剥离的产品形态（ABU Agent Code / 终端 CLI / 外部编码代理）—— 网站叙事聚焦 Agentic + GUI。

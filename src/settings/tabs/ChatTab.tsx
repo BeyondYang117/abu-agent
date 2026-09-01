@@ -55,7 +55,7 @@ interface ChatTabProps {
   onNavigateTab: (tab: SettingsTab) => void
 }
 
-/** AI 客户端（聊天）标签页：共用资料 + Kivio Agent / Kivio Chat 两套设置。 */
+/** AI 客户端（聊天）标签页：共用资料 + ABU Agent Agent / ABU Agent Chat 两套设置。 */
 export function ChatTab({
   settings,
   t,
@@ -104,7 +104,7 @@ export function ChatTab({
         </div>
       </SettingsGroup>
 
-      {/* ─── Kivio Agent ─── */}
+      {/* ─── ABU Agent Agent ─── */}
       <SettingsGroup title={t.kivioAgentSection}>
         {t.kivioAgentSectionHint ? (
           <p className="kv-row-desc mb-2 px-0">{t.kivioAgentSectionHint}</p>
@@ -116,7 +116,7 @@ export function ChatTab({
               <Input
                 className="min-w-0 flex-1"
                 value={chatTools.nativeTools?.workingDirectory ?? ''}
-                placeholder={lang === 'zh' ? '默认：~/Kivio/workspace' : 'Default: ~/Kivio/workspace'}
+                placeholder={lang === 'zh' ? '默认：~/ABU Agent/workspace' : 'Default: ~/ABU Agent/workspace'}
                 onChange={(workingDirectory) => onUpdateNativeTools({ workingDirectory })}
               />
               <Button
@@ -136,7 +136,7 @@ export function ChatTab({
                 size="sm"
                 className="shrink-0"
                 onClick={async () => {
-                  const defaultPath = await join(await homeDir(), 'Kivio', 'workspace')
+                  const defaultPath = await join(await homeDir(), 'ABU Agent', 'workspace')
                   onUpdateNativeTools({ workingDirectory: defaultPath })
                 }}
                 data-tauri-drag-region="false"
@@ -215,7 +215,7 @@ export function ChatTab({
         onNavigateTab={onNavigateTab}
       />
 
-      {/* ─── Kivio Chat ─── */}
+      {/* ─── ABU Agent Chat ─── */}
       <SettingsGroup title={t.kivioChatSection}>
         {t.kivioChatSectionHint ? (
           <p className="kv-row-desc mb-1 px-0">{t.kivioChatSectionHint}</p>
@@ -278,8 +278,8 @@ export function ChatTab({
         </SettingRow>
         <p className="kv-row-desc px-0 pb-1 pt-1">
           {lang === 'zh'
-            ? '以上开关仅影响 Kivio Chat。写文件 / Shell / Subagent 始终只在 Kivio Agent 中可用。'
-            : 'These toggles only affect Kivio Chat. Write / shell / sub-agents stay Agent-only.'}
+            ? '以上开关仅影响 ABU Agent Chat。写文件 / Shell / Subagent 始终只在 ABU Agent 中可用。'
+            : 'These toggles only affect ABU Agent Chat. Write / shell / sub-agents stay Agent-only.'}
         </p>
       </SettingsGroup>
     </>
