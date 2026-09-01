@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ABU Agent Settings with ABU API",
+  "description": "Settings schema for ABU Agent Desktop with ABU API integration",
+  "type": "object",
+  "properties": {
+    "abu_api_base_url": {
+      "type": "string",
+      "format": "uri",
+      "default": "https://api.abuai.com",
+      "description": "ABU API 服务器地址（支持自建实例）"
+    },
+    "abu_api_session_token": {
+      "type": ["string", "null"],
+      "description": "ABU API 会话令牌（登录后自动设置）"
+    },
+    "abu_api_device_id": {
+      "type": ["string", "null"],
+      "description": "当前设备 ID（首次注册后保留）"
+    },
+    "runtime_mode": {
+      "type": "string",
+      "enum": ["cloud", "local"],
+      "default": "local",
+      "description": "运行模式：cloud（使用 ABU API 账户）或 local（本地配置 Provider）"
+    },
+    "abu_api_default_soft_cap": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 500,
+      "description": "默认软上限（预警阈值，单位：分）"
+    },
+    "abu_api_default_hard_cap": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 2000,
+      "description": "默认硬上限（强制停止阈值，单位：分）"
+    },
+    "abu_api_heartbeat_interval": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 600,
+      "default": 300,
+      "description": "心跳间隔（秒）"
+    },
+    "abu_api_usage_poll_interval": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "default": 5,
+      "description": "用量轮询间隔（秒）"
+    }
+  }
+}
