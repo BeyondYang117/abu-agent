@@ -1,5 +1,7 @@
 /* 导入 TailwindCSS v4 */
 @import "tailwindcss";
+/* ABU API 集成样式（登录、设备管理、配额提示等） */
+@import "./styles/abuApi.css";
 /* 导入 TailwindCSS 排版插件 */
 @plugin "@tailwindcss/typography";
 

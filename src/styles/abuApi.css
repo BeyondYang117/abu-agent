@@ -1,4 +1,15 @@
-/* ABU API 集成样式 */
+/* ABU API 集成样式
+ *
+ * 变量映射（见 index.css :root）：
+ *   背景：--bg / --bg-input-subtle / --bg-hover
+ *   文字：--text / --text-muted / --text-faint
+ *   强调：--accent / --accent-soft
+ *   边框：--border / --border-strong
+ *
+ * 不要在此文件定义已在 index.css 中定义的 onboarding-* 类（如
+ * .onboarding-field、.onboarding-field-label、.onboarding-panel-note），
+ * 以免两处定义在 import 顺序上冲突。
+ */
 
 /* ==================== 登录步骤 ==================== */
 
@@ -16,7 +27,7 @@
   flex-direction: column;
   gap: 1.5rem;
   padding: 2rem;
-  background: var(--surface-1);
+  background: var(--bg-input-subtle);
   border-radius: 12px;
   border: 1px solid var(--border);
 }
@@ -31,7 +42,7 @@
 .onboarding-login-status-text {
   font-size: 0.9375rem;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .onboarding-login-code-block {
@@ -40,7 +51,7 @@
   gap: 0.5rem;
   align-items: center;
   padding: 1.5rem;
-  background: var(--surface-0);
+  background: var(--bg);
   border-radius: 8px;
   border: 1px solid var(--border);
 }
@@ -50,9 +61,9 @@
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 0.25em;
-  color: var(--text-primary);
+  color: var(--text);
   padding: 0.75rem 1.5rem;
-  background: var(--surface-2);
+  background: var(--bg-hover);
   border-radius: 6px;
   user-select: all;
 }
@@ -76,7 +87,7 @@
 }
 
 .onboarding-link:hover:not(:disabled) {
-  background: var(--accent-alpha-10);
+  background: var(--accent-soft);
   text-decoration: underline;
 }
 
@@ -101,26 +112,7 @@
   border-color: rgba(239, 68, 68, 0.3);
 }
 
-.onboarding-panel-note {
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.onboarding-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.onboarding-field-label {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-/* ==================== 设备管理 ==================== */
+/* ==================== 设备管理（Phase 4 预留）==================== */
 
 .settings-devices {
   display: flex;
@@ -133,14 +125,14 @@
   align-items: center;
   justify-content: space-between;
   padding: 1rem;
-  background: var(--surface-1);
+  background: var(--bg-input-subtle);
   border-radius: 8px;
   border: 1px solid var(--border);
   transition: border-color 0.15s;
 }
 
 .settings-device-card:hover {
-  border-color: var(--border-hover);
+  border-color: var(--border-strong);
 }
 
 .settings-device-info {
@@ -153,17 +145,17 @@
 .settings-device-name {
   font-size: 0.9375rem;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .settings-device-meta {
   font-size: 0.8125rem;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .settings-device-time {
   font-size: 0.75rem;
-  color: var(--text-tertiary);
+  color: var(--text-faint);
 }
 
 .settings-device-current {
@@ -171,18 +163,18 @@
   font-weight: 500;
   color: var(--accent);
   padding: 0.375rem 0.75rem;
-  background: var(--accent-alpha-10);
+  background: var(--accent-soft);
   border-radius: 999px;
 }
 
-/* ==================== 账户信息 ==================== */
+/* ==================== 账户信息（Phase 4 预留）==================== */
 
 .settings-account-card {
   display: flex;
   align-items: center;
   gap: 1rem;
   padding: 1rem;
-  background: var(--surface-1);
+  background: var(--bg-input-subtle);
   border-radius: 8px;
   border: 1px solid var(--border);
   margin-bottom: 0.75rem;
@@ -212,21 +204,21 @@
 .settings-account-name {
   font-size: 0.9375rem;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 
 .settings-account-email {
   font-size: 0.8125rem;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .settings-account-quota {
   font-size: 0.75rem;
-  color: var(--text-tertiary);
+  color: var(--text-faint);
   margin-top: 0.125rem;
 }
 
-/* ==================== 聊天配额提示 ==================== */
+/* ==================== 聊天配额提示（Phase 5 预留）==================== */
 
 .chat-quota-warning {
   display: flex;
@@ -273,9 +265,9 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.75rem;
-  color: var(--text-tertiary);
+  color: var(--text-faint);
   padding: 0.375rem 0.75rem;
-  background: var(--surface-1);
+  background: var(--bg-input-subtle);
   border-radius: 6px;
 }
 
@@ -298,7 +290,7 @@
   font-weight: 500;
   padding: 0.25rem 0.625rem;
   border-radius: 999px;
-  background: var(--surface-1);
+  background: var(--bg-input-subtle);
   border: 1px solid var(--border);
 }
 
