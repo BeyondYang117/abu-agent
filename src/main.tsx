@@ -5,6 +5,7 @@ import './index.css'
 import 'streamdown/styles.css'
 import { abuApiAuthStore } from './api/abuApiAuth'
 import { api } from './api/tauri'
+import { initAbuApiClient, DEFAULT_ABU_API_BASE_URL } from './api/abuApi'
 
 // 屏蔽 WebView 原生右键菜单（Back/Reload/Inspect）
 document.addEventListener('contextmenu', (e) => e.preventDefault())
@@ -18,6 +19,11 @@ api
       deviceId: config.device_id,
       baseUrl: config.base_url,
     })
+
+    // 如果已登录，初始化 ABU API 客户端
+    if (config.session_token && config.base_url) {
+      initAbuApiClient(config.base_url, config.session_token)
+    }
   })
   .catch((err: unknown) => {
     console.warn('Failed to load ABU API config:', err)

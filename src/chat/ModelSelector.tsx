@@ -239,18 +239,32 @@ function ModelSelectorBase({
               <div className="px-4 py-6 text-center text-sm text-neutral-500">
                 {cloudError ? (
                   <>
-                    <div>{t.chatNoModels}</div>
+                    <div className="font-medium text-neutral-700 dark:text-neutral-300">{t.chatNoModels}</div>
                     <div className="mt-2 text-xs text-red-500">{cloudError}</div>
+                    <div className="mt-3 space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
+                      <p>{t.chatNoModelsHint || '请检查：'}</p>
+                      <ul className="list-inside list-disc space-y-1 text-left">
+                        <li>{t.chatNoModelsHint1 || '1. 是否已完成 ABU API 账户登录'}</li>
+                        <li>{t.chatNoModelsHint2 || '2. 网络连接是否正常'}</li>
+                        <li>{t.chatNoModelsHint3 || '3. API 配置是否正确（设置 → 查家）'}</li>
+                      </ul>
+                    </div>
                     <button
                       type="button"
                       onClick={() => void loadSettings()}
-                      className="mt-3 rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                      className="mt-4 rounded-md bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                     >
-                      {t.onboardingRetry || 'Retry'}
+                      {t.onboardingRetry || '重试'}
                     </button>
                   </>
                 ) : (
-                  t.chatNoModels
+                  <>
+                    <div className="font-medium text-neutral-700 dark:text-neutral-300">{t.chatNoModels}</div>
+                    <div className="mt-3 space-y-2 text-xs text-neutral-600 dark:text-neutral-400">
+                      <p>{t.chatNoModelsConfigHint || '请先配置模型提供商：'}</p>
+                      <p className="text-indigo-500">{t.chatNoModelsConfigPath || '设置 → 查家 → 添加提供商'}</p>
+                    </div>
+                  </>
                 )}
               </div>
             )}

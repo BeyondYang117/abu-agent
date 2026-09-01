@@ -110,7 +110,7 @@ export const abuApiAuthActions = {
 // 完成登录流程（在 Onboarding 中调用）
 export async function completeLogin(sessionToken: string): Promise<void> {
   const { api } = await import('./tauri')
-  const { DEFAULT_ABU_API_BASE_URL } = await import('./abuApi')
+  const { DEFAULT_ABU_API_BASE_URL, initAbuApiClient } = await import('./abuApi')
   const deviceId = await api.getDeviceFingerprint()
   const baseUrl = abuApiAuthStore.getState().baseUrl || DEFAULT_ABU_API_BASE_URL
 
@@ -121,6 +121,9 @@ export async function completeLogin(sessionToken: string): Promise<void> {
     device_id: deviceId,
     runtime_mode: 'cloud',
   })
+
+  // 初始化 ABU API 客户端
+  initAbuApiClient(baseUrl, sessionToken)
 
   // 更新内存状态
   abuApiAuthStore.login(sessionToken, deviceId, baseUrl)

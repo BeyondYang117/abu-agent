@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { ExternalLink, Loader2 } from 'lucide-react'
+import { ExternalLink, Loader2, Copy, Check } from 'lucide-react'
 import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
 import { AbuApiClient } from '../../api/abuApi'
@@ -33,8 +33,23 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
+  // Copy state
+  const [copied, setCopied] = useState(false)
+
   // 创建临时客户端（登录前不需要 session token）
   const client = new AbuApiClient(abuApiBaseUrl)
+
+  // 复制验证码
+  const copyCode = useCallback(async () => {
+    if (!deviceFlow) return
+    try {
+      await navigator.clipboard.writeText(deviceFlow.userCode)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }, [deviceFlow])
 
   // 开始 Device Code Flow
   const startDeviceFlow = useCallback(async () => {
@@ -192,7 +207,28 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 <p className="text-sm text-neutral-600 dark:text-neutral-400">
                   {t.onboardingLoginCodeLabel || '验证码：'}
                 </p>
-                <div className="onboarding-login-code">{deviceFlow.userCode}</div>
+                <div className="flex items-center gap-2 justify-center">
+                  <div className="onboarding-login-code">{deviceFlow.userCode}</div>
+                  <button
+                    type="button"
+                    onClick={copyCode}
+                    className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                    data-tauri-drag-region="false"
+                    title={copied ? (t.copied || '已复制') : (t.copy || '复制')}
+                  >
+                    {copied ? (
+                      <>
+                        <Check size={16} className="text-green-600 dark:text-green-400" />
+                        <span>{t.copied || '已复制'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={16} />
+                        <span>{t.copy || '复制'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
                 <p className="text-xs text-neutral-500 dark:text-neutral-500">
                   {t.onboardingLoginCodeHint ||
                     '如果浏览器未自动填入验证码，请手动输入上方代码'}

@@ -738,21 +738,27 @@ export function WebSearchPanel({ t, lang, webSearch, onChange }: WebSearchPanelP
           <SettingsGroup title={t.webSearchProviderSection}>
             {selected.keyField && (
               <SettingRow label={t.lensWebSearchApiKey} stack>
-                <div className="w-full space-y-1">
+                <div className="w-full space-y-2">
                   <ApiKeyField
                     value={keyValue}
                     placeholder={selected.keyPlaceholder || 'API key'}
                     onChange={(value) => onChange({ [selected.keyField!]: value } as Partial<WebSearchConfig>)}
                   />
                   {selected.apiKeyUrl && (
-                    <button
-                      type="button"
-                      onClick={() => void api.openExternal(selected.apiKeyUrl!)}
-                      className="inline-flex items-center text-[12px] text-indigo-500 hover:underline dark:text-indigo-300"
-                      data-tauri-drag-region="false"
-                    >
-                      {t.webSearchGetKey} ↗
-                    </button>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void api.openExternal(selected.apiKeyUrl!)}
+                        className="inline-flex items-center gap-1 text-[12px] text-indigo-500 hover:underline dark:text-indigo-300"
+                        data-tauri-drag-region="false"
+                      >
+                        <ExternalLink size={12} />
+                        {t.webSearchGetKey}
+                      </button>
+                      <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                        {t.webSearchApiKeyHint || '请先访问上方链接获取 API Key，填写后即可在下方测试搜索功能'}
+                      </p>
+                    </div>
                   )}
                 </div>
               </SettingRow>
