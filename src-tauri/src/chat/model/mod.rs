@@ -3,12 +3,16 @@
 //! Runtime code should exchange `GenerateRequest`, `GenerateOutput`, and `StreamPart`.
 //! Provider-specific JSON belongs inside this module's adapters.
 
+pub mod abu_api_provider;
 pub mod anthropic;
 pub mod gemini;
 pub mod openai;
 pub mod responses;
 pub mod types;
 
+pub use abu_api_provider::{
+    check_task_quota, create_abu_api_virtual_provider, send_task_heartbeat, TaskQuotaStatus,
+};
 pub use anthropic::AnthropicMessagesProvider;
 pub use gemini::GeminiProvider;
 pub use openai::OpenAiChatProvider;

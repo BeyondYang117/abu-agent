@@ -38,6 +38,7 @@ resources/python-sandbox/
 src-tauri/binaries/
 src-tauri/swift/kivio-ai-helper/.build/
 src-tauri/swift/kivio-ocr-helper/.build/
+src-tauri/swift/abu-agent-ocr-helper/.build/
 
 .superpowers/
 
