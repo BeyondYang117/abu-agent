@@ -1691,6 +1691,24 @@ impl Settings {
         self.providers.iter().find(|p| p.id == id)
     }
 
+    /// 是否处于云端模式。`runtime_mode` 在盘上是字符串（前端直接写 `"cloud"` /
+    /// `"local"`），这里集中做一次容错比较，避免各调用点各写一遍 `== "cloud"`
+    /// 而在大小写 / 空格上分叉。
+    pub fn is_cloud_runtime(&self) -> bool {
+        self.runtime_mode.trim().eq_ignore_ascii_case("cloud")
+    }
+
+    /// 生效的 ABU API 根地址（已去掉尾部 `/`）。缺省或空串回落到
+    /// `DEFAULT_ABU_API_BASE_URL`。
+    pub fn abu_api_base_url_or_default(&self) -> &str {
+        self.abu_api_base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(DEFAULT_ABU_API_BASE_URL)
+            .trim_end_matches('/')
+    }
+
     pub fn effective_chat_model(&self) -> (String, String) {
         if self.default_models.chat.is_configured() {
             return (

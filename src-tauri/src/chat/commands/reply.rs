@@ -151,16 +151,33 @@ pub(super) async fn complete_assistant_reply_inner(
     let resolved_model = arm
         .map(|a| a.model.clone())
         .unwrap_or_else(|| conversation.model.clone());
-    let provider = settings
-        .get_provider(&resolved_provider_id)
-        .ok_or_else(|| "Chat provider not found".to_string())?
-        .clone();
-    if provider.api_keys.is_empty() {
-        return Err(format_chat_missing_api_key_error(&provider.name));
-    }
+    // 模型名两种模式都必需：Cloud 模式下 relay 按**模型名**选渠道
+    // （`middleware.Distribute()`），空模型连 task 都不该建。
     if resolved_model.trim().is_empty() {
         return Err(chat_missing_model_error());
     }
+    // Cloud 模式：向 abu-api 申请 Session → Task → Relay Session，用返回的 relay_key
+    // 造一个指向中转端点的虚拟供应商，替代本机配置的 provider。守卫在函数退出时
+    // 停心跳并收尾 Task（默认终态 Failed，成功/取消路径显式标记）。
+    let abu_task_guard = if settings.is_cloud_runtime() {
+        let context = crate::chat::abu_api_task::prepare_conversation(&settings).await?;
+        Some(crate::chat::abu_api_task::AbuApiTaskGuard::new(context))
+    } else {
+        None
+    };
+    let provider = match abu_task_guard.as_ref() {
+        Some(guard) => guard.virtual_provider(),
+        None => {
+            let provider = settings
+                .get_provider(&resolved_provider_id)
+                .ok_or_else(|| "Chat provider not found".to_string())?
+                .clone();
+            if provider.api_keys.is_empty() {
+                return Err(format_chat_missing_api_key_error(&provider.name));
+            }
+            provider
+        }
+    };
 
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let language = crate::settings::resolve_chat_language(&settings);
@@ -220,7 +237,7 @@ pub(super) async fn complete_assistant_reply_inner(
         });
     }
     if direct_image_model {
-        return complete_direct_image_generation_reply(
+        let image_outcome = complete_direct_image_generation_reply(
             app,
             state,
             &settings,
@@ -236,8 +253,16 @@ pub(super) async fn complete_assistant_reply_inner(
             retry_attempts,
             entry,
         )
-        .await
-        .map(|_| ArmReplyOutcome {
+        .await;
+        // 出图是尾调用、可以正常成功：守卫默认 Failed，这里必须显式标记，
+        // 否则一次成功的云端出图会被记成失败 task。
+        if let Some(guard) = abu_task_guard.as_ref() {
+            match &image_outcome {
+                Ok(_) => guard.mark_succeeded(),
+                Err(error) => guard.mark_from_error(error),
+            }
+        }
+        return image_outcome.map(|_| ArmReplyOutcome {
             message: None,
             run_id: None,
             error: None,
@@ -289,6 +314,9 @@ pub(super) async fn complete_assistant_reply_inner(
                 );
                 emit_chat_tool_record(app, &run_id, &record);
                 auxiliary_tool_records.push(record);
+                if let Some(guard) = abu_task_guard.as_ref() {
+                    guard.mark_cancelled();
+                }
                 if arm.is_some() {
                     protocol_guard.defer_terminal();
                     return Ok(ArmReplyOutcome {
@@ -700,6 +728,10 @@ pub(super) async fn complete_assistant_reply_inner(
     let result = match result {
         Ok(result) => result,
         Err(error) => {
+            // 取消与失败要分开记：用户主动停不该在服务端留下一条 failed task。
+            if let Some(guard) = abu_task_guard.as_ref() {
+                guard.mark_from_error(&error);
+            }
             if arm.is_some() {
                 protocol_guard.defer_terminal();
                 return Ok(ArmReplyOutcome {
@@ -740,6 +772,11 @@ pub(super) async fn complete_assistant_reply_inner(
             return Err(error);
         }
     };
+    // Agent loop 返回 Ok 即模型调用已完成、token 已计入服务端账单。之后的落盘 /
+    // 刷新失败是本地问题，不该把这条 task 记成 failed（用户已经被计费了）。
+    if let Some(guard) = abu_task_guard.as_ref() {
+        guard.mark_succeeded();
+    }
 
     let refreshed = crate::chat::repository::repository(app)
         .get(app, &conversation.id)
