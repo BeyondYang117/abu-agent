@@ -224,6 +224,9 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     try {
       await completeLogin(sessionToken)
       setLoginCompleted(true)
+      // 重新加载 settings 以获取更新后的 runtime_mode
+      const reloaded = await getSettingsCached()
+      setSettings(reloaded)
       // 自动进入下一步
       goNext()
     } catch (err) {
@@ -270,13 +273,16 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
       <div className="onboarding-main">
         <div className="onboarding-topbar" data-tauri-drag-region>
-          <Button
-            variant="ghost"
-            onClick={() => setSkipConfirmOpen(true)}
-            data-tauri-drag-region="false"
-          >
-            {t.onboardingSkip}
-          </Button>
+          {/* Cloud 模式下隐藏"跳过引导"：用户已通过 ABU API 授权登录，应完成完整引导流程 */}
+          {settings.runtimeMode?.trim().toLowerCase() !== 'cloud' && (
+            <Button
+              variant="ghost"
+              onClick={() => setSkipConfirmOpen(true)}
+              data-tauri-drag-region="false"
+            >
+              {t.onboardingSkip}
+            </Button>
+          )}
         </div>
 
         <div className="onboarding-body kv-scroll" data-tauri-drag-region="false">
