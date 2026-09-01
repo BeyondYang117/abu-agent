@@ -7,7 +7,7 @@ import { isProviderEnabled } from '../settings/utils'
 import { ModelIcon } from './ModelIcon'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import { chatTitlebarPillButtonClass } from './platform'
-import { abuApi, ABU_API_PROVIDER_ID } from '../api/abuApi'
+import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -43,10 +43,10 @@ function ModelSelectorBase({
       const isCloud = settings.runtimeMode?.trim().toLowerCase() === 'cloud'
 
       if (isCloud) {
-        // Cloud 模式：从 abuApi.listModels() 获取模型列表
+        // Cloud 模式：从 listModels() 获取模型列表
         setCloudError(null)
         try {
-          const response = await abuApi.listModels()
+          const response = await listModels()
           setCloudModels(response.models)
           // 构造虚拟 Provider（用于 UI 渲染，实际调用时 Rust 侧会替换）
           const virtualProvider: ModelProvider = {

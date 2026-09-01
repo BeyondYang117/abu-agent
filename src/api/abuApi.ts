@@ -358,6 +358,10 @@ export function isAbuApiInitialized(): boolean {
 
 // ==================== 便捷导出函数 ====================
 
+export async function listModels(): Promise<AgentModelsResponse> {
+  return getAbuApiClient().listModels()
+}
+
 export async function listDevices(): Promise<AgentDevice[]> {
   return getAbuApiClient().listDevices()
 }
