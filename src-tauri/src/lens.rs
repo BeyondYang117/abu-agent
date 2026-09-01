@@ -102,13 +102,13 @@ const KIVIO_SELECTABLE_MIN_HEIGHT: f64 = 360.0;
 fn is_kivio_owner(owner: &str) -> bool {
     matches!(
         owner,
-        "Kivio Desktop" | "Kivio" | "kivio" | "KeyLingo" | "keylingo"
+        "ABU Agent" | "Kivio Desktop" | "Kivio" | "kivio" | "KeyLingo" | "keylingo"
     )
 }
 
 #[cfg(target_os = "macos")]
 fn is_kivio_primary_window(title: &str, width: f64, height: f64) -> bool {
-    matches!(title.trim(), "Kivio Desktop" | "Kivio" | "KeyLingo")
+    matches!(title.trim(), "ABU Agent" | "Kivio Desktop" | "Kivio" | "KeyLingo")
         && width >= KIVIO_SELECTABLE_MIN_WIDTH
         && height >= KIVIO_SELECTABLE_MIN_HEIGHT
 }

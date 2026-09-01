@@ -144,8 +144,8 @@ macOS needs **Accessibility** and **Screen Recording**. Then follow the onboardi
 
 No account. Keys live in local `settings.json`. Conversations, knowledge bases, and notes live under the app data directory:
 
-- Windows: `%APPDATA%\com.zmair.kivio`
-- macOS: `~/Library/Application Support/com.zmair.kivio`
+- Windows: `%APPDATA%\com.abu.agent`
+- macOS: `~/Library/Application Support/com.abu.agent`
 
 No telemetry. Requests go only to the providers you configure.
 

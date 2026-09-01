@@ -2876,7 +2876,10 @@ pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), Stri
 }
 
 /**
- * 一次性数据迁移：v2.4.5 把 identifier 从 com.zmair.keylingo 改为 com.zmair.kivio。
+ * 一次性数据迁移：identifier 变更历史
+ * - v2.4.5: com.zmair.keylingo → com.zmair.kivio
+ * - v2.9.6: com.zmair.kivio → com.abu.agent
+ *
  * Tauri 的 app_data_dir 直接由 identifier 派生，改名后新目录是空的，
  * 老用户升级会丢失 settings.json / lens-history。这里在新目录还没数据时，
  * 把同级的旧目录整个递归拷贝过来。
@@ -2899,11 +2902,17 @@ fn migrate_legacy_app_data(app: &AppHandle) {
     let Some(parent) = new_dir.parent() else {
         return;
     };
-    // 旧 identifier 的目录名就是 identifier 本身（macOS / Windows / Linux 都一致）
-    let legacy_dir = parent.join("com.zmair.keylingo");
-    if !legacy_dir.is_dir() {
+
+    // 按优先级尝试迁移（最新的旧版本优先）
+    let legacy_identifiers = ["com.zmair.kivio", "com.zmair.keylingo"];
+    let legacy_dir = legacy_identifiers
+        .iter()
+        .map(|id| parent.join(id))
+        .find(|dir| dir.is_dir());
+
+    let Some(legacy_dir) = legacy_dir else {
         return;
-    }
+    };
 
     if let Err(err) = std::fs::create_dir_all(&new_dir) {
         eprintln!("[migrate-app-data] mkdir new dir failed: {err}");

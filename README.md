@@ -141,8 +141,8 @@ macOS 需要**辅助功能**与**屏幕录制**权限。启动后按引导填供
 
 不需要账号。Key 写在本机 `settings.json` 里，对话、知识库、笔记都在应用数据目录：
 
-- Windows：`%APPDATA%\com.zmair.kivio`
-- macOS：`~/Library/Application Support/com.zmair.kivio`
+- Windows：`%APPDATA%\com.abu.agent`
+- macOS：`~/Library/Application Support/com.abu.agent`
 
 无遥测，请求只发往你配置的供应商。
 

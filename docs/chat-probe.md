@@ -8,7 +8,7 @@ release 构建里整套 probe 被 `#[cfg(debug_assertions)]` 编译掉，不存�
 
 1. `npm run dev` 起 app（debug）。启动日志会打印：
    `[chat-probe] watching <app_data>/chat_probe/request.json (debug-only test channel)`
-2. 写请求文件 `<app_data>/chat_probe/request.json`（Windows：`%APPDATA%\com.zmair.kivio\chat_probe\request.json`）：
+2. 写请求文件 `<app_data>/chat_probe/request.json`（Windows：`%APPDATA%\com.abu.agent\chat_probe\request.json`）：
    ```json
    {
      "id": "my-test-1",
