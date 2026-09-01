@@ -213,6 +213,23 @@ export class AbuApiClient {
     })
   }
 
+  // ==================== 用户信息 ====================
+
+  /**
+   * 获取当前登录用户的信息
+   */
+  async getUserInfo(): Promise<{
+    id: number
+    username: string
+    display_name?: string
+    email?: string
+    quota: number
+    used_quota: number
+    group: string
+  }> {
+    return this.request('/api/user/self')
+  }
+
   // ==================== 模型与会话 ====================
 
   /**
