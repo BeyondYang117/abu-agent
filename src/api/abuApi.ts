@@ -5,6 +5,12 @@
  * 设备管理、模型列表和中转请求接口。
  */
 
+/**
+ * ABU API 生产环境地址。与 Rust 侧
+ * `settings_abu_api::DEFAULT_ABU_API_BASE_URL` 保持一致。
+ */
+export const DEFAULT_ABU_API_BASE_URL = 'https://api.abuai.chat'
+
 export interface DeviceAuthResponse {
   device_code: string
   user_code: string

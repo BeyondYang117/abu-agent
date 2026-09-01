@@ -47,6 +47,10 @@ impl Default for RuntimeMode {
 
 /// ABU API 相关的辅助函数
 
+/// ABU API 生产环境地址。未在设置里显式配置时的默认值，
+/// 前端 `abuApiAuth.ts` / `OnboardingShell.tsx` 的兜底值必须与此保持一致。
+pub const DEFAULT_ABU_API_BASE_URL: &str = "https://api.abuai.chat";
+
 /// 检查是否配置了 ABU API
 pub fn has_abu_api_config(settings: &Settings) -> bool {
     settings.abu_api_session_token.is_some() && settings.abu_api_device_id.is_some()
@@ -57,7 +61,7 @@ pub fn get_abu_api_base_url(settings: &Settings) -> String {
     settings
         .abu_api_base_url
         .clone()
-        .unwrap_or_else(|| "https://api.abuai.com".to_string())
+        .unwrap_or_else(|| DEFAULT_ABU_API_BASE_URL.to_string())
 }
 
 /// 清除 ABU API 会话信息（保留 device_id）
@@ -105,7 +109,7 @@ mod tests {
     #[test]
     fn test_get_abu_api_base_url() {
         let mut settings = Settings::default();
-        assert_eq!(get_abu_api_base_url(&settings), "https://api.abuai.com");
+        assert_eq!(get_abu_api_base_url(&settings), "https://api.abuai.chat");
 
         settings.abu_api_base_url = Some("https://custom.api.com".to_string());
         assert_eq!(get_abu_api_base_url(&settings), "https://custom.api.com");

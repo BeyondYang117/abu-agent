@@ -110,8 +110,9 @@ export const abuApiAuthActions = {
 // 完成登录流程（在 Onboarding 中调用）
 export async function completeLogin(sessionToken: string): Promise<void> {
   const { api } = await import('./tauri')
+  const { DEFAULT_ABU_API_BASE_URL } = await import('./abuApi')
   const deviceId = await api.getDeviceFingerprint()
-  const baseUrl = abuApiAuthStore.getState().baseUrl || 'https://api.abuai.com'
+  const baseUrl = abuApiAuthStore.getState().baseUrl || DEFAULT_ABU_API_BASE_URL
 
   // 保存到 settings
   await api.saveAbuApiConfig({

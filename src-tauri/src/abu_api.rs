@@ -21,9 +21,18 @@ pub struct DeviceRegistration {
     pub capabilities: Option<String>,
 }
 
-/// 获取设备指纹（稳定唯一标识符）
+/// 获取设备指纹（稳定唯一标识符）。
+///
+/// 薄封装：真正的计算在 `compute_device_fingerprint()` 里，
+/// 那是个不依赖 `AppHandle` 的纯函数，便于单测直接调用。
 #[command]
-pub fn get_device_fingerprint(app: AppHandle) -> Result<String, String> {
+pub fn get_device_fingerprint(_app: AppHandle) -> Result<String, String> {
+    Ok(compute_device_fingerprint())
+}
+
+/// 组合机器 ID / 主机名 / 用户名算出 16 位十六进制指纹。
+/// 同一台机器上多次调用必须稳定——设备注册靠它去重。
+pub fn compute_device_fingerprint() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -95,7 +104,7 @@ pub fn get_device_fingerprint(app: AppHandle) -> Result<String, String> {
     }
 
     let hash = hasher.finish();
-    Ok(format!("{:016x}", hash))
+    format!("{:016x}", hash)
 }
 
 /// 获取主机名
@@ -177,7 +186,7 @@ pub async fn load_abu_api_config(app: AppHandle) -> Result<AbuApiConfig, String>
     Ok(AbuApiConfig {
         base_url: settings
             .abu_api_base_url
-            .unwrap_or_else(|| "https://api.abuai.com".to_string()),
+            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string()),
         session_token: settings.abu_api_session_token,
         device_id: settings.abu_api_device_id,
         runtime_mode: settings.runtime_mode,
@@ -206,15 +215,16 @@ mod tests {
 
     #[test]
     fn test_device_fingerprint_stable() {
-        // 同一台机器多次调用应返回相同指纹
-        // 注意：这个测试在 CI 环境中可能不稳定，仅作本地验证
-        let fp1 = get_device_fingerprint(/* mock app handle */).ok();
-        let fp2 = get_device_fingerprint(/* mock app handle */).ok();
+        // 同一台机器多次调用必须返回相同指纹（设备注册靠它去重）。
+        let fp1 = compute_device_fingerprint();
+        let fp2 = compute_device_fingerprint();
 
-        if let (Some(f1), Some(f2)) = (fp1, fp2) {
-            assert_eq!(f1, f2, "Device fingerprint should be stable");
-            assert_eq!(f1.len(), 16, "Fingerprint should be 16 hex chars");
-        }
+        assert_eq!(fp1, fp2, "Device fingerprint should be stable");
+        assert_eq!(fp1.len(), 16, "Fingerprint should be 16 hex chars");
+        assert!(
+            fp1.chars().all(|c| c.is_ascii_hexdigit()),
+            "Fingerprint should be lowercase hex, got: {fp1}"
+        );
     }
 
     #[test]

@@ -3137,6 +3137,10 @@ fn default_runtime_mode() -> String {
     "local".to_string()
 }
 
+/// ABU API 生产环境地址。`abu_api_base_url` 缺省时的兜底值。
+/// 前端同名常量在 `src/api/abuApi.ts`，两边必须一致。
+pub const DEFAULT_ABU_API_BASE_URL: &str = "https://api.abuai.chat";
+
 fn clamp_retry_attempts(value: u8) -> u8 {
     value.clamp(1, 8)
 }

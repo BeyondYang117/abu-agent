@@ -10,6 +10,7 @@ import { canCompleteOnboarding, validateProviderStep } from './validation'
 import { DoneStep } from './steps/DoneStep'
 import { HotkeyStep } from './steps/HotkeyStep'
 import { LoginStep } from './steps/LoginStep'
+import { DEFAULT_ABU_API_BASE_URL } from '../api/abuApi'
 import { ProviderStep } from './steps/ProviderStep'
 import { WebSearchStep } from './steps/WebSearchStep'
 import { WelcomeStep } from './steps/WelcomeStep'
@@ -281,7 +282,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
           {stepId === 'login' ? (
             <LoginStep
               t={t}
-              abuApiBaseUrl={settings?.abu_api_base_url || 'https://api.abuai.com'}
+              abuApiBaseUrl={settings?.abu_api_base_url || DEFAULT_ABU_API_BASE_URL}
               onLoginSuccess={handleLoginSuccess}
             />
           ) : null}

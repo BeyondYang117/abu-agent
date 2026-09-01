@@ -7,7 +7,7 @@
     "abu_api_base_url": {
       "type": "string",
       "format": "uri",
-      "default": "https://api.abuai.com",
+      "default": "https://api.abuai.chat",
       "description": "ABU API 服务器地址（支持自建实例）"
     },
     "abu_api_session_token": {

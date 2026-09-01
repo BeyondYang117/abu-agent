@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { ExternalLink, Loader2 } from 'lucide-react'
 import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
-import { getAbuApiClient } from '../../api/abuApi'
+import { AbuApiClient } from '../../api/abuApi'
 import { api } from '../../api/tauri'
 
 type LoginStepProps = {
@@ -33,7 +33,8 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
-  const client = getAbuApiClient()
+  // 创建临时客户端（登录前不需要 session token）
+  const client = new AbuApiClient(abuApiBaseUrl)
 
   // 开始 Device Code Flow
   const startDeviceFlow = useCallback(async () => {
