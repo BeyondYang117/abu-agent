@@ -739,7 +739,7 @@ mod tests {
     }
 
     fn tmp_db() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("kivio-store-test-{}.db", uuid::Uuid::new_v4()))
+        std::env::temp_dir().join(format!("abu-agent-store-test-{}.db", uuid::Uuid::new_v4()))
     }
 
     fn mk_chunk(id: &str, text: &str, emb: Vec<f32>) -> KnowledgeChunk {

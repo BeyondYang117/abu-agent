@@ -23,11 +23,11 @@ export type ChatWindowGeometry = {
   y?: number
 }
 
-const CHAT_LAST_ROUTE_KEY = 'kivio-chat-last-route'
-const CHAT_SIDEBAR_COLLAPSED_KEY = 'kivio-chat-sidebar-collapsed'
-const CHAT_WINDOW_GEOMETRY_KEY = 'kivio-chat-window-geometry'
+const CHAT_LAST_ROUTE_KEY = 'abu-agent-chat-last-route'
+const CHAT_SIDEBAR_COLLAPSED_KEY = 'abu-agent-chat-sidebar-collapsed'
+const CHAT_WINDOW_GEOMETRY_KEY = 'abu-agent-chat-window-geometry'
 /** @deprecated 旧版仅持久化尺寸；读取时自动迁移到 geometry key */
-const CHAT_WINDOW_SIZE_KEY = 'kivio-chat-window-size'
+const CHAT_WINDOW_SIZE_KEY = 'abu-agent-chat-window-size'
 const WINDOWS_MINIMIZED_POSITION_SENTINEL = -10000
 const MIN_VISIBLE_GEOMETRY_EDGE = 80
 
@@ -87,7 +87,7 @@ export function normalizeStoredChatRoute(value: string | null): string | null {
 /**
  * 上次聊天路由的当前权威值由 Rust 持久化（app_data/chat-last-route.json，创建窗口时烤进
  * URL，见 src-tauri/src/windows.rs）。本模块只负责把路由变化同步给 Rust，并在内存里缓存
- * 一份供「已存在窗口被再次打开」时恢复。localStorage 的 `kivio-chat-last-route` 是旧版
+ * 一份供「已存在窗口被再次打开」时恢复。localStorage 的 `abu-agent-chat-last-route` 是旧版
  * 遗留：首次调用 getRememberedChatRoute() 时自动迁移到 Rust 并删除旧 key。
  * 
  * 历史教训：localStorage 写入是异步落盘且错误被静默吞掉，退出前没有 flush 屏障，导致
@@ -161,7 +161,7 @@ export function rememberChatSidebarCollapsed(collapsed: boolean) {
   setLocalStorageItem(CHAT_SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0')
 }
 
-const CHAT_SIDEBAR_WIDTH_KEY = 'kivio-chat-sidebar-width'
+const CHAT_SIDEBAR_WIDTH_KEY = 'abu-agent-chat-sidebar-width'
 
 /** 左侧栏宽度夹紧：绝对上下限，再按视口给主区留出最小宽度。 */
 export function clampSidebarWidth(width: number, viewportWidth?: number): number {
@@ -188,10 +188,10 @@ export function rememberSidebarWidth(width: number) {
 
 // ---------- Right Dock 持久化 ----------
 
-const CHAT_DOCK_OPEN_KEY = 'kivio-chat-dock-open'
-const CHAT_DOCK_WIDTH_KEY = 'kivio-chat-dock-width'
-const CHAT_DOCK_TAB_KEY = 'kivio-chat-dock-tab'
-const CHAT_DOCK_TREE_EXPANDED_KEY = 'kivio-chat-dock-tree-expanded'
+const CHAT_DOCK_OPEN_KEY = 'abu-agent-chat-dock-open'
+const CHAT_DOCK_WIDTH_KEY = 'abu-agent-chat-dock-width'
+const CHAT_DOCK_TAB_KEY = 'abu-agent-chat-dock-tab'
+const CHAT_DOCK_TREE_EXPANDED_KEY = 'abu-agent-chat-dock-tree-expanded'
 /** 每项目展开状态 map 的最大项目键数（超出时丢弃最旧的键）。 */
 const DOCK_TREE_EXPANDED_MAX_KEYS = 50
 

@@ -14,7 +14,7 @@ use crate::chat::model::ModelUsage;
 /// `calculateContextTokens = totalTokens || input+output+cacheRead+cacheWrite`），按 provider
 /// 家族消歧缓存计数：
 /// - `anthropic_messages`：`input_tokens` 是**非缓存**部分，全量 = `input + output + cache_read +
-///   cache_creation`（四者不相交）。**不**用 Kivio 的 `total_tokens`——它对 Anthropic 只存
+///   cache_creation`（四者不相交）。**不**用 ABU Agent 的 `total_tokens`——它对 Anthropic 只存
 ///   `input+output`、漏了 cache（见 `usage::model_usage_from_anthropic_value`）。
 /// - 其它（`openai_*` / responses）：优先 `total_tokens`（= prompt+completion，prompt 已含 cached，
 ///   无双算）；缺失则 `input(=prompt,含cached) + output`。**不**再叠加 cached（子集，叠加即双算，
@@ -115,8 +115,8 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_ignores_kivio_total_tokens_missing_cache() {
-        // 即便 total_tokens 存在（Kivio 对 Anthropic 只填 input+output、漏 cache），也不能用它，
+    fn anthropic_ignores_abu_agent_total_tokens_missing_cache() {
+        // 即便 total_tokens 存在（ABU Agent 对 Anthropic 只填 input+output、漏 cache），也不能用它，
         // 必须显式加 cache。
         let mut u = usage(Some(100_000), Some(50_000), None);
         u.total_tokens = Some(100_100); // = input+output，漏了 cache

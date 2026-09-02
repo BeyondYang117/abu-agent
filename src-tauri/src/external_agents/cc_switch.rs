@@ -9,7 +9,7 @@
 //! - `grokbuild`：`{"config": "<config.toml 全文>"}`（落盘到 `~/.grok/config.toml`）
 //! - `hermes` / `openclaw`：各自私有形状
 //!
-//! ponytail: 只导 Kivio **确实有落地通道**的四类（claude=env / codex=私有 CODEX_HOME /
+//! ponytail: 只导 ABU Agent **确实有落地通道**的四类（claude=env / codex=私有 CODEX_HOME /
 //! gemini=env / grok=原生 config.toml）。hermes 等没有注入通道的，报成跳过数而不是假装支持。
 //! 也没做 v2 `config.json` 回落：v3 的库存在就够了，缺了直接报「未找到」。
 use crate::settings::CliEnvVar;
@@ -19,7 +19,7 @@ use crate::settings::CliEnvVar;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedProvider {
-    /// 映射到 Kivio 的 agent id（claude / codex / gemini / grok）。
+    /// 映射到 ABU Agent 的 agent id（claude / codex / gemini / grok）。
     pub agent_id: String,
     /// 保留 cc-switch 原 id：二次导入按 id 走更新，不会堆出重复条目。
     pub id: String,
@@ -37,7 +37,7 @@ pub struct ImportedProvider {
 #[serde(rename_all = "camelCase")]
 pub struct ImportScan {
     pub providers: Vec<ImportedProvider>,
-    /// 认得出但 Kivio 没有落地通道而跳过的条数（hermes / openclaw…）。
+    /// 认得出但 ABU Agent 没有落地通道而跳过的条数（hermes / openclaw…）。
     pub skipped: usize,
 }
 
@@ -45,7 +45,7 @@ fn db_path() -> Option<std::path::PathBuf> {
     directories::BaseDirs::new().map(|base| base.home_dir().join(".cc-switch/cc-switch.db"))
 }
 
-/// cc-switch 的 `app_type` → Kivio 的 agent id。返回 None = 没有落地通道，跳过。
+/// cc-switch 的 `app_type` → ABU Agent 的 agent id。返回 None = 没有落地通道，跳过。
 fn map_app_type(app_type: &str) -> Option<&'static str> {
     match app_type {
         "claude" | "claude-code" | "claude_code" => Some("claude"),

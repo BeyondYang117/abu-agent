@@ -1,6 +1,6 @@
 //! 从本地 CLI 导入对话——历史解析。
 //!
-//! 把 CLI 自己的 transcript 解析成 Kivio 的 `ChatMessage`。契约见
+//! 把 CLI 自己的 transcript 解析成 ABU Agent 的 `ChatMessage`。契约见
 //! [ADR-0002](../../../docs/adr/0002-imported-history-is-a-snapshot.md)：
 //!
 //! - 只认四类块：`text` / `tool_use` / `tool_result` / `thinking`，外加图片。
@@ -120,7 +120,7 @@ impl Pending {
                 usage: None,
                 anchor_usage: None,
                 group_id: None,
-                // 导入的消息不归属任何 Kivio provider——续聊由 CLI 承担（ADR-0001）。
+                // 导入的消息不归属任何 ABU Agent provider——续聊由 CLI 承担（ADR-0001）。
                 provider_id: None,
                 model: None,
                 // 毫秒 → 秒：`ChatMessage.timestamp` 与前端 `nowSeconds()` 对齐，
@@ -150,7 +150,7 @@ pub fn parse_claude_history(raw: &str) -> Vec<ImportedMessage> {
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        // 子 agent 分支不还原（Kivio 没有"从历史重建嵌套卡片"的渲染路径）。
+        // 子 agent 分支不还原（ABU Agent 没有"从历史重建嵌套卡片"的渲染路径）。
         if entry.get("isSidechain").and_then(Value::as_bool) == Some(true) {
             continue;
         }
@@ -1067,17 +1067,17 @@ mod tests {
     }
 
     /// grok / codex 跑真实数据。
-    /// `KIVIO_GROK_JSONL=<chat_history.jsonl> KIVIO_CODEX_JSONL=<rollout.jsonl> cargo test ... -- --ignored --nocapture`
+    /// `ABU_AGENT_GROK_JSONL=<chat_history.jsonl> ABU_AGENT_CODEX_JSONL=<rollout.jsonl> cargo test ... -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn smoke_parse_real_grok_and_codex() {
         for (label, var, parse) in [
             (
                 "grok",
-                "KIVIO_GROK_JSONL",
+                "ABU_AGENT_GROK_JSONL",
                 parse_grok_history as fn(&str) -> Vec<ImportedMessage>,
             ),
-            ("codex", "KIVIO_CODEX_JSONL", parse_codex_history),
+            ("codex", "ABU_AGENT_CODEX_JSONL", parse_codex_history),
         ] {
             let Ok(path) = std::env::var(var) else {
                 println!("[{label}] 跳过（未设 {var}）");
@@ -1234,11 +1234,11 @@ mod tests {
     }
 
     /// 解析本机真实会话。默认不跑。
-    /// `KIVIO_CLAUDE_JSONL=<路径> cargo test --lib external_agents::import_history::tests::smoke -- --ignored --nocapture`
+    /// `ABU_AGENT_CLAUDE_JSONL=<路径> cargo test --lib external_agents::import_history::tests::smoke -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn smoke_parse_real_claude_session() {
-        let path = std::env::var("KIVIO_CLAUDE_JSONL").expect("需要 KIVIO_CLAUDE_JSONL");
+        let path = std::env::var("ABU_AGENT_CLAUDE_JSONL").expect("需要 ABU_AGENT_CLAUDE_JSONL");
         let raw = std::fs::read_to_string(&path).unwrap();
         let msgs = parse_claude_history(&raw);
         let users = msgs.iter().filter(|m| m.message.role == "user").count();

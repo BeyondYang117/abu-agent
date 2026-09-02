@@ -12,7 +12,7 @@ use crate::external_agents::session::claude_init::{
 };
 use crate::external_agents::types::RuntimeModelOption;
 
-pub const CONTEXT_SOURCE_BUILTIN: &str = "kivio_builtin";
+pub const CONTEXT_SOURCE_BUILTIN: &str = "abu_agent_builtin";
 pub const CONTEXT_SOURCE_EXTERNAL: &str = "external_cli";
 pub const TOKEN_COUNT_CLI: &str = "cli_reported";
 pub const TOKEN_COUNT_ESTIMATED: &str = "estimated";
@@ -179,7 +179,7 @@ pub(crate) fn cli_reported_context_tokens(usage: &ModelUsage) -> usize {
 /// 这条 CLI 上报是否**真的带了分子**（任一 token 数 > 0）。
 ///
 /// 判据不能是 `input_tokens.is_some()`：全零上报（未登录 / `/help` / 未知斜杠命令 /
-/// Kivio 自己发的 `/compact` —— 这些轮次没有 LLM 往返）落盘的是 `Some(0)`，
+/// ABU Agent 自己发的 `/compact` —— 这些轮次没有 LLM 往返）落盘的是 `Some(0)`，
 /// `is_some()` 会命中它并把用量条清零。
 fn usage_has_token_numbers(usage: &ModelUsage) -> bool {
     // 必须与 `run.rs::usage_tokens_all_zero` **完全互为反面**（含 `reasoning_tokens`）。
@@ -852,7 +852,7 @@ mod tests {
     fn kimi_falls_back_to_wire_log_before_character_estimate() {
         // kimi 的 ACP 上游不报任何用量 → 消息上没有 usage。改动前只能字符估算（把 23605 估成 ~24）。
         let home = std::env::temp_dir().join(format!(
-            "kivio-ctx-kimi-{}-{}",
+            "abu-agent-ctx-kimi-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -980,7 +980,7 @@ mod tests {
 
     /// **零用量的上报不许把分子清零**（A2 的第三道防线）。
     ///
-    /// 没有 LLM 往返的轮次（未登录 / `/help` / 未知斜杠命令 / Kivio 自己发的 `/compact`）
+    /// 没有 LLM 往返的轮次（未登录 / `/help` / 未知斜杠命令 / ABU Agent 自己发的 `/compact`）
     /// 会落下一条全 0 的 usage。判据若是 `input_tokens.is_some()`，`Some(0)` 会命中它 ⇒
     /// 用量条从 47K 掉到 0，直到下一轮真实回复才恢复。必须跳过它、继续往前找。
     #[test]

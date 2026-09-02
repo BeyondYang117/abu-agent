@@ -95,12 +95,12 @@ Before publishing or announcing installers, inspect the final artifact contents.
 For macOS DMG:
 
 ```bash
-mkdir -p /tmp/kivio-release-check
-hdiutil attach -nobrowse -readonly -mountpoint /tmp/kivio-release-check \
+mkdir -p /tmp/abu-agent-release-check
+hdiutil attach -nobrowse -readonly -mountpoint /tmp/abu-agent-release-check \
   "src-tauri/target/release/bundle/dmg/ABU Agent Desktop_X.Y.Z_aarch64.dmg"
-find "/tmp/kivio-release-check/ABU Agent Desktop.app/Contents/Resources" -maxdepth 5 -type f | sort
-hdiutil detach /tmp/kivio-release-check
-rmdir /tmp/kivio-release-check
+find "/tmp/abu-agent-release-check/ABU Agent Desktop.app/Contents/Resources" -maxdepth 5 -type f | sort
+hdiutil detach /tmp/abu-agent-release-check
+rmdir /tmp/abu-agent-release-check
 ```
 
 For the local `.app` bundle before DMG:

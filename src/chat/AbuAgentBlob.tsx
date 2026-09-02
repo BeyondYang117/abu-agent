@@ -9,7 +9,7 @@ import {
   ABUAgentBlobSim,
   blobScheduleMs,
   type BlobMood,
-} from './kivioBlobSim'
+} from './abuAgentBlobSim'
 import { prefersReducedMotion } from './utils'
 
 export type { BlobMood }

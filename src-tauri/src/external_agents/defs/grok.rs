@@ -12,7 +12,7 @@
 //! - the model can also be pinned at launch via `-m` (session/set_model still works and is
 //!   harmless duplication for the fresh-session path).
 //!
-//! 1.0.x 起 `grok agent` 会按 `[cli] use_leader` 挂到共享 leader。Kivio 每条对话要自己的
+//! 1.0.x 起 `grok agent` 会按 `[cli] use_leader` 挂到共享 leader。ABU Agent 每条对话要自己的
 //! 进程（取消杀树、会话隔离），所以 argv 里永远带 `--no-leader`。
 
 use super::super::types::{

@@ -13,12 +13,12 @@
 //! ```
 //! 真实 input = `inputOther + inputCacheRead + inputCacheCreation`。
 //!
-//! **关联方式：workDir，不是 session id。** kimi 的 session id 由 kimi 侧生成，Kivio 走 ACP
+//! **关联方式：workDir，不是 session id。** kimi 的 session id 由 kimi 侧生成，ABU Agent 走 ACP
 //! 时根本没存（实测 `external-agent-sessions/` 里 18 个 claude + 3 个 pi + **0 个 kimi**）。
-//! 改用 `<kimi_home>/session_index.jsonl` 的 `workDir` 字段——它恰好等于 Kivio 的
+//! 改用 `<kimi_home>/session_index.jsonl` 的 `workDir` 字段——它恰好等于 ABU Agent 的
 //! `workspace::resolve_effective_cwd()`（`chat-workspaces/<conversation_id>`）。
 //!
-//! **必须跳过空壳会话**：Kivio 的斜杠命令探测每次 `session/new` 都会在 kimi 侧留下一个没有
+//! **必须跳过空壳会话**：ABU Agent 的斜杠命令探测每次 `session/new` 都会在 kimi 侧留下一个没有
 //! 任何 turn 的会话（探测残渣）。
 //! 实测某个 workDir 下 53 个 session 里 52 个是空壳。判据：wire.jsonl 里存在
 //! `type == "usage.record"` 且 `usageScope == "turn"` 的记录。有效候选按 wire.jsonl mtime 取最新。
@@ -62,7 +62,7 @@ pub fn kimi_home() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|base| base.home_dir().join(".kimi-code"))
 }
 
-/// 读某个 Kivio 执行 cwd 对应的最近一轮 kimi 用量。找不到任何有效会话时 `None`。
+/// 读某个 ABU Agent 执行 cwd 对应的最近一轮 kimi 用量。找不到任何有效会话时 `None`。
 pub fn latest_turn_usage(work_dir: &Path) -> Option<KimiTurnUsage> {
     latest_turn_usage_in(&kimi_home()?, work_dir)
 }
@@ -174,7 +174,7 @@ mod tests {
     impl TempHome {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "kivio-kimi-usage-{tag}-{}-{:?}",
+                "abu-agent-kimi-usage-{tag}-{}-{:?}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn reads_latest_turn_usage_including_cache() {
         let home = TempHome::new("basic");
-        let work_dir = "/tmp/kivio-ws/conv-1";
+        let work_dir = "/tmp/abu-agent-ws/conv-1";
         home.add_session("session-a", work_dir, &format!("{REAL_RECORD}\n"));
 
         let usage = latest_turn_usage_in(home.path(), Path::new(work_dir)).expect("usage");
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn takes_last_record_not_first() {
         let home = TempHome::new("last");
-        let work_dir = "/tmp/kivio-ws/conv-2";
+        let work_dir = "/tmp/abu-agent-ws/conv-2";
         let early = r#"{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":10,"output":1,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1}"#;
         home.add_session("session-a", work_dir, &format!("{early}\n{REAL_RECORD}\n"));
 
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn skips_empty_shell_sessions_from_slash_probing() {
         let home = TempHome::new("shell");
-        let work_dir = "/tmp/kivio-ws/conv-3";
+        let work_dir = "/tmp/abu-agent-ws/conv-3";
         let real_wire = home.add_session("session-real", work_dir, &format!("{REAL_RECORD}\n"));
         // 斜杠探测残渣：有 wire.jsonl，但没有任何 usage.record。必须被跳过。
         let shell_wire = home.add_session(
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn newest_session_with_usage_wins() {
         let home = TempHome::new("newest");
-        let work_dir = "/tmp/kivio-ws/conv-7";
+        let work_dir = "/tmp/abu-agent-ws/conv-7";
         let old_record = r#"{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":100,"output":2,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"turn","time":1}"#;
         let old_wire = home.add_session("session-old", work_dir, &format!("{old_record}\n"));
         let new_wire = home.add_session("session-new", work_dir, &format!("{REAL_RECORD}\n"));
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn ignores_non_turn_scope_records() {
         let home = TempHome::new("scope");
-        let work_dir = "/tmp/kivio-ws/conv-4";
+        let work_dir = "/tmp/abu-agent-ws/conv-4";
         let session_scope = r#"{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":999,"output":9,"inputCacheRead":0,"inputCacheCreation":0},"usageScope":"session","time":9}"#;
         home.add_session("session-a", work_dir, &format!("{session_scope}\n"));
         assert!(latest_turn_usage_in(home.path(), Path::new(work_dir)).is_none());
@@ -312,10 +312,10 @@ mod tests {
         let home = TempHome::new("workdir");
         home.add_session(
             "session-a",
-            "/tmp/kivio-ws/conv-other",
+            "/tmp/abu-agent-ws/conv-other",
             &format!("{REAL_RECORD}\n"),
         );
-        assert!(latest_turn_usage_in(home.path(), Path::new("/tmp/kivio-ws/conv-mine")).is_none());
+        assert!(latest_turn_usage_in(home.path(), Path::new("/tmp/abu-agent-ws/conv-mine")).is_none());
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         // index 不存在。
         assert!(latest_turn_usage_in(home.path(), Path::new("/tmp/x")).is_none());
 
-        let work_dir = "/tmp/kivio-ws/conv-5";
+        let work_dir = "/tmp/abu-agent-ws/conv-5";
         home.add_session("session-a", work_dir, "not json at all\n{broken\n");
         // 坏 wire 行被跳过 → 该会话视为无用量。
         assert!(latest_turn_usage_in(home.path(), Path::new(work_dir)).is_none());
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn oversized_wire_file_is_refused() {
         let home = TempHome::new("cap");
-        let work_dir = "/tmp/kivio-ws/conv-6";
+        let work_dir = "/tmp/abu-agent-ws/conv-6";
         let wire = home.add_session("session-a", work_dir, &format!("{REAL_RECORD}\n"));
         assert!(read_capped(&wire, MAX_WIRE_FILE_BYTES).is_some());
         assert!(read_capped(&wire, 4).is_none());

@@ -153,7 +153,7 @@ pub async fn detect_pi_commands(
             let mut out = Vec::new();
             let mut seen = std::collections::HashSet::new();
             // pi 内建命令不经 get_commands 上报（rpc.md 明说 built-in TUI commands 不含
-            // 在内，也无法探测），与 codex 的 CODEX_BUILTIN_COMMANDS 同策略：只列 Kivio
+            // 在内，也无法探测），与 codex 的 CODEX_BUILTIN_COMMANDS 同策略：只列 ABU Agent
             // 适配层真正会执行的那几个，先播种再合并动态结果（同名以内建为准）。
             for (name, description) in PI_BUILTIN_COMMANDS {
                 seen.insert((*name).to_string());
@@ -205,7 +205,7 @@ const FIRE_AND_FORGET: &[&str] = &[
 ];
 
 /// pi 内建命令白名单（get_commands 不上报内建，rpc.md：built-in TUI commands 走
-/// prompt 不会执行）。只列 Kivio 适配层拦截并转成真 RPC 的命令——列而不适配等于
+/// prompt 不会执行）。只列 ABU Agent 适配层拦截并转成真 RPC 的命令——列而不适配等于
 /// 骗用户。`/compact` → `{"type":"compact"}`（见 `run_pi_rpc_session`）。
 const PI_BUILTIN_COMMANDS: &[(&str, &str)] = &[("compact", "压缩对话历史")];
 
@@ -220,7 +220,7 @@ const BTW_COMMANDS: &[&str] = &[
     "btw:thinking",
 ];
 const BTW_ENTRY_TYPE: &str = "btw-thread-entry";
-const BTW_ENTRIES_REQUEST_ID: &str = "kivio-btw-entries";
+const BTW_ENTRIES_REQUEST_ID: &str = "abu-agent-btw-entries";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PiBtwCommand {
@@ -422,7 +422,7 @@ pub fn parse_pi_models(stderr: &str) -> Option<Vec<RuntimeModelOption>> {
                 .get(2)
                 .and_then(|label| parse_context_window_label(label));
             // 下拉框标签用「模型 · 供应商」：供应商 id 现在已是短名（relay），
-            // 比 `kivio-p-xxx/model` 整串塞进一行可读得多；id 仍保留完整 provider/model。
+            // 比 `abu-agent-p-xxx/model` 整串塞进一行可读得多；id 仍保留完整 provider/model。
             out.push(RuntimeModelOption {
                 id: full_id,
                 label: format!("{} · {}", parts[1], parts[0]),
@@ -913,7 +913,7 @@ where
     let mut compaction_emitted = false;
     // Pi emits the failed turn before it announces whether an automatic retry will follow.
     // Defer fatal errors until the final agent_end; otherwise a recovered retry still leaves
-    // Kivio's turn permanently marked as failed.
+    // ABU Agent's turn permanently marked as failed.
     let mut pending_error: Option<String> = None;
     // Special RPC commands can finish on their response while Pi still flushes a late
     // `agent_settled`. A reused reader must not let that stale boundary finish the next prompt.
@@ -1089,7 +1089,7 @@ where
             if value
                 .get("id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| id.starts_with("kivio-control-"))
+                .is_some_and(|id| id.starts_with("abu-agent-control-"))
             {
                 continue;
             }
@@ -1364,7 +1364,7 @@ impl PiRpcSession {
         cwd: &Path,
         resume_native: Option<&str>,
     ) -> Result<Self, String> {
-        // The persisted live handle is the authoritative binding for this Kivio conversation.
+        // The persisted live handle is the authoritative binding for this ABU Agent conversation.
         // It can exist even when the regular binding was not flushed before a crash.
         let (effective_args, session_id, claimed_resume) =
             persistent_session_args(args, resume_native)?;
@@ -1520,7 +1520,7 @@ pub fn spawn_pi_rpc_session_actor(
                                 match next {
                                     Some(SessionCommand::Cancel) => {
                                         cancelled.store(true, Ordering::Release);
-                                        let request_id = format!("kivio-control-{}", next_control_id);
+                                        let request_id = format!("abu-agent-control-{}", next_control_id);
                                         next_control_id = next_control_id.saturating_add(1);
                                         if issue_control_command(
                                             &session.stdin,
@@ -1542,7 +1542,7 @@ pub fn spawn_pi_rpc_session_actor(
                                         close_after_turn = true;
                                     }
                                     Some(SessionCommand::Steer { id, text, images, kind, accepted }) => {
-                                        let request_id = format!("kivio-control-{}", next_control_id);
+                                        let request_id = format!("abu-agent-control-{}", next_control_id);
                                         next_control_id = next_control_id.saturating_add(1);
                                         let command_type = match kind {
                                             MessageInjectionKind::Steer => "steer",
@@ -1955,7 +1955,7 @@ mod tests {
         let writer = tokio::spawn(async move {
             for line in [
                 r#"{"id":1,"type":"response","command":"prompt","success":true}"#,
-                r#"{"id":"kivio-btw-entries","type":"response","command":"get_entries","success":true,"data":{"entries":[{"type":"custom","id":"e9","customType":"btw-thread-entry","data":{"question":"side question","answer":"side answer","provider":"p","model":"m"}}]}}"#,
+                r#"{"id":"abu-agent-btw-entries","type":"response","command":"get_entries","success":true,"data":{"entries":[{"type":"custom","id":"e9","customType":"btw-thread-entry","data":{"question":"side question","answer":"side answer","provider":"p","model":"m"}}]}}"#,
             ] {
                 stdout_writer.write_all(line.as_bytes()).await?;
                 stdout_writer.write_all(b"\n").await?;
@@ -2048,7 +2048,7 @@ mod tests {
         let writer = tokio::spawn(async move {
             for line in [
                 r#"{"id":1,"type":"response","command":"prompt","success":true}"#,
-                r#"{"id":"kivio-btw-entries","type":"response","command":"get_entries","success":true,"data":{"entries":[]}}"#,
+                r#"{"id":"abu-agent-btw-entries","type":"response","command":"get_entries","success":true,"data":{"entries":[]}}"#,
                 r#"{"type":"agent_settled"}"#,
             ] {
                 stdout_writer.write_all(line.as_bytes()).await?;
@@ -2862,9 +2862,9 @@ mod tests {
                 .expect("first line");
             for event in [
                 json!({"id": 1, "type": "response", "command": "prompt", "success": true}),
-                json!({"id": "kivio-btw-entries", "type": "response", "command": "get_entries", "success": true, "data": {"entries": []}}),
+                json!({"id": "abu-agent-btw-entries", "type": "response", "command": "get_entries", "success": true, "data": {"entries": []}}),
                 json!({"type": "agent_settled"}),
-                json!({"id": "kivio-btw-entries", "type": "response", "command": "get_entries", "success": true, "data": {"entries": []}}),
+                json!({"id": "abu-agent-btw-entries", "type": "response", "command": "get_entries", "success": true, "data": {"entries": []}}),
             ] {
                 server_stdout
                     .write_all(format!("{event}\n").as_bytes())
@@ -2943,17 +2943,17 @@ mod tests {
     #[test]
     fn missing_pi_session_file_is_not_a_successful_resume() {
         assert!(!pi_native_session_present(
-            "kivio-missing-session-id-for-test",
+            "abu-agent-missing-session-id-for-test",
             Path::new(r"E:\workspace\abu-agent"),
         ));
         assert!(!pi_resume_is_live(
             Path::new(r"C:\npm\pi.cmd"),
-            "kivio-missing-session-id-for-test",
+            "abu-agent-missing-session-id-for-test",
             Path::new(r"E:\workspace\abu-agent"),
         ));
         assert!(pi_resume_is_live(
             Path::new(r"\\wsl$\Ubuntu\usr\bin\pi"),
-            "kivio-missing-session-id-for-test",
+            "abu-agent-missing-session-id-for-test",
             Path::new(r"E:\workspace\abu-agent"),
         ));
         assert!(is_missing_pi_session_error("Pi session \"abc\" not found"));
@@ -2968,16 +2968,16 @@ mod tests {
         );
         assert_eq!(
             encode_pi_session_cwd(Path::new(
-                r"C:\Users\11028\AppData\Roaming\com.zmair.kivio\chat-workspaces\conv_7a684c05-38f0-484e-9b5c-3a38c2c38289"
+                r"C:\Users\11028\AppData\Roaming\com.zmair.abu-agent\chat-workspaces\conv_7a684c05-38f0-484e-9b5c-3a38c2c38289"
             )),
-            "--C--Users-11028-AppData-Roaming-com.zmair.kivio-chat-workspaces-conv_7a684c05-38f0-484e-9b5c-3a38c2c38289--"
+            "--C--Users-11028-AppData-Roaming-com.zmair.abu-agent-chat-workspaces-conv_7a684c05-38f0-484e-9b5c-3a38c2c38289--"
         );
     }
 
     #[test]
     fn pi_native_session_present_finds_cwd_encoded_timestamp_jsonl() {
         let root = std::env::temp_dir().join(format!(
-            "kivio-pi-sess-{}",
+            "abu-agent-pi-sess-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time")
@@ -3023,10 +3023,10 @@ mod tests {
     fn parse_pi_model_thinking_reads_column_by_header() {
         let out = "provider          model          context  max-out  thinking  images\n\
                    edgefn            DeepSeek-Flash 128K     8.2K     no        no\n\
-                   kivio-p           claude-son-5   1M       128K     yes       yes";
+                   abu-agent-p           claude-son-5   1M       128K     yes       yes";
         let thinking = parse_pi_model_thinking(out);
         assert_eq!(thinking.get("edgefn/DeepSeek-Flash"), Some(&false));
-        assert_eq!(thinking.get("kivio-p/claude-son-5"), Some(&true));
+        assert_eq!(thinking.get("abu-agent-p/claude-son-5"), Some(&true));
         // 表头缺 thinking 列 → 空表（未知，不隐藏档位）。
         assert!(parse_pi_model_thinking("provider model context\na b 1K").is_empty());
         assert!(parse_pi_model_thinking("").is_empty());

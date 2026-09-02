@@ -234,7 +234,7 @@ Claude：ABU Agent 用的是 `--add-dir`，会带上对方 `.claude/skills`。�
 v1：**根切换器**（下拉：主目录 + 每个附加目录）。树 / Git / 终端跟当前选中根走，合同仍然是「看到的目录 = 选中根」，不是「看到的目录 = agent 可能写到的所有地方」。  
 v2：VS Code 式多根树；Git 按根分 tab。永远不要做一个跨仓原子 commit。
 
-Cline 的教训：checkpoint / 规则默认只认 primary。ABU Agent 的 `.kivio/agents`、项目 skills 继续只从**主项目根**加载，除非以后单独做「从附加目录加载 .kivio」（对标 Claude 的 CLAUDE.md 开关，默认关）。
+Cline 的教训：checkpoint / 规则默认只认 primary。ABU Agent 的 `.abu-agent/agents`、项目 skills 继续只从**主项目根**加载，除非以后单独做「从附加目录加载 .abu-agent」（对标 Claude 的 CLAUDE.md 开关，默认关）。
 
 ### 导入与续聊
 
@@ -267,7 +267,7 @@ Cline 的教训：checkpoint / 规则默认只认 primary。ABU Agent 的 `.kivi
 2. **下发外部 CLI：** Claude `--add-dir`、Codex `runtimeWorkspaceRoots`、ACP `additionalDirectories`（有能力才发）。Pi/不支持：警告。
 3. **Dock 根切换器**（树 + Git + 终端跟选中根）。
 4. **项目级默认附加目录**（新建对话拷贝；不强制旧对话）。
-5. **可选：** 子代理 `cwd`/`root` 覆盖；文件工具 `root` 参数；`.kivio` 是否从附加目录加载（默认否）。
+5. **可选：** 子代理 `cwd`/`root` 覆盖；文件工具 `root` 参数；`.abu-agent` 是否从附加目录加载（默认否）。
 
 ---
 

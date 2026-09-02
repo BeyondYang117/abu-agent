@@ -105,7 +105,7 @@ pub fn materialize_mcp_server(plugin: &CatalogPlugin) -> Option<ChatMcpServer> {
     // 启用时再探测一次，避免 PATH 未刷新 / 仅在默认安装目录时失败
     let binary = resolve_binary_for_status(plugin.id).or_else(|| resolve_binary(plugin.id))?;
     // OfficeCLI：MCP 改文档默认只在内存 resident 里，磁盘延迟 2–10s 才刷。
-    // 设 each 保证每次工具返回前已落盘，Kivio 才能用 `view html` 刷实时预览。
+    // 设 each 保证每次工具返回前已落盘，ABU Agent 才能用 `view html` 刷实时预览。
     let mut env = std::collections::HashMap::new();
     if plugin.id == "officecli" {
         env.insert("OFFICECLI_RESIDENT_FLUSH".to_string(), "each".to_string());
@@ -130,7 +130,7 @@ pub fn materialize_mcp_server(plugin: &CatalogPlugin) -> Option<ChatMcpServer> {
 /// 启用：挂 MCP（若有）+ 确保 chat 工具总开关 + 落盘 settings。
 ///
 /// 注意：README 里的 `officecli mcp claude/cursor` 是给那些客户端写配置用的；
-/// Kivio **不要**跑那些命令，而是在这里注册 stdio：`{binary绝对路径} mcp`。
+/// ABU Agent **不要**跑那些命令，而是在这里注册 stdio：`{binary绝对路径} mcp`。
 pub fn apply_enable_side_effects(
     app: &AppHandle,
     state: &AppState,

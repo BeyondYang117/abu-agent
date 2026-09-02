@@ -49,7 +49,7 @@ pub enum SlashStrategy {
     CodexAppServer,
     /// Discover via the Pi RPC `get_commands` request.
     PiRpc,
-    /// Discover via `session/commands` (`ctx.commands.list`) after the kivio
+    /// Discover via `session/commands` (`ctx.commands.list`) after the abu_agent
     /// profile mounts. Builtins are only the pre-connect fallback.
     Dsh,
     /// No discoverable slash commands for this CLI in headless mode.
@@ -195,7 +195,7 @@ pub struct RuntimeAgentDef {
     pub supports_steering: bool,
     /// 该 CLI 的协议能否把一条用户消息排到当前运行完成后继续处理。
     /// Pi 使用 RPC `follow_up`；dsh 使用官方 `session/prompt` → `agent.followup()`。
-    /// 其余协议仍由 Kivio 在轮末发起普通新轮次。
+    /// 其余协议仍由 ABU Agent 在轮末发起普通新轮次。
     pub supports_follow_up: bool,
     /// 允许原生注入的图片 MIME 白名单；空 = 不限。Claude stream-json 仅认 jpeg/png/gif/webp，
     /// 超出的图片降级为路径文本（不静默丢弃）。
@@ -268,8 +268,8 @@ pub enum UnifiedAgentEvent {
     /// CLI 在**自己内部**完成了一次上下文压缩（claude 的
     /// `{"type":"system","subtype":"compact_boundary"}`）。
     ///
-    /// 与 Kivio 主动发 `/compact`（`external_agents/compact.rs`）不同：那是用户点的、
-    /// Kivio 知情；这条是 CLI 自动触发的，Kivio 只能被动收到通知。不接的话
+    /// 与 ABU Agent 主动发 `/compact`（`external_agents/compact.rs`）不同：那是用户点的、
+    /// ABU Agent 知情；这条是 CLI 自动触发的，ABU Agent 只能被动收到通知。不接的话
     /// 用户会看到「对话突然变短了但没有任何提示」。
     ///
     /// 字段取自 `compact_metadata`，claude 2.1.220 反查二进制核实的构造处为

@@ -38,7 +38,7 @@ import type {
   WebSearchMode,
 } from '../types'
 
-const LAST_WEB_SEARCH_MODE_KEY = 'kivio.chat.lastWebSearchMode'
+const LAST_WEB_SEARCH_MODE_KEY = 'abu_agent.chat.lastWebSearchMode'
 const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party', 'platform'])
 
 function loadLastWebSearchMode(): WebSearchMode | undefined {

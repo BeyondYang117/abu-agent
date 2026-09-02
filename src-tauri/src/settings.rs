@@ -704,7 +704,7 @@ pub fn default_chat_max_output_tokens() -> u32 {
 
 pub(crate) fn clamp_chat_max_output_tokens(_value: u32) -> u32 {
     // 对齐 Pi：maxTokens 写在模型目录上，没有用户档位。自定义模型没填时缺省 16384。
-    // Kivio 有库用库；未收录一律发这个 16k，不按协议省略。
+    // ABU Agent 有库用库；未收录一律发这个 16k，不按协议省略。
     default_chat_max_output_tokens()
 }
 
@@ -744,7 +744,7 @@ pub struct ChatConfig {
     /// 响应语言（"zh"/"en" 等）。空字符串表示跟随 Lens 默认语言，再跟随 target_lang。
     #[serde(default)]
     pub default_language: String,
-    /// 自定义 system prompt；空则使用内置 Chat 模板（Kivio Agent 运行时）。
+    /// 自定义 system prompt；空则使用内置 Chat 模板（ABU Agent 运行时）。
     #[serde(default)]
     pub system_prompt: String,
     /// Chat 侧栏显示的用户名；空则前端使用默认文案。
@@ -759,12 +759,12 @@ pub struct ChatConfig {
     /// 本地 CLI Agent 的用户覆盖，key = agent id（claude/codex/…）。缺省 = 全默认。
     #[serde(default)]
     pub external_cli_agents: std::collections::HashMap<String, ExternalCliAgentConfig>,
-    /// Kivio Chat 运行时专属设置（与 Kivio Agent 的工具/提示词分离）。
+    /// ABU Agent Chat 运行时专属设置（与 ABU Agent 的工具/提示词分离）。
     #[serde(default)]
     pub chat_mode: ChatModeConfig,
 }
 
-/// Kivio Chat runtime settings — conversational tools + optional custom prompt.
+/// ABU Agent Chat runtime settings — conversational tools + optional custom prompt.
 /// Independent from Agent native-tool toggles (write/shell/skills stay Agent-only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -839,7 +839,7 @@ pub struct ExternalCliAgentConfig {
 ///   `~/.codex/config.toml` 顶层 `model`（文件已存在时）以及 CLI 正在读的那份
 /// - grok：只用 `config_toml`，把其中的 `[models]` / `[model.*]` 合并进 `~/.grok/config.toml`
 /// - opencode / pi：用 `config_json` / `auth_json` / `default_model` 合并进 CLI 原生全局配置
-/// - dsh：用 `config_json` 在 Kivio 私有 profile 中挂载 `llm-pi-ai`，Key 通过 `env` 注入
+/// - dsh：用 `config_json` 在 ABU Agent 私有 profile 中挂载 `llm-pi-ai`，Key 通过 `env` 注入
 /// - pi：另用 `default_reasoning` 写入 `settings.json.defaultThinkingLevel`
 ///
 /// 扁平结构而不是 tagged enum：settings.json 是用户可手改的文件，enum 的 tag 写错整条读不出来。
@@ -859,7 +859,7 @@ pub struct ExternalCliProvider {
     pub config_json: String,
     /// codex：私有 CODEX_HOME 的完整 auth.json；opencode / pi：单个原生凭据对象。
     pub auth_json: String,
-    /// Kivio 自用的模型覆盖状态；不写入 CLI 原生配置。
+    /// ABU Agent 自用的模型覆盖状态；不写入 CLI 原生配置。
     pub model_metadata_json: String,
     /// opencode / pi / dsh：模型引用使用的稳定供应商 id（dsh wire 为 `provider:model`）。
     pub native_provider_id: String,
@@ -1159,8 +1159,8 @@ impl Default for ChatNativeToolsConfig {
 
 pub fn default_chat_working_directory() -> String {
     directories::BaseDirs::new()
-        .map(|dirs| dirs.home_dir().join("Kivio").join("workspace"))
-        .unwrap_or_else(|| std::path::PathBuf::from("Kivio").join("workspace"))
+        .map(|dirs| dirs.home_dir().join("ABU Agent").join("workspace"))
+        .unwrap_or_else(|| std::path::PathBuf::from("ABU Agent").join("workspace"))
         .to_string_lossy()
         .to_string()
 }
@@ -1422,7 +1422,7 @@ pub struct DocProcessorProvider {
     pub enabled: bool,
 }
 
-/// 知识库文档处理：Kivio 内置解析 + 可选第三方解析服务及路由策略。
+/// 知识库文档处理：ABU Agent 内置解析 + 可选第三方解析服务及路由策略。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DocumentProcessingConfig {
@@ -1434,7 +1434,7 @@ pub struct DocumentProcessingConfig {
     pub rapid_ocr_tier: String,
     /// PDF 处理: "text"(默认,文字层) | "force_ocr"(扫描版重扫——内置未启用,会报错)
     pub pdf_strategy: String,
-    /// "" = Kivio 内置（本地 Rust）；否则为某第三方 provider id
+    /// "" = ABU Agent 内置（本地 Rust）；否则为某第三方 provider id
     pub active_processor: String,
     /// 内置解析失败（如扫描版 PDF）时自动回退到第一个启用的第三方服务。
     pub fallback_to_third_party: bool,
@@ -2879,8 +2879,8 @@ pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), Stri
 
 /**
  * 一次性数据迁移：identifier 变更历史
- * - v2.4.5: com.zmair.keylingo → com.zmair.kivio
- * - v2.9.6: com.zmair.kivio → com.abu.agent
+ * - v2.4.5: com.zmair.abu-agent → com.zmair.abu-agent
+ * - v2.9.6: com.zmair.abu-agent → com.abu.agent
  *
  * Tauri 的 app_data_dir 直接由 identifier 派生，改名后新目录是空的，
  * 老用户升级会丢失 settings.json / lens-history。这里在新目录还没数据时，
@@ -2906,7 +2906,7 @@ fn migrate_legacy_app_data(app: &AppHandle) {
     };
 
     // 按优先级尝试迁移（最新的旧版本优先）
-    let legacy_identifiers = ["com.zmair.kivio", "com.zmair.keylingo"];
+    let legacy_identifiers = ["com.zmair.abu-agent", "com.zmair.abu-agent"];
     let legacy_dir = legacy_identifiers
         .iter()
         .map(|id| parent.join(id))
@@ -3037,9 +3037,9 @@ pub fn default_lens_system_prompt(language: &str, has_image: bool) -> String {
 /// Chat 客户端默认系统提示：允许正常 Markdown（含表格），不强制「不要空行」。
 pub fn default_chat_system_prompt(has_image: bool) -> String {
     if has_image {
-        "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+        "You are the AI assistant inside ABU Agent. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     } else {
-        "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+        "You are the AI assistant inside ABU Agent. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     }
 }
 

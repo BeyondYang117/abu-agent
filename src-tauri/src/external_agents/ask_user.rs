@@ -1,4 +1,4 @@
-//! 外部 CLI 「问用户」接到 Kivio 已有卡片上的适配层。
+//! 外部 CLI 「问用户」接到 ABU Agent 已有卡片上的适配层。
 //!
 //! 宿主只认这一套：按 agent + 工具名找到 codec → 映射入参 → 弹同一张卡 →
 //! 把答案编回这条 CLI 的线形状。**不改各 CLI 的线协议**（claude 仍走
@@ -255,7 +255,7 @@ fn encode_pi_extension_ui(
     }
 }
 
-/// claude `AskUserQuestion` 的入参 → Kivio 问用户卡片。
+/// claude `AskUserQuestion` 的入参 → ABU Agent 问用户卡片。
 ///
 /// 官方形状：`{"questions":[{"question":"…","header":"…","multiSelect":bool,
 ///   "options":[{"label":"…","description":"…"}]}]}`
@@ -279,7 +279,7 @@ fn parse_claude(input: &Value) -> Option<AskUserPromptPayload> {
                 options,
                 allow_multiple: json_bool(question, &["multiSelect"]),
                 // claude 的 schema 里没有「自定义文本」这一档，但用户总该能不选任何预设项
-                // 直接说自己的想法 —— 这是 Kivio 卡片本来就有的能力，白给。
+                // 直接说自己的想法 —— 这是 ABU Agent 卡片本来就有的能力，白给。
                 allow_custom: true,
             })
         })
@@ -356,7 +356,7 @@ fn encode_claude(
     Value::Object(updated)
 }
 
-/// dsh `session/ask` 的官方问题形状 → Kivio 问用户卡片。
+/// dsh `session/ask` 的官方问题形状 → ABU Agent 问用户卡片。
 ///
 /// 入参（`dsh-user-questions` / `dsh-tool-ask-user`）：
 /// `{ questions: [{ id, question, header?, detail?, options?: [{ label, description? }],
@@ -446,7 +446,7 @@ fn encode_dsh(
     serde_json::json!({ "answers": answers })
 }
 
-/// Codex `item/tool/requestUserInput` 的入参 → Kivio 问用户卡片。
+/// Codex `item/tool/requestUserInput` 的入参 → ABU Agent 问用户卡片。
 ///
 /// 官方形状（app-server v2）：`{ questions: [{ id, header, question, isOther?,
 ///   isSecret?, options?: [{ label, description }] }] }`。
@@ -634,8 +634,8 @@ mod tests {
         );
     }
 
-    /// claude 的 `AskUserQuestion` 入参必须能映射成 Kivio 的问用户卡片，否则这个功能
-    /// 就退回到「当场拒」——claude 在 Kivio 里从此不能反问用户。
+    /// claude 的 `AskUserQuestion` 入参必须能映射成 ABU Agent 的问用户卡片，否则这个功能
+    /// 就退回到「当场拒」——claude 在 ABU Agent 里从此不能反问用户。
     #[test]
     fn claude_ask_user_input_maps_to_the_ask_user_card() {
         let input = serde_json::json!({

@@ -51,7 +51,7 @@ Google Fonts 引入：`Geist:wght@300;400;500;600;700`、`Geist+Mono:wght@400;50
 
 **这是品牌最强的识别符号**，用户明确锁定的两处用法：
 
-- **Hero 大标题 "KIVIO"**：`font-size: clamp(3.2rem, 11vw, 8.5rem)`，`line-height: 0.94`，`letter-spacing: 0.02em`，全大写。
+- **Hero 大标题 "ABU_AGENT"**：`font-size: clamp(3.2rem, 11vw, 8.5rem)`，`line-height: 0.94`，`letter-spacing: 0.02em`，全大写。
 - **产品区标题 "ABU Agent Desktop"**：`clamp(2.4rem, 5.6vw, 4.6rem)`，`line-height: 0.98`。
 
 规则：像素字体**只用于品牌名 / 产品名级别的大标题**（每屏最多一处），永远不用于正文、按钮、导航。它与像素抖动背景在视觉语法上是同一件事 —— "信号里长出来的字"。
@@ -104,7 +104,7 @@ canvas 之上盖一层 `.hero-veil`，两个渐变叠加：以文字区（30%, 5
 
 ### 4.4 逐字升起动画
 
-KIVIO 五个字母和 tagline 逐字 `<span>` 拆分，`translateY(0.55em) → 0` + 淡入，缓动 `cubic-bezier(0.19, 1, 0.22, 1)`，字母间隔 55ms、tagline 26ms（延迟 300ms 起）。语言切换时 tagline 重新拆字、动画重放。
+ABU_AGENT 五个字母和 tagline 逐字 `<span>` 拆分，`translateY(0.55em) → 0` + 淡入，缓动 `cubic-bezier(0.19, 1, 0.22, 1)`，字母间隔 55ms、tagline 26ms（延迟 300ms 起）。语言切换时 tagline 重新拆字、动画重放。
 
 ---
 
@@ -132,7 +132,7 @@ KIVIO 五个字母和 tagline 逐字 `<span>` 拆分，`translateY(0.55em) → 0
 - 短句、克制、工程文档味；避免感叹号和营销腔。
 - 标题偏格言体："屏幕所至，智能所及。" / "探索屏幕，创造可能。" / "Your screen, intelligent."
 - 能力描述压缩成一行名词句，句号结尾。
-- 中英双语等价维护（`data-i18n` 字典），默认跟随浏览器语言，选择存 `localStorage('kivio-lang')`。
+- 中英双语等价维护（`data-i18n` 字典），默认跟随浏览器语言，选择存 `localStorage('abu-agent-lang')`。
 
 ## 8. 禁止清单
 

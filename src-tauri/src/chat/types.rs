@@ -126,7 +126,7 @@ pub struct ConversationContextState {
     pub clear_boundaries: Vec<ContextClearBoundaryRecord>,
     #[serde(default)]
     pub warning: Option<String>,
-    /// `kivio_builtin` or `external_cli`.
+    /// `abu_agent_builtin` or `external_cli`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_source: Option<String>,
     /// `cli_reported` or `estimated` (external CLI only).

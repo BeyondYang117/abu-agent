@@ -22,15 +22,15 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore]
     async fn replace_pipeline_real_fixture() {
-        let model_dir = std::env::var_os("KIVIO_REPLACE_MODEL_DIR")
+        let model_dir = std::env::var_os("ABU_AGENT_REPLACE_MODEL_DIR")
             .map(std::path::PathBuf::from)
-            .expect("set KIVIO_REPLACE_MODEL_DIR");
-        let image_path = std::env::var_os("KIVIO_REPLACE_IMAGE")
+            .expect("set ABU_AGENT_REPLACE_MODEL_DIR");
+        let image_path = std::env::var_os("ABU_AGENT_REPLACE_IMAGE")
             .map(std::path::PathBuf::from)
-            .expect("set KIVIO_REPLACE_IMAGE");
-        let output_path = std::env::var_os("KIVIO_REPLACE_OUTPUT")
+            .expect("set ABU_AGENT_REPLACE_IMAGE");
+        let output_path = std::env::var_os("ABU_AGENT_REPLACE_OUTPUT")
             .map(std::path::PathBuf::from)
-            .expect("set KIVIO_REPLACE_OUTPUT");
+            .expect("set ABU_AGENT_REPLACE_OUTPUT");
         let manager = crate::offline_models::OfflineModelManager::with_model_dir(
             model_dir,
             reqwest::Client::new(),

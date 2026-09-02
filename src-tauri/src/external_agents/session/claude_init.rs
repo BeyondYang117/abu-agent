@@ -19,7 +19,7 @@ use crate::external_agents::types::{RuntimeBuildOptions, RuntimeContext, Runtime
 ///    每档的 runtime model + 展示名（tier id 不变，所以四行不会因映射到同一模型而折叠）
 /// 3. **不起进程**探测模型列表
 ///
-/// 这里 id / label 与 cc-gui 字面一致；Kivio 额外在列表头保留 `default`（Auto / 不传
+/// 这里 id / label 与 cc-gui 字面一致；ABU Agent 额外在列表头保留 `default`（Auto / 不传
 /// `--model`），这是本应用胶囊语义，cc-gui 没有这一行。
 const CLAUDE_BUILTIN_TIERS: &[(&str, &str)] = &[
     ("claude-fable-5", "Fable 5"),
@@ -182,7 +182,7 @@ pub async fn probe_claude_init(
 ///
 /// - **不起进程**（`resolved_bin` / `cwd` 仅保留签名兼容；slash 探测另走 `probe_claude_init`）
 /// - 4 档 builtin + settings/env 覆盖改写 label（展示名）
-/// - 头上多一个 `default`（Kivio Auto：不传 `--model`）
+/// - 头上多一个 `default`（ABU Agent Auto：不传 `--model`）
 /// - `current_model`：读 `settings.json` 的 `model` / `ANTHROPIC_MODEL` /
 ///    `ANTHROPIC_DEFAULT_MODEL`（不 spawn）
 pub async fn detect_claude_models(
@@ -198,7 +198,7 @@ fn build_claude_model_catalog() -> (Vec<RuntimeModelOption>, Option<String>) {
     let mut models = get_builtin_claude_models();
     apply_claude_model_overrides(&mut models, &overrides);
 
-    // Kivio Auto 行：不传 `--model`，让 CLI 用自己的默认 / settings。
+    // ABU Agent Auto 行：不传 `--model`，让 CLI 用自己的默认 / settings。
     let mut out = vec![RuntimeModelOption {
         id: "default".to_string(),
         label: "Default".to_string(),
@@ -342,7 +342,7 @@ fn resolve_override_for_family<'a>(
 }
 
 /// 把 settings/env 映射写到展示名上（cc-gui：改 `model` + `name`，tier id 不变）。
-/// Kivio 的 `RuntimeModelOption` 只有 id/label：id 保持 catalog，label 改成映射后的 runtime id。
+/// ABU Agent 的 `RuntimeModelOption` 只有 id/label：id 保持 catalog，label 改成映射后的 runtime id。
 fn apply_claude_model_overrides(
     models: &mut [RuntimeModelOption],
     overrides: &ClaudeModelOverrides,
@@ -516,7 +516,7 @@ fn claude_config_dir() -> Option<PathBuf> {
 /// CLI 把「本轮实际生效的档位」导给 hook / Bash 用（zod 描述原文："Also exposed to hook
 /// commands and Bash as the CLAUDE_EFFORT env var"）。真正的输入覆盖是
 /// `CLAUDE_CODE_EFFORT_LEVEL`（`ait()` 只读它，且 `unset` / `auto` 视为「没配」）。
-/// 读错的后果不是「读不到」而是**读到别人的**：Kivio 若从 Claude Code 内启动，
+/// 读错的后果不是「读不到」而是**读到别人的**：ABU Agent 若从 Claude Code 内启动，
 /// `CLAUDE_EFFORT` 会被继承进来（本机 `env | grep CLAUDE` 可见，且它不在
 /// `spawn::PARENT_SESSION_ENV_VARS` 的剥离清单里），胶囊显示的就是宿主那一轮的档位，
 /// 与用户的 claude 配置无关。
@@ -674,7 +674,7 @@ mod tests {
     /// 把 CLAUDE_CONFIG_DIR 指到空目录，避免读到本机真实 `~/.claude/settings.json`。
     fn isolate_claude_config() -> (PathBuf, Option<String>) {
         let dir = std::env::temp_dir().join(format!(
-            "kivio-claude-cfg-{}-{}",
+            "abu-agent-claude-cfg-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -737,7 +737,7 @@ mod tests {
     fn settings_overrides_rewrite_labels_keep_catalog_ids() {
         let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!(
-            "kivio-claude-override-{}-{}",
+            "abu-agent-claude-override-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -919,7 +919,7 @@ mod tests {
     fn reads_effort_level_from_settings_json() {
         let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!(
-            "kivio-claude-effort-{}-{}",
+            "abu-agent-claude-effort-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -978,7 +978,7 @@ mod tests {
     fn reads_ultracode_and_treats_unset_auto_as_unconfigured() {
         let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!(
-            "kivio-claude-ultracode-{}-{}",
+            "abu-agent-claude-ultracode-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1064,8 +1064,8 @@ mod live_probe_hygiene_tests {
 
     /// claude 把会话落在 `~/.claude/projects/<cwd 编码>/<session-id>.jsonl`。
     /// 编码规则：cwd 里每个**非字母数字**字符逐个换成 `-`（不折叠连续分隔符）。
-    /// 本机核验：`C:\Users\11028\AppData\Roaming\com.zmair.kivio\chat-workspaces\__global__`
-    /// → `C--Users-11028-AppData-Roaming-com-zmair-kivio-chat-workspaces---global--`。
+    /// 本机核验：`C:\Users\11028\AppData\Roaming\com.zmair.abu-agent\chat-workspaces\__global__`
+    /// → `C--Users-11028-AppData-Roaming-com-zmair-abu-agent-chat-workspaces---global--`。
     fn claude_project_dir_for(cwd: &Path) -> PathBuf {
         let encoded: String = cwd
             .to_string_lossy()
@@ -1151,7 +1151,7 @@ mod live_probe_hygiene_tests {
         };
 
         let cwd = std::env::temp_dir().join(format!(
-            "kivio-probe-hygiene-{}-{}",
+            "abu-agent-probe-hygiene-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

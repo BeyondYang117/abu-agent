@@ -2,12 +2,12 @@ import Schema from '@deepseek-ai/schemastery'
 import { HarnessSdkJsonRpcServer } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 
-class KivioHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
+class AbuAgentHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
   async initialize(params) {
     const result = await super.initialize(params)
     // Session tools read header.cwd; sandbox-policy falls back to process.cwd()
     // when a header has none. Align the process with initialize.cwd so this
-    // one-session process is actually rooted in the Kivio project directory.
+    // one-session process is actually rooted in the ABU Agent project directory.
     try {
       process.chdir(this.cwd)
     } catch {
@@ -16,7 +16,7 @@ class KivioHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
     return {
       ...result,
       serverInfo: {
-        name: 'kivio-dsh-sdk-runtime',
+        name: 'abu-agent-dsh-sdk-runtime',
         version: '1.0.0',
       },
       capabilities: {
@@ -92,7 +92,7 @@ class KivioHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
    * session in the ungrouped bucket ("其他项目" / 未分组). Mirror
    * session.create: ensure the directory is a workspace, then attach.
    *
-   * Per-conversation Kivio workbenches stay ungrouped so they do not
+   * Per-conversation ABU Agent workbenches stay ungrouped so they do not
    * flood the web sidebar with uuid folders.
    */
   async attachToWorkspace(sessionId, cwd) {
@@ -102,7 +102,7 @@ class KivioHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
       await workspace.attachSession(sessionId)
     } catch (error) {
       // Grouping is best-effort; a failed attach must not drop the turn.
-      console.error('[kivio-dsh] workspace attach failed:', error)
+      console.error('[abu-agent-dsh] workspace attach failed:', error)
     }
   }
 
@@ -216,7 +216,7 @@ class KivioHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
     const jobs = this.ctx.jobs
     if (jobs && typeof jobs.kill === 'function') {
       try {
-        const outcome = jobs.kill(jobId, agent, 'kivio-stop-task')
+        const outcome = jobs.kill(jobId, agent, 'abu-agent-stop-task')
         return { sessionId, jobId, outcome, target: 'job' }
       } catch {
         // Unknown job ids include childSessionId from subagent.started.
@@ -262,7 +262,7 @@ class KivioHarnessSdkJsonRpcServer extends HarnessSdkJsonRpcServer {
   // Official SDK only exposes session/prompt → agent.followup() (next turn).
   // dsh itself has agent.steer() (next-step inbox). Reuse prompt()'s
   // UserMessage construction by routing followup to steer for this one call.
-  // @deepseek-ai/dsh-llm is a peer of the SDK server, not a kivio profile dep.
+  // @deepseek-ai/dsh-llm is a peer of the SDK server, not a abu_agent profile dep.
   // prompt() and steer() share a per-agent queue so a concurrent prompt cannot
   // run while followup is patched to steer.
   async steer(params) {
@@ -433,7 +433,7 @@ async function materializeContentBlocks(ctx, blocks) {
   return out
 }
 
-export const name = 'kivio-dsh-jsonrpc-bridge'
+export const name = 'abu-agent-dsh-jsonrpc-bridge'
 export const inject = ['agents', 'sessionPersistence', 'agentPresets', 'userQuestions', 'commands', 'attachments', 'jobs', 'subagents', 'workspaceRegistry']
 export const Config = Schema.object({
   maxTokensAsSuccess: Schema.boolean().default(false),
@@ -445,7 +445,7 @@ export function apply(ctx, config) {
   const output = config.output ?? process.stdout
   const exit = config.exit ?? ((code) => process.exit(code))
   const transport = new JsonRpcLineTransport(input, output)
-  const server = new KivioHarnessSdkJsonRpcServer(ctx, transport, {
+  const server = new AbuAgentHarnessSdkJsonRpcServer(ctx, transport, {
     maxTokensAsSuccess: config.maxTokensAsSuccess,
   })
   const parentPid = process.ppid
@@ -482,14 +482,14 @@ export function apply(ctx, config) {
     return ctx.userQuestions.registerProvider({
       ask: (request) => askViaHost(transport, server, request),
     })
-  }, 'kivio-jsonrpc.user-questions')
+  }, 'abu-agent-jsonrpc.user-questions')
   ctx.effect(() => {
     transport.start()
     return async () => {
       await server.shutdown()
       transport.close()
     }
-  }, 'kivio-jsonrpc.serve')
+  }, 'abu-agent-jsonrpc.serve')
 }
 
 function wireQuestions(questions) {

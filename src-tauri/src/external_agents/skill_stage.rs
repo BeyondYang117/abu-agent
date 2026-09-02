@@ -3,7 +3,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-pub const SKILLS_CWD_ALIAS: &str = ".kivio/skills-staged";
+pub const SKILLS_CWD_ALIAS: &str = ".abu-agent/skills-staged";
 
 #[derive(Debug, Clone)]
 pub struct SkillStagingResult {
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn stage_active_skill_creates_copy_barrier() {
-        let tmp = std::env::temp_dir().join(format!("kivio-skill-stage-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("abu-agent-skill-stage-{}", uuid::Uuid::new_v4()));
         let src = tmp.join("src-skill");
         let cwd = tmp.join("project");
         fs::create_dir_all(&src).unwrap();

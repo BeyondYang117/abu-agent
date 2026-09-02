@@ -184,8 +184,8 @@ fn acp_initialize_params(terminal: bool) -> Value {
         "protocolVersion": ACP_PROTOCOL_VERSION,
         "clientCapabilities": { "terminal": terminal },
         "clientInfo": {
-            "name": "kivio",
-            "title": "Kivio",
+            "name": "abu_agent",
+            "title": "ABU Agent",
             "version": env!("CARGO_PKG_VERSION"),
         },
     })
@@ -851,7 +851,7 @@ pub async fn detect_acp_commands(
 ///
 /// **优先挑 `allow_once`**：审批卡上的「允许一次」必须名副其实。以前优先挑
 /// `approve_for_session` / `allow_always`，等于用户点「允许」就被静默升级成永久放行。
-/// 「总是允许」由 Kivio 自己那张 `chat_tool_always_allow` 表兜住（后续同名工具不再弹卡，
+/// 「总是允许」由 ABU Agent 自己那张 `chat_tool_always_allow` 表兜住（后续同名工具不再弹卡，
 /// 每次照样以 allow_once 回给 CLI），不需要把三态透传下来。
 /// 只在 CLI 压根没给 once 选项时才退回 session/always（否则这一轮就卡死了）。
 fn choose_permission_outcome(options: Option<&Value>) -> Option<String> {
@@ -962,7 +962,7 @@ fn usage_from_prompt_result(result: &Value) -> Option<crate::chat::model::ModelU
 /// 读的就是这个字段来当分子。不要"修正"成 prompt input 语义。
 ///
 /// `size` 是上下文窗口总大小，走 `context_window_tokens` 当分母。
-/// `cost` 暂不解析——Kivio 目前没有成本展示位。
+/// `cost` 暂不解析——ABU Agent 目前没有成本展示位。
 ///
 /// `used`/`size` 都缺时返回 `None`（不是这个变体，或上游没给数据）。
 fn parse_acp_usage_update(
@@ -1087,7 +1087,7 @@ fn acp_tool_block_text(block: &Value, terminals: Option<&AcpTerminalHost>) -> Op
 }
 
 /// Kimi 0.37 在广告 `terminal` 后把全部 spawn 换成宿主终端，又只放行 `bash -c`。
-/// 原文看起来像 Kivio 没接好，其实是 agent 策略。
+/// 原文看起来像 ABU Agent 没接好，其实是 agent 策略。
 pub(crate) fn explain_acp_agent_policy_error(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -1519,7 +1519,7 @@ impl AcpSession {
                 .then_some(additional_directories);
 
             // session/new for a fresh session, session/load to resume a prior one.
-            // One Kivio conversation ↔ one native session id: load failure must
+            // One ABU Agent conversation ↔ one native session id: load failure must
             // surface (caller only starts fresh when the CLI says the id is gone).
             let mut next_id: u64 = 2;
             let (result, session_id) = match resume_session.filter(|s| !s.is_empty()) {
@@ -2131,8 +2131,8 @@ mod tests {
         let params = acp_initialize_params(true);
         assert_eq!(params["clientCapabilities"]["terminal"], json!(true));
         assert_eq!(params["protocolVersion"], json!(ACP_PROTOCOL_VERSION));
-        assert_eq!(params["clientInfo"]["name"], json!("kivio"));
-        assert_eq!(params["clientInfo"]["title"], json!("Kivio"));
+        assert_eq!(params["clientInfo"]["name"], json!("abu_agent"));
+        assert_eq!(params["clientInfo"]["title"], json!("ABU Agent"));
         assert_eq!(
             params["clientInfo"]["version"],
             json!(env!("CARGO_PKG_VERSION"))
@@ -2458,7 +2458,7 @@ mod tests {
     #[test]
     fn flatten_acp_tool_content_resolves_terminal_output() {
         let mut host = AcpTerminalHost::new(std::env::temp_dir());
-        host.seed_output("term_1", "KIVIO_ACP_TERMINAL_OK\n");
+        host.seed_output("term_1", "ABU_AGENT_ACP_TERMINAL_OK\n");
         let finished = serde_json::Map::from_iter([
             ("sessionUpdate".to_string(), json!("tool_call_update")),
             ("toolCallId".to_string(), json!("bash-1")),
@@ -2481,7 +2481,7 @@ mod tests {
             event,
             UnifiedAgentEvent::ToolResult { tool_use_id, content, is_error }
                 if tool_use_id == "bash-1"
-                    && content.contains("KIVIO_ACP_TERMINAL_OK")
+                    && content.contains("ABU_AGENT_ACP_TERMINAL_OK")
                     && !*is_error
         )));
     }

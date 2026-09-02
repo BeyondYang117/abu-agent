@@ -219,7 +219,7 @@ mod parse_e2e {
 
     fn tmp_path(suffix: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "kivio-parse-e2e-{}{suffix}",
+            "abu-agent-parse-e2e-{}{suffix}",
             uuid::Uuid::new_v4().simple()
         ))
     }
@@ -240,7 +240,7 @@ mod parse_e2e {
         // ---- txt ----
         {
             let path = tmp_path(".txt");
-            std::fs::write(&path, format!("{CN} Kivio 2026\n{EN} line two.\n")).unwrap();
+            std::fs::write(&path, format!("{CN} ABU Agent 2026\n{EN} line two.\n")).unwrap();
             let doc = parse_file(&path).expect("txt parse");
             show("txt", &doc);
             assert!(
@@ -255,7 +255,7 @@ mod parse_e2e {
         // ---- md ----
         {
             let path = tmp_path(".md");
-            std::fs::write(&path, format!("# {CN} Kivio 2026\n\n{EN} paragraph.\n")).unwrap();
+            std::fs::write(&path, format!("# {CN} ABU Agent 2026\n\n{EN} paragraph.\n")).unwrap();
             let doc = parse_file(&path).expect("md parse");
             show("md", &doc);
             assert!(
@@ -301,7 +301,7 @@ mod parse_e2e {
         {
             let path = tmp_path(".html");
             let html = format!(
-                "<html><head><title>{CN}标题</title></head><body><h1>{CN} Kivio 2026</h1><p>{EN} paragraph body text.</p></body></html>"
+                "<html><head><title>{CN}标题</title></head><body><h1>{CN} ABU Agent 2026</h1><p>{EN} paragraph body text.</p></body></html>"
             );
             std::fs::write(&path, &html).unwrap();
             let doc = parse_file(&path).expect("html parse");
@@ -324,7 +324,7 @@ mod parse_e2e {
         {
             let path = tmp_path(".htm");
             let html = format!(
-                "<html><head><title>{CN}标题</title></head><body><h1>{CN} Kivio 2026</h1><p>{EN} paragraph body text.</p></body></html>"
+                "<html><head><title>{CN}标题</title></head><body><h1>{CN} ABU Agent 2026</h1><p>{EN} paragraph body text.</p></body></html>"
             );
             std::fs::write(&path, &html).unwrap();
             let doc = parse_file(&path).expect("htm parse");
@@ -374,7 +374,7 @@ mod parse_e2e {
             let path = tmp_path(".pdf");
             // Base-14 Helvetica has no CJK glyphs/encoding, so a hand-rolled PDF
             // can't carry Chinese text honestly — English-only keyword here.
-            let bytes = build_pdf(&format!("BT /F1 14 Tf 20 150 Td ({EN} Kivio 2026) Tj ET"));
+            let bytes = build_pdf(&format!("BT /F1 14 Tf 20 150 Td ({EN} ABU Agent 2026) Tj ET"));
             std::fs::write(&path, &bytes).unwrap();
             let doc = parse_file(&path).expect("pdf parse");
             show("pdf", &doc);
@@ -457,7 +457,7 @@ mod parse_e2e {
         let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
-<w:p><w:r><w:t>{cn} Kivio 2026</w:t></w:r></w:p>
+<w:p><w:r><w:t>{cn} ABU Agent 2026</w:t></w:r></w:p>
 <w:p><w:r><w:t>第二段：</w:t></w:r><w:r><w:t>{en}</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>Tab-separated</w:t></w:r></w:p>
 </w:body></w:document>"#
         );
@@ -515,7 +515,7 @@ mod parse_e2e {
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <sheetData>
-<row r="1"><c r="A1" t="inlineStr"><is><t>{cn}</t></is></c><c r="B1" t="inlineStr"><is><t>Kivio 2026</t></is></c></row>
+<row r="1"><c r="A1" t="inlineStr"><is><t>{cn}</t></is></c><c r="B1" t="inlineStr"><is><t>ABU Agent 2026</t></is></c></row>
 <row r="2"><c r="A2" t="inlineStr"><is><t>{en}</t></is></c><c r="B2" t="inlineStr"><is><t>中文</t></is></c></row>
 </sheetData>
 </worksheet>"#

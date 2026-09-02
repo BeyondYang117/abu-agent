@@ -1,6 +1,6 @@
 //! Windows → WSL 桥：探测并拉起装在 WSL 发行版里的 CLI。
 //!
-//! Kivio 是 Win32 GUI，`where.exe` 只扫 Windows PATH。很多人把 claude / codex 装在
+//! ABU Agent 是 Win32 GUI，`where.exe` 只扫 Windows PATH。很多人把 claude / codex 装在
 //! Ubuntu 里；Windows 侧要么完全看不见，要么只看见 `appendWindowsPath` 带过来的 `.cmd`
 //! 垫片（能 `--version`，登录态却在 Linux `$HOME`）。
 //!
@@ -559,10 +559,10 @@ mod tests {
     fn env_value_for_cli_translates_path_homes_only_on_wsl() {
         let wsl = PathBuf::from(r"\\wsl$\Ubuntu\usr\bin\codex");
         let win = PathBuf::from(r"C:\codex.exe");
-        let home = r"C:\Users\me\AppData\Roaming\kivio\codex-p1";
+        let home = r"C:\Users\me\AppData\Roaming\abu_agent\codex-p1";
         assert_eq!(
             env_value_for_cli(&wsl, "CODEX_HOME", home.to_string()),
-            "/mnt/c/Users/me/AppData/Roaming/kivio/codex-p1"
+            "/mnt/c/Users/me/AppData/Roaming/abu_agent/codex-p1"
         );
         assert_eq!(
             env_value_for_cli(&win, "CODEX_HOME", home.to_string()),

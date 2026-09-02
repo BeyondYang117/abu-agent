@@ -213,7 +213,7 @@ fn to_snake_case(value: &str) -> String {
 
 fn mcp_tool_requires_confirmation(_tool: &McpTool) -> bool {
     // MCP annotations are server-provided, untrusted hints. They may be displayed to the user,
-    // but must never relax Kivio's approval boundary. A user-owned approval policy (for example
+    // but must never relax ABU Agent's approval boundary. A user-owned approval policy (for example
     // the explicit global `auto` policy) is the only way to bypass per-call MCP confirmation.
     true
 }
@@ -225,7 +225,7 @@ pub fn native_web_search_tool() -> ChatToolDefinition {
         description: "Search the web for current facts and return source snippets.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -277,7 +277,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
         description: "Read a local file or directory. For a file: text is line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit old_string. Output is capped at 2000 lines or 50KB, whichever is hit first, so a single read can never flood the context; when the cap or your own limit stops the read early the result says so and reports total_lines and next_offset — continue with offset until you have what you need. Optional offset/limit select a 1-based line window (the cap still applies on top). For a directory path: returns its entries (folded in the former `ls` tool); offset/limit are ignored. Image files (png/jpg/webp/…) are also supported: the image is shown to you directly when your model has vision, otherwise it is described or OCR'd to text — so you can `read` screenshots and photos by path. For PDF/Word/Excel, use the matching skill instead.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -294,7 +294,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
 }
 
 /// Directory listing tool def. No longer part of the chat native tool set (chat's
-/// `read` now lists directories directly), but still used by the Kivio Code surface,
+/// `read` now lists directories directly), but still used by the ABU Agent Code surface,
 /// which keeps a dedicated `ls` in its own tool list.
 pub fn native_list_dir_tool() -> ChatToolDefinition {
     ChatToolDefinition {
@@ -303,7 +303,7 @@ pub fn native_list_dir_tool() -> ChatToolDefinition {
         description: "List files and directories in a directory. Omit path (or pass \".\") to list the current working directory; relative paths resolve from it. Do not guess or invent an absolute path, and never translate/\"correct\" directory names — pass an absolute or ~/ path only when the user gave one or an earlier tool returned it.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -325,7 +325,7 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
         description: "Search text in a file or under a directory. By default `query` is a literal substring; set regex=true to treat it as a regular expression. If you already know the exact file, pass that file path directly; for broader searches, pass a directory and use `glob` to narrow the scope. Relative paths resolve from the project root; respects .gitignore and skips common dependency/build folders (node_modules, target, dist, …).".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -355,7 +355,7 @@ pub fn native_glob_files_tool() -> ChatToolDefinition {
         description: "Find files/directories under a directory by glob pattern such as \"src/**/*.tsx\". Relative paths resolve from the project root; respects .gitignore.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -379,7 +379,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
         description: "Write a full text file: create it if missing, overwrite it if it exists. Use this when the user explicitly asks to save/write/create a local file or gives a target path; for small changes to an existing file prefer edit. Do not call it just because the user asked for a code block or inline code — answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -401,7 +401,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
         description: "Edit a file with one or more exact text replacements in a single call. Each edit's old_string must match a unique, contiguous region of the current file (copy it from read output WITHOUT the leading line-number prefix); if a snippet appears more than once, extend it with surrounding context. Edits apply in order. Prefer this over write for changes to existing files. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -439,7 +439,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
         description: format!("Run a host shell command (build, test, etc.).{shell_hint} In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. Do not use `cd path && command` when the path contains spaces—pass `cwd` and run only the remaining command. Do not combine `cwd` with a leading `cd ... &&` prefix. Long-running dev servers such as `npm run dev`, `npm run tauri dev`, and `vite` are started in the background automatically and return immediately with a pid. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Host Python package installs require an explicit user request and allow_host_python_package_install=true."),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -464,7 +464,7 @@ pub fn native_bash_output_tool() -> ChatToolDefinition {
         description: "Inspect background commands started by bash (background:true). With a job_id: returns that job's captured stdout/stderr since since_offset (default 0), the current status (running / exited with exit_code / killed / error), and next_offset for incremental reads. With NO job_id: lists all background commands tracked in this app session (job_id, status, command, working directory, age) — background commands survive across turns until killed or the app exits. After dispatching a background command, do NOT poll immediately — keep working, then poll a bounded number of times (≤20). Always refresh once with bash_output before reporting a background command's result to the user.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -485,7 +485,7 @@ pub fn native_kill_background_tool() -> ChatToolDefinition {
         description: "Stop a background command started by bash (background:true) by killing its process group. Pass the job_id. Use this to stop a dev server or other long-running background process when you are done with it; otherwise it keeps running until the app exits.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -503,10 +503,10 @@ pub fn native_save_assistant_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__save_assistant".to_string(),
         name: "save_assistant".to_string(),
-        description: "Create a new Kivio assistant (专家). ONLY available while building an assistant by chat, and only call it after you have restated the full config and the user confirmed. system_prompt is the assistant's own instructions (write it in the user's language). mcp_server_ids and skill_ids MUST be chosen from the available lists given in your builder instructions — use the exact ids, never invent them; leave a list empty if none apply. Returns the new assistant id.".to_string(),
+        description: "Create a new ABU Agent assistant (专家). ONLY available while building an assistant by chat, and only call it after you have restated the full config and the user confirmed. system_prompt is the assistant's own instructions (write it in the user's language). mcp_server_ids and skill_ids MUST be chosen from the available lists given in your builder instructions — use the exact ids, never invent them; leave a list empty if none apply. Returns the new assistant id.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -533,7 +533,7 @@ pub fn native_present_artifacts_tool() -> ChatToolDefinition {
         description: "Show files or images in the chat. You must call this when the user asks to show, preview, attach, or send a file; reading or describing a file does not display it. Pass artifact_ids for files this conversation generated, or paths for files that already exist on disk — never both for the same file, and never invent a path for a generated file. Unselected files remain hidden.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -571,10 +571,10 @@ pub fn native_memory_read_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_read".to_string(),
         name: "memory_read".to_string(),
-        description: "Read Kivio Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
+        description: "Read ABU Agent Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -604,10 +604,10 @@ pub fn native_memory_modify_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_modify".to_string(),
         name: "memory_modify".to_string(),
-        description: "Modify Kivio Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
+        description: "Modify ABU Agent Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -651,10 +651,10 @@ pub fn native_memory_search_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_search".to_string(),
         name: "memory_search".to_string(),
-        description: "Search Kivio Chat long-term memory (L2) by keywords and get the most relevant entries back as heading + snippet. Prefer this over memory_read when you are not sure of the exact L2 heading: memory_read needs an exact heading/text match, while memory_search ranks sections by query-token overlap.".to_string(),
+        description: "Search ABU Agent Chat long-term memory (L2) by keywords and get the most relevant entries back as heading + snippet. Prefer this over memory_read when you are not sure of the exact L2 heading: memory_read needs an exact heading/text match, while memory_search ranks sections by query-token overlap.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -727,7 +727,7 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
         description: "Fetch readable text from an HTTPS URL. Uses the configured fetch provider's extract API when available (independent of the search provider: Tavily, Exa, Ollama, TinyFish, Serper, Kimi); otherwise fetches the page directly (HTML stripped to plain text, with a hosted reader fallback).".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -757,7 +757,7 @@ fn native_automation_tool(
         description: description.to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema,
         sensitive,
         annotations: None,
@@ -768,7 +768,7 @@ fn native_automation_tool(
 pub fn native_automation_list_tool() -> ChatToolDefinition {
     native_automation_tool(
         "automation_list",
-        "List Kivio automations (id, name, enabled, trigger type). Call this once to avoid duplicates, then create with automation_upsert. Do not discover node types by trial.",
+        "List ABU Agent automations (id, name, enabled, trigger type). Call this once to avoid duplicates, then create with automation_upsert. Do not discover node types by trial.",
         serde_json::json!({
             "type": "object",
             "properties": {},
@@ -796,13 +796,13 @@ pub fn native_automation_get_tool() -> ChatToolDefinition {
 pub fn native_automation_upsert_tool() -> ChatToolDefinition {
     native_automation_tool(
         "automation_upsert",
-        "Create or replace a Kivio automation graph in ONE call. Omit id to create. Omit node positions to auto-layout. Activate the `automation` skill first for node types and examples. Do not glob the repo and do not dry_run-probe types. Validation errors return allowedNodeTypes and schemaHint.",
+        "Create or replace a ABU Agent automation graph in ONE call. Omit id to create. Omit node positions to auto-layout. Activate the `automation` skill first for node types and examples. Do not glob the repo and do not dry_run-probe types. Validation errors return allowedNodeTypes and schemaHint.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "automation": {
                     "type": "object",
-                    "description": "Complete graph: {name, enabled, nodes:[{id, type, data}], edges:[{id, source, target, sourceHandle?, targetHandle?}]}. schemaVersion is set by Kivio. Allowed node types are in the `automation` skill."
+                    "description": "Complete graph: {name, enabled, nodes:[{id, type, data}], edges:[{id, source, target, sourceHandle?, targetHandle?}]}. schemaVersion is set by ABU Agent. Allowed node types are in the `automation` skill."
                 },
                 "dry_run": {
                     "type": "boolean",
@@ -893,7 +893,7 @@ pub fn native_knowledge_search_tool() -> ChatToolDefinition {
         description: "Search the user's knowledge base(s) for passages relevant to a query and return them with citation markers. Use this whenever the question may be answered by the user's uploaded documents. Each returned passage is prefixed with a [n] marker and its source; when you use a passage, cite it inline as [n]. If no relevant passage is returned, say you don't have that information in the knowledge base instead of guessing. This searches only the libraries the user attached to the current conversation; if none are attached it returns nothing.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -930,7 +930,7 @@ pub fn native_advisor_tool() -> ChatToolDefinition {
         description: "Consult a stronger advisor model for guidance. Use this when you are stuck, have failed the same approach repeatedly, or face a significant design/architecture decision — NOT for routine steps you can handle yourself. Pass the specific question and enough context (relevant code, what you already tried, constraints). Returns the advisor's diagnosis and direction; you remain responsible for carrying it out.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -977,7 +977,7 @@ const LONG_MCP_SERVER_ID: usize = 16;
 /// Shared wire-name builder for [`ChatToolDefinition`] and `ModelTool`.
 pub fn wire_tool_name(source: &str, name: &str, id: &str, server_id: Option<&str>) -> String {
     match source {
-        // Native and Skill tools are model-facing APIs owned by Kivio. Keep their names
+        // Native and Skill tools are model-facing APIs owned by ABU Agent. Keep their names
         // aligned with the system prompt so models can call exactly what we instruct.
         "native" | "skill" | "mixer" => apply_reserved_wire_alias(&sanitize_openai_tool_name(name)),
         _ => sanitize_openai_tool_name(&compact_mcp_tool_id(id, server_id)),
@@ -1377,7 +1377,7 @@ mod tests {
             description: "Search the web".to_string(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("ABU Agent".to_string()),
             input_schema: serde_json::json!({ "type": "object" }),
             sensitive: false,
             annotations: None,

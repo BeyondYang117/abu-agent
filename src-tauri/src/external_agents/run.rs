@@ -59,7 +59,7 @@ fn context_reset_notice_event() -> UnifiedAgentEvent {
 
 /// 系统提示落盘文件的前缀。启动 GC 也认这个前缀（`screenshot::cleanup_orphan_temp_files`），
 /// 崩溃留下的残渣 24h 后被回收。
-const SYSTEM_PROMPT_FILE_PREFIX: &str = "kivio-extsys-";
+const SYSTEM_PROMPT_FILE_PREFIX: &str = "abu-agent-extsys-";
 
 fn translate_cli_dirs(cli_bin: &Path, dirs: Vec<String>) -> Vec<String> {
     dirs.into_iter()
@@ -394,7 +394,7 @@ pub async fn run_external_cli_reply(
         crate::chat::protocol::RegisteredRunGuard::new(app, &run_id, conversation.revision);
 
     // All rich external protocols, including Pi RPC, use the live-session registry so one child
-    // process serves multiple turns for the same Kivio conversation.
+    // process serves multiple turns for the same ABU Agent conversation.
     let persistent = matches!(
         def.stream_format,
         StreamFormat::ClaudeStreamJson
@@ -1238,7 +1238,7 @@ async fn reconnect_fresh(
 /// `thread/start` 生效，所以 sandbox 进指纹；model / effort 每轮都能带，不进指纹。
 ///
 /// dsh 相反：model 是进程级 `initialize` 后创建 agent 时固定的，reasoning 是 profile patch，
-/// sandbox 是进程环境变量；三者都没有 session 级修改 RPC。任一变化都必须换进程，但 Kivio
+/// sandbox 是进程环境变量；三者都没有 session 级修改 RPC。任一变化都必须换进程，但 ABU Agent
 /// bridge 会用同一个 native session id 调 `agents.resume()`，所以历史上下文继续保留。
 fn dsh_provider_fingerprint_for(
     config: Option<&crate::settings::ExternalCliAgentConfig>,
@@ -1693,10 +1693,10 @@ const FULL_ACCESS_PERMISSION_MODE: &str = "bypassPermissions";
 
 /// 宿主侧回答工具审批询问所需的一切。
 ///
-/// 存在的意义只有一个：**把外部 CLI 的权限询问接到 Kivio 已有的那条审批链路上**
+/// 存在的意义只有一个：**把外部 CLI 的权限询问接到 ABU Agent 已有的那条审批链路上**
 /// （typed approval event → 前端确认卡 → `chat_confirm_tool_call` → 同一张
 /// `pending_chat_tool_approvals` 挂起表）。内置 agent 用的就是这一套，不许再造第二套
-/// （spec 第 2 条）。唯一需要的适配是 **id 映射**：Kivio 那侧按「工具调用 id」寻址，
+/// （spec 第 2 条）。唯一需要的适配是 **id 映射**：ABU Agent 那侧按「工具调用 id」寻址，
 /// 而 CLI 给的是它自己的 `request_id` —— 所以卡片用 claude 的 `tool_use_id`（与工具卡同一个
 /// id），回程按 `request_id` 路由，两者在 `ApprovalAsk` 里成对携带。
 struct ApprovalHost<'a> {
@@ -1750,7 +1750,7 @@ impl ApprovalHost<'_> {
         // 问用户不是「要不要放行这个工具」，而是 CLI 在问用户一个问题。
         // 官方答法走各 CLI 自己的线（claude: 同一条 `can_use_tool` 回
         // `allow + updatedInput`；dsh: `session/ask` 回 `{ answers }`），
-        // 卡片是 Kivio 已有的那张 —— 不该为每条 CLI 再造一套（spec 第 2 条）。
+        // 卡片是 ABU Agent 已有的那张 —— 不该为每条 CLI 再造一套（spec 第 2 条）。
         if let Some(codec) =
             crate::external_agents::ask_user::codec_for(self.agent_id, &ask.tool_name)
         {
@@ -1869,7 +1869,7 @@ impl ApprovalHost<'_> {
         }
     }
 
-    /// 弹 Kivio 已有的问用户卡，答完补发带答案的工具记录并落盘。
+    /// 弹 ABU Agent 已有的问用户卡，答完补发带答案的工具记录并落盘。
     ///
     /// 答完把**带答案**的记录补发一次，消息流里才留得下「问了什么 + 选了什么」。
     /// 少了这一步，那条工具卡的载荷永远停在「等待作答」，而 CLI 随后回的
@@ -2556,7 +2556,7 @@ async fn connect_persistent_session(
                 .filter(|id| !id.is_empty())
             {
                 // Same contract as Codex / ACP: resume failure must surface. Swallowing
-                // `session/open` and creating a fresh `kivio-*` id made save_live_handle
+                // `session/open` and creating a fresh `abu-agent-*` id made save_live_handle
                 // overwrite the real binding. Missing-session is classified one layer up.
                 let session = DshJsonRpcSession::connect(
                     resolved_bin,
@@ -2731,7 +2731,7 @@ fn emit_cli_compaction(
 ) -> CompactionBoundaryRecord {
     let boundary = CompactionBoundaryRecord {
         id: format!("ctxbd_{}", Uuid::new_v4()),
-        // CLI 内部压缩，Kivio 拿不到「摘要覆盖到哪条消息」——这是 CLI 自己的上下文切分点，
+        // CLI 内部压缩，ABU Agent 拿不到「摘要覆盖到哪条消息」——这是 CLI 自己的上下文切分点，
         // 协议里也不上报。留空并靠 `display_after_message_id` 做时间线锚点。
         source_until_message_id: String::new(),
         display_after_message_id: Some(anchor_message_id.to_string()),
@@ -2935,7 +2935,7 @@ fn apply_unified_event(
             dropped_tokens,
             duration_ms,
         } => {
-            // CLI **自己**压缩了上下文（claude 的 compact_boundary）。Kivio 并没有发
+            // CLI **自己**压缩了上下文（claude 的 compact_boundary）。ABU Agent 并没有发
             // `/compact`，所以不能走 `external_agents::compact` 那条路；这里做两件事：
             //   1. 发协议压缩更新让前端**立刻**插入分隔线——否则用户只会看到
             //      「对话突然变短了」而没有任何解释；
@@ -3762,7 +3762,7 @@ mod tests {
     }
 
     /// **零用量的 result 不许把分子清零**（A2）。claude 在没有 LLM 往返的轮次
-    /// （未登录 / `/help` / 未知斜杠命令 / Kivio 自己发的 `/compact`）会报一条全 0 的 usage，
+    /// （未登录 / `/help` / 未知斜杠命令 / ABU Agent 自己发的 `/compact`）会报一条全 0 的 usage，
     /// 但它仍可能带着 `modelUsage.contextWindow`。直接整体覆盖会把本轮 `message_start`
     /// 报的真实占用清零 ⇒ 用量条从 47K 掉到 0。
     #[test]
@@ -4145,7 +4145,7 @@ mod tests {
     }
 
     const REAL_DSH_MISSING_SESSION_ERROR: &str =
-        "dsh session/open: session \"kivio-old\" not found";
+        "dsh session/open: session \"abu-agent-old\" not found";
 
     #[test]
     fn a_missing_dsh_resume_target_reconnects_without_resume_exactly_once() {

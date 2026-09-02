@@ -3,7 +3,7 @@
 //! 上游 `officecli watch` **只**在「CLI 进程」对文档做 add/set/remove 时推 SSE；
 //! 经 `officecli mcp` 的修改**不会**通知 watch，浏览器会一直停在创建时的空页。
 //!
-//! 因此 Kivio 在 MCP 成功改文档后：
+//! 因此 ABU Agent 在 MCP 成功改文档后：
 //! 1. 要求 MCP 侧 `OFFICECLI_RESIDENT_FLUSH=each`（见 lifecycle）保证磁盘已落盘
 //! 2. 用 `officecli view <file> html -o <preview.html>` 导出当前画面
 //! 3. **推送优先**：本地 SSE 服务器（127.0.0.1:26316，仿上游 watch 的推送模式）
@@ -156,8 +156,8 @@ pub fn note_after_officecli_tool(
         }
     };
     Some(format!(
-        "[Kivio] Live preview refreshing → open {target} (auto-reloads on each edit). \
-Do NOT call `officecli watch` yourself (MCP edits do not push to watch; Kivio serves its own preview)."
+        "[ABU Agent] Live preview refreshing → open {target} (auto-reloads on each edit). \
+Do NOT call `officecli watch` yourself (MCP edits do not push to watch; ABU Agent serves its own preview)."
     ))
 }
 
@@ -256,11 +256,11 @@ async fn refresh_html_preview(app: &AppHandle, doc_path: &str) -> Result<(), Str
     }
     html = inject_scroll_keeper(&html);
     // 标注来源，方便排查
-    if !html.contains("kivio-live-preview") {
+    if !html.contains("abu-agent-live-preview") {
         html = html.replacen(
             "<body>",
             &format!(
-                "<body data-kivio-live-preview=\"1\" data-source-doc=\"{}\">",
+                "<body data-abu-agent-live-preview=\"1\" data-source-doc=\"{}\">",
                 html_escape_attr(doc_path)
             ),
             1,
@@ -298,7 +298,7 @@ fn preview_html_path() -> Option<PathBuf> {
     plugin_dir(OFFICECLI_PLUGIN_ID).map(|d| d.join(PREVIEW_HTML_NAME))
 }
 
-// ===== SSE 预览服务器（仿上游 watch 的推送模式，但由 Kivio 在 MCP 导出后推） =====
+// ===== SSE 预览服务器（仿上游 watch 的推送模式，但由 ABU Agent 在 MCP 导出后推） =====
 
 /// 确保 SSE 服务器已启动，返回监听端口；bind 失败返回 None（回落 file:// 轮询）。
 async fn ensure_preview_server() -> Option<u16> {
@@ -453,7 +453,7 @@ async fn handle_preview_connection(
 /// 注入 SSE 客户端：收到 reload 事件即整页刷新（配合 scroll keeper 无感）。
 /// EventSource 自带断线重连（retry: 1500），app 重启后浏览器自动接回。幂等。
 fn inject_sse_client(html: &str, port: u16) -> String {
-    const MARK: &str = "data-kivio-sse-client";
+    const MARK: &str = "data-abu-agent-sse-client";
     if html.contains(MARK) {
         return html.to_string();
     }
@@ -496,10 +496,10 @@ fn path_to_file_url(path: &Path) -> String {
 
 fn inject_meta_refresh(html: &str, secs: u32) -> String {
     let tag =
-        format!(r#"<meta http-equiv="refresh" content="{secs}" data-kivio-preview-refresh="1">"#);
-    if html.contains("data-kivio-preview-refresh") {
+        format!(r#"<meta http-equiv="refresh" content="{secs}" data-abu-agent-preview-refresh="1">"#);
+    if html.contains("data-abu-agent-preview-refresh") {
         // 已注入过则替换秒数
-        if let Some(start) = html.find("data-kivio-preview-refresh") {
+        if let Some(start) = html.find("data-abu-agent-preview-refresh") {
             // 简单：整段 head 内已有则不再重复
             let _ = start;
             return html.to_string();
@@ -533,13 +533,13 @@ fn inject_meta_refresh(html: &str, secs: u32) -> String {
 /// 被拽回顶部，预览翻不了页。注入一小段 JS：卸载前把各滚动容器的位置存
 /// sessionStorage（file:// 下按目录同源，可用），加载后恢复。幂等。
 fn inject_scroll_keeper(html: &str) -> String {
-    const MARK: &str = "data-kivio-scroll-keeper";
+    const MARK: &str = "data-abu-agent-scroll-keeper";
     if html.contains(MARK) {
         return html.to_string();
     }
     let script = format!(
         r#"<script {MARK}="1">(function(){{
-var KEY='kivio-preview-scroll';
+var KEY='abu-agent-preview-scroll';
 function containers(){{
   var all=document.querySelectorAll('*'),out=[document.scrollingElement||document.documentElement];
   for(var i=0;i<all.length;i++){{var e=all[i];if(e.scrollHeight>e.clientHeight+4&&e.clientHeight>0)out.push(e);}}
@@ -583,7 +583,7 @@ fn strip_meta_refresh(html: &str) -> String {
         return html.to_string();
     };
     let tag = &html[start..start + end_rel + 1];
-    if !tag.contains("data-kivio-preview-refresh") {
+    if !tag.contains("data-abu-agent-preview-refresh") {
         return html.to_string();
     }
     let mut out = String::with_capacity(html.len());
@@ -806,9 +806,9 @@ mod tests {
     fn inject_refresh_into_head() {
         let html = "<!DOCTYPE html><html><head><meta charset=utf-8></head><body>hi</body></html>";
         let out = inject_meta_refresh(html, 2);
-        assert!(out.contains("data-kivio-preview-refresh"));
+        assert!(out.contains("data-abu-agent-preview-refresh"));
         assert!(out.contains("content=\"2\""));
-        assert!(out.find("<head>").unwrap() < out.find("data-kivio-preview-refresh").unwrap());
+        assert!(out.find("<head>").unwrap() < out.find("data-abu-agent-preview-refresh").unwrap());
     }
 
     #[test]
@@ -829,8 +829,8 @@ mod tests {
     fn scroll_keeper_injected_before_body_close_and_idempotent() {
         let html = "<html><head></head><body>hi</body></html>";
         let out = inject_scroll_keeper(html);
-        assert!(out.contains("data-kivio-scroll-keeper"));
-        assert!(out.find("data-kivio-scroll-keeper").unwrap() < out.find("</body>").unwrap());
+        assert!(out.contains("data-abu-agent-scroll-keeper"));
+        assert!(out.find("data-abu-agent-scroll-keeper").unwrap() < out.find("</body>").unwrap());
         assert_eq!(inject_scroll_keeper(&out), out);
     }
 
@@ -838,9 +838,9 @@ mod tests {
     fn sse_client_injected_with_port_and_idempotent() {
         let html = "<html><head></head><body>hi</body></html>";
         let out = inject_sse_client(html, 26316);
-        assert!(out.contains("data-kivio-sse-client"));
+        assert!(out.contains("data-abu-agent-sse-client"));
         assert!(out.contains("http://127.0.0.1:26316/events"));
-        assert!(out.find("data-kivio-sse-client").unwrap() < out.find("</body>").unwrap());
+        assert!(out.find("data-abu-agent-sse-client").unwrap() < out.find("</body>").unwrap());
         assert_eq!(inject_sse_client(&out, 26316), out);
     }
 

@@ -64,7 +64,7 @@ describe('buildCitationMap', () => {
       structured_content: {
         type: 'builtin_web_search',
         provider: 'OpenAI',
-        queries: ['kivio'],
+        queries: ['abu_agent'],
         citations: [
           { title: 'A', url: 'https://a.com' },
           { title: 'B', url: 'https://www.b.com', snippet: '摘要', published_date: '2025-06-01' },

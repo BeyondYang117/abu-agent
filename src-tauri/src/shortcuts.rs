@@ -911,7 +911,7 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
         ensure_overlay_panel(&window);
-        // ensure_main_window 的冷创建若短暂激活了 Kivio，在显示非激活 Panel 前立刻纠正；
+        // ensure_main_window 的冷创建若短暂激活了 ABU Agent，在显示非激活 Panel 前立刻纠正；
         // 不触碰 Chat 窗口本身。
         let st = app.state::<AppState>();
         reassert_previous_frontmost_app(app, &st.prev_frontmost_pid_main);
@@ -1429,7 +1429,7 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
                         return;
                     }
                 }
-                // 托盘图标点击 = 把 Kivio 带到前台：优先聚焦当前已开的窗口，不强跳 Chat，
+                // 托盘图标点击 = 把 ABU Agent 带到前台：优先聚焦当前已开的窗口，不强跳 Chat，
                 // 也不把停在 #chat/settings 的用户重置回 #chat（丢失填到一半的配置）。
                 // 一个窗口都没开时才新开 Chat。
                 if let Err(err) = open_settings_window_for_activation(app) {

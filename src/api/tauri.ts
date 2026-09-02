@@ -1203,7 +1203,7 @@ export type PluginStatus = {
   enabled: boolean
   version: string | null
   path: string | null
-  /** kivio | system | none */
+  /** abu_agent | system | none */
   source: string
   /** 安装时落盘、启用才注入的 Skill */
   hasSkill: boolean

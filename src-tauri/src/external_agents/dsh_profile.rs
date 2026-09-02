@@ -1,4 +1,4 @@
-//! Kivio 专用 dsh profile 的生成与维护。
+//! ABU Agent 专用 dsh profile 的生成与维护。
 //!
 //! dsh 没有「一条命令直接出流式 JSON」的模式，它**只能 boot profile**（`dsh --profile <name>`）。
 //! 一个 profile 是 `$DSH_HOME/profiles/<name>/` 下的目录：`package.json`（依赖 + `dsh.profile.bundles`
@@ -8,22 +8,22 @@
 //!
 //! 1. **复用用户的 `$DSH_HOME`**（默认 `~/.dsh`），因为 `settings.yaml` 里的供应商配置与
 //!    `.credentials.yaml` / `.env` 里的 key 都在那儿 —— 换一个私有 home 就等于要求用户再配一遍。
-//! 2. **只写 `profiles/kivio/`**。用户自己的 `profiles/web`、`profiles/tui` 与家目录那份
-//!    `cordis.patch.yml` 一律不碰（同 Kivio 不改写 `~/.claude` / `~/.codex` 的凭证与路由）。
+//! 2. **只写 `profiles/abu_agent/`**。用户自己的 `profiles/web`、`profiles/tui` 与家目录那份
+//!    `cordis.patch.yml` 一律不碰（同 ABU Agent 不改写 `~/.claude` / `~/.codex` 的凭证与路由）。
 //! 3. **依赖安装走官方 `dsh plugin --profile` 通道**，不自己写 `package.json` + `pnpm install`。
 //!    那条命令做三件我们自己做会漏的事：按模板初始化 profile（`dsh.profile.bundles` 要写
 //!    `@deepseek-ai/dsh-base`，**少了它 profile 起来没有 agent**）、转发 pnpm、按安装结果回填
 //!    bundle 层列表。本机实测漏掉 bundles 那次的表现是进程能起、`initialize` 能回，
-//!    但一 prompt 就没有任何 agent 接。安装前会写 `profiles/kivio/.npmrc` 钉死
+//!    但一 prompt 就没有任何 agent 接。安装前会写 `profiles/abu_agent/.npmrc` 钉死
 //!    `registry.npmjs.org`，避免用户家目录镜像缺 `@deepseek-ai/*`。
 //!
 //! # patch 里放什么
 //!
-//! 包含 Kivio profile 的装配与进程级配置：
-//! - `kivio-dsh-bridge.mjs` 一条 insert（在官方 server 上补 `resume` / `cancel` / `command` /
+//! 包含 ABU Agent profile 的装配与进程级配置：
+//! - `abu-agent-dsh-bridge.mjs` 一条 insert（在官方 server 上补 `resume` / `cancel` / `command` /
 //!   `commands` / `stop-job` / `steer` RPC；follow-up 走官方 `session/prompt`）
 //! - `hmr` 关掉：那是给开发热重载用的，常驻会话里只会带来意外重连
-//! - `session-title-llm` 关掉：Kivio 自己起标题，留着等于每轮多付一次模型调用
+//! - `session-title-llm` 关掉：ABU Agent 自己起标题，留着等于每轮多付一次模型调用
 //!   （实测确认它会发 `session/title-llm-request`）
 //! - `llm-deepseek.reasoningEffort`：官方 DeepSeek 路由的档位（只认 `off|low|high|max`）。
 //!   第三方 `llm-pi-ai` 路由另写 `providers.<route>.reasoning`（pi-ai 档位表）。
@@ -32,10 +32,10 @@
 //!   `$DSH_HOME/.agent-presets` 里用户自己写的 preset。与官方 web 一样关掉 host
 //!   平面工具，改由所选 preset 组装；`dsh --profile` 会把随包的 `config/agent-presets`
 //!   补进 `roots`，`includeUserRoot: true` 再挂上用户目录。
-//! - `storage` / `workspace`：与官方 web 共用 `$DSH_HOME/storages`。Kivio 创建的原生会话
+//! - `storage` / `workspace`：与官方 web 共用 `$DSH_HOME/storages`。ABU Agent 创建的原生会话
 //!   必须挂进 Host Workspace，否则 dsh web 把它们全部丢进「其他项目」。
-//! - 当前 Kivio 供应商的 `llm-pi-ai.providers.<route>`：只挂在 `profiles/kivio`，Key 仅以
-//!   `apiKeyEnv` 引用并由 Kivio 注入进程，不写入 YAML。
+//! - 当前 ABU Agent 供应商的 `llm-pi-ai.providers.<route>`：只挂在 `profiles/abu_agent`，Key 仅以
+//!   `apiKeyEnv` 引用并由 ABU Agent 注入进程，不写入 YAML。
 //!
 //! **当前选择的模型不写进 patch**。provider 的模型目录在 patch 中，但每轮实际 route/model
 //! 仍由 `initialize` RPC 决定（见 `session::dsh_jsonrpc`）。
@@ -48,11 +48,11 @@ use serde_json::Value;
 use crate::proc::NoConsoleWindow;
 use crate::settings::ExternalCliProvider;
 
-/// Kivio 私有 profile 名。与用户的 `web` / `tui` 并存。
-pub const KIVIO_PROFILE: &str = "kivio";
+/// ABU Agent 私有 profile 名。与用户的 `web` / `tui` 并存。
+pub const ABU_AGENT_PROFILE: &str = "abu_agent";
 
-const BRIDGE_FILENAME: &str = "kivio-dsh-bridge.mjs";
-const BRIDGE_SOURCE: &str = include_str!("../../resources/dsh/kivio-dsh-bridge.mjs");
+const BRIDGE_FILENAME: &str = "abu-agent-dsh-bridge.mjs";
+const BRIDGE_SOURCE: &str = include_str!("../../resources/dsh/abu-agent-dsh-bridge.mjs");
 
 /// Bridge 复用官方 server/transport；dsh core API 由运行中的 profile 提供，避免安装第二份 core。
 const REQUIRED_PACKAGES: &[&str] = &[
@@ -60,7 +60,7 @@ const REQUIRED_PACKAGES: &[&str] = &[
     "@deepseek-ai/dsh-sdk-protocol",
 ];
 
-/// 不要把 `@deepseek-ai/dsh-agent-presets` 装进 kivio profile。
+/// 不要把 `@deepseek-ai/dsh-agent-presets` 装进 abu_agent profile。
 /// `dsh plugin add` 不带版本会落到 `0.0.1-rc.1`，和本机 dsh 带的 `0.1.0-rc.6` 抢解析，
 /// 然后缺 `@deepseek-ai/dsh-paths`。patch 里只写插件名，让官方 module fallback 用随包那份。
 const PROFILE_PRESET_PACKAGE: &str = "@deepseek-ai/dsh-agent-presets";
@@ -107,9 +107,9 @@ pub(crate) fn dsh_home() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|base| base.home_dir().join(".dsh"))
 }
 
-/// `$DSH_HOME/profiles/kivio/`。
+/// `$DSH_HOME/profiles/abu_agent/`。
 pub fn profile_dir() -> Option<PathBuf> {
-    dsh_home().map(|home| home.join("profiles").join(KIVIO_PROFILE))
+    dsh_home().map(|home| home.join("profiles").join(ABU_AGENT_PROFILE))
 }
 
 const USER_PRESET_DIR: &str = ".agent-presets";
@@ -244,7 +244,7 @@ pub fn chat_dsh_list_agent_presets() -> Vec<DshAgentPresetOption> {
 /// 只有 `off|low|high|max`），整棵树起不来。
 fn render_patch(reasoning: Option<&str>, preset: Option<&str>) -> String {
     let mut out = String::from(
-        "# 由 Kivio 生成并维护，请勿手改（每次启动 dsh 会话时按当前设置重写）。\n\
+        "# 由 ABU Agent 生成并维护，请勿手改（每次启动 dsh 会话时按当前设置重写）。\n\
          #\n\
          # 用户自己的 profile（web / tui）与 $DSH_HOME/cordis.patch.yml 不受影响。\n\
          \n\
@@ -252,7 +252,7 @@ fn render_patch(reasoning: Option<&str>, preset: Option<&str>) -> String {
          - id: hmr\n\
          \x20 disabled: true\n\
          \n\
-         # 标题由 Kivio 自己起；留着等于每轮多付一次模型调用。\n\
+         # 标题由 ABU Agent 自己起；留着等于每轮多付一次模型调用。\n\
          - id: session-title-llm\n\
          \x20 disabled: true\n",
     );
@@ -275,7 +275,7 @@ fn render_patch(reasoning: Option<&str>, preset: Option<&str>) -> String {
     out.push_str(
         "\n# Agent 模式：随包四档 + $DSH_HOME/.agent-presets 用户 preset。\n\
          # 随包 roots 由 `dsh --profile` 的 composeProfile 注入；includeUserRoot\n\
-         # 让官方 web 写的自定义 preset 在 kivio profile 里也能挂上。\n\
+         # 让官方 web 写的自定义 preset 在 abu_agent profile 里也能挂上。\n\
          - insert:\n\
          \x20   - id: agent-presets\n\
          \x20     name: '@deepseek-ai/dsh-agent-presets'\n\
@@ -285,8 +285,8 @@ fn render_patch(reasoning: Option<&str>, preset: Option<&str>) -> String {
     );
     out.push_str(&normalize_agent_preset(preset));
     out.push_str(
-        "\n\n# 与官方 web 共用 $DSH_HOME/storages，把 Kivio 会话挂进 Host Workspace。\n\
-         # 只写插件名，包从本机 dsh 安装解析，不 `plugin add` 进 kivio profile。\n\
+        "\n\n# 与官方 web 共用 $DSH_HOME/storages，把 ABU Agent 会话挂进 Host Workspace。\n\
+         # 只写插件名，包从本机 dsh 安装解析，不 `plugin add` 进 abu_agent profile。\n\
          - insert:\n\
          \x20   - id: storage\n\
          \x20     name: '@deepseek-ai/dsh-storage'\n\
@@ -301,10 +301,10 @@ fn render_patch(reasoning: Option<&str>, preset: Option<&str>) -> String {
          \x20   - id: workspace\n\
          \x20     name: '@deepseek-ai/dsh-workspace'\n\
          \n\
-         # Kivio bridge：保留官方事件流，并补齐跨进程 resume 与协议级 cancel。\n\
+         # ABU Agent bridge：保留官方事件流，并补齐跨进程 resume 与协议级 cancel。\n\
          - insert:\n\
-         \x20   - id: kivio-dsh-jsonrpc-bridge\n\
-         \x20     name: './kivio-dsh-bridge.mjs'\n",
+         \x20   - id: abu-agent-dsh-jsonrpc-bridge\n\
+         \x20     name: './abu-agent-dsh-bridge.mjs'\n",
     );
     out
 }
@@ -420,7 +420,7 @@ fn render_patch_with_providers(
         active_providers.push(active);
     }
 
-    out.push_str("\n# 挂载到 Kivio profile 的第三方供应商；API Key 只通过环境变量注入。\n");
+    out.push_str("\n# 挂载到 ABU Agent profile 的第三方供应商；API Key 只通过环境变量注入。\n");
     out.push_str("- id: llm-pi-ai\n  config:\n    providers:\n");
     for active in active_providers {
         let mut config = active.config;
@@ -524,7 +524,7 @@ pub async fn ensure_profile_ready(
     // `cordis.patch.yml`（内容是 `[]`），先写就会被它覆盖掉。
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建 dsh profile 目录失败：{e}"))?;
     std::fs::write(dir.join(BRIDGE_FILENAME), BRIDGE_SOURCE)
-        .map_err(|e| format!("写入 Kivio dsh bridge 失败：{e}"))?;
+        .map_err(|e| format!("写入 ABU Agent dsh bridge 失败：{e}"))?;
     let config = crate::external_agents::overrides::agent_config("dsh").unwrap_or_default();
     let patch = render_patch_with_providers(reasoning, preset, &config.providers)?;
     std::fs::write(dir.join("cordis.patch.yml"), patch)
@@ -556,7 +556,7 @@ fn strip_profile_agent_presets_dep(dir: &Path) {
     }
 }
 
-/// `dsh plugin --profile kivio add <pkgs>`。
+/// `dsh plugin --profile abu_agent add <pkgs>`。
 ///
 /// 用探测到的那个绝对二进制（与跑轮次的是同一个），不走 PATH 再查一次。
 fn remove_provider_env_from_install(
@@ -577,7 +577,7 @@ async fn install_packages(bin: &Path) -> Result<(), String> {
     crate::external_agents::installer::ensure_pnpm_for_dsh().await?;
 
     // Installation never needs model credentials. Build a clean command so pnpm and dependency
-    // lifecycle scripts cannot inherit the active Kivio provider API key.
+    // lifecycle scripts cannot inherit the active ABU Agent provider API key.
     let mut command = tokio::process::Command::new(bin);
     crate::external_agents::spawn::strip_parent_session_env(&mut command);
     crate::external_agents::installer::pin_official_npm_registry(&mut command);
@@ -591,7 +591,7 @@ async fn install_packages(bin: &Path) -> Result<(), String> {
     command
         .arg("plugin")
         .arg("--profile")
-        .arg(KIVIO_PROFILE)
+        .arg(ABU_AGENT_PROFILE)
         .arg("add")
         .args(REQUIRED_PACKAGES)
         .stdin(std::process::Stdio::null())
@@ -679,7 +679,7 @@ mod tests {
             default_model: "gpt-test".to_string(),
             config_json: serde_json::json!({
                 "displayName": "Relay",
-                "apiKeyEnv": "KIVIO_DSH_RELAY_ONE_API_KEY",
+                "apiKeyEnv": "ABU_AGENT_DSH_RELAY_ONE_API_KEY",
                 "api": "openai-responses",
                 "baseURL": "https://relay.example/v1",
                 "models": [{
@@ -691,7 +691,7 @@ mod tests {
             })
             .to_string(),
             env: vec![crate::settings::CliEnvVar {
-                key: "KIVIO_DSH_RELAY_ONE_API_KEY".to_string(),
+                key: "ABU_AGENT_DSH_RELAY_ONE_API_KEY".to_string(),
                 value: "sk-secret".to_string(),
             }],
             ..Default::default()
@@ -700,11 +700,11 @@ mod tests {
 
     /// 装配 bridge 的 insert 必须在，否则 `initialize` 没有 resumable server 应答。
     #[test]
-    fn patch_always_mounts_the_kivio_bridge() {
+    fn patch_always_mounts_the_abu_agent_bridge() {
         let yml = render_patch(None, None);
         assert!(yml.contains("- insert:"));
-        assert!(yml.contains("name: './kivio-dsh-bridge.mjs'"));
-        assert!(yml.contains("id: kivio-dsh-jsonrpc-bridge"));
+        assert!(yml.contains("name: './abu-agent-dsh-bridge.mjs'"));
+        assert!(yml.contains("id: abu-agent-dsh-jsonrpc-bridge"));
         assert!(yml.contains("name: '@deepseek-ai/dsh-agent-presets'"));
         assert!(yml.contains("default: standard"));
         assert!(yml.contains("name: '@deepseek-ai/dsh-workspace'"));
@@ -760,7 +760,7 @@ mod tests {
         assert!(BRIDGE_SOURCE.contains("attachSession"));
         assert!(BRIDGE_SOURCE.contains("shouldAttachWorkspace"));
         assert!(BRIDGE_SOURCE.contains("process.chdir(this.cwd)"));
-        assert!(BRIDGE_SOURCE.contains("[kivio-dsh] workspace attach failed:"));
+        assert!(BRIDGE_SOURCE.contains("[abu-agent-dsh] workspace attach failed:"));
         assert!(!BRIDGE_SOURCE.contains("waitForProviderAdapter"));
         assert!(!BRIDGE_SOURCE.contains("@deepseek-ai/dsh-session"));
     }
@@ -770,7 +770,7 @@ mod tests {
         let provider = relay_provider();
         let mut command = tokio::process::Command::new("dsh");
         remove_provider_env_from_install(&mut command, &[provider]);
-        let key = std::ffi::OsStr::new("KIVIO_DSH_RELAY_ONE_API_KEY");
+        let key = std::ffi::OsStr::new("ABU_AGENT_DSH_RELAY_ONE_API_KEY");
         let entry = command.as_std().get_envs().find(|(name, _)| *name == key);
         assert!(matches!(entry, Some((_, None))));
     }
@@ -781,7 +781,7 @@ mod tests {
         let yml = render_patch_with_providers(Some("high"), None, &[provider]).unwrap();
         assert!(yml.contains("- id: llm-pi-ai"));
         assert!(yml.contains("relay-one:"));
-        assert!(yml.contains("apiKeyEnv: KIVIO_DSH_RELAY_ONE_API_KEY"));
+        assert!(yml.contains("apiKeyEnv: ABU_AGENT_DSH_RELAY_ONE_API_KEY"));
         assert!(yml.contains("baseURL: https://relay.example/v1"));
         assert!(yml.contains("id: gpt-test"));
         assert!(yml.contains("reasoning: high"));
@@ -799,12 +799,12 @@ mod tests {
         second.native_provider_id = "relay-two".to_string();
         second.default_model = "claude-test".to_string();
         second.env = vec![crate::settings::CliEnvVar {
-            key: "KIVIO_DSH_RELAY_TWO_API_KEY".to_string(),
+            key: "ABU_AGENT_DSH_RELAY_TWO_API_KEY".to_string(),
             value: "sk-second".to_string(),
         }];
         second.config_json = second
             .config_json
-            .replace("KIVIO_DSH_RELAY_ONE_API_KEY", "KIVIO_DSH_RELAY_TWO_API_KEY")
+            .replace("ABU_AGENT_DSH_RELAY_ONE_API_KEY", "ABU_AGENT_DSH_RELAY_TWO_API_KEY")
             .replace("gpt-test", "claude-test");
 
         let mut disabled = relay_provider();
@@ -848,7 +848,7 @@ mod tests {
         provider.env.clear();
         assert!(render_patch_with_providers(None, None, &[provider])
             .unwrap_err()
-            .contains("KIVIO_DSH_RELAY_ONE_API_KEY"));
+            .contains("ABU_AGENT_DSH_RELAY_ONE_API_KEY"));
 
         let mut provider = relay_provider();
         provider.default_model = "missing".to_string();
@@ -868,7 +868,7 @@ mod tests {
     #[test]
     fn strip_profile_agent_presets_dep_removes_the_shadowing_copy() {
         let dir =
-            std::env::temp_dir().join(format!("kivio-dsh-preset-strip-{}", std::process::id()));
+            std::env::temp_dir().join(format!("abu-agent-dsh-preset-strip-{}", std::process::id()));
         let pkg_dir = dir
             .join("node_modules")
             .join("@deepseek-ai")
@@ -940,7 +940,7 @@ mod tests {
 
     #[test]
     fn lists_user_presets_and_normalizes_existing_custom_ids() {
-        let root = std::env::temp_dir().join(format!("kivio-dsh-presets-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("abu-agent-dsh-presets-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         write_user_preset(
             &root,
@@ -980,7 +980,7 @@ mod tests {
         assert!(yml.contains("reasoningEffort: max"));
     }
 
-    /// `default` 是 Kivio 侧的「不指定」哨兵，**不是** dsh 的合法档位值
+    /// `default` 是 ABU Agent 侧的「不指定」哨兵，**不是** dsh 的合法档位值
     /// （schema 只认 `off|low|high|max`）。写进去整棵配置树会在启动时被拒。
     #[test]
     fn patch_omits_reasoning_for_default_and_blank() {
@@ -1056,15 +1056,15 @@ mod tests {
     fn profile_dir_lives_under_dsh_home() {
         if let Some(dir) = profile_dir() {
             let shown = dir.to_string_lossy().replace('\\', "/");
-            assert!(shown.ends_with("profiles/kivio"), "got {shown}");
+            assert!(shown.ends_with("profiles/abu_agent"), "got {shown}");
         }
     }
 
     #[test]
     fn windows_pnpm_not_on_path_is_recognized_even_when_cmd_garbles_the_rest() {
-        let real = "dsh: initialized profile kivio at C:\\Users\\18758\\.dsh\\profiles\\kivio\n\
+        let real = "dsh: initialized profile abu_agent at C:\\Users\\18758\\.dsh\\profiles\\abu_agent\n\
                     'pnpm' \u{fffd}\u{fffd}\u{fffd}\n\
-                    dsh: pnpm failed in profile directory C:\\Users\\18758\\.dsh\\profiles\\kivio";
+                    dsh: pnpm failed in profile directory C:\\Users\\18758\\.dsh\\profiles\\abu_agent";
         assert!(pnpm_missing_in_output(None, real));
         assert!(pnpm_missing_in_output(Some(127), "pnpm not found on PATH"));
         assert!(!pnpm_missing_in_output(

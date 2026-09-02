@@ -43,7 +43,7 @@ pub fn todo_write_tool() -> ChatToolDefinition {
         description: "Replace the assistant's internal todo list for this conversation. Use for multi-step work progress; users cannot edit this list.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

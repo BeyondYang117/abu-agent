@@ -293,17 +293,17 @@ describe('ToolCallBlock', () => {
           toolName: 'web_search',
           source: 'native',
           status: 'success',
-          arguments: JSON.stringify({ query: 'kivio release' }),
+          arguments: JSON.stringify({ query: 'abu_agent release' }),
           structured_content: {
             type: 'builtin_web_search',
             provider: 'OpenAI',
-            queries: ['kivio release'],
+            queries: ['abu_agent release'],
             citations: [
               { title: 'A 站', url: 'https://a.com' },
               {
                 title: 'B 站',
                 url: 'https://www.b.com',
-                snippet: '关于 kivio 的发布说明',
+                snippet: '关于 abu_agent 的发布说明',
                 published_date: '2025-06-01',
               },
             ],
@@ -320,7 +320,7 @@ describe('ToolCallBlock', () => {
     expect(screen.getByText('A 站')).toBeInTheDocument()
     expect(screen.getByText('a.com')).toBeInTheDocument()
     expect(screen.getByText(/b\.com · 2025-06-01/)).toBeInTheDocument() // www 前缀剥离 + 日期
-    expect(screen.getByText('关于 kivio 的发布说明')).toBeInTheDocument()
+    expect(screen.getByText('关于 abu_agent 的发布说明')).toBeInTheDocument()
     expect(screen.getByText(/2025-06-01/)).toBeInTheDocument()
     // 点来源行 → 浏览器打开（不导航 webview）。
     await user.click(screen.getByText('A 站'))
@@ -857,7 +857,7 @@ describe('ToolCallBlock', () => {
         toolCall={buildToolCall({
           toolName: 'mcp__notion__searchPages',
           source: 'mcp',
-          arguments: JSON.stringify({ q: 'kivio' }),
+          arguments: JSON.stringify({ q: 'abu_agent' }),
         })}
       />,
     )

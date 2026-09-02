@@ -1,4 +1,4 @@
-//! MCP 工具结果 → Kivio 内部结构的映射。
+//! MCP 工具结果 → ABU Agent 内部结构的映射。
 //!
 //! 这里的逻辑与 wire 实现无关：输入是 MCP `tools/call` 结果的 JSON（wire 形状），
 //! 输出是 `McpToolCallResult`。rmcp 的 `CallToolResult` 序列化出来就是同一个形状

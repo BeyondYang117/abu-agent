@@ -98,9 +98,9 @@ pub fn load_image_blocks(paths: &[PathBuf], whitelist: &[&str]) -> (Vec<ImageBlo
     (native, degraded)
 }
 
-/// Codex 用：把原图 copy 成临时文件（前缀 `kivio-ext-img-`），返回临时文件路径列表。
+/// Codex 用：把原图 copy 成临时文件（前缀 `abu-agent-ext-img-`），返回临时文件路径列表。
 /// Codex sandbox 锁 cwd，读不到会话附件目录，故与 Paseo 一样落一份临时文件传 `localImage` path。
-/// 扁平文件（与 kivio 现有 `kivio-mcpimg-` 约定一致），靠 app 的 `cleanup_orphan_temp_files`
+/// 扁平文件（与 abu_agent 现有 `abu-agent-mcpimg-` 约定一致），靠 app 的 `cleanup_orphan_temp_files`
 /// 按前缀回收；单张失败跳过。
 pub fn materialize_images_to_tempdir(images: &[ImageBlock]) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -111,7 +111,7 @@ pub fn materialize_images_to_tempdir(images: &[ImageBlock]) -> Vec<PathBuf> {
             .and_then(|e| e.to_str())
             .unwrap_or("png");
         let dest =
-            std::env::temp_dir().join(format!("kivio-ext-img-{}.{ext}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("abu-agent-ext-img-{}.{ext}", uuid::Uuid::new_v4()));
         if std::fs::copy(&img.path, &dest).is_ok() {
             out.push(dest);
         }
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn oversized_native_image_degrades_without_base64_allocation() {
-        let dir = std::env::temp_dir().join(format!("kivio-ext-att-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-ext-att-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("large.png");
         let file = std::fs::File::create(&path).expect("create image");
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn file_note_uses_an_absolute_path_for_an_existing_file() {
-        let dir = std::env::temp_dir().join(format!("kivio-ext-att-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-ext-att-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("notes.txt");
         std::fs::write(&path, "hello").expect("write");

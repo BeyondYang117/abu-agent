@@ -665,7 +665,7 @@ pub struct SubAgentRequest {
     pub parent_run_id: String,
     pub parent_tool_call_id: String,
     pub parent_generation: u64,
-    /// 父对话工作目录，用于扫描项目 `.kivio/skills` 与 `.agents/skills`。
+    /// 父对话工作目录，用于扫描项目 `.abu-agent/skills` 与 `.agents/skills`。
     pub skill_project_cwd: Option<std::path::PathBuf>,
 }
 
@@ -832,7 +832,7 @@ pub fn agent_tool(defs: &[AgentDefinition]) -> ChatToolDefinition {
         description: "Spawn a sub-agent to handle a focused sub-task and return its result. The sub-agent runs with its own fresh context and a restricted toolset, and this call BLOCKS until it finishes, returning the full result inline. Use for delegating self-contained research/implementation/review work. To run sub-agents in PARALLEL, emit MULTIPLE agent tool calls in a SINGLE message — they execute concurrently and each returns its own result. Provide a complete, self-contained prompt — the sub-agent cannot see this conversation.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

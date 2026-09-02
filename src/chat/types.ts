@@ -420,8 +420,8 @@ export interface ConversationContextState {
   clearBoundaries?: ContextClearBoundaryRecord[]
   warning?: string | null
   warningMessage?: string | null
-  context_source?: 'kivio_builtin' | 'external_cli' | string
-  contextSource?: 'kivio_builtin' | 'external_cli' | string
+  context_source?: 'abu_agent_builtin' | 'external_cli' | string
+  contextSource?: 'abu_agent_builtin' | 'external_cli' | string
   token_count_source?: 'cli_reported' | 'estimated' | 'provider_reported' | string
   tokenCountSource?: 'cli_reported' | 'estimated' | 'provider_reported' | string
   session_input_tokens?: number

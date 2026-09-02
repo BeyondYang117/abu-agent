@@ -76,7 +76,7 @@ async fn write_rpc_error(
 
 fn codex_initialize_params() -> Value {
     json!({
-        "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" },
+        "clientInfo": { "name": "abu_agent", "title": "abu_agent", "version": "0" },
         // `runtimeWorkspaceRoots` / command `additionalPermissions` are experimental.
         // Without this flag app-server strips them, so agreeing to a permission card
         // never materializes `:workspace_roots` and the model reports the workspace
@@ -444,7 +444,7 @@ fn map_codex_notification(
         }
         // Mid-turn `error` / `thread/realtime/error` **precedes** `turn/completed` (app-server
         // README). Codex uses this for stream reconnect (`Reconnecting... 7/50`); the TUI
-        // keeps thinking. Do **not** end the Kivio turn here — returning `TurnFailed` kills
+        // keeps thinking. Do **not** end the ABU Agent turn here — returning `TurnFailed` kills
         // the live process (RetryFresh) while Codex is still retrying. Quota / window /
         // exhausted-retry stay fail-closed; everything else is an English status-line note
         // (`reconnect 7/50`) until `turn/completed`.
@@ -2042,7 +2042,7 @@ fn effort_options(ids: &[&str]) -> Vec<crate::external_agents::types::RuntimeMod
 /// 3. If `config.toml` model is still missing, inject it after Auto  
 ///
 /// Deliberately does **not** append every runtime-only id (gpt-5.4 / 5.2 / …) — that
-/// is what made Kivio show a junk list while cc-gui showed the clean 4.
+/// is what made ABU Agent show a junk list while cc-gui showed the clean 4.
 pub fn merge_codex_model_catalog(
     runtime: CodexModelsProbe,
     config_model: Option<&str>,
@@ -2169,7 +2169,7 @@ pub async fn detect_codex_models(
         &mut stdin,
         1,
         "initialize",
-        json!({ "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" } }),
+        json!({ "clientInfo": { "name": "abu_agent", "title": "abu_agent", "version": "0" } }),
     )
     .await
     .is_ok()
@@ -2201,7 +2201,7 @@ pub async fn detect_codex_models(
 ///
 /// Field names match the live app-server (camelCase). We also accept snake_case for
 /// older / relay shapes. Hidden models are dropped. A synthetic `default` row is prepended
-/// (Kivio Auto = don't pin a model in Turn/start).
+/// (ABU Agent Auto = don't pin a model in Turn/start).
 pub fn parse_codex_model_list_result(result: &Value) -> Option<CodexModelsProbe> {
     use crate::external_agents::types::{default_model_option, RuntimeModelOption};
 
@@ -2388,7 +2388,7 @@ pub async fn detect_codex_commands(
                 &mut stdin,
                 1,
                 "initialize",
-                json!({ "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" } }),
+                json!({ "clientInfo": { "name": "abu_agent", "title": "abu_agent", "version": "0" } }),
             )
             .await
             .is_ok()
@@ -3375,7 +3375,7 @@ mod tests {
     ///
     /// 单测只能证明「给定这样的 JSON 会取 last」；这条证明真实 codex 确实**发**了
     /// `last` 且它与 `total` 在多轮下会分叉。跑两轮同一 thread：
-    /// `total` 单调累加，`last` 只反映最近一次请求 —— 若 Kivio 读回 total，
+    /// `total` 单调累加，`last` 只反映最近一次请求 —— 若 ABU Agent 读回 total，
     /// 第二轮的用量会包含第一轮，进度条持续虚高。
     #[tokio::test]
     #[ignore = "requires live codex login + network"]
@@ -3411,7 +3411,7 @@ mod tests {
         );
 
         // **口径硬判据**：codex 的 `cachedInputTokens` 是 `inputTokens` 的子集
-        // （实测 16865 + 7 = 16872 = 其自报的 totalTokens），所以 Kivio 算出的
+        // （实测 16865 + 7 = 16872 = 其自报的 totalTokens），所以 ABU Agent 算出的
         // total 必须恰好等于 input + output。把 cache 再加一遍会让这条变红——
         // 那正是曾经真实发生过的 bug（20328 vs 16872，虚高 20%）。
         for u in &usages {
@@ -3533,7 +3533,7 @@ mod tests {
     fn initialize_opts_into_experimental_api() {
         let params = codex_initialize_params();
         assert_eq!(params["capabilities"]["experimentalApi"], json!(true));
-        assert_eq!(params["clientInfo"]["name"], json!("kivio"));
+        assert_eq!(params["clientInfo"]["name"], json!("abu_agent"));
     }
 
     #[test]

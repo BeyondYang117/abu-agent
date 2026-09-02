@@ -24,7 +24,7 @@ use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-pub const RAPIDOCR_WORKER_ARG: &str = "--kivio-rapidocr-worker";
+pub const RAPIDOCR_WORKER_ARG: &str = "--abu-agent-rapidocr-worker";
 
 #[derive(Debug, Clone, Copy)]
 enum WorkerMode {
@@ -104,7 +104,7 @@ impl RapidOcrClient {
         Self::new(OfflineModelManager::with_model_dir(dir, http))
     }
 
-    /// Headless (no-AppHandle) client for the `kivio-code` CLI. OCR is never
+    /// Headless (no-AppHandle) client for the `abu-agent-code` CLI. OCR is never
     /// invoked from the terminal agent; carries `app: None` so any OCR call
     /// errors out, identical to the test `disabled()` placeholder.
     pub fn headless(models: Arc<OfflineModelManager>) -> Arc<Self> {
@@ -230,7 +230,7 @@ async fn run_worker(
 }
 
 // The existing real-model E2E lives inside the library test binary, so `current_exe()` points to
-// the Rust test harness rather than the `kivio` GUI binary and cannot dispatch the hidden worker
+// the Rust test harness rather than the `abu_agent` GUI binary and cannot dispatch the hidden worker
 // argument. Keep that E2E useful by running the same worker body in-process under cfg(test).
 #[cfg(test)]
 async fn run_worker(
@@ -1016,14 +1016,14 @@ mod rapidocr_e2e {
         }
 
         // 持久缓存目录:重复跑不用每次重下模型。
-        let model_dir = std::env::temp_dir().join("kivio-rapidocr-e2e-models");
+        let model_dir = std::env::temp_dir().join("abu-agent-rapidocr-e2e-models");
         std::fs::create_dir_all(&model_dir).expect("mkdir model_dir");
         eprintln!("[rapidocr-e2e] model_dir = {}", model_dir.display());
 
         let client = RapidOcrClient::with_model_dir(model_dir.clone(), reqwest::Client::new());
 
         // 测试图:白底黑字中英混排,由仓库脚本(PowerShell + System.Drawing)生成。
-        let image_path = std::env::temp_dir().join("kivio-rapidocr-e2e-test.png");
+        let image_path = std::env::temp_dir().join("abu-agent-rapidocr-e2e-test.png");
         generate_test_image(&image_path);
         assert!(
             image_path.is_file(),
@@ -1062,8 +1062,8 @@ mod rapidocr_e2e {
         );
         assert!(!text.is_empty(), "OCR text should not be empty");
         assert!(
-            text.contains("Kivio"),
-            "OCR text should contain 'Kivio', got: {text}"
+            text.contains("ABU Agent"),
+            "OCR text should contain 'ABU Agent', got: {text}"
         );
         assert!(
             text.contains("测试") || text.contains("识别"),

@@ -30,7 +30,7 @@ pub const LIVE_SESSION_IDLE_TTL: Duration = Duration::from_secs(600);
 pub struct ApprovalAsk {
     /// CLI 的 `control_request.request_id`。**回复时必须原样回显**，否则对端匹配不到。
     pub request_id: String,
-    /// claude 的 `toolu_…`。用作 Kivio 侧的 `toolCallId`，这样审批卡和工具卡指向同一个 id。
+    /// claude 的 `toolu_…`。用作 ABU Agent 侧的 `toolCallId`，这样审批卡和工具卡指向同一个 id。
     /// CLI 偶尔不给（schema 里是 optional），缺失时回落到 `request_id`。
     pub tool_call_id: String,
     /// CLI 报的工具原名（`Write` / `Bash` / `mcp__server__tool`，PascalCase 有意义，不归一化）。
@@ -38,7 +38,7 @@ pub struct ApprovalAsk {
     /// 工具入参原文，用于卡片上的摘要。
     pub input: serde_json::Value,
     /// CLI 标记「这个工具要用户在卡片上直接作答」。问用户经 `ask_user::codec_for`
-    /// 转成 Kivio 已有的卡片，答复经 `ApprovalDecision::updated_input` 回去；
+    /// 转成 ABU Agent 已有的卡片，答复经 `ApprovalDecision::updated_input` 回去；
     /// claude 的 `ExitPlanMode` 走审批卡、批准时额外经
     /// `ApprovalDecision::set_permission_mode` 切档位。其余（CLI 将来新增的
     /// 交互工具）仍当场拒（见 `claude_stream::APPROVAL_INTERACTIVE_UNSUPPORTED`）。

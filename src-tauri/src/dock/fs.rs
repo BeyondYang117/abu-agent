@@ -787,7 +787,7 @@ mod tests {
     fn temp_workdir(tag: &str) -> PathBuf {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("kivio-dock-fs-{tag}-{}-{id}", std::process::id()));
+            std::env::temp_dir().join(format!("abu-agent-dock-fs-{tag}-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("create temp workdir");
         fs::canonicalize(&dir).expect("canonicalize temp workdir")
     }

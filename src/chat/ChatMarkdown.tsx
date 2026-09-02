@@ -341,7 +341,7 @@ function normalizeLegacyErrorDetails(content: string): string {
     /<details>\s*<summary>错误详情<\/summary>\s*(`{3,})\s*\n([\s\S]*?)\n\1\s*<\/details>/g,
     (_match, _oldFence: string, detail: string) => {
       const fence = errorDetailsFence(detail)
-      return `${fence}kivio-error-details\n${detail}\n${fence}`
+      return `${fence}abu-agent-error-details\n${detail}\n${fence}`
     },
   )
 }
@@ -762,7 +762,7 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
       if (streaming) return <CodeBlock code={code} language="mermaid" />
       return <MermaidBlock code={code} />
     }
-    if (language === 'kivio-error-details') {
+    if (language === 'abu-agent-error-details') {
       return <ErrorDetails detail={code} />
     }
     if (streaming) return <CodeBlock code={code} language={language} />
@@ -989,7 +989,7 @@ function safeDecodeURIComponent(value: string): string {
 }
 
 function decodeABUAgentInternalUrl(value: string): string {
-  const internalLink = /^https:\/\/kivio\.local\/__kivio-(file|local)\?target=(.*)$/i.exec(value)
+  const internalLink = /^https:\/\/abu_agent\.local\/__abu-agent-(file|local)\?target=(.*)$/i.exec(value)
   return internalLink ? safeDecodeURIComponent(internalLink[2]) : value
 }
 

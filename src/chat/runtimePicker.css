@@ -83,7 +83,7 @@
 }
 
 /*
- * Kivio Chat 仍用同一 logo-mark 外形，只做颜色处理：
+ * ABU Agent Chat 仍用同一 logo-mark 外形，只做颜色处理：
  * - Agent：默认黑/白 mark
  * - Chat：染成品牌天蓝（shape 不变，色相变化）
  */
@@ -278,7 +278,7 @@
   opacity: 0.45;
 }
 
-/* 列表里的 Kivio 图标跟 AgentIcon 一样 20px（胶囊上是 18px）。 */
+/* 列表里的 ABU Agent 图标跟 AgentIcon 一样 20px（胶囊上是 18px）。 */
 .kv-runtime-picker__agent .kv-runtime-picker__builtin-logo {
   width: 20px;
   height: 20px;

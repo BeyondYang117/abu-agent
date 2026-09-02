@@ -71,7 +71,7 @@ pub fn list_windows() -> Vec<WindowInfo> {
             reason = Some("layer!=0");
         } else if alpha < 0.05 {
             reason = Some("alpha~0");
-        } else if is_kivio_auxiliary_window(&owner, &title, bw, bh) {
+        } else if is_abu_agent_auxiliary_window(&owner, &title, bw, bh) {
             reason = Some("self-helper");
         } else if bw < 60.0 || bh < 40.0 {
             reason = Some("too-small");
@@ -94,36 +94,36 @@ pub fn list_windows() -> Vec<WindowInfo> {
 }
 
 #[cfg(target_os = "macos")]
-const KIVIO_SELECTABLE_MIN_WIDTH: f64 = 360.0;
+const ABU_AGENT_SELECTABLE_MIN_WIDTH: f64 = 360.0;
 #[cfg(target_os = "macos")]
-const KIVIO_SELECTABLE_MIN_HEIGHT: f64 = 360.0;
+const ABU_AGENT_SELECTABLE_MIN_HEIGHT: f64 = 360.0;
 
 #[cfg(target_os = "macos")]
-fn is_kivio_owner(owner: &str) -> bool {
+fn is_abu_agent_owner(owner: &str) -> bool {
     matches!(
         owner,
-        "ABU Agent" | "Kivio Desktop" | "Kivio" | "kivio" | "KeyLingo" | "keylingo"
+        "ABU Agent" | "ABU Agent Desktop" | "ABU Agent" | "abu_agent" | "ABU Agent" | "abu-agent"
     )
 }
 
 #[cfg(target_os = "macos")]
-fn is_kivio_primary_window(title: &str, width: f64, height: f64) -> bool {
+fn is_abu_agent_primary_window(title: &str, width: f64, height: f64) -> bool {
     matches!(
         title.trim(),
-        "ABU Agent" | "Kivio Desktop" | "Kivio" | "KeyLingo"
-    ) && width >= KIVIO_SELECTABLE_MIN_WIDTH
-        && height >= KIVIO_SELECTABLE_MIN_HEIGHT
+        "ABU Agent" | "ABU Agent Desktop" | "ABU Agent" | "ABU Agent"
+    ) && width >= ABU_AGENT_SELECTABLE_MIN_WIDTH
+        && height >= ABU_AGENT_SELECTABLE_MIN_HEIGHT
 }
 
 #[cfg(target_os = "macos")]
-fn is_kivio_auxiliary_window(owner: &str, title: &str, width: f64, height: f64) -> bool {
-    if !is_kivio_owner(owner) {
+fn is_abu_agent_auxiliary_window(owner: &str, title: &str, width: f64, height: f64) -> bool {
+    if !is_abu_agent_owner(owner) {
         return false;
     }
 
-    // Chat is now Kivio's primary desktop window, so Lens must be able to
+    // Chat is now ABU Agent's primary desktop window, so Lens must be able to
     // select it. Keep filtering Lens/translator helper surfaces owned by us.
-    !is_kivio_primary_window(title, width, height)
+    !is_abu_agent_primary_window(title, width, height)
 }
 
 #[cfg(target_os = "macos")]
@@ -201,32 +201,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kivio_chat_window_is_selectable() {
-        assert!(!is_kivio_auxiliary_window(
-            "Kivio Desktop",
-            "Kivio Desktop",
+    fn abu_agent_chat_window_is_selectable() {
+        assert!(!is_abu_agent_auxiliary_window(
+            "ABU Agent Desktop",
+            "ABU Agent Desktop",
             1060.0,
             746.0
         ));
-        assert!(!is_kivio_auxiliary_window("kivio", "Kivio", 1060.0, 746.0));
-        assert!(!is_kivio_auxiliary_window("Kivio", "Kivio", 400.0, 400.0));
+        assert!(!is_abu_agent_auxiliary_window("abu_agent", "ABU Agent", 1060.0, 746.0));
+        assert!(!is_abu_agent_auxiliary_window("ABU Agent", "ABU Agent", 400.0, 400.0));
     }
 
     #[test]
-    fn kivio_helper_windows_are_filtered() {
-        assert!(is_kivio_auxiliary_window(
-            "Kivio Desktop",
+    fn abu_agent_helper_windows_are_filtered() {
+        assert!(is_abu_agent_auxiliary_window(
+            "ABU Agent Desktop",
             "Lens",
             1728.0,
             1117.0
         ));
-        assert!(is_kivio_auxiliary_window("kivio", "Lens", 1728.0, 1117.0));
-        assert!(is_kivio_auxiliary_window("kivio", "Kivio", 392.0, 152.0));
-        assert!(is_kivio_auxiliary_window("KeyLingo", "", 600.0, 72.0));
+        assert!(is_abu_agent_auxiliary_window("abu_agent", "Lens", 1728.0, 1117.0));
+        assert!(is_abu_agent_auxiliary_window("abu_agent", "ABU Agent", 392.0, 152.0));
+        assert!(is_abu_agent_auxiliary_window("ABU Agent", "", 600.0, 72.0));
     }
 
     #[test]
     fn other_apps_are_not_self_filtered() {
-        assert!(!is_kivio_auxiliary_window("Safari", "Kivio", 392.0, 152.0));
+        assert!(!is_abu_agent_auxiliary_window("Safari", "ABU Agent", 392.0, 152.0));
     }
 }

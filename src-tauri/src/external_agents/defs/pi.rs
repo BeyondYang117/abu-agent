@@ -27,7 +27,7 @@ pub fn build_pi_args(
     // pi 原生会话：`--session-id <id>` 语义天然幂等——不存在则创建、存在则续接。首轮
     // resolve_agent_resume_context 给出 new_session_id（新 uuid，落盘 external-agent-sessions），
     // 后续轮给出 resume_session_id（同一 id），两种情况都用这同一个 flag。pi 每轮 spawn，
-    // 靠这个 id 让 CLI 自己从原生会话文件恢复历史，Kivio 不再重放 transcript。
+    // 靠这个 id 让 CLI 自己从原生会话文件恢复历史，ABU Agent 不再重放 transcript。
     if let Some(session_id) = ctx
         .resume_session_id
         .as_ref()

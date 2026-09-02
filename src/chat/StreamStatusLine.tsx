@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react'
-import { ABUAgentBlob, type BlobMood } from './KivioBlob'
+import { ABUAgentBlob, type BlobMood } from './AbuAgentBlob'
 import { getCoarse, getSnapshot } from './streamingStore'
-import { resolveBlobMood } from './kivioBlobSim'
+import { resolveBlobMood } from './abuAgentBlobSim'
 import { useConversationTransition } from './conversationTransitionStore'
 
 export const StreamStatusLogo = memo(function StreamStatusLogo({

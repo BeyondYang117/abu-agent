@@ -89,8 +89,8 @@ const MAX_REPORT_SAMPLES = 2_000
 
 declare global {
   interface Window {
-    __KIVIO_CHAT_PERF_REPORT__?: () => ChatPerfReport
-    __KIVIO_CHAT_PERF_RESET__?: () => void
+    __ABU_AGENT_CHAT_PERF_REPORT__?: () => ChatPerfReport
+    __ABU_AGENT_CHAT_PERF_RESET__?: () => void
   }
 }
 
@@ -100,13 +100,13 @@ function probeEnabled(): boolean {
     enabledCache = false
     return false
   }
-  const globalFlag = (globalThis as { __KIVIO_CHAT_PERF__?: boolean }).__KIVIO_CHAT_PERF__
+  const globalFlag = (globalThis as { __ABU_AGENT_CHAT_PERF__?: boolean }).__ABU_AGENT_CHAT_PERF__
   if (globalFlag !== undefined) {
     enabledCache = globalFlag
     return globalFlag
   }
   try {
-    enabledCache = window.localStorage.getItem('kivio.debug.chatPerf') !== '0'
+    enabledCache = window.localStorage.getItem('abu_agent.debug.chatPerf') !== '0'
   } catch {
     enabledCache = true
   }
@@ -139,7 +139,7 @@ function scheduleFlush() {
       detail: bucket.lastDetail,
     }))
     buckets.clear()
-    console.info('[kivio:perf] chat window', rows, windowSamples.splice(0, windowSamples.length))
+    console.info('[abu_agent:perf] chat window', rows, windowSamples.splice(0, windowSamples.length))
   }, 500)
 }
 
@@ -284,7 +284,7 @@ export function useChatPerfLongTaskProbe() {
             startTime: Number(entry.startTime.toFixed(1)),
           }
           recordChatPerfLongTask(sample)
-          console.warn('[kivio:perf] long task', sample)
+          console.warn('[abu_agent:perf] long task', sample)
         }
       })
       observer.observe({ entryTypes: ['longtask'] })
@@ -298,6 +298,6 @@ export function useChatPerfLongTaskProbe() {
 }
 
 if (typeof window !== 'undefined' && import.meta.env.DEV) {
-  window.__KIVIO_CHAT_PERF_REPORT__ = getChatPerfReport
-  window.__KIVIO_CHAT_PERF_RESET__ = resetChatPerfProbeForTests
+  window.__ABU_AGENT_CHAT_PERF_REPORT__ = getChatPerfReport
+  window.__ABU_AGENT_CHAT_PERF_RESET__ = resetChatPerfProbeForTests
 }

@@ -57,9 +57,9 @@ describe('normalizeAgent', () => {
     expect(agentSelectedModel(normalizeAgent({
       prompt: '',
       runtimeKind: 'builtin',
-      model: 'kivio-model',
+      model: 'abu-agent-model',
       externalModel: 'sonnet',
-    }))).toBe('kivio-model')
+    }))).toBe('abu-agent-model')
   })
 
   it('marks required slots empty until configured', () => {

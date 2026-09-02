@@ -1,4 +1,4 @@
-//! Document → text routing: Kivio built-in parse + optional third-party
+//! Document → text routing: ABU Agent built-in parse + optional third-party
 //! parsing services (MinerU / LlamaParse), per the document-processing config.
 //!
 //! Built-in (`parse::parse_file`) handles txt/md/html/docx/xlsx/pdf-text
@@ -505,7 +505,7 @@ mod tests {
     async fn explicit_processor_routes_third_party() {
         let state = AppState::new_headless(Settings::default(), std::env::temp_dir());
         let c = cfg("p1", false, vec![provider("p1", true)]);
-        let dir = std::env::temp_dir().join("kivio-test-docs");
+        let dir = std::env::temp_dir().join("abu-agent-test-docs");
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("route-check.pdf");
         std::fs::write(&f, b"%PDF-1.4 not really").unwrap();

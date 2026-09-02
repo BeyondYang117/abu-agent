@@ -657,7 +657,7 @@ describe('ExternalAgentsSettings', () => {
               id: 'p-dsh-gpt',
               name: 'gpt',
               nativeProviderId: 'gpt',
-              env: [{ key: 'KIVIO_DSH_GPT_API_KEY', value: 'sk' }],
+              env: [{ key: 'ABU_AGENT_DSH_GPT_API_KEY', value: 'sk' }],
             },
           ],
         },

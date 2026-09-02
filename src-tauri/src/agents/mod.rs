@@ -3,12 +3,12 @@
 //! An `AgentDefinition` is the sub-agent counterpart of `ChatAssistantSnapshot`:
 //! a named persona with an optional system-prompt prefix, an optional model
 //! override, and an allow-list of tools. Definitions load in three layers
-//! (built-in → user `~/<app_data>/agents/*.md` → project `.kivio/agents/*.md`),
+//! (built-in → user `~/<app_data>/agents/*.md` → project `.abu-agent/agents/*.md`),
 //! later layers overriding earlier ones by id, mirroring the Skill loader and
 //! Claude Code's `agents/` convention.
 //!
 //! Unlike clawspring's reference implementation (whose `tools` field was never
-//! enforced), Kivio enforces the tool allow-list at spawn time via
+//! enforced), ABU Agent enforces the tool allow-list at spawn time via
 //! `chat::agent::filter::filter_tools_for_agent`, which also strips the `agent`
 //! tool itself so a sub-agent can never recursively spawn.
 
@@ -33,7 +33,7 @@ pub fn user_agents_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Load the merged agent registry: built-ins, then `<app_data>/agents/*.md`
-/// (source `user`), then `<project_root>/.kivio/agents/*.md` (source
+/// (source `user`), then `<project_root>/.abu-agent/agents/*.md` (source
 /// `project`) when a project root is provided. Same-id later layers override
 /// earlier ones. Parse failures are skipped (never fatal) so a malformed file
 /// can't break spawning.
@@ -47,7 +47,7 @@ pub fn load_agent_definitions(
         merge_dir(&mut defs, &dir, "user");
     }
     if let Some(root) = project_root {
-        merge_dir(&mut defs, &root.join(".kivio").join("agents"), "project");
+        merge_dir(&mut defs, &root.join(".abu-agent").join("agents"), "project");
     }
     defs
 }

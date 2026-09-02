@@ -331,7 +331,7 @@ mod tests {
             crate::offline_models::OfflineModelManager::headless(reqwest::Client::new());
         AppState::base(
             Settings::default(),
-            std::env::temp_dir().join(format!("kivio-title-test-usage-{}", uuid::Uuid::new_v4())),
+            std::env::temp_dir().join(format!("abu-agent-title-test-usage-{}", uuid::Uuid::new_v4())),
             reqwest::Client::new(),
             #[cfg(target_os = "macos")]
             crate::macos_ocr::MacOcrClient::disabled(),

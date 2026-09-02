@@ -130,7 +130,7 @@ pub(crate) fn save_pasted_attachment(
 }
 
 fn write_pasted_attachment_bytes(name: &str, bytes: &[u8]) -> Result<(PathBuf, String), String> {
-    let dir = std::env::temp_dir().join("kivio-chat-paste");
+    let dir = std::env::temp_dir().join("abu-agent-chat-paste");
     fs::create_dir_all(&dir).map_err(|e| format!("创建临时附件目录失败: {e}"))?;
     let file_name = format!("paste-{}-{}", Uuid::new_v4(), name);
     let path = dir.join(&file_name);
@@ -401,14 +401,14 @@ fn rehydrate_model_message_images_in_dir(
     }
 }
 
-/// 外置后写在 `api_messages` 图片部件 url 位置的哨兵 URI：`kivio-attachment://<mime>/<文件名>`。
+/// 外置后写在 `api_messages` 图片部件 url 位置的哨兵 URI：`abu-agent-attachment://<mime>/<文件名>`。
 ///
 /// 为什么要自造一个 scheme 而不是直接塞文件名：`api_messages` 是**原始 wire JSON**
 /// （`Vec<Value>`），没有 `MessagePart` 那样的结构化 `path` 字段可用。哨兵必须
 /// ① 不含 base64、② 能原样还原出 `data:<mime>;base64,<payload>`（mime 不能靠扩展名猜，
 /// `image/jpeg` 与 `.jpg` 不是双射）、③ 一眼能认出不是真 URL（免得漏 rehydrate 时被
 /// 当成远程图发出去）。
-const ATTACHMENT_URI_SCHEME: &str = "kivio-attachment://";
+const ATTACHMENT_URI_SCHEME: &str = "abu-agent-attachment://";
 
 /// `api_messages` 里可能出现的图片部件 `type`（与 `agent::prepare::IMAGE_PART_TYPES` 同口径）。
 const API_IMAGE_PART_TYPES: [&str; 3] = ["image_url", "input_image", "image"];
@@ -491,7 +491,7 @@ pub(crate) fn message_has_api_message_image_to_externalize(message: &ChatMessage
 ///
 /// 文件读不到就把整个部件换成文本占位符（与 `MessagePart` 侧的
 /// [`crate::chat::model::MISSING_IMAGE_PLACEHOLDER`] 同语义）——绝不把
-/// `kivio-attachment://` 原样发给 provider。
+/// `abu-agent-attachment://` 原样发给 provider。
 pub(crate) fn rehydrate_api_message_images(
     app: &AppHandle,
     conversation_id: &str,
@@ -858,7 +858,7 @@ fn attachment_processing_hint(attachment: &Attachment) -> String {
             "推荐复用现成 `{skill}` Skill：需要读取或分析该文件时，先调用 skill(name=\"{skill}\")，再按该 Skill 的 SKILL.md / reference / scripts 流程处理安全副本路径。"
         )
     } else {
-        "此文件已保存为 Kivio 安全副本；仅在有可用读取工具或对应 Skill 时处理正文。".to_string()
+        "此文件已保存为 ABU Agent 安全副本；仅在有可用读取工具或对应 Skill 时处理正文。".to_string()
     }
 }
 
@@ -869,7 +869,7 @@ pub(crate) fn compose_user_content_for_api(
 ) -> String {
     let trimmed = content.trim();
     // 虚拟文本附件（memory://）正文已由 text_attachments 通道内联进 API content，
-    // 这里过滤掉，避免再输出一段「Kivio 安全副本路径」造成重复。
+    // 这里过滤掉，避免再输出一段「ABU Agent 安全副本路径」造成重复。
     let real_attachments: Vec<&Attachment> = attachments
         .iter()
         .filter(|attachment| !is_memory_text_attachment(attachment))
@@ -889,7 +889,7 @@ pub(crate) fn compose_user_content_for_api(
         .map(|attachment| {
             let stored_path = stored_attachment_path_for_prompt(attachment, attachment_dir);
             format!(
-                "- {} ({})\n  - 附件 ID：{}\n  - Kivio 安全副本路径：{}\n  - 处理建议：{}",
+                "- {} ({})\n  - 附件 ID：{}\n  - ABU Agent 安全副本路径：{}\n  - 处理建议：{}",
                 attachment.name,
                 attachment_format_label(attachment),
                 attachment.id,
@@ -1115,13 +1115,13 @@ mod tests {
                 path: "att_1-report.PDF".to_string(),
                 content: None,
             }],
-            Some(Path::new("/Users/test/Library/Application Support/com.zmair.kivio/conversations/conv_1_attachments")),
+            Some(Path::new("/Users/test/Library/Application Support/com.zmair.abu-agent/conversations/conv_1_attachments")),
         );
 
         assert!(content.contains("report.PDF"));
         assert!(content.contains("PDF"));
         assert!(content.contains("skill(name=\"pdf\")"));
-        assert!(content.contains("Kivio 安全副本路径"));
+        assert!(content.contains("ABU Agent 安全副本路径"));
         assert!(content.contains("不要仅凭文件名臆测内容"));
     }
 
@@ -1310,7 +1310,7 @@ mod tests {
     /// 落盘的会话 JSON 里绝不能出现 base64：图片必须写成附件文件 + `path` 引用。
     #[test]
     fn externalize_model_message_images_moves_base64_to_disk() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let payload = general_purpose::STANDARD.encode(b"fake-png-bytes");
 
@@ -1337,7 +1337,7 @@ mod tests {
     /// 实测同图读 3 次曾在 JSON 里存 3 份 2.5MB base64。
     #[test]
     fn externalize_model_message_images_dedupes_identical_images() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let payload = general_purpose::STANDARD.encode(b"same-image");
 
@@ -1365,7 +1365,7 @@ mod tests {
     /// 已有 path 的部件跳过 ⇒ 每次落盘都跑也是幂等的。
     #[test]
     fn externalize_model_message_images_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut messages = image_model_messages(vec![(
@@ -1385,7 +1385,7 @@ mod tests {
     /// 回放时按 path 读盘填回 base64，模型看到的内容与当初一字不差。
     #[test]
     fn rehydrate_model_message_images_restores_base64_from_disk() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let bytes = b"round-trip-bytes";
         let payload = general_purpose::STANDARD.encode(bytes);
@@ -1403,7 +1403,7 @@ mod tests {
     /// 附件文件被删 → data 留空，由适配器换成占位文本，绝不发空 base64 让 provider 400。
     #[test]
     fn rehydrate_tolerates_missing_and_unsafe_paths() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut messages = image_model_messages(vec![
@@ -1422,7 +1422,7 @@ mod tests {
     /// `image/jpg`（非标准写法）不能落成 `.image/jpg` 之类的坏扩展名。
     #[test]
     fn externalize_normalizes_jpg_mime_to_jpeg_extension() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut messages = image_model_messages(vec![(
@@ -1456,7 +1456,7 @@ mod tests {
     /// 中断草稿的 `api_messages` 同样不许把 base64 落盘（同一个 bug 的另一半）。
     #[test]
     fn externalize_api_message_images_replaces_base64_with_sentinel() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let payload = general_purpose::STANDARD.encode(b"wire-png-bytes");
 
@@ -1466,7 +1466,7 @@ mod tests {
         assert!(externalize_api_message_images_in_dir(&dir, &mut messages));
 
         let url = api_image_url(&messages[0]);
-        assert!(url.starts_with("kivio-attachment://image/png/msgimg-"));
+        assert!(url.starts_with("abu-agent-attachment://image/png/msgimg-"));
         let json = serde_json::to_string(&messages).unwrap();
         assert!(!json.contains(&payload), "JSON 里不许有 base64");
 
@@ -1480,14 +1480,14 @@ mod tests {
     /// 回放前必须还原成 data URL，且 mime 逐字保留（不能靠扩展名猜）。
     #[test]
     fn rehydrate_api_message_images_round_trips() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let payload = general_purpose::STANDARD.encode(b"jpeg-wire-bytes");
         let original = format!("data:image/jpeg;base64,{payload}");
 
         let mut messages = vec![api_image_message(&original)];
         externalize_api_message_images_in_dir(&dir, &mut messages);
-        assert!(api_image_url(&messages[0]).starts_with("kivio-attachment://"));
+        assert!(api_image_url(&messages[0]).starts_with("abu-agent-attachment://"));
 
         rehydrate_api_message_images_in_dir(&dir, &mut messages);
         assert_eq!(api_image_url(&messages[0]), original, "必须逐字还原");
@@ -1498,7 +1498,7 @@ mod tests {
     /// Responses 的 `input_image` 是字符串形（`image_url` 本身就是 url），也要覆盖。
     #[test]
     fn externalize_api_message_images_handles_string_image_url() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let payload = general_purpose::STANDARD.encode(b"responses-bytes");
 
@@ -1513,7 +1513,7 @@ mod tests {
         assert!(messages[0]["content"][0]["image_url"]
             .as_str()
             .unwrap()
-            .starts_with("kivio-attachment://"));
+            .starts_with("abu-agent-attachment://"));
 
         rehydrate_api_message_images_in_dir(&dir, &mut messages);
         assert!(messages[0]["content"][0]["image_url"]
@@ -1527,11 +1527,11 @@ mod tests {
     /// 文件缺失 ⇒ url 置空（由适配器跳过该部件），**绝不把哨兵原样发给 provider**。
     #[test]
     fn rehydrate_api_message_images_blanks_missing_files() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut messages = vec![api_image_message(
-            "kivio-attachment://image/png/msgimg-deadbeef.png",
+            "abu-agent-attachment://image/png/msgimg-deadbeef.png",
         )];
         rehydrate_api_message_images_in_dir(&dir, &mut messages);
         assert_eq!(api_image_url(&messages[0]), "");
@@ -1543,18 +1543,18 @@ mod tests {
     #[test]
     fn parse_attachment_uri_rejects_traversal_and_malformed() {
         assert_eq!(
-            parse_attachment_uri("kivio-attachment://image/png/msgimg-a.png"),
+            parse_attachment_uri("abu-agent-attachment://image/png/msgimg-a.png"),
             Some(("image/png".to_string(), "msgimg-a.png"))
         );
-        assert!(parse_attachment_uri("kivio-attachment://image/png/../../etc/passwd").is_none());
-        assert!(parse_attachment_uri("kivio-attachment://noslash").is_none());
+        assert!(parse_attachment_uri("abu-agent-attachment://image/png/../../etc/passwd").is_none());
+        assert!(parse_attachment_uri("abu-agent-attachment://noslash").is_none());
         assert!(parse_attachment_uri("data:image/png;base64,AAAA").is_none());
     }
 
     /// 幂等：第二次不该再改动（已是哨兵，不是 data URL）。
     #[test]
     fn externalize_api_message_images_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("kivio-extimg-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-extimg-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
 
         let mut messages = vec![api_image_message(&format!(

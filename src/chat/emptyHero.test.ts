@@ -6,14 +6,14 @@ describe('emptyHeroLine', () => {
     expect(emptyHeroLine({
       lang: 'zh',
       assistantName: '翻译官',
-      projectName: 'kivio',
+      projectName: 'abu_agent',
       seed: 'c1',
     })).toBe('翻译官')
   })
 
   it('项目 / 集用短前缀', () => {
-    expect(emptyHeroLine({ lang: 'zh', projectName: 'kivio' })).toBe('在「kivio」')
-    expect(emptyHeroLine({ lang: 'en', projectName: 'kivio' })).toBe('In “kivio”')
+    expect(emptyHeroLine({ lang: 'zh', projectName: 'abu_agent' })).toBe('在「abu_agent」')
+    expect(emptyHeroLine({ lang: 'en', projectName: 'abu_agent' })).toBe('In “abu_agent”')
     expect(emptyHeroLine({ lang: 'zh', setName: '写作' })).toBe('在「写作」')
   })
 

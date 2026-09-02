@@ -526,7 +526,7 @@ fn acp_initialize_params(terminal: bool) -> Value {
         "protocolVersion": ACP_PROTOCOL_VERSION,
         "clientCapabilities": { "terminal": terminal },
         "clientInfo": {
-            "name": "kivio",
+            "name": "abu_agent",
             "title": "ABU Agent",
             "version": env!("CARGO_PKG_VERSION"),
         },

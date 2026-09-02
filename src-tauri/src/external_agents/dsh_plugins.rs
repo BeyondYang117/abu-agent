@@ -3,23 +3,23 @@
 //! 官方 web 把可配项写进 `$DSH_HOME/settings.yaml` 的三个 namespace
 //!（`shell` / `agent-loop` / `web-search-deepseek`），密钥进 `.credentials.yaml`
 //!（官方 DeepSeek 模型与网页搜索共用 `DEEPSEEK_API_KEY`），
-//! 清单则来自已 compose 的 Loader 树。Kivio 不改 `profiles/kivio/cordis.patch.yml`
+//! 清单则来自已 compose 的 Loader 树。ABU Agent 不改 `profiles/abu_agent/cordis.patch.yml`
 //!（那份由 `dsh_profile::ensure_profile_ready` 每轮重写），所以：
 //!
 //! - **官方密钥**：写入 `.credentials.yaml` 的 `refs.DEEPSEEK_API_KEY`（`version: 1`），
 //!   与官方网页版同一条路径；不进 `cordis.patch.yml`。当前 dsh 只接受顶层
 //!   `version` / `refs` / `records`，环境变量名不能写在根上。就绪判定对齐官方分层：
 //!   进程环境 > `.credentials.yaml` > 项目 `.env` > `$DSH_HOME/.env`。
-//! - **插件配置**：读写 `settings.yaml` + 可选写凭据，热重载后 kivio / web 共用。
-//! - **插件列表**：优先 `dsh --profile kivio --dump-config`（boot-free）解析
+//! - **插件配置**：读写 `settings.yaml` + 可选写凭据，热重载后 abu_agent / web 共用。
+//! - **插件列表**：优先 `dsh --profile abu_agent --dump-config`（boot-free）解析
 //!   id / name / disabled；失败则读安装包里的 `dsh-base` / `dsh-agent-presets`
-//!   patch + Kivio 自己的 `cordis.patch.yml`。没有 live host，fiber 相位一律未知；
+//!   patch + ABU Agent 自己的 `cordis.patch.yml`。没有 live host，fiber 相位一律未知；
 //!   启用态以 compose 后的 `disabled` 为准。
 //! - **settings.yaml 里的第三方供应商**：设置页「所有供应商」会列出
 //!   `llm-pi-ai.providers` 摘要。用户点删除时才从这份文件移除该条——这不是把
-//!   Kivio 管理的供应商同步进 web，只处理页面上已经显示的那一行。
+//!   ABU Agent 管理的供应商同步进 web，只处理页面上已经显示的那一行。
 //! - **模型图片 / 推理档位**：官方 web 只认 `settings.yaml` 里的 `input` /
-//!   `defaultInput` / `reasoningEfforts`。Kivio 保存供应商时，只把已存在路由上的
+//!   `defaultInput` / `reasoningEfforts`。ABU Agent 保存供应商时，只把已存在路由上的
 //!   这几项写回去，不新建供应商、不写密钥。
 
 use std::collections::BTreeMap;
@@ -33,7 +33,7 @@ use tauri::AppHandle;
 use tauri_plugin_shell::ShellExt;
 use tokio::time::timeout;
 
-use crate::external_agents::dsh_profile::{profile_dir, KIVIO_PROFILE};
+use crate::external_agents::dsh_profile::{profile_dir, ABU_AGENT_PROFILE};
 use crate::external_agents::registry::get_agent_def;
 use crate::external_agents::spawn::{agent_cli_command, resolve_binary};
 use crate::proc::NoConsoleWindow;
@@ -272,7 +272,7 @@ fn credentials_need_heal(root: &Mapping) -> bool {
 
 /// Move stray top-level env keys into `refs` and pin `version: 1`.
 /// Matches dsh-credentials-local (`version` | `refs` | `records` only).
-/// Stray keys overwrite existing `refs` entries so a Kivio save wins.
+/// Stray keys overwrite existing `refs` entries so a ABU Agent save wins.
 fn migrate_credentials_to_v1(mut root: Mapping) -> Mapping {
     let mut stray = Mapping::new();
     let keys: Vec<serde_yaml::Value> = root.keys().cloned().collect();
@@ -418,7 +418,7 @@ fn native_pi_ai_api_key_env(provider_id: &str) -> Option<String> {
     pi_ai_api_key_env_from_settings(&text, provider_id)
 }
 
-/// Connect 前的凭据门：Kivio 托管供应商由调用方另行判断；这里覆盖官方 DeepSeek
+/// Connect 前的凭据门：ABU Agent 托管供应商由调用方另行判断；这里覆盖官方 DeepSeek
 /// 与 `settings.yaml` 里的 `llm-pi-ai` 路由（含 `.env` 兜底）。
 pub(crate) fn credentials_ready_for_provider(provider: &str, cwd: Option<&Path>) -> bool {
     let api_key_env = if provider.trim().is_empty() || provider == DSH_OFFICIAL_PROVIDER_ID {
@@ -815,14 +815,14 @@ fn inventory_fallback_error(dump_result: &Result<String, String>, file_err: &str
     }
 }
 
-async fn dump_kivio_config() -> Result<String, String> {
+async fn dump_abu_agent_config() -> Result<String, String> {
     let def = get_agent_def("dsh").ok_or_else(|| "未注册 dsh".to_string())?;
     let bin = resolve_binary(def)
         .await
         .ok_or_else(|| "未找到 dsh 可执行文件".to_string())?;
     let mut command = agent_cli_command(def, &bin);
     command
-        .args(["--profile", KIVIO_PROFILE, "--dump-config"])
+        .args(["--profile", ABU_AGENT_PROFILE, "--dump-config"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -901,7 +901,7 @@ pub fn chat_dsh_plugin_settings_save(
 
 #[tauri::command]
 pub async fn chat_dsh_plugin_inventory() -> Result<Vec<DshPluginEntry>, String> {
-    let dump_result = dump_kivio_config().await;
+    let dump_result = dump_abu_agent_config().await;
     if let Ok(dump) = &dump_result {
         if let Ok(entries) = parse_inventory_dump(dump) {
             if !entries.is_empty() {
@@ -1291,7 +1291,7 @@ fn apply_provider_caps(
     changed
 }
 
-fn sync_kivio_model_capabilities_at(
+fn sync_abu_agent_model_capabilities_at(
     settings_path: &Path,
     providers: &[ExternalCliProvider],
 ) -> Result<(), String> {
@@ -1314,9 +1314,9 @@ fn sync_kivio_model_capabilities_at(
     Ok(())
 }
 
-/// 把 Kivio 已保存的模型 `input` / `reasoningEfforts` 写回已存在的 `settings.yaml` 路由。
+/// 把 ABU Agent 已保存的模型 `input` / `reasoningEfforts` 写回已存在的 `settings.yaml` 路由。
 /// 不新建供应商，也不写密钥；官方 web 的贴图和 effort 选择只认这些字段。
-pub(crate) fn sync_kivio_model_capabilities(
+pub(crate) fn sync_abu_agent_model_capabilities(
     providers: &[ExternalCliProvider],
 ) -> Result<(), String> {
     let Ok(path) = settings_path() else {
@@ -1325,7 +1325,7 @@ pub(crate) fn sync_kivio_model_capabilities(
     if !path.exists() {
         return Ok(());
     }
-    sync_kivio_model_capabilities_at(&path, providers)
+    sync_abu_agent_model_capabilities_at(&path, providers)
 }
 
 #[tauri::command]
@@ -1541,8 +1541,8 @@ node: warning this is not yaml
 - id: tool-bash
   disabled: true
 - insert:
-    - id: kivio-dsh-jsonrpc-bridge
-      name: './kivio-dsh-bridge.mjs'
+    - id: abu-agent-dsh-jsonrpc-bridge
+      name: './abu-agent-dsh-bridge.mjs'
 "#,
             &mut entries,
         )
@@ -1551,9 +1551,9 @@ node: warning this is not yaml
         assert!(entries.get("tool-bash").is_some_and(|entry| !entry.enabled));
         assert_eq!(
             entries
-                .get("kivio-dsh-jsonrpc-bridge")
+                .get("abu-agent-dsh-jsonrpc-bridge")
                 .map(|entry| entry.module_name.as_str()),
-            Some("./kivio-dsh-bridge.mjs")
+            Some("./abu-agent-dsh-bridge.mjs")
         );
         assert!(entries.contains_key("tool-web"));
     }
@@ -1576,7 +1576,7 @@ node: warning this is not yaml
 
     #[test]
     fn official_credential_writes_deepseek_key_and_keeps_neighbors() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-cred-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-cred-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".credentials.yaml");
         std::fs::write(&path, "OTHER_KEY: keep-me\n").unwrap();
@@ -1598,7 +1598,7 @@ node: warning this is not yaml
 
     #[test]
     fn heals_hybrid_versioned_file_with_stray_top_level_key() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-heal-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-heal-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".credentials.yaml");
         std::fs::write(
@@ -1624,7 +1624,7 @@ node: warning this is not yaml
 
     #[test]
     fn credentials_contain_reads_refs_layout() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-refs-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-refs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(".credentials.yaml");
         std::fs::write(&path, "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-yaml\n").unwrap();
@@ -1638,7 +1638,7 @@ node: warning this is not yaml
 
     #[test]
     fn native_provider_detail_reads_models_and_key_without_touching_neighbors() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-native-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-native-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = dir.join("settings.yaml");
         let credentials = dir.join(".credentials.yaml");
@@ -1698,7 +1698,7 @@ llm-pi-ai:
 
     #[test]
     fn native_provider_delete_removes_route_and_stale_default() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-del-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-del-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = dir.join("settings.yaml");
         std::fs::write(
@@ -1732,8 +1732,8 @@ llm-pi-ai:
     }
 
     #[test]
-    fn kivio_model_caps_write_existing_settings_route_only() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-caps-{}", uuid::Uuid::new_v4()));
+    fn abu_agent_model_caps_write_existing_settings_route_only() {
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-caps-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = dir.join("settings.yaml");
         std::fs::write(
@@ -1757,7 +1757,7 @@ llm-pi-ai:
         )
         .unwrap();
 
-        sync_kivio_model_capabilities_at(
+        sync_abu_agent_model_capabilities_at(
             &settings,
             &[ExternalCliProvider {
                 id: "p-dsh-gpt".into(),
@@ -1843,7 +1843,7 @@ llm-pi-ai:
 
     #[test]
     fn credential_status_accepts_dotenv_when_yaml_missing() {
-        let dir = std::env::temp_dir().join(format!("kivio-dsh-env-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dsh-env-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let user_env = dir.join(".env");
         std::fs::write(&user_env, "DEEPSEEK_API_KEY=sk-from-home\n").unwrap();

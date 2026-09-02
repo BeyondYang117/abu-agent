@@ -11,7 +11,7 @@ use super::lifecycle::{
     apply_disable_side_effects, apply_enable_side_effects, plugin_mcp_server_id,
 };
 use super::state::{
-    default_binary_filename, is_enabled, kivio_binary_path, meta_path, plugin_dir, probe_version,
+    default_binary_filename, is_enabled, abu_agent_binary_path, meta_path, plugin_dir, probe_version,
     read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_for_status,
     skill_dir, write_meta, PluginMeta,
 };
@@ -44,7 +44,7 @@ pub struct PluginStatus {
     pub enabled: bool,
     pub version: Option<String>,
     pub path: Option<String>,
-    /// kivio | system | none
+    /// abu_agent | system | none
     pub source: String,
     pub has_skill: bool,
     pub has_mcp: bool,
@@ -91,7 +91,7 @@ pub fn list_plugin_statuses() -> Result<Vec<PluginStatus>, String> {
     Ok(PLUGIN_CATALOG.iter().map(status_for).collect())
 }
 
-/// 无 spawn 的缓存态列表：只查文件（kivio 托管路径）+ meta.json（enabled/version），
+/// 无 spawn 的缓存态列表：只查文件（abu_agent 托管路径）+ meta.json（enabled/version），
 /// 不跑 `which` / `--version` 子进程。前端首屏用它秒开页面；完整探测只在手动刷新/操作后跑。
 pub fn list_plugin_statuses_cached() -> Result<Vec<PluginStatus>, String> {
     Ok(PLUGIN_CATALOG.iter().map(status_for_cached).collect())
@@ -114,16 +114,16 @@ fn fill_mcp_active(list: &mut [PluginStatus], state: &AppState) {
 }
 
 /// 构造一条 PluginStatus。`installed` 由调用方决定（精确探测用 `path.is_some()`，缓存态用
-/// kivio 路径存在 + meta 记录），`path`/`version` 同理由调用方按快/慢路径填入。
+/// abu_agent 路径存在 + meta 记录），`path`/`version` 同理由调用方按快/慢路径填入。
 fn build_status(
     catalog: &CatalogPlugin,
-    kivio: &Option<PathBuf>,
+    abu_agent: &Option<PathBuf>,
     path: Option<PathBuf>,
     installed: bool,
     version: Option<String>,
 ) -> PluginStatus {
-    let source = if kivio.is_some() {
-        "kivio".to_string()
+    let source = if abu_agent.is_some() {
+        "abu_agent".to_string()
     } else if installed {
         "system".to_string()
     } else {
@@ -164,7 +164,7 @@ fn build_status(
 }
 
 fn status_for(catalog: &CatalogPlugin) -> PluginStatus {
-    let kivio = kivio_binary_path(catalog.id);
+    let abu_agent = abu_agent_binary_path(catalog.id);
     // 此处不再重复 enrich（list 已做）；单条 status 也走完整 resolve（含 which spawn）。
     let path = resolve_binary(catalog.id);
     let installed = path.is_some();
@@ -172,22 +172,22 @@ fn status_for(catalog: &CatalogPlugin) -> PluginStatus {
         .as_ref()
         .and_then(|p| probe_version(p))
         .or_else(|| read_meta(catalog.id).and_then(|m| m.version));
-    build_status(catalog, &kivio, path, installed, version)
+    build_status(catalog, &abu_agent, path, installed, version)
 }
 
-/// 缓存态：无子进程。installed 取「kivio 托管二进制存在」或「meta 记录装过/启用过」，
+/// 缓存态：无子进程。installed 取「abu_agent 托管二进制存在」或「meta 记录装过/启用过」，
 /// version 直接用 meta 缓存值。system-PATH 安装但无 meta 的插件此处可能暂显未装，随后
 /// 被手动刷新的完整探测修正——秒开优先，短暂不精确可接受。
 fn status_for_cached(catalog: &CatalogPlugin) -> PluginStatus {
-    let kivio = kivio_binary_path(catalog.id);
+    let abu_agent = abu_agent_binary_path(catalog.id);
     let meta = read_meta(catalog.id);
-    let installed = kivio.is_some()
+    let installed = abu_agent.is_some()
         || meta
             .as_ref()
             .map(|m| m.enabled || m.version.is_some() || m.installed_at.is_some())
             .unwrap_or(false);
     let version = meta.and_then(|m| m.version);
-    build_status(catalog, &kivio, kivio.clone(), installed, version)
+    build_status(catalog, &abu_agent, abu_agent.clone(), installed, version)
 }
 
 /// 用 AppState 填充 mcp_active（settings 里是否已注册且 enabled）
@@ -209,14 +209,14 @@ pub fn list_plugin_statuses_cached_with_state(
     Ok(list)
 }
 
-/// 生成「让 Kivio AI 安装」的用户消息 + 标题。
+/// 生成「让 ABU Agent AI 安装」的用户消息 + 标题。
 ///
-/// 安装**全程由本对话里的 Kivio AI 操作**（run_command / web_fetch），**不是** Kivio
+/// 安装**全程由本对话里的 ABU Agent AI 操作**（run_command / web_fetch），**不是** ABU Agent
 /// 后端静默脚本下载。AI 负责：读 README → 装二进制 → 装官方 Skill 包 → 验收。
-/// 用户点「启用」后，Kivio 运行时再挂官方 MCP stdio + 把已装官方 Skill 接入 Agent。
+/// 用户点「启用」后，ABU Agent 运行时再挂官方 MCP stdio + 把已装官方 Skill 接入 Agent。
 pub fn get_install_brief(id: &str) -> Result<PluginInstallBrief, String> {
     let catalog = catalog_plugin(id).ok_or_else(|| format!("unknown plugin: {id}"))?;
-    // GUI 应用型插件（Skill 由 Kivio 下载、无 MCP，如 ego lite）：officecli 那套 MCP/skills-install
+    // GUI 应用型插件（Skill 由 ABU Agent 下载、无 MCP，如 ego lite）：officecli 那套 MCP/skills-install
     // 模板不适用，走精简简报。
     if catalog.skill_download_url.is_some() {
         return Ok(build_downloaded_skill_app_brief(catalog));
@@ -240,7 +240,7 @@ pub fn get_install_brief(id: &str) -> Result<PluginInstallBrief, String> {
     };
 
     let user_message = format!(
-        r#"# 安装 Kivio 插件：{name}
+        r#"# 安装 ABU Agent 插件：{name}
 
 ## 1. 项目地址
 
@@ -264,27 +264,27 @@ README 失败：说明原因并给 {repo} / Releases，不要瞎装。
 
 ## 3. 分工（必读）
 
-Kivio **不会**用后台脚本静默下载插件。本任务由 **你（Kivio AI）** 在本对话里用工具完成。
+ABU Agent **不会**用后台脚本静默下载插件。本任务由 **你（ABU Agent AI）** 在本对话里用工具完成。
 
 | 阶段 | 谁做 | 你要做什么 |
 |------|------|------------|
 | **A. 安装（本对话）** | **你（AI）** | ① 按 README 安装官方 `{binary}` ② 若 `~/.agents/skills` 已有官方 Skill 则跳过，否则补 `skills install` ③ 验收并汇报 |
 | **B. 检测** | 用户点插件页「刷新」 | 你只需保证 PATH/默认目录里能跑 `{binary}` |
-| **C. 启用** | **用户**打开插件开关 | **不要**手改 Kivio settings；启用后 Kivio **自动**挂上官方 MCP（`… mcp` stdio）并把官方 Skill 接入对话 |
+| **C. 启用** | **用户**打开插件开关 | **不要**手改 ABU Agent settings；启用后 ABU Agent **自动**挂上官方 MCP（`… mcp` stdio）并把官方 Skill 接入对话 |
 | **D. 关闭** | 用户 | 卸下 MCP / Skill / 系统提示 |
 
-### 3.1 MCP：官方能力，Kivio 启用时自动接线
+### 3.1 MCP：官方能力，ABU Agent 启用时自动接线
 
-- 官方 MCP = 本机 `{binary} mcp`（stdio JSON-RPC），**不是** Kivio 自研协议。
-- README 里的 `{binary} mcp claude|cursor|vscode|…` 是给**其它 IDE**写配置的。在 Kivio 里：
+- 官方 MCP = 本机 `{binary} mcp`（stdio JSON-RPC），**不是** ABU Agent 自研协议。
+- README 里的 `{binary} mcp claude|cursor|vscode|…` 是给**其它 IDE**写配置的。在 ABU Agent 里：
   - **禁止**执行 `mcp claude` / `cursor` / `vscode` / `lmstudio` 等。
-  - **禁止**手改 Kivio 的 MCP 列表 / settings.json。
-  - 用户 **启用** 插件后，Kivio 会注册：`command=<绝对路径>`，`args=["mcp"]`（id 形如 `plugin-{id}`）。
-- 你在安装阶段**不要**声称「MCP 已在 Kivio 里可用」——那要等用户启用。
+  - **禁止**手改 ABU Agent 的 MCP 列表 / settings.json。
+  - 用户 **启用** 插件后，ABU Agent 会注册：`command=<绝对路径>`，`args=["mcp"]`（id 形如 `plugin-{id}`）。
+- 你在安装阶段**不要**声称「MCP 已在 ABU Agent 里可用」——那要等用户启用。
 
-### 3.2 Skill：官方安装器写入 `~/.agents/skills`，Kivio 直接扫描
+### 3.2 Skill：官方安装器写入 `~/.agents/skills`，ABU Agent 直接扫描
 
-官网安装器 / `{binary} skills install` 会把 Skill 写到 `~/.agents/skills`（以及 `~/.claude/skills` 等）。Kivio **直接扫描这些目录**，不要再拷进插件目录、不要手写 stub。
+官网安装器 / `{binary} skills install` 会把 Skill 写到 `~/.agents/skills`（以及 `~/.claude/skills` 等）。ABU Agent **直接扫描这些目录**，不要再拷进插件目录、不要手写 stub。
 
 若本机已经有对应 SKILL.md：**跳过** skills install。只有缺文件时才按 **§5** 补装。
 
@@ -312,10 +312,10 @@ Kivio **不会**用后台脚本静默下载插件。本任务由 **你（Kivio A
 
 装完后明确告知用户（原话意思即可）：
 
-> 二进制与官方 Skills 已装好。请到 Kivio → **扩展 → 插件**，找到 **{name}**，打开 **启用**。  
-> 启用后 Kivio 会自动挂载官方 MCP（`{binary} mcp`）并接入官方 Skills；无需再配 Claude/Cursor 的 mcp 命令。
+> 二进制与官方 Skills 已装好。请到 ABU Agent → **扩展 → 插件**，找到 **{name}**，打开 **启用**。  
+> 启用后 ABU Agent 会自动挂载官方 MCP（`{binary} mcp`）并接入官方 Skills；无需再配 Claude/Cursor 的 mcp 命令。
 
-PATH 若仅新终端生效：请用户在插件页点刷新，或重启 Kivio。优先用户级安装，非必要不要管理员/sudo。
+PATH 若仅新终端生效：请用户在插件页点刷新，或重启 ABU Agent。优先用户级安装，非必要不要管理员/sudo。
 
 失败时：说明卡在哪一步 → 按 README 换官方方式 → 仍失败则给仓库与 Releases 链接。
 
@@ -435,8 +435,8 @@ pub async fn run_official_install(id: &str) -> Result<PluginActionResult, String
     })
 }
 
-/// 面向「GUI 应用 + Kivio 下载 Skill」型插件（如 ego lite）的安装简报：
-/// AI 只负责装 app + 引导 onboarding；Skill 由 Kivio 启用时下载，本插件无 MCP。
+/// 面向「GUI 应用 + ABU Agent 下载 Skill」型插件（如 ego lite）的安装简报：
+/// AI 只负责装 app + 引导 onboarding；Skill 由 ABU Agent 启用时下载，本插件无 MCP。
 fn build_downloaded_skill_app_brief(catalog: &CatalogPlugin) -> PluginInstallBrief {
     let readme_urls: Vec<String> = catalog
         .readme_urls
@@ -453,7 +453,7 @@ fn build_downloaded_skill_app_brief(catalog: &CatalogPlugin) -> PluginInstallBri
             .join("\n")
     };
     let user_message = format!(
-        r#"# 安装 Kivio 插件：{name}
+        r#"# 安装 ABU Agent 插件：{name}
 
 ## 1. 项目
 
@@ -471,8 +471,8 @@ fn build_downloaded_skill_app_brief(catalog: &CatalogPlugin) -> PluginInstallBri
 ## 3. 分工（必读）
 
 - **你（AI）**：按官方方式安装应用，并引导用户完成首次 onboarding，直到 `{binary}` 命令可用。
-- **Skill：不用你装。** 用户在「扩展 → 插件」点**启用**后，Kivio 会自动从仓库下载 `{binary}` 的官方 Skill 并接入对话。**禁止**手写 / 精简 Skill。
-- **MCP：本插件无 MCP。** 不要配置任何 mcp 命令，也不要改 Kivio settings。
+- **Skill：不用你装。** 用户在「扩展 → 插件」点**启用**后，ABU Agent 会自动从仓库下载 `{binary}` 的官方 Skill 并接入对话。**禁止**手写 / 精简 Skill。
+- **MCP：本插件无 MCP。** 不要配置任何 mcp 命令，也不要改 ABU Agent settings。
 
 ## 4. 安装步骤
 
@@ -480,7 +480,7 @@ fn build_downloaded_skill_app_brief(catalog: &CatalogPlugin) -> PluginInstallBri
 
 ## 5. 收尾对用户说
 
-> 应用与 onboarding 完成后，请到 Kivio →「扩展 → 插件」，找到 **{name}** 点**刷新**确认已检测到，再打开**启用**。启用后 Kivio 会自动下载并接入官方 Skill。
+> 应用与 onboarding 完成后，请到 ABU Agent →「扩展 → 插件」，找到 **{name}** 点**刷新**确认已检测到，再打开**启用**。启用后 ABU Agent 会自动下载并接入官方 Skill。
 "#,
         name = catalog.name,
         repo = catalog.repo,
@@ -637,19 +637,19 @@ pub async fn uninstall_plugin(
 
     let mut cleaned: Vec<String> = Vec::new();
 
-    // 1) Kivio 插件数据（meta / 同步的 skill 缓存 / 预览 html）
+    // 1) ABU Agent 插件数据（meta / 同步的 skill 缓存 / 预览 html）
     if let Some(dir) = plugin_dir(id) {
         if dir.is_dir() {
             match std::fs::remove_dir_all(&dir) {
-                Ok(()) => cleaned.push(format!("Kivio 插件目录 {}", dir.display())),
-                Err(e) => cleaned.push(format!("Kivio 插件目录删除失败: {e}")),
+                Ok(()) => cleaned.push(format!("ABU Agent 插件目录 {}", dir.display())),
+                Err(e) => cleaned.push(format!("ABU Agent 插件目录删除失败: {e}")),
             }
         } else if let Some(meta) = meta_path(id) {
             let _ = std::fs::remove_file(meta);
         }
     }
 
-    // 2) 本机二进制与官方安装目录（干干净净，不只卸 Kivio 侧）
+    // 2) 本机二进制与官方安装目录（干干净净，不只卸 ABU Agent 侧）
     if let Some(bin) = resolved.as_ref() {
         cleaned.extend(remove_cli_install(catalog, bin));
     }
@@ -792,7 +792,7 @@ fn remove_officecli_residuals() -> Vec<String> {
 
     let skill_roots = [
         home.join(".agents").join("skills"),
-        home.join(".kivio").join("skills"),
+        home.join(".abu-agent").join("skills"),
         home.join(".claude").join("skills"),
         home.join(".cursor").join("skills"),
         home.join(".copilot").join("skills"),
@@ -868,7 +868,7 @@ fn remove_cua_driver_residuals() -> Vec<String> {
 
     let skill_roots = [
         home.join(".agents").join("skills"),
-        home.join(".kivio").join("skills"),
+        home.join(".abu-agent").join("skills"),
         home.join(".claude").join("skills"),
         home.join(".cursor").join("skills"),
         home.join(".codex").join("skills"),
@@ -957,7 +957,7 @@ fn home_agent_skill_parents() -> Vec<PathBuf> {
     };
     vec![
         home.join(".agents").join("skills"),
-        home.join(".kivio").join("skills"),
+        home.join(".abu-agent").join("skills"),
         home.join(".claude").join("skills"),
         home.join(".cursor").join("skills"),
         home.join(".codex").join("skills"),

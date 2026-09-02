@@ -19,7 +19,7 @@ function renderTab(overrides: Partial<Props> = {}) {
   const props = {
     lang: 'zh' as const,
     chatMemory: { enabled: true } as Props['chatMemory'],
-    memoryDir: '/tmp/kivio/memory',
+    memoryDir: '/tmp/abu_agent/memory',
     memoryError: '',
     memorySuccess: '',
     memoryLoading: false,
@@ -91,7 +91,7 @@ describe('MemoryTab', () => {
 
   it('显示记忆目录路径', () => {
     renderTab()
-    expect(screen.getByText('/tmp/kivio/memory')).toBeTruthy()
+    expect(screen.getByText('/tmp/abu_agent/memory')).toBeTruthy()
   })
 
   it('错误与成功提示分别渲染', () => {

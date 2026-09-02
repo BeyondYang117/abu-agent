@@ -1,4 +1,4 @@
-//! Static registry for Kivio's builtin (native-source) tools.
+//! Static registry for ABU Agent's builtin (native-source) tools.
 //!
 //! This table is the single source of truth that replaces the previously
 //! drifting hardcoded lists:
@@ -245,12 +245,12 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         call: NativeToolCall::Async(call_read_file),
     },
     // `ls` (list_dir) is folded into `read` in the GUI, so it is NOT advertised
-    // there (enabled=false, kept out of the GUI's built-in tool set). kivio-code,
+    // there (enabled=false, kept out of the GUI's built-in tool set). abu-agent-code,
     // however, exposes a standalone `ls` tool via its own `core_tool_definitions`.
     // This entry exists purely so metadata lookups by the name "ls"
     // (is_read_only_tool / session-consent / bypass) resolve — without it, plan
     // mode drops `ls` and the session-consent gate skips it. `call` is unused
-    // (the GUI never dispatches it; kivio-code dispatches `ls` in its own executor).
+    // (the GUI never dispatches it; abu-agent-code dispatches `ls` in its own executor).
     NativeToolEntry {
         name: "ls",
         def: native_list_dir_tool,
@@ -1149,7 +1149,7 @@ mod tests {
                 "kill_background"
             ],
             "session-consent set must be exactly the file/shell tools (read now also \
-             lists directories; `ls` is the standalone kivio-code list_dir tool; find \
+             lists directories; `ls` is the standalone abu-agent-code list_dir tool; find \
              is renamed glob) plus the background-command observability tools (gated \
              identically to bash); a new file/shell tool MUST set \
              requires_session_consent or it silently bypasses the consent gate"
@@ -1512,7 +1512,7 @@ mod tests {
     #[test]
     fn present_artifacts_loads_existing_local_file() {
         let path = std::env::temp_dir().join(format!(
-            "kivio-present-artifact-{}.txt",
+            "abu-agent-present-artifact-{}.txt",
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::write(&path, b"hello").expect("write test file");

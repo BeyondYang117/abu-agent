@@ -504,7 +504,7 @@ mod tests {
     fn temp_dir(tag: &str) -> PathBuf {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "kivio-dock-watch-{tag}-{}-{id}",
+            "abu-agent-dock-watch-{tag}-{}-{id}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).expect("create temp dir");

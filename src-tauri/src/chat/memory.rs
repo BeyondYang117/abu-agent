@@ -90,7 +90,7 @@ pub struct MemoryModifyArgs {
 }
 
 /// Resolve (and create) the `chat-memory` dir under an explicit app-data base.
-/// This is the AppHandle-free core so non-Tauri callers (e.g. the kivio-code
+/// This is the AppHandle-free core so non-Tauri callers (e.g. the abu-agent-code
 /// terminal agent, which has no `AppHandle`) can read/write the SAME memory the
 /// GUI writes, by passing their own resolved app-data dir.
 pub fn memory_dir_at(base: &Path) -> Result<PathBuf, String> {
@@ -177,7 +177,7 @@ pub fn l1_prompt_block_at(dir: &Path) -> Result<Option<String>, String> {
         ));
     }
     Ok(Some(format!(
-        "Kivio Memory (L1 online memory; user-editable; persistent across chats):\n\n{}",
+        "ABU Agent Memory (L1 online memory; user-editable; persistent across chats):\n\n{}",
         trimmed
     )))
 }

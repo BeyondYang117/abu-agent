@@ -11,7 +11,7 @@ import {
  * `byAgent` 按代理各记一份。切走再切回时 RuntimePicker 会发 default，
  * 没有这张表就会把上次的模型和思考档清成 Auto。
  */
-export const LAST_AGENT_RUNTIME_KEY = 'kivio.chat.lastAgentRuntime'
+export const LAST_AGENT_RUNTIME_KEY = 'abu_agent.chat.lastAgentRuntime'
 
 export type ExternalRuntimeSnapshot = {
   externalModel: string

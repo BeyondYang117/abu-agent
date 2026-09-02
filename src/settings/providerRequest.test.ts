@@ -10,7 +10,7 @@ import {
 
 describe('headerIssue', () => {
   it('accepts a normal header', () => {
-    expect(headerIssue({ key: 'X-Title', value: 'kivio' }, true)).toBeNull()
+    expect(headerIssue({ key: 'X-Title', value: 'abu_agent' }, true)).toBeNull()
   })
 
   it('rejects every reserved key, case-insensitively', () => {
@@ -45,9 +45,9 @@ describe('headerIssue', () => {
 
 describe('parseHeaderImport', () => {
   it('reads a JSON object', () => {
-    const result = parseHeaderImport('{"X-Title":"kivio","X-Count":3}')
+    const result = parseHeaderImport('{"X-Title":"abu_agent","X-Count":3}')
     expect(result.headers).toEqual([
-      { key: 'X-Title', value: 'kivio' },
+      { key: 'X-Title', value: 'abu_agent' },
       { key: 'X-Count', value: '3' },
     ])
     expect(result.issues).toEqual([])
@@ -55,9 +55,9 @@ describe('parseHeaderImport', () => {
 
   it('reads a JSON array of key/value objects and reports rejected entries', () => {
     const result = parseHeaderImport(
-      '[{"key":"X-Title","value":"kivio"},{"key":"Authorization","value":"Bearer x"},{"key":"X-Obj","value":{}}]',
+      '[{"key":"X-Title","value":"abu_agent"},{"key":"Authorization","value":"Bearer x"},{"key":"X-Obj","value":{}}]',
     )
-    expect(result.headers).toEqual([{ key: 'X-Title', value: 'kivio' }])
+    expect(result.headers).toEqual([{ key: 'X-Title', value: 'abu_agent' }])
     expect(result.issues).toEqual([
       { key: 'Authorization', reason: 'reserved' },
       { key: 'X-Obj', reason: 'unsupported-value' },
@@ -68,23 +68,23 @@ describe('parseHeaderImport', () => {
     const curl = [
       'curl https://api.example.com/v1/chat/completions \\',
       "  -H 'X-Title: my app' \\",
-      '  -H "HTTP-Referer: https://kivio.dev" \\',
+      '  -H "HTTP-Referer: https://abu_agent.dev" \\',
       '  --header X-Env:prod \\',
       "  -d '{\"model\":\"gpt-4o\"}'",
     ].join('\n')
     const result = parseHeaderImport(curl)
     expect(result.headers).toEqual([
       { key: 'X-Title', value: 'my app' },
-      { key: 'HTTP-Referer', value: 'https://kivio.dev' },
+      { key: 'HTTP-Referer', value: 'https://abu_agent.dev' },
       { key: 'X-Env', value: 'prod' },
     ])
   })
 
   it('falls back to plain "Name: value" lines', () => {
-    const result = parseHeaderImport('X-Title: kivio\nHTTP-Referer: https://kivio.dev')
+    const result = parseHeaderImport('X-Title: abu_agent\nHTTP-Referer: https://abu_agent.dev')
     expect(result.headers).toEqual([
-      { key: 'X-Title', value: 'kivio' },
-      { key: 'HTTP-Referer', value: 'https://kivio.dev' },
+      { key: 'X-Title', value: 'abu_agent' },
+      { key: 'HTTP-Referer', value: 'https://abu_agent.dev' },
     ])
   })
 
@@ -107,9 +107,9 @@ describe('parseHeaderImport', () => {
   })
 
   it('reads the --header=X: y form', () => {
-    const result = parseHeaderImport('curl https://x/v1 --header=X-Title:kivio --header="X-Env: prod"')
+    const result = parseHeaderImport('curl https://x/v1 --header=X-Title:abu_agent --header="X-Env: prod"')
     expect(result.headers).toEqual([
-      { key: 'X-Title', value: 'kivio' },
+      { key: 'X-Title', value: 'abu_agent' },
       { key: 'X-Env', value: 'prod' },
     ])
   })

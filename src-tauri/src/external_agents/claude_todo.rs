@@ -1,9 +1,9 @@
-//! Claude Code 的任务列表 → Kivio 对话上已有的 Todo 条。
+//! Claude Code 的任务列表 → ABU Agent 对话上已有的 Todo 条。
 //!
 //! 2.1.142 起默认是 `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`，不再整表
 //! `TodoWrite`（可用 `CLAUDE_CODE_ENABLE_TASKS=0` 退回）。2.1.233 起 Sonnet 5 /
 //! Fable 5 / Mythos 5 / Opus 4.8 及更新模型把这整组工具默认拆掉，要
-//! `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` 才回来（Kivio 在 `defs/claude.rs` 的 `env`
+//! `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` 才回来（ABU Agent 在 `defs/claude.rs` 的 `env`
 //! 里设）。官方监测代码看 `tool_use` / `tool_result`，按 task id 累加，不新做一套 UI。
 //! 解析仍认 `TodoWrite`：旧会话、退回开关、以及重新启用后的遗留调用都会走到。
 //!
@@ -12,7 +12,7 @@
 //!   `Task #<id> created successfully: …`，结构化 `{ task: { id, subject } }` 只在
 //!   落盘帧的 `toolUseResult` 里，stream-json 的 `tool_result.content` 是那句英文。
 //! - `TaskUpdate` 入参 `{ taskId, status? }`（流里也可能是 `id` / `task_id`）。
-//! - `status: "deleted"` 是删条，不是 Kivio 的 cancelled。
+//! - `status: "deleted"` 是删条，不是 ABU Agent 的 cancelled。
 //!
 //! 不要走内置 `normalized_state`：那条会把多个 `in_progress` 降成 pending。
 //! `TaskGet` 只读，不改列表。

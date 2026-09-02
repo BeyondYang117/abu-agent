@@ -194,7 +194,7 @@ describe('cliNativeProviderConfigs', () => {
     const config = JSON.parse(built.configJson!)
     expect(config).toMatchObject({
       displayName: 'Relay',
-      apiKeyEnv: 'KIVIO_DSH_RELAY_ONE_API_KEY',
+      apiKeyEnv: 'ABU_AGENT_DSH_RELAY_ONE_API_KEY',
       api: 'openai-responses',
       baseURL: 'https://relay.example/v1',
       models: [{
@@ -209,13 +209,13 @@ describe('cliNativeProviderConfigs', () => {
     expect(config.models[0].reasoningEfforts).toMatchObject({ off: null, high: 'high' })
     expect(JSON.stringify(config)).not.toContain('sk-dsh')
     expect(built.authJson).toBe('')
-    expect(dshApiKeyEnv('relay-one')).toBe('KIVIO_DSH_RELAY_ONE_API_KEY')
+    expect(dshApiKeyEnv('relay-one')).toBe('ABU_AGENT_DSH_RELAY_ONE_API_KEY')
 
     const read = readNativeCliProvider('dsh', {
       id: 'p-dsh',
       name: 'Relay',
       nativeProviderId: 'relay-one',
-      env: [{ key: 'KIVIO_DSH_RELAY_ONE_API_KEY', value: 'sk-dsh' }],
+      env: [{ key: 'ABU_AGENT_DSH_RELAY_ONE_API_KEY', value: 'sk-dsh' }],
       ...built,
     })
     expect(read).toMatchObject({
@@ -253,7 +253,7 @@ describe('cliNativeProviderConfigs', () => {
       nativeProviderId: 'gpt',
       defaultModel: 'gpt-5.6-sol',
     })
-    expect(provider.env).toEqual([{ key: 'KIVIO_DSH_GPT_API_KEY', value: 'sk-native' }])
+    expect(provider.env).toEqual([{ key: 'ABU_AGENT_DSH_GPT_API_KEY', value: 'sk-native' }])
     const read = readNativeCliProvider('dsh', provider)
     expect(read).toMatchObject({
       nativeProviderId: 'gpt',
@@ -307,7 +307,7 @@ describe('cliNativeProviderConfigs', () => {
       id: 'p-dsh-gpt',
       name: 'GPT',
       nativeProviderId: 'gpt',
-      env: [{ key: 'KIVIO_DSH_GPT_API_KEY', value: 'sk-dsh' }],
+      env: [{ key: 'ABU_AGENT_DSH_GPT_API_KEY', value: 'sk-dsh' }],
       ...built,
     })
     expect(read.models[0]).toMatchObject({

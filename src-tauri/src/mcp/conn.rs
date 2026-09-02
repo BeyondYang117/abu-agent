@@ -95,7 +95,7 @@ const STDERR_PEEK_BYTES: usize = 2048;
 
 /// rmcp 服务句柄的具体类型 —— stdio 与 HTTP 共用同一个，所以上层不再需要
 /// 按传输方式分叉。
-pub type McpService = RunningService<RoleClient, KivioClientHandler>;
+pub type McpService = RunningService<RoleClient, AbuAgentClientHandler>;
 
 /// 一条活着的 MCP 连接。
 pub struct Conn {
@@ -113,21 +113,21 @@ pub struct Conn {
 /// 我们的 `ClientHandler`：除了上报 client info，唯一职责就是把
 /// `tools/list_changed` 记成一次 revision 自增。
 #[derive(Clone, Default)]
-pub struct KivioClientHandler {
+pub struct AbuAgentClientHandler {
     tools_revision: Arc<AtomicU64>,
 }
 
-impl KivioClientHandler {
+impl AbuAgentClientHandler {
     pub fn revision_handle(&self) -> Arc<AtomicU64> {
         self.tools_revision.clone()
     }
 }
 
-impl ClientHandler for KivioClientHandler {
+impl ClientHandler for AbuAgentClientHandler {
     fn get_info(&self) -> ClientInfo {
         ClientInfo::new(
             ClientCapabilities::default(),
-            Implementation::new("Kivio", env!("CARGO_PKG_VERSION")),
+            Implementation::new("ABU Agent", env!("CARGO_PKG_VERSION")),
         )
         .with_protocol_version(LEGACY_PROTOCOL_VERSION)
     }
@@ -178,7 +178,7 @@ async fn connect_with(
     http: &reqwest::Client,
     lifecycle: ClientLifecycleMode,
 ) -> Result<Conn, String> {
-    let handler = KivioClientHandler::default();
+    let handler = AbuAgentClientHandler::default();
     let tools_revision = handler.revision_handle();
 
     match server.transport.as_str() {
@@ -724,7 +724,7 @@ mod tests {
     #[test]
     fn legacy_handshake_still_advertises_2025_06_18() {
         assert_eq!(LEGACY_PROTOCOL_VERSION, ProtocolVersion::V_2025_06_18);
-        let info = KivioClientHandler::default().get_info();
+        let info = AbuAgentClientHandler::default().get_info();
         assert_eq!(info.protocol_version, ProtocolVersion::V_2025_06_18);
     }
 

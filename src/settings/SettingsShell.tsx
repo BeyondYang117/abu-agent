@@ -1016,7 +1016,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const handleExportSettings = useCallback(async () => {
     try {
       const path = await save({
-        defaultPath: 'kivio-settings-backup.json',
+        defaultPath: 'abu-agent-settings-backup.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],
       })
       if (!path) return

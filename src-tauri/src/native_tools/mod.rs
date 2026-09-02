@@ -38,7 +38,7 @@ pub const MAX_READ_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// 工具输出的统一上限，照抄 pi `core/tools/truncate.ts` 的 `DEFAULT_MAX_LINES` /
 /// `DEFAULT_MAX_BYTES`：**行数和字节数谁先到算谁**，且永远只返回完整行。
 ///
-/// pi 的规范是「每个工具的输出出口都过一遍 truncate」。Kivio 的 `run_command`
+/// pi 的规范是「每个工具的输出出口都过一遍 truncate」。ABU Agent 的 `run_command`
 /// 早就在用这两个数（tail 方向），但 `read` 一直没有出口上限：一次 `read` 能把
 /// 2MB 的长行文件整个灌进上下文（≈50 万 token），连读几个这样的文件就把请求撑到
 /// 供应商静默返回 200 + 空正文——表现为「模型返回了空响应」，实为框架没有地板。
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn resolve_read_path_allows_temp_paths() {
-        let file = std::env::temp_dir().join(format!("kivio_read_{}.txt", uuid::Uuid::new_v4()));
+        let file = std::env::temp_dir().join(format!("abu_agent_read_{}.txt", uuid::Uuid::new_v4()));
         fs::write(&file, "hello").expect("write temp file");
 
         let resolved = resolve_read_path(&file.to_string_lossy()).expect("resolve read path");
@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn resolve_read_path_expands_tilde_home_prefix() {
         let home = user_home_dir().expect("home");
-        let dir = home.join(format!(".kivio_tilde_test_{}", uuid::Uuid::new_v4()));
+        let dir = home.join(format!(".abu_agent_tilde_test_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("mkdir");
         let file = dir.join("sample.csv");
         fs::write(&file, "alpha,beta").expect("write");
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn conversation_relative_paths_use_and_create_default_workbench() {
         let root =
-            std::env::temp_dir().join(format!("kivio_workspace_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("abu_agent_workspace_{}", uuid::Uuid::new_v4().simple()));
         let workspace = NativeToolWorkspace::conversation(root.clone());
         assert!(!root.exists());
         let resolved = resolve_tool_write_path(&workspace, "reports/result.txt").expect("resolve");
@@ -444,9 +444,9 @@ mod tests {
     #[test]
     fn explicit_absolute_path_does_not_create_conversation_workbench() {
         let root =
-            std::env::temp_dir().join(format!("kivio_workspace_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("abu_agent_workspace_{}", uuid::Uuid::new_v4().simple()));
         let explicit = std::env::temp_dir().join(format!(
-            "kivio_explicit_{}.txt",
+            "abu_agent_explicit_{}.txt",
             uuid::Uuid::new_v4().simple()
         ));
         let workspace = NativeToolWorkspace::conversation(root.clone());
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn omitted_command_cwd_creates_and_uses_conversation_workbench() {
         let root =
-            std::env::temp_dir().join(format!("kivio_workspace_{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("abu_agent_workspace_{}", uuid::Uuid::new_v4().simple()));
         let workspace = NativeToolWorkspace::conversation(root.clone());
         let cwd = resolve_tool_existing_dir(&workspace, None).expect("cwd");
         assert_eq!(cwd, fs::canonicalize(&root).unwrap());

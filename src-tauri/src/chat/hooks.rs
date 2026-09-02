@@ -438,7 +438,7 @@ async fn run_job(shared: &Shared, job: HookJob) {
     }
 }
 
-/// 执行 command 类 Hook：载荷 JSON 写 stdin，`KIVIO_*` env 注入，超时杀进程组。
+/// 执行 command 类 Hook：载荷 JSON 写 stdin，`ABU_AGENT_*` env 注入，超时杀进程组。
 async fn run_command_hook(
     hook: &HookDef,
     body: &str,
@@ -453,13 +453,13 @@ async fn run_command_hook(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("KIVIO_HOOK_EVENT", payload.event)
-        .env("KIVIO_HOOK_NAME", payload.hook_name)
-        .env("KIVIO_CONVERSATION_ID", payload.conversation_id)
-        .env("KIVIO_RUN_ID", payload.run_id)
-        .env("KIVIO_WORKDIR", &payload.cwd)
-        .env("KIVIO_TOOL_NAME", payload.tool_name.unwrap_or(""))
-        .env("KIVIO_TOOL_CALL_ID", payload.tool_call_id.unwrap_or(""))
+        .env("ABU_AGENT_HOOK_EVENT", payload.event)
+        .env("ABU_AGENT_HOOK_NAME", payload.hook_name)
+        .env("ABU_AGENT_CONVERSATION_ID", payload.conversation_id)
+        .env("ABU_AGENT_RUN_ID", payload.run_id)
+        .env("ABU_AGENT_WORKDIR", &payload.cwd)
+        .env("ABU_AGENT_TOOL_NAME", payload.tool_name.unwrap_or(""))
+        .env("ABU_AGENT_TOOL_CALL_ID", payload.tool_call_id.unwrap_or(""))
         .kill_on_drop(true);
     #[cfg(windows)]
     {
@@ -566,7 +566,7 @@ async fn run_http_hook(hook: &HookDef, body: &str) -> Result<(), String> {
         .request(method, hook.url.trim())
         .timeout(std::time::Duration::from_millis(hook.timeout_ms))
         .header("content-type", "application/json")
-        .header("X-Kivio-Hook-Event", hook.event.as_str());
+        .header("X-ABU Agent-Hook-Event", hook.event.as_str());
     if send_body {
         request = request.body(body.to_string());
     }
@@ -598,7 +598,7 @@ mod tests {
     #[cfg(unix)]
     impl TempDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("kivio_hook_{}", uuid::Uuid::new_v4()));
+            let path = std::env::temp_dir().join(format!("abu_agent_hook_{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&path).expect("mkdir temp");
             Self(path)
         }
@@ -685,7 +685,7 @@ mod tests {
         let out = dir.path().join("payload.json");
         let env_out = dir.path().join("env.txt");
         let hook = command_hook(&format!(
-            "cat > {out}; printf '%s|%s|%s|%s|%s' \"$KIVIO_HOOK_EVENT\" \"$KIVIO_HOOK_NAME\" \"$KIVIO_TOOL_NAME\" \"$KIVIO_TOOL_CALL_ID\" \"$KIVIO_CONVERSATION_ID\" > {env}",
+            "cat > {out}; printf '%s|%s|%s|%s|%s' \"$ABU_AGENT_HOOK_EVENT\" \"$ABU_AGENT_HOOK_NAME\" \"$ABU_AGENT_TOOL_NAME\" \"$ABU_AGENT_TOOL_CALL_ID\" \"$ABU_AGENT_CONVERSATION_ID\" > {env}",
             out = out.display(),
             env = env_out.display()
         ));

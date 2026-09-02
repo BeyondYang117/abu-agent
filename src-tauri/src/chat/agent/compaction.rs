@@ -1380,7 +1380,7 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     // 取 `max(纯估算)` 作保守下限，绝不因锚点偏小比现状更乐观。
     let budget = (window as f32 * AUTO_COMPACT_RATIO) as usize;
     // 纯字符估算 = 消息 + **工具 schema**（对齐 pi/footer 的兜底口径：pi 兜底含 system+每工具+消息；
-    // Kivio footer 也含 `estimate_tool_segments`）。工具定义随每次请求发送、provider 会计入，漏算会
+    // ABU Agent footer 也含 `estimate_tool_segments`）。工具定义随每次请求发送、provider 会计入，漏算会
     // 让无锚点的首轮低估数千 token、压缩过晚——故这里补上（与 footer `count_tokens_in_value` 同口径，
     // 都基于 `estimate_value_tokens(tool.to_openai_tool())`）。
     // 按「工具名集合哈希」做轮间缓存：每轮为上百个工具重建整份 schema JSON 只为估个

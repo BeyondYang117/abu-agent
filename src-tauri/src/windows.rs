@@ -20,6 +20,9 @@ pub const CHAT_MIN_INNER_HEIGHT: f64 = 400.0;
 const CHAT_DEFAULT_INNER_WIDTH: f64 = 1280.0;
 const CHAT_DEFAULT_INNER_HEIGHT: f64 = 800.0;
 
+/// Display name used in native window chrome and platform UI.
+pub const APP_DISPLAY_NAME: &str = "ABU Agent Desktop";
+
 /// Windows / Linux 的自绘全宽标题栏带高度（与 index.css `.chat-titlebar-strip { height: 44px }` 同步）。
 /// macOS 用系统 Overlay 标题栏、不占额外内容高度，故为 0。
 #[cfg(target_os = "macos")]
@@ -312,7 +315,7 @@ pub fn get_chat_window(app: &AppHandle) -> Option<WebviewWindow> {
 
 // ---------- 上次聊天路由持久化 ----------
 //
-// 历史：`kivio-chat-last-route` 曾存在 WebView2 localStorage 里（src/chat/persistence.ts）。
+// 历史：`abu-agent-chat-last-route` 曾存在 WebView2 localStorage 里（src/chat/persistence.ts）。
 // localStorage 的写入是渲染进程异步提交，应用退出前没有任何 flush 屏障——「切到新对话
 // → 立刻退出」会把最后一次写入丢掉；而挂载恢复又会把旧值原样写回（App.tsx），于是每次
 // 重开都固定恢复到一条旧对话。迁移到 Rust 侧文件：写入走原子落盘，与 WebView2 存储
@@ -430,7 +433,7 @@ pub fn ensure_chat_window_with_hash(app: &AppHandle, hash: &str) -> Result<Webvi
     let (default_width, default_height) =
         chat_window_size_for_visible_content(CHAT_DEFAULT_INNER_WIDTH, CHAT_DEFAULT_INNER_HEIGHT);
     let mut builder = WebviewWindowBuilder::new(app, "chat", WebviewUrl::App(url.into()))
-        .title("Kivio Desktop")
+        .title(APP_DISPLAY_NAME)
         .inner_size(default_width, default_height)
         .min_inner_size(min_width, min_height)
         .resizable(true)
@@ -505,7 +508,7 @@ pub fn ensure_chat_popout_window(
         POPOUT_DEFAULT_INNER_HEIGHT,
     );
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
-        .title("Kivio")
+        .title(APP_DISPLAY_NAME)
         .inner_size(default_width, default_height)
         .min_inner_size(min_width, min_height)
         .resizable(true)
@@ -619,7 +622,7 @@ fn ensure_overlay_window(
         .background_color(Color(0, 0, 0, 0))
         .skip_taskbar(true)
         // Tauri 默认让新窗口初始聚焦；即使 visible=false，macOS 冷创建普通 NSWindow 时也会
-        // 短暂激活 Kivio。截图浮窗随后再恢复原 App 就会触发整组窗口重排，表现为桌面闪一下。
+        // 短暂激活 ABU Agent。截图浮窗随后再恢复原 App 就会触发整组窗口重排，表现为桌面闪一下。
         // 先以非聚焦隐藏窗口创建，后续 NSPanel 显示时再由 show_overlay_panel 精确取键盘焦点。
         .focused(false)
         .visible(false)
@@ -888,7 +891,7 @@ pub fn destroy_overlay_window(window: &WebviewWindow) {
         return;
     };
     // 恢复原类和 destroy 必须在同一个主线程闭包里连续完成。若先等待恢复、再从后台线程
-    // destroy，主线程排队超过等待时限时就可能在窗口仍是 KivioOverlayPanel 的情况下销毁，
+    // destroy，主线程排队超过等待时限时就可能在窗口仍是 AbuAgentOverlayPanel 的情况下销毁，
     // 重新触发 tao/WebKit 的 ObjC abort；两步合并后即使调用方等待超时，排队闭包最终执行时
     // 仍会严格按“换类 → 销毁”的顺序运行。
     let window_for_destroy = window.clone();
@@ -905,7 +908,7 @@ pub fn destroy_overlay_window(window: &WebviewWindow) {
 /// 运行时注册一个 NSPanel 子类：borderless 窗口默认 `canBecomeKeyWindow=NO`，强制 YES 才能
 /// 接收键盘；`canBecomeMainWindow=NO` 保持其辅助身份。进程内只注册一次。
 #[cfg(target_os = "macos")]
-fn kivio_overlay_panel_class() -> *const objc::runtime::Class {
+fn abu_agent_overlay_panel_class() -> *const objc::runtime::Class {
     use objc::declare::ClassDecl;
     use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
     use objc::{class, sel, sel_impl};
@@ -929,7 +932,7 @@ fn kivio_overlay_panel_class() -> *const objc::runtime::Class {
         .get_or_init(|| {
             let superclass = class!(NSPanel);
             let mut decl =
-                ClassDecl::new("KivioOverlayPanel", superclass).expect("declare KivioOverlayPanel");
+                ClassDecl::new("AbuAgentOverlayPanel", superclass).expect("declare AbuAgentOverlayPanel");
             unsafe {
                 decl.add_method(
                     sel!(canBecomeKeyWindow),
@@ -963,7 +966,7 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
     //    且 show/hide/set_size/set_resizable/set_focus 都不触发它，安全。
     //    实例尺寸安全：NSPanel 不新增 ivar，尺寸与 NSWindow 一致（≤ TaoWindow = NSWindow + 1 Bool），
     //    重分类不会越界读写。
-    let panel_class = kivio_overlay_panel_class();
+    let panel_class = abu_agent_overlay_panel_class();
     let already: bool = msg_send![window, isKindOfClass: panel_class];
     if !already {
         // object_setClass 返回原类（tao 的 `TaoWindow`，全 app 共用一个）。存下来，
@@ -1025,10 +1028,10 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
 
 // ===== 浮窗关闭时把前台交还给"打开浮窗前的那个 App" =====
 //
-// 非激活 NSPanel 关闭（orderOut）时，AppKit 有时会把 Regular 策略的 Kivio 进程重新激活成
+// 非激活 NSPanel 关闭（orderOut）时，AppKit 有时会把 Regular 策略的 ABU Agent 进程重新激活成
 // 前台；此刻屏上只有浮窗（panel 不计入 hasVisibleWindows、也不在 USER_WINDOW_LABELS），
 // 于是 main.rs 的 RunEvent::Reopen 分支会误判"无可见窗口"而 open_chat_window，凭空弹出 Chat。
-// 解法：显示浮窗前快照当时的前台 App，关闭后把前台还给它 → Kivio 不会变成前台无窗口 →
+// 解法：显示浮窗前快照当时的前台 App，关闭后把前台还给它 → ABU Agent 不会变成前台无窗口 →
 // 那个误触的 Reopen 不再发生。这也顺带让 Esc 后正确回到用户原来的位置（Spotlight 式）。
 
 /// 读取当前前台 App 的 PID（NSWorkspace 线程安全，可后台线程读）。取不到返回 0。
@@ -1068,7 +1071,7 @@ unsafe fn macos_activate_app(pid: i32) {
     let _: bool = msg_send![running, activateWithOptions: NS_ACTIVATE_ALL_WINDOWS];
 }
 
-/// 显示浮窗前调用：记下当前前台 App 到给定槽。前台是 Kivio 自己（或取不到）时记 0 —— 不需要
+/// 显示浮窗前调用：记下当前前台 App 到给定槽。前台是 ABU Agent 自己（或取不到）时记 0 —— 不需要
 /// 交还，而"Chat 在前"的情况由 RunEvent::Reopen 的 has_visible_windows=true 分支正确处理。
 /// `slot`：lens 与输入翻译各用一个独立槽，避免两个浮窗同时存在时相互覆盖。
 #[cfg(target_os = "macos")]
@@ -1080,9 +1083,9 @@ pub fn remember_frontmost_app(slot: &std::sync::atomic::AtomicI32) {
     slot.store(to_store, Ordering::SeqCst);
 }
 
-/// 冷创建隐藏 WebView 可能在它被重分类成非激活 NSPanel 之前短暂激活 Kivio，连带把普通 Chat
+/// 冷创建隐藏 WebView 可能在它被重分类成非激活 NSPanel 之前短暂激活 ABU Agent，连带把普通 Chat
 /// 窗口排到其他 App 前面。Panel 配置完成、真正显示之前调用本函数：若原前台 App 已被抢走，
-/// 立刻把它重新激活，但不清空快照（关闭浮窗时仍可再次交还）。前台原本就是 Kivio 时槽为 0，
+/// 立刻把它重新激活，但不清空快照（关闭浮窗时仍可再次交还）。前台原本就是 ABU Agent 时槽为 0，
 /// 因而不会隐藏、显示、聚焦或改变 Chat 窗口本身。
 #[cfg(target_os = "macos")]
 pub fn reassert_previous_frontmost_app(app: &AppHandle, slot: &std::sync::atomic::AtomicI32) {
@@ -1145,7 +1148,12 @@ pub fn restore_previous_frontmost_app(app: &AppHandle, slot: &std::sync::atomic:
 
 #[cfg(test)]
 mod tests {
-    use super::is_valid_chat_last_route;
+    use super::{is_valid_chat_last_route, APP_DISPLAY_NAME};
+
+    #[test]
+    fn user_facing_window_brand_is_abu_agent_desktop() {
+        assert_eq!(APP_DISPLAY_NAME, "ABU Agent Desktop");
+    }
 
     #[test]
     fn accepts_conversation_routes() {

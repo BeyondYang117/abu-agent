@@ -29,7 +29,7 @@ describe('webSearchCardView', () => {
         structured_content: {
           type: 'builtin_web_search',
           provider: 'OpenAI',
-          queries: ['kivio release', '  kivio 下载  '],
+          queries: ['abu_agent release', '  abu_agent 下载  '],
           citations: [
             { title: 'A 站', url: 'https://a.com' },
             { title: '', url: 'https://www.b.com' },
@@ -39,7 +39,7 @@ describe('webSearchCardView', () => {
     )
     expect(view).not.toBeNull()
     expect(view!.provider).toBe('OpenAI')
-    expect(view!.queries).toEqual(['kivio release', 'kivio 下载'])
+    expect(view!.queries).toEqual(['abu_agent release', 'abu_agent 下载'])
     expect(view!.citations).toHaveLength(2)
     expect(view!.citations[0]).toEqual({ n: 1, title: 'A 站', url: 'https://a.com', host: 'a.com' })
     // 空标题 → 兜底成域名。

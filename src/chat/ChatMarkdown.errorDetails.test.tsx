@@ -4,7 +4,7 @@ import { ChatMarkdown } from './ChatMarkdown'
 
 describe('ChatMarkdown 错误详情', () => {
   it('把受控错误代码块渲染成折叠详情', () => {
-    const content = 'Pi 的模型流式响应中途断开。\n\n```kivio-error-details\n原始错误：stream_read_error\n退出码：1\n```'
+    const content = 'Pi 的模型流式响应中途断开。\n\n```abu-agent-error-details\n原始错误：stream_read_error\n退出码：1\n```'
     const { container } = render(<ChatMarkdown content={content} />)
 
     const details = container.querySelector('details')

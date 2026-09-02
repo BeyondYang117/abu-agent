@@ -717,7 +717,7 @@ fn validate_numeric_range(schema: &Value, value: &Value, path: &str) -> Result<(
 /// 让 token 翻倍（read_file 行号化后 content 不再等于 JSON，旧逻辑会整包重复追加）。
 fn assign_artifact_ids(artifacts: &mut [ChatToolArtifact]) {
     for artifact in artifacts {
-        // IDs are a Kivio-owned display capability. Never trust or preserve an
+        // IDs are a ABU Agent-owned display capability. Never trust or preserve an
         // ID supplied by an external tool server.
         artifact.id = Some(format!("art_{}", uuid::Uuid::new_v4().simple()));
     }
@@ -1125,7 +1125,7 @@ mod tests {
             description: "Write file".to_string(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("ABU Agent".to_string()),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1147,7 +1147,7 @@ mod tests {
             description: String::new(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("ABU Agent".to_string()),
             input_schema: serde_json::json!({ "type": "object" }),
             sensitive: false,
             annotations: None,
@@ -1156,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn assigns_fresh_kivio_owned_artifact_ids() {
+    fn assigns_fresh_abu_agent_owned_artifact_ids() {
         let mut artifacts = vec![
             ChatToolArtifact {
                 id: None,
@@ -1716,7 +1716,7 @@ mod tests {
         let coerced = coerce_tool_arguments(
             &schema,
             serde_json::json!({
-                "query": "Kivio",
+                "query": "ABU Agent",
                 "domain_type": "web",
                 "pub_year_min": null,
                 "pub_year_max": null,
@@ -1726,7 +1726,7 @@ mod tests {
         assert_eq!(
             coerced,
             serde_json::json!({
-                "query": "Kivio",
+                "query": "ABU Agent",
                 "domain_type": "web",
                 "nullable_note": null
             })

@@ -84,9 +84,9 @@ export function preserveLocalMarkdownLinks(content: string): string {
         return `${prefix}${destination}${suffix}`
       }
       if (/^file:\/\//i.test(destination)) {
-        return `${prefix}https://kivio.local/__kivio-file?target=${encodeURIComponent(destination)}${suffix}`
+        return `${prefix}https://abu_agent.local/__abu-agent-file?target=${encodeURIComponent(destination)}${suffix}`
       }
-      return `${prefix}https://kivio.local/__kivio-local?target=${encodeURIComponent(destination)}${suffix}`
+      return `${prefix}https://abu_agent.local/__abu-agent-local?target=${encodeURIComponent(destination)}${suffix}`
     }),
   )
 }

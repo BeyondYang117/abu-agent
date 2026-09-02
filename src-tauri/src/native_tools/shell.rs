@@ -51,7 +51,7 @@ fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
     // 环境净化（对齐 codex 等）：关掉彩色输出与交互式分页，让给模型读的命令输出更干净。
     // 只设"降噪"类，刻意不设 CI=1 —— 那会改变部分工具行为（如 CRA 把 warning 当 error、
     // 某些 dev server 行为变样），本次目标仅是可读性，不改行为。无 AppState（headless
-    // kivio-code）也应用，故放在 state 早返回之前。
+    // abu-agent-code）也应用，故放在 state 早返回之前。
     cmd.env("TERM", "dumb");
     cmd.env("NO_COLOR", "1");
     cmd.env("FORCE_COLOR", "0");
@@ -129,7 +129,7 @@ fn wrap_ps_command(command: &str) -> String {
 
 /// Windows: absolute path to Git Bash's `bash.exe`, if discoverable. Cached for
 /// the process lifetime — installing/uninstalling Git for Windows requires a
-/// Kivio restart to be picked up, which is an accepted tradeoff (see R4 design
+/// ABU Agent restart to be picked up, which is an accepted tradeoff (see R4 design
 /// notes; existsSync-per-call like pi does is cheap in Node, less clean in Rust).
 ///
 /// Resolution order (pi's `getShellConfig` precedence, minus the hard error):
@@ -141,12 +141,12 @@ fn wrap_ps_command(command: &str) -> String {
 ///    `Path::is_file` — `where` is known to surface stale/ghost PATH entries.
 /// 3. Reject anything resolving to the WSL bash shim
 ///    (`...\Windows\System32\bash.exe` / `...\Windows\sysnative\bash.exe`):
-///    its `/mnt/c/...` filesystem view does not match the Windows paths Kivio
-///    passes around, unlike pi (which special-cases WSL via stdin), Kivio
+///    its `/mnt/c/...` filesystem view does not match the Windows paths ABU Agent
+///    passes around, unlike pi (which special-cases WSL via stdin), ABU Agent
 ///    just excludes it.
 ///
 /// `None` means "no usable Git Bash" — callers fall back to the existing
-/// PowerShell path unchanged. Unlike pi/Claude Code, Kivio never hard-errors:
+/// PowerShell path unchanged. Unlike pi/Claude Code, ABU Agent never hard-errors:
 /// Git for Windows is not an install prerequisite.
 #[cfg(target_os = "windows")]
 pub fn find_git_bash() -> Option<PathBuf> {
@@ -199,7 +199,7 @@ fn where_bash_exe() -> Option<PathBuf> {
 
 /// True when `path` is the WSL bash shim (`...\Windows\System32\bash.exe` or
 /// `...\Windows\sysnative\bash.exe`), matched case-insensitively. WSL bash's
-/// filesystem view (`/mnt/c/...`) does not match the Windows paths Kivio hands
+/// filesystem view (`/mnt/c/...`) does not match the Windows paths ABU Agent hands
 /// to commands, so it must never be selected as the agent's shell even if it
 /// is the first `bash.exe` on PATH.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -262,7 +262,7 @@ pub(crate) fn build_shell_command(command: &str) -> Command {
         if let Some(bash) = find_git_bash() {
             let mut c = Command::new(bash);
             // 与 PowerShell 分支同法:.arg() 把整段命令当单个 argv 传给 bash 的
-            // -c,由 bash 自己的引号/转义规则解析,不在 Kivio 侧二次拆分。
+            // -c,由 bash 自己的引号/转义规则解析,不在 ABU Agent 侧二次拆分。
             c.arg("-c");
             c.arg(command);
             return c;
@@ -459,7 +459,7 @@ fn offload_large_output(formatted: String) -> String {
     }
     let lines = formatted.lines().count();
     let bytes = formatted.len();
-    let path = std::env::temp_dir().join(format!("kivio-bash-{}.log", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!("abu-agent-bash-{}.log", uuid::Uuid::new_v4()));
     let log_note = match std::fs::write(&path, &formatted) {
         Ok(()) => Some(format!(
             "[full output: {lines} lines, {bytes} bytes — complete log saved to {}. Read it with the `read` tool (use offset/limit or grep it) if the tail below is not enough.]",
@@ -582,10 +582,10 @@ fn is_long_running_dev_command(command: &str) -> bool {
 
 /// Filename prefix for per-job background-command logs in temp_dir. App startup
 /// GC and the app-exit sweep both look for this prefix.
-pub const BG_CMD_LOG_PREFIX: &str = "kivio-bgcmd-";
+pub const BG_CMD_LOG_PREFIX: &str = "abu-agent-bgcmd-";
 
 /// Lifecycle of a tracked background command. Mirrors the MCP Tasks status
-/// vocabulary (running/completed/failed/cancelled) in Kivio terms.
+/// vocabulary (running/completed/failed/cancelled) in ABU Agent terms.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum BackgroundCommandStatus {
@@ -722,7 +722,7 @@ async fn run_shell_command_background(
         .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    // No registry (e.g. headless kivio-code without an AppState): fall back to
+    // No registry (e.g. headless abu-agent-code without an AppState): fall back to
     // the legacy fire-and-forget shape so behavior never regresses.
     let Some(state) = state else {
         return Ok(format!(
@@ -1055,7 +1055,7 @@ mod tests {
     #[test]
     fn default_cwd_uses_first_workspace_root_when_configured() {
         let home = user_home_dir().expect("home should be available in tests");
-        let root = home.join(".kivio-chat-test-root");
+        let root = home.join(".abu-agent-chat-test-root");
         std::fs::create_dir_all(&root).expect("mkdir");
         let args = serde_json::json!({ "command": "pwd" });
         let workspace = NativeToolWorkspace::global(&[root.to_string_lossy().into_owned()]);
@@ -1068,7 +1068,7 @@ mod tests {
 
     #[test]
     fn command_cwd_allows_temp_directory_outside_home() {
-        let dir = std::env::temp_dir().join(format!("kivio_cmd_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu_agent_cmd_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let args = serde_json::json!({ "command": "pwd", "cwd": dir.to_string_lossy() });
         let workspace = NativeToolWorkspace::global(&[]);
@@ -1129,7 +1129,7 @@ mod tests {
     fn bg_test_state() -> AppState {
         AppState::new_headless(
             crate::settings::Settings::default(),
-            std::env::temp_dir().join("kivio-bgcmd-test-usage"),
+            std::env::temp_dir().join("abu-agent-bgcmd-test-usage"),
         )
     }
 
@@ -1159,7 +1159,7 @@ mod tests {
     #[tokio::test]
     async fn background_command_is_tracked_and_output_polls_to_exit() {
         let state = bg_test_state();
-        let token = "KIVIO_BG_OK";
+        let token = "ABU_AGENT_BG_OK";
         let workspace = NativeToolWorkspace::global(&[]);
         let started = run_command(
             &workspace,
@@ -1569,7 +1569,7 @@ mod tests {
         let big = "x".repeat(MAX_INLINE_COMMAND_OUTPUT_BYTES + 1);
         let result = offload_large_output(big.clone());
         assert!(result.starts_with("[full output:"));
-        assert!(result.contains("kivio-bash-"));
+        assert!(result.contains("abu-agent-bash-"));
         assert!(result.contains("complete log saved to"));
         // The full body is still present inline (the loop truncates the middle).
         assert!(result.contains(&big));
@@ -1667,7 +1667,7 @@ mod tests {
     }
 
     /// WSL 的 bash 垫片(System32/sysnative)必须被拒:它的 /mnt/c 文件系统视图
-    /// 与 Kivio 传的 Windows 路径语义不符。大小写不敏感;正/反斜杠都认;
+    /// 与 ABU Agent 传的 Windows 路径语义不符。大小写不敏感;正/反斜杠都认;
     /// 正常 Git Bash 安装位不受影响。
     #[test]
     fn wsl_bash_paths_are_rejected() {
@@ -1779,7 +1779,7 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[tokio::test]
     async fn run_command_stdin_is_null_so_readers_get_eof() {
-        let dir = std::env::temp_dir().join(format!("kivio_stdin_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu_agent_stdin_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let workspace = NativeToolWorkspace::global(&[dir.to_string_lossy().into_owned()]);
 

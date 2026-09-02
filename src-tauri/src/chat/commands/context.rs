@@ -221,7 +221,7 @@ pub(crate) async fn chat_clear_context(
 
 pub(super) fn apply_context_clear(conversation: &mut Conversation) -> Result<(), String> {
     if conversation.agent_runtime.is_external() {
-        return Err("清空上下文仅支持 Kivio Agent 和 Kivio Chat".to_string());
+        return Err("清空上下文仅支持 ABU Agent 和 ABU Agent Chat".to_string());
     }
     let last_id = conversation
         .messages
@@ -1351,7 +1351,7 @@ pub(super) fn build_chat_api_messages(
         } else if message.role == "assistant" && !message.api_messages.is_empty() {
             messages.pop();
             // 与上面 model_messages 同理：中断草稿的 `api_messages` 里图片已被外置成
-            // `kivio-attachment://` 哨兵，发给模型前必须还原成 data URL。
+            // `abu-agent-attachment://` 哨兵，发给模型前必须还原成 data URL。
             let mut api_messages = message.api_messages.clone();
             if let Some(app) = app {
                 crate::chat::attachments::rehydrate_api_message_images(

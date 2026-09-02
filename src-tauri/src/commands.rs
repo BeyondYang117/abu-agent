@@ -229,7 +229,7 @@ const SETTINGS_BACKUP_VERSION: u32 = 1;
 pub(crate) fn export_settings(state: State<AppState>, path: String) -> Result<(), String> {
     let settings = state.settings_read().clone();
     let backup = serde_json::json!({
-        "app": "kivio",
+        "app": "abu_agent",
         "type": "settings-backup",
         "version": SETTINGS_BACKUP_VERSION,
         "settings": serde_json::to_value(&settings).map_err(|e| e.to_string())?,
@@ -250,7 +250,7 @@ pub(crate) async fn import_settings(
     let value: serde_json::Value =
         serde_json::from_str(&raw).map_err(|_| "文件不是有效的 JSON".to_string())?;
     if value.get("type").and_then(|v| v.as_str()) != Some("settings-backup") {
-        return Err("这不是 Kivio 设置备份文件".to_string());
+        return Err("这不是 ABU Agent 设置备份文件".to_string());
     }
     let settings_value = value
         .get("settings")
@@ -343,7 +343,7 @@ pub(crate) async fn commit_translation(
     #[cfg(target_os = "macos")]
     crate::windows::forget_frontmost_app(&state.prev_frontmost_pid_main);
 
-    // macOS 输入翻译窗口被重分类为 KivioOverlayPanel；必须先换回 TaoWindow 再 destroy，
+    // macOS 输入翻译窗口被重分类为 AbuAgentOverlayPanel；必须先换回 TaoWindow 再 destroy，
     // 否则 WebKit 清理 contentLayoutRect KVO observer 时会抛 ObjC 异常并让 Rust abort。
     #[cfg(target_os = "macos")]
     if let Some(window) = get_main_window(&app) {
@@ -396,7 +396,7 @@ pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 /// 模型输出里的本地文件链接**禁止**打开的扩展名。
 ///
 /// 为什么是黑名单而不是白名单：白名单必漏——docx / xlsx / zip / mp4 / py 都是用户会点的正常
-/// 文件，漏一个就是「点了没反应」，跟「在 Kivio 里打开」一样是坏的。真正需要挡的只有
+/// 文件，漏一个就是「点了没反应」，跟「在 ABU Agent 里打开」一样是坏的。真正需要挡的只有
 /// 「默认处理器会**执行代码**」那一小类，那是可枚举的：`shell().open` 对 `.command` / `.app`
 /// / Windows `.bat` 是执行语义，而 href 来自模型输出（不可信输入）。安装器（pkg/msi）一并挡,
 /// 它们点一下就进安装流程。
@@ -569,7 +569,7 @@ fn temp_file_name_from_artifact_name(name: &str) -> String {
 ///
 /// 用于**没有 path 的旧 artifact**（新产物都带 path，走 `chat_open_generated_artifact`）。
 /// 替代前端原来的 `window.open(dataUrl)`——那条在 Tauri 里由 webview 自己处理，不会交给
-/// 默认程序（表现就是「点了在 Kivio 里打开 / 什么都没发生」）。
+/// 默认程序（表现就是「点了在 ABU Agent 里打开 / 什么都没发生」）。
 ///
 /// 扩展名同样过 `ensure_openable_extension`：这里是**先落盘再交给默认程序**，一个 `.command`
 /// 产物落地就成了可执行文件。
@@ -590,7 +590,7 @@ pub(crate) fn open_data_url_file(
 
     let file_name = temp_file_name_from_artifact_name(&name);
     // 每次一个独立子目录：同名产物不会互相覆盖，也不用担心撞到别的临时文件。
-    let dir = std::env::temp_dir().join(format!("kivio-artifact-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("abu-agent-artifact-{}", uuid::Uuid::new_v4()));
     let path = dir.join(&file_name);
     ensure_openable_extension(&path)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败：{e}"))?;
@@ -605,7 +605,7 @@ pub(crate) fn open_data_url_file(
 #[allow(deprecated)]
 pub(crate) fn open_html_preview(app: AppHandle, html: String) -> Result<(), String> {
     let path =
-        std::env::temp_dir().join(format!("kivio-html-preview-{}.html", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("abu-agent-html-preview-{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&path, html).map_err(|e| format!("Write HTML preview failed: {e}"))?;
     let path_str = path
         .to_str()
@@ -969,7 +969,7 @@ pub(crate) async fn test_provider_connection(
 }
 
 /// 连接探测用的用户消息。不用 "hi" / "hello"：不少网关把极短问候当无效请求直接吞掉或不回。
-const CONNECTION_TEST_PROMPT: &str = "Reply with exactly: kivio-ok";
+const CONNECTION_TEST_PROMPT: &str = "Reply with exactly: abu-agent-ok";
 /// 给推理模型留一点思考预算；连通性测试不需要长回答。
 const CONNECTION_TEST_MAX_OUTPUT_TOKENS: u32 = 64;
 
@@ -1139,7 +1139,7 @@ mod tests {
     /// ② `shell().open` 对 `.command` 是**执行**语义，而 href 来自模型输出 ⇒ 必须拒。
     #[test]
     fn local_file_href_opens_ordinary_files_and_refuses_executables() {
-        let dir = std::env::temp_dir().join(format!("kivio-open-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-open-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let page = dir.join("a b.html");
         std::fs::write(&page, "<html></html>").unwrap();

@@ -504,7 +504,7 @@ fn inline_code_request_ignores_attachment_safe_copy_paths() {
                 path: "att_1-report.pdf".to_string(),
                 content: None,
             }],
-            Some(Path::new("/Users/test/Library/Application Support/com.zmair.kivio/conversations/conv_1_attachments")),
+            Some(Path::new("/Users/test/Library/Application Support/com.zmair.abu-agent/conversations/conv_1_attachments")),
         );
 
     assert!(should_answer_inline_without_file_write(Some(&content)));
@@ -1952,7 +1952,7 @@ fn apply_context_clear_rejects_external_runtime() {
     conversation.agent_runtime.kind = crate::chat::AgentRuntimeKind::External;
     conversation.agent_runtime.external_agent_id = Some("claude".to_string());
     let err = apply_context_clear(&mut conversation).expect_err("external");
-    assert!(err.contains("Kivio Agent"));
+    assert!(err.contains("ABU Agent"));
 }
 
 #[test]
@@ -2025,7 +2025,7 @@ fn auxiliary_vision_result_becomes_text_for_main_chat_model() {
     let result = AuxiliaryVisionResult {
         provider_name: "Vision Provider".to_string(),
         model: "vision-model".to_string(),
-        content: "图片里是一张 Kivio 设置页截图。".to_string(),
+        content: "图片里是一张 ABU Agent 设置页截图。".to_string(),
     };
     let augmented = user_content_with_auxiliary_vision_result(Some("这是什么？"), &result, "zh");
 
@@ -2042,7 +2042,7 @@ fn auxiliary_vision_result_becomes_text_for_main_chat_model() {
 
     assert!(content.is_string());
     assert!(content.as_str().unwrap().contains("[混音器视觉副任务结果]"));
-    assert!(content.as_str().unwrap().contains("Kivio 设置页截图"));
+    assert!(content.as_str().unwrap().contains("ABU Agent 设置页截图"));
     assert!(!serde_json::to_string(&messages)
         .expect("messages serialize")
         .contains("image_url"));
@@ -2166,7 +2166,7 @@ fn prepare_reply_with_model_tags_last_turn_and_rejects_duplicates() {
         None,
     )
     .expect_err("external");
-    assert!(err.contains("Kivio Agent"));
+    assert!(err.contains("ABU Agent"));
 }
 
 #[test]

@@ -275,7 +275,7 @@ fn missing_node_message(for_dsh: bool) -> String {
         format!(
             "安装 DeepSeek Harness 需要 Node.js 22.19+ 或 24+（以及 npm）。\
              当前电脑没有可用的 Node.js，自动安装也没有成功。\
-             请打开 {NODE_DOWNLOAD_URL} 下载 LTS 版本，装好后重新打开 Kivio 再点安装。"
+             请打开 {NODE_DOWNLOAD_URL} 下载 LTS 版本，装好后重新打开 ABU Agent 再点安装。"
         )
     } else {
         format!(
@@ -369,11 +369,11 @@ pub(crate) async fn ensure_pnpm_for_dsh() -> Result<(), String> {
 /// 仓库 `.npmrc` 写了 `legacy-peer-deps=true`，peer 整包不装。给全局安装一个
 /// 自带 package.json 的空项目，npm 就不会再往上走到仓库。
 fn isolated_npm_cwd() -> PathBuf {
-    let dir = std::env::temp_dir().join("kivio-npm-global");
+    let dir = std::env::temp_dir().join("abu-agent-npm-global");
     let _ = std::fs::create_dir_all(&dir);
     let pkg = dir.join("package.json");
     if !pkg.is_file() {
-        let _ = std::fs::write(pkg, "{\"private\":true,\"name\":\"kivio-npm-global\"}\n");
+        let _ = std::fs::write(pkg, "{\"private\":true,\"name\":\"abu-agent-npm-global\"}\n");
     }
     let npmrc = dir.join(".npmrc");
     if !npmrc.is_file() {
@@ -1123,14 +1123,14 @@ async fn finish_dsh_install(
 ) -> Result<(), String> {
     let Some(bin) = crate::external_agents::spawn::resolve_binary(def).await else {
         return Err(
-            "DeepSeek Harness 已装上，但当前进程还找不到 dsh 命令。请关掉 Kivio 再打开，然后重新扫描。"
+            "DeepSeek Harness 已装上，但当前进程还找不到 dsh 命令。请关掉 ABU Agent 再打开，然后重新扫描。"
                 .to_string(),
         );
     };
     crate::external_agents::spawn::invalidate_probe_cache(&bin);
     dsh_cli_starts(&bin).await?;
     emit("dsh --version 已通过".to_string());
-    emit("正在初始化 Kivio dsh profile（首次需要下载插件）…".to_string());
+    emit("正在初始化 ABU Agent dsh profile（首次需要下载插件）…".to_string());
     crate::external_agents::dsh_profile::ensure_profile_ready(&bin, None, None).await?;
     emit("dsh profile 已就绪".to_string());
     Ok(())

@@ -170,8 +170,8 @@ function tokenizeCurl(command: string): string[] {
 
 /**
  * 从粘贴的文本导入请求头。支持三种输入：
- * - JSON 对象 `{"X-Title": "kivio"}`
- * - JSON 数组 `[{"key":"X-Title","value":"kivio"}]`
+ * - JSON 对象 `{"X-Title": "abu_agent"}`
+ * - JSON 数组 `[{"key":"X-Title","value":"abu_agent"}]`
  * - cURL 命令（读 `-H` / `--header`）
  *
  * 解析失败抛 `HeaderImportError`，调用方据此保持现有列表不动。

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Windows 上运行 Kivio 的 Rust 测试（绕开 comctl32 v6 清单缺失导致的 0xC0000139）。
+  Windows 上运行 ABU Agent 的 Rust 测试（绕开 comctl32 v6 清单缺失导致的 0xC0000139）。
 
 .DESCRIPTION
   cargo test 构建的测试二进制没有 Common-Controls v6 应用清单，而依赖静态导入了

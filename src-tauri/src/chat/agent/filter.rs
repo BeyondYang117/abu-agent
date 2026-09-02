@@ -6,7 +6,7 @@
 //! it keeps skill-runtime tools while enforcing the agent's configured tool list.
 //!
 //! Entry syntax follows the industry convention (Claude Code / Cursor), which
-//! matches Kivio's own MCP tool ids (`mcp__<server>__<tool>`) verbatim:
+//! matches ABU Agent's own MCP tool ids (`mcp__<server>__<tool>`) verbatim:
 //! `*` (everything), `mcp__*` (every MCP tool), `mcp__<server>` /
 //! `mcp__<server>__*` (one server's tools), any other `<prefix>*`, or an exact
 //! tool name (legacy aliases included). Composition order is spec-mandated:
@@ -85,7 +85,7 @@ pub fn filter_tools_for_agent(
         }
         // Phase 2: resolve the allow-list on the post-deny pool.
         let allowed = allow.iter().any(|entry| entry_matches(tool, entry));
-        // Keep Kivio housekeeping built-ins (todo, etc.) that the agent did not
+        // Keep ABU Agent housekeeping built-ins (todo, etc.) that the agent did not
         // explicitly exclude — they are appended separately and are harmless.
         if allowed {
             true
@@ -137,7 +137,7 @@ mod tests {
             description: String::new(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("ABU Agent".to_string()),
             input_schema: serde_json::json!({}),
             sensitive: false,
             annotations: None,

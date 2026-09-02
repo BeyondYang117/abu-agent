@@ -49,7 +49,7 @@ pub fn parse_agent_markdown(
         .filter(|s| !s.is_empty());
     let tools = parse_list_value(frontmatter.get("tools"));
     // Industry convention spells the denylist `disallowedTools` (camelCase);
-    // Kivio's own frontmatter style is snake_case, so accept both (camelCase wins).
+    // ABU Agent's own frontmatter style is snake_case, so accept both (camelCase wins).
     let disallowed_tools = match frontmatter.get("disallowedTools") {
         Some(value) => parse_list_value(Some(value)),
         None => parse_list_value(frontmatter.get("disallowed_tools")),
@@ -130,7 +130,7 @@ mod tests {
             def.disallowed_tools,
             vec!["write".to_string(), "edit".to_string()]
         );
-        // Kivio-style snake_case.
+        // ABU Agent-style snake_case.
         let snake = "---\nname: x\ndisallowed_tools: bash\n---\nbody";
         let def = parse_agent_markdown("x", snake, "user", None).unwrap();
         assert_eq!(def.disallowed_tools, vec!["bash".to_string()]);

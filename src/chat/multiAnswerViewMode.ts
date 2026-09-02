@@ -9,7 +9,7 @@ import { useCallback, useSyncExternalStore } from 'react'
 
 export type MultiAnswerViewMode = 'tabs' | 'columns'
 
-const MULTI_ANSWER_VIEW_STORAGE_KEY = 'kivio.chat.multiAnswerView'
+const MULTI_ANSWER_VIEW_STORAGE_KEY = 'abu_agent.chat.multiAnswerView'
 
 const DEFAULT_MODE: MultiAnswerViewMode = 'tabs'
 

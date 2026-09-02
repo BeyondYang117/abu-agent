@@ -517,7 +517,7 @@ fn test_app_state() -> AppState {
     AppState::base(
         Settings::default(),
         std::env::temp_dir().join(format!(
-            "kivio-agent-loop-test-usage-{}",
+            "abu-agent-agent-loop-test-usage-{}",
             uuid::Uuid::new_v4()
         )),
         reqwest::Client::new(),
@@ -598,7 +598,7 @@ fn long_summary_sse_tagged(prefix: &str) -> String {
 /// Streaming planning step: one `read` tool call, then `[DONE]`.
 fn planning_tool_call_sse_events() -> Vec<String> {
     vec![
-            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_read","function":{"name":"read","arguments":"{\"path\":\"/tmp/kivio-test.txt\"}"}}]}}]}"#
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_read","function":{"name":"read","arguments":"{\"path\":\"/tmp/abu-agent-test.txt\"}"}}]}}]}"#
                 .to_string(),
             r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#.to_string(),
             "[DONE]".to_string(),
@@ -679,7 +679,7 @@ fn pending_tool_call(id: &str, function_name: &str) -> PendingToolCall {
 
 fn test_tool_arguments(function_name: &str) -> Value {
     match function_name.to_ascii_lowercase().as_str() {
-        "read" => serde_json::json!({ "path": "/tmp/kivio-test.txt" }),
+        "read" => serde_json::json!({ "path": "/tmp/abu-agent-test.txt" }),
         "web_fetch" => serde_json::json!({ "url": "https://example.com" }),
         "bash" | "run_command" => serde_json::json!({ "command": "echo 1" }),
         "ask_user" => serde_json::json!({
@@ -3202,10 +3202,10 @@ async fn run_loop_nonstream_synthesis_empty_output_uses_fallback() {
 fn responses_web_search_sse_events() -> Vec<String> {
     vec![
         r#"{"type":"response.output_item.added","item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}}"#.to_string(),
-        r#"{"type":"response.output_item.done","item":{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"kivio latest release"}}}"#.to_string(),
-        r#"{"type":"response.output_text.delta","delta":"Kivio 最新版本信息。"}"#.to_string(),
-        r#"{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","title":"Kivio Release","url":"https://kivio.dev/releases"}}"#.to_string(),
-        r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Kivio 最新版本信息。"}]}]}}"#.to_string(),
+        r#"{"type":"response.output_item.done","item":{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"abu_agent latest release"}}}"#.to_string(),
+        r#"{"type":"response.output_text.delta","delta":"ABU Agent 最新版本信息。"}"#.to_string(),
+        r#"{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","title":"ABU Agent Release","url":"https://abu_agent.dev/releases"}}"#.to_string(),
+        r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ABU Agent 最新版本信息。"}]}]}}"#.to_string(),
         "[DONE]".to_string(),
     ]
 }
@@ -3244,7 +3244,7 @@ async fn run_loop_stream_builtin_web_search_card_precedes_answer_single_card() {
         .expect("builtin web search run completes");
 
     assert_eq!(result.stream_outcome, "completed");
-    assert_eq!(result.content, "Kivio 最新版本信息。");
+    assert_eq!(result.content, "ABU Agent 最新版本信息。");
 
     // 落盘工具记录：恰好一条 web_search，终态 Success。
     let web_records: Vec<_> = result
@@ -3267,7 +3267,7 @@ async fn run_loop_stream_builtin_web_search_card_precedes_answer_single_card() {
         .iter()
         .find(|segment| {
             segment.kind == ChatMessageSegmentKind::Text
-                && segment.text.as_deref() == Some("Kivio 最新版本信息。")
+                && segment.text.as_deref() == Some("ABU Agent 最新版本信息。")
         })
         .expect("answer text segment persisted");
     assert!(
@@ -3630,7 +3630,7 @@ async fn a_successful_run_never_cancels_hooks() {
 #[tokio::test]
 async fn run_loop_smoke_plain_answer_completes() {
     let server = MockModelServer::start(vec![MockResponse::Sse(vec![
-        r#"{"choices":[{"delta":{"content":"你好，我是 Kivio。"}}]}"#.to_string(),
+        r#"{"choices":[{"delta":{"content":"你好，我是 ABU Agent。"}}]}"#.to_string(),
         "[DONE]".to_string(),
     ])]);
     let state = test_app_state();
@@ -3644,7 +3644,7 @@ async fn run_loop_smoke_plain_answer_completes() {
         .expect("plain answer must not error");
 
     assert_eq!(result.stream_outcome, "completed");
-    assert_eq!(result.content, "你好，我是 Kivio。");
+    assert_eq!(result.content, "你好，我是 ABU Agent。");
     assert!(result.tool_records.is_empty());
     assert!(executor.events().is_empty(), "no tools configured");
 }

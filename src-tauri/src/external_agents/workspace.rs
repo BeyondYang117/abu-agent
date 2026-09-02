@@ -124,7 +124,7 @@ mod tests {
     fn cli_dir_if_exists_rejects_missing_paths() {
         assert_eq!(
             cli_dir_if_exists(PathBuf::from(
-                r"\\?\E:\this-folder-does-not-exist-kivio-cwd-test"
+                r"\\?\E:\this-folder-does-not-exist-abu-agent-cwd-test"
             )),
             None
         );

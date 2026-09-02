@@ -4,7 +4,7 @@ use super::super::types::{
 };
 
 /// Probe 失败时的静态兜底：与 desktop-cc-gui builtin catalog 同 id/label，
-/// 另加 Kivio 的 `default`（Auto / 不传 `--model`）。
+/// 另加 ABU Agent 的 `default`（Auto / 不传 `--model`）。
 const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("default", "Default"),
     ("claude-fable-5", "Fable 5"),
@@ -249,7 +249,7 @@ pub fn claude_mode_auto_allows_tools(permission_mode: &str) -> bool {
     permission_mode == DEFAULT_PERMISSION_MODE
 }
 
-/// `--append-system-prompt-file <path>`：把 Kivio 的会话级系统指令**追加**到 claude 原生
+/// `--append-system-prompt-file <path>`：把 ABU Agent 的会话级系统指令**追加**到 claude 原生
 /// 系统提示之后（不替换）。
 ///
 /// **隐藏 flag**（`--help` 里没有），claude 2.1.220 本机零副作用探针确认存在：
@@ -357,7 +357,7 @@ pub const CLAUDE_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     model_probe_args: None,
     slash_strategy: super::super::types::SlashStrategy::ClaudeInit,
     // 2.1.233：Sonnet 5 / Fable 5 / Mythos 5 / Opus 4.8 及更新模型默认拆掉
-    // TaskCreate/Get/Update/List 和 TodoWrite。Kivio 对话 Todo 条靠这些工具
+    // TaskCreate/Get/Update/List 和 TodoWrite。ABU Agent 对话 Todo 条靠这些工具
     // 驱动，必须显式要回来。用户覆盖 `env_for("claude")` 可以关掉。
     env: &[("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")],
     max_prompt_arg_bytes: None,
@@ -591,12 +591,12 @@ mod tests {
     /// 且是 append 语义（不替换 claude 原生系统提示）。
     #[test]
     fn append_system_prompt_file_args_pair_the_flag_with_the_path() {
-        let args = append_system_prompt_file_args(std::path::Path::new("/tmp/kivio-extsys-c1.md"));
+        let args = append_system_prompt_file_args(std::path::Path::new("/tmp/abu-agent-extsys-c1.md"));
         assert_eq!(
             args,
             vec![
                 "--append-system-prompt-file".to_string(),
-                "/tmp/kivio-extsys-c1.md".to_string(),
+                "/tmp/abu-agent-extsys-c1.md".to_string(),
             ]
         );
         // 拼到 build_args 之后仍是相邻的一对（顺序无关，但成对不可拆）。
@@ -627,11 +627,11 @@ mod tests {
     #[test]
     fn append_system_prompt_file_keeps_windows_paths_verbatim() {
         let args = append_system_prompt_file_args(std::path::Path::new(
-            r"C:\Users\a b\AppData\Local\Temp\kivio-extsys-c1.md",
+            r"C:\Users\a b\AppData\Local\Temp\abu-agent-extsys-c1.md",
         ));
         assert_eq!(
             args[1],
-            r"C:\Users\a b\AppData\Local\Temp\kivio-extsys-c1.md"
+            r"C:\Users\a b\AppData\Local\Temp\abu-agent-extsys-c1.md"
         );
     }
 

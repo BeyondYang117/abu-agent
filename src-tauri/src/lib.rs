@@ -256,7 +256,7 @@ pub fn run() {
             // 清理上次崩溃 / 强杀 / 旧版本遗留的截图 PNG（24h 之前的，避免误删并发实例的活文件）
             cleanup_orphan_temp_files();
             cleanup_stale_sandbox_exports();
-            // 会话副产物：空/孤儿工作区目录、已删会话残留的附件目录。只碰 Kivio 自己造的
+            // 会话副产物：空/孤儿工作区目录、已删会话残留的附件目录。只碰 ABU Agent 自己造的
             // `conv_*` 目录，非空的孤儿工作区只报数不删（里面是用户产物）。
             chat::gc::sweep_conversation_side_artifacts(app.handle());
 
@@ -357,7 +357,7 @@ pub fn run() {
             }
             let usage_dir = usage::usage_dir(&app.handle()).unwrap_or_else(|err| {
                 eprintln!("Failed to initialize usage ledger dir: {err}");
-                std::env::temp_dir().join("kivio-usage")
+                std::env::temp_dir().join("abu-agent-usage")
             });
 
             let offline_models =

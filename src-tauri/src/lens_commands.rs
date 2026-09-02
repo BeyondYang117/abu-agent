@@ -513,7 +513,7 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
     }
 
     // 必须在 ensure_* 创建隐藏 WebView 之前记录。macOS 冷创建普通 NSWindow 可能短暂激活
-    // Kivio；若等创建后才记录，就会把被抢来的 Kivio 误认成原前台 App，Chat 随之被排到最前。
+    // ABU Agent；若等创建后才记录，就会把被抢来的 ABU Agent 误认成原前台 App，Chat 随之被排到最前。
     #[cfg(target_os = "macos")]
     windows::remember_frontmost_app(&state.prev_frontmost_pid_lens);
 
@@ -2858,7 +2858,7 @@ fn archive_captured_image(app: &AppHandle, temp_path: &std::path::Path, image_id
 
     let now = chrono::Local::now();
     let short_uuid = &image_id[..image_id.len().min(8)];
-    let filename = format!("kivio-{}-{}.png", now.format("%Y-%m-%d-%H%M%S"), short_uuid);
+    let filename = format!("abu-agent-{}-{}.png", now.format("%Y-%m-%d-%H%M%S"), short_uuid);
     let dest = archive_dir.join(&filename);
 
     if let Err(e) = std::fs::copy(temp_path, &dest) {

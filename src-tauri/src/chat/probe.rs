@@ -140,7 +140,7 @@ struct ProbeContextState {
     status: String,
     /// `cli_reported` / `estimated` / `provider_reported`。
     token_count_source: Option<String>,
-    /// `external_cli` / `kivio_builtin`。
+    /// `external_cli` / `abu_agent_builtin`。
     context_source: Option<String>,
     compression_count: usize,
     compaction_boundary_count: usize,

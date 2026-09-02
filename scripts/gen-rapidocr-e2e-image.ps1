@@ -31,7 +31,7 @@ try {
   $brush = [System.Drawing.Brushes]::Black
 
   $g.DrawString('离线识别测试 高精度模型', $font, $brush, 20, 30)
-  $g.DrawString('Kivio RapidOCR Test 2026', $font, $brush, 20, 100)
+  $g.DrawString('ABU Agent RapidOCR Test 2026', $font, $brush, 20, 100)
   $g.Flush()
 
   $bmp.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)

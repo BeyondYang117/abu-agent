@@ -164,7 +164,7 @@ enum InboundFrame {
 /// `apply_flag_settings` / `get_settings` / `submit_feedback`），全都是「问我们、等我们答」。
 ///
 /// 我们只实现了 `can_use_tool`（工具审批），其余一律回一条 error —— 沉默的代价是整轮永久挂死。
-const UNSUPPORTED_CONTROL_REQUEST: &str = "Kivio 尚不支持这个控制请求";
+const UNSUPPORTED_CONTROL_REQUEST: &str = "ABU Agent 尚不支持这个控制请求";
 
 /// 用户点「拒绝」时回给 CLI 的话。它会原样变成那次工具调用的 `tool_result`（实测），
 /// 所以要写成模型看得懂、且能据此改变计划的一句中文。
@@ -188,7 +188,7 @@ const APPROVAL_ABORTED_MESSAGE: &str = "用户中止了本轮，这次操作未�
 /// **MCP 工具**；`AskUserQuestion` / `ExitPlanMode` 是内置工具，不在其中 —— 所以放开之后
 /// 不会撞上那条。
 const APPROVAL_INTERACTIVE_UNSUPPORTED: &str =
-    "Kivio 暂不支持这个需要在卡片上直接作答的工具，请改用普通回复继续。";
+    "ABU Agent 暂不支持这个需要在卡片上直接作答的工具，请改用普通回复继续。";
 
 /// 一条已经送去问用户、还在等答复的询问。
 ///
@@ -332,7 +332,7 @@ fn control_response_verdict(frame: &Value, request_id: &str) -> Option<bool> {
 /// （见 `APPROVAL_INTERACTIVE_UNSUPPORTED`）。抽成纯函数是为了让「哪些不问用户」有单测可证。
 fn approval_verdict(ask: &ApprovalAsk) -> Result<(), &'static str> {
     // 三个交互工具都答得了：
-    // - `AskUserQuestion` → Kivio 自己的问用户卡片，选项经 `updated_input` 回去；
+    // - `AskUserQuestion` → ABU Agent 自己的问用户卡片，选项经 `updated_input` 回去；
     // - `ExitPlanMode`   → 审批卡，批准时经 `set_permission_mode` 先切档位再放行；
     // - `EnterPlanMode`  → 审批卡，**放行就够** —— 它的实现里自己就切了档
     //   （二进制：`setToolPermissionContext(… {type:"setMode",mode:"plan",destination:"session"})`）。
@@ -375,7 +375,7 @@ pub fn is_enter_plan_mode(tool_name: &str) -> bool {
 /// `tool_name` / `display_name` / `input` / `tool_use_id` / `description` /
 /// `permission_suggestions` / `requires_user_interaction` / …
 ///
-/// `tool_use_id` 在 schema 里是 optional：缺失时回落 `request_id` 当 Kivio 侧的卡片 id
+/// `tool_use_id` 在 schema 里是 optional：缺失时回落 `request_id` 当 ABU Agent 侧的卡片 id
 /// —— 卡片必须有个稳定 id 才能被答复，宁可与工具卡对不上也不能没有。
 fn approval_ask_from_request(request_id: &str, request: &Value) -> ApprovalAsk {
     let tool_call_id = request
@@ -603,7 +603,7 @@ impl ClaudeStreamJsonSession {
     /// （`--session-id` 首次 / `--resume` 重连），不像 codex/ACP 在握手 RPC 里传。
     pub async fn connect(resolved_bin: &Path, args: &[String], cwd: &Path) -> Result<Self, String> {
         // spec 第 16 条：必须走 `cli_command` 剥掉父会话身份/宿主代管凭据标记，
-        // 否则 Kivio 从某个 CLI 会话里启动时子进程会拒绝启动或报「未登录」。
+        // 否则 ABU Agent 从某个 CLI 会话里启动时子进程会拒绝启动或报「未登录」。
         let mut child = cli_command(resolved_bin)
             .args(args)
             .current_dir(cwd)
@@ -722,7 +722,7 @@ impl ClaudeStreamJsonSession {
             // Auto/empty, or already on the mapped runtime — no control request.
             return Ok(());
         };
-        let request_id = format!("kivio-set-model-{}", Uuid::new_v4());
+        let request_id = format!("abu-agent-set-model-{}", Uuid::new_v4());
         let line = set_model_request_line(&request_id, &runtime);
         if self.stdin.write_all(line.as_bytes()).await.is_err() || self.stdin.flush().await.is_err()
         {
@@ -850,7 +850,7 @@ impl ClaudeStreamJsonSession {
                         // 协议级中断，**不 kill**：进程要留给下一轮（常驻的核心收益）。
                         // 写失败也不立刻放弃 —— 继续读，`result` 可能已经在路上。
                         let line =
-                            interrupt_request_line(&format!("kivio-interrupt-{}", Uuid::new_v4()));
+                            interrupt_request_line(&format!("abu-agent-interrupt-{}", Uuid::new_v4()));
                         let _ = self.stdin.write_all(line.as_bytes()).await;
                         let _ = self.stdin.flush().await;
                     }
@@ -879,7 +879,7 @@ impl ClaudeStreamJsonSession {
                 // 会发 `status:"stopped"` 的 `task_notification`，注册表由那帧修正。
                 Ok(SessionCommand::StopTask { task_id }) => {
                     let line = stop_task_request_line(
-                        &format!("kivio-stop-task-{}", Uuid::new_v4()),
+                        &format!("abu-agent-stop-task-{}", Uuid::new_v4()),
                         &task_id,
                     );
                     let _ = self.stdin.write_all(line.as_bytes()).await;
@@ -909,7 +909,7 @@ impl ClaudeStreamJsonSession {
                     // 离开计划档，否则它下一句 `Edit` 又被挡回来。同一条 stdin 上的两帧按
                     // 写入顺序处理，所以这里只要保证「切档在前」即可。
                     if let Some(mode) = decision.set_permission_mode.as_deref() {
-                        let request_id = format!("kivio-set-mode-{}", Uuid::new_v4());
+                        let request_id = format!("abu-agent-set-mode-{}", Uuid::new_v4());
                         let line = set_permission_mode_request_line(&request_id, mode);
                         let _ = self.stdin.write_all(line.as_bytes()).await;
                         let _ = self.stdin.flush().await;
@@ -1147,7 +1147,7 @@ impl ClaudeStreamJsonSession {
     /// 停止立即生效；它发的 `task_notification`（stopped）由轮间空闲读消费进注册表
     /// （发起方已乐观置 stopped，见 interaction.rs）。
     pub async fn send_stop_task(&mut self, task_id: &str) {
-        let line = stop_task_request_line(&format!("kivio-stop-task-{}", Uuid::new_v4()), task_id);
+        let line = stop_task_request_line(&format!("abu-agent-stop-task-{}", Uuid::new_v4()), task_id);
         self.write_control_line(&line).await;
     }
 
@@ -1592,8 +1592,8 @@ mod tests {
 
     #[test]
     fn interrupt_request_ids_are_unique() {
-        let a = interrupt_request_line(&format!("kivio-interrupt-{}", Uuid::new_v4()));
-        let b = interrupt_request_line(&format!("kivio-interrupt-{}", Uuid::new_v4()));
+        let a = interrupt_request_line(&format!("abu-agent-interrupt-{}", Uuid::new_v4()));
+        let b = interrupt_request_line(&format!("abu-agent-interrupt-{}", Uuid::new_v4()));
         assert_ne!(a, b);
     }
 
@@ -1708,7 +1708,7 @@ mod tests {
     fn control_channel_noise_is_ignored_without_a_reply() {
         for raw in [
             r#"{"type":"keep_alive"}"#,
-            r#"{"type":"control_response","response":{"subtype":"success","request_id":"kivio-interrupt-1","response":{"still_queued":[]}}}"#,
+            r#"{"type":"control_response","response":{"subtype":"success","request_id":"abu-agent-interrupt-1","response":{"still_queued":[]}}}"#,
         ] {
             assert!(
                 matches!(
@@ -1887,7 +1887,7 @@ mod tests {
     /// （给一张点了也没用的卡片比诚实拒掉更糟）。
     #[test]
     fn interactive_tools_are_denied_without_bothering_the_user() {
-        // `AskUserQuestion`：宿主把它转成 Kivio 的问用户卡片，
+        // `AskUserQuestion`：宿主把它转成 ABU Agent 的问用户卡片，
         // 选项经 `ApprovalDecision::updated_input` 回给 CLI（官方 `allow + updatedInput`）。
         let ask_user = ask_for(
             r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{},"requires_user_interaction":true}}"#,
@@ -2079,7 +2079,7 @@ mod tests {
 ///
 /// ```powershell
 /// pwsh scripts/win-cargo-test.ps1 --lib claude_stream
-/// cd src-tauri; ./target/debug/deps/kivio-*.exe claude_stream --ignored --nocapture --test-threads=1
+/// cd src-tauri; ./target/debug/deps/abu-agent-*.exe claude_stream --ignored --nocapture --test-threads=1
 /// ```
 #[cfg(test)]
 mod live_tests {
@@ -2199,7 +2199,7 @@ mod live_tests {
             eprintln!("SKIP: 本机没有可用的 claude CLI");
             return None;
         };
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-live-{session_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-live-{session_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
         match ClaudeStreamJsonSession::connect(&bin, &live_args(session_id, model), &workdir).await
         {
@@ -2295,7 +2295,7 @@ mod live_tests {
             return;
         };
         let session_id = Uuid::new_v4().to_string();
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-askuser-{session_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-askuser-{session_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
 
         // `AskUserQuestion` 只在带 `--permission-prompt-tool stdio` 时才出现在工具表里
@@ -2423,7 +2423,7 @@ text={}",
             return;
         };
         let session_id = Uuid::new_v4().to_string();
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-plan-{session_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-plan-{session_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
         let target = workdir.join("plan-proof.txt");
 
@@ -2520,7 +2520,7 @@ text={}",
             return;
         };
         let session_id = Uuid::new_v4().to_string();
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-multi-{session_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-multi-{session_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
         let args = live_args_with_sandbox(&session_id, None, Some("default"));
         let Ok(session) = ClaudeStreamJsonSession::connect(&bin, &args, &workdir).await else {
@@ -2863,7 +2863,7 @@ text={}",
             return;
         };
         let session_id = Uuid::new_v4().to_string();
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-reconnect-{session_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-reconnect-{session_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
 
         // 第一个进程：sonnet，建立会话并记一个数字。
@@ -2945,7 +2945,7 @@ text={}",
         };
         // 一个从没存在过的会话 id —— 模拟「claude 那边的会话记录被清理掉了」。
         let dead_id = Uuid::new_v4().to_string();
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-deadresume-{dead_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-deadresume-{dead_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
 
         // ---- 第 1 步：确认真实 CLI 的失败形态与我们的判据一致 ----
@@ -3078,7 +3078,7 @@ text={}",
 
         for (approve, label) in [(true, "allow"), (false, "deny")] {
             let session_id = Uuid::new_v4().to_string();
-            let workdir = std::env::temp_dir().join(format!("kivio-claude-approve-{session_id}"));
+            let workdir = std::env::temp_dir().join(format!("abu-agent-claude-approve-{session_id}"));
             std::fs::create_dir_all(&workdir).expect("create workdir");
             let target = workdir.join("approved.txt");
 
@@ -3173,7 +3173,7 @@ text={}",
             return;
         };
         let session_id = Uuid::new_v4().to_string();
-        let workdir = std::env::temp_dir().join(format!("kivio-claude-approvecancel-{session_id}"));
+        let workdir = std::env::temp_dir().join(format!("abu-agent-claude-approvecancel-{session_id}"));
         std::fs::create_dir_all(&workdir).expect("create workdir");
         let args = live_args_with_sandbox(&session_id, None, Some("default"));
 

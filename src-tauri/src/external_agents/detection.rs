@@ -587,7 +587,7 @@ fn parse_dsh_settings_models(text: &str) -> Result<ProbeModelsOutput, String> {
             .iter()
             .filter(|provider| !provider.disabled)
         {
-            merge_kivio_dsh_provider(&mut models, &mut seen, &mut reasoning_by_model, provider)?;
+            merge_abu_agent_dsh_provider(&mut models, &mut seen, &mut reasoning_by_model, provider)?;
         }
         if let Some(provider) = config
             .providers
@@ -642,7 +642,7 @@ fn push_dsh_model(
     });
 }
 
-fn merge_kivio_dsh_provider(
+fn merge_abu_agent_dsh_provider(
     models: &mut Vec<RuntimeModelOption>,
     seen: &mut std::collections::HashSet<String>,
     reasoning_by_model: &mut HashMap<String, Vec<RuntimeModelOption>>,
@@ -1621,7 +1621,7 @@ mod tests {
         assert!(parse_pi_config("{\"defaultThinkingLevel\":\"\"}")
             .1
             .is_none());
-        // Kivio 表单会写 max，必须能读回来。
+        // ABU Agent 表单会写 max，必须能读回来。
         assert_eq!(
             parse_pi_config("{\"defaultThinkingLevel\":\"Max\"}")
                 .1
@@ -1798,7 +1798,7 @@ llm-deepseek:
     }
 
     #[test]
-    fn kivio_dsh_provider_models_are_namespaced_by_route() {
+    fn abu_agent_dsh_provider_models_are_namespaced_by_route() {
         let provider = crate::settings::ExternalCliProvider {
             name: "Relay".to_string(),
             native_provider_id: "relay-one".to_string(),
@@ -1817,7 +1817,7 @@ llm-deepseek:
         let mut models = vec![default_model_option()];
         let mut seen = std::collections::HashSet::from(["default".to_string()]);
         let mut reasoning_by_model = HashMap::new();
-        merge_kivio_dsh_provider(&mut models, &mut seen, &mut reasoning_by_model, &provider)
+        merge_abu_agent_dsh_provider(&mut models, &mut seen, &mut reasoning_by_model, &provider)
             .unwrap();
         assert_eq!(models[1].id, "relay-one:gpt-test");
         assert_eq!(models[1].label, "GPT Test (Relay One)");

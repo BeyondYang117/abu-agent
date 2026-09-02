@@ -228,7 +228,7 @@ fn eval_lane(conn: &rusqlite::Connection, w_vec: f32, w_kw: f32) -> Metrics {
 }
 
 fn build_store() -> (rusqlite::Connection, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!("kivio-eval-{}.db", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!("abu-agent-eval-{}.db", uuid::Uuid::new_v4()));
     let conn = store::open_db(&path).unwrap();
     let chunks: Vec<KnowledgeChunk> = DOCS
         .iter()

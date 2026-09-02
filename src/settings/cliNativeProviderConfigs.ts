@@ -108,7 +108,7 @@ export function isValidNativeProviderId(value: string): boolean {
 
 export function dshApiKeyEnv(providerId: string): string {
   const suffix = providerId.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_') || 'PROVIDER'
-  return `KIVIO_DSH_${suffix}_API_KEY`
+  return `ABU_AGENT_DSH_${suffix}_API_KEY`
 }
 
 export function emptyNativeModel(agentId: NativeCliAgentId, id = ''): NativeCliModel {

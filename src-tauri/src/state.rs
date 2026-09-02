@@ -127,8 +127,8 @@ pub struct AppState {
     /// 自愈会让快速连按热键并发跑两次 lens_request_internal（take-once 复位载荷被吞，
     /// 前端进入坏状态）。宽限期内（LENS_OPEN_GRACE）不自愈。
     pub lens_opened_at: Mutex<Option<std::time::Instant>>,
-    /// macOS：打开浮窗前记下的前台 App PID（0 = 无 / 前台就是 Kivio 自己），关闭浮窗时据此把
-    /// 前台交还给原来的 App，避免 Kivio 变成"前台却无窗口"而触发 RunEvent::Reopen 误开 Chat。
+    /// macOS：打开浮窗前记下的前台 App PID（0 = 无 / 前台就是 ABU Agent 自己），关闭浮窗时据此把
+    /// 前台交还给原来的 App，避免 ABU Agent 变成"前台却无窗口"而触发 RunEvent::Reopen 误开 Chat。
     /// lens（含截图/选词翻译）与输入翻译是各自独立、可同时存在的浮窗，各占一个槽，避免相互覆盖。
     /// 详见 spec/backend/window-lifecycle.md。
     pub prev_frontmost_pid_lens: AtomicI32,
@@ -285,7 +285,7 @@ pub struct AppState {
     pub background_commands: Arc<Mutex<HashMap<String, crate::native_tools::BackgroundCommand>>>,
     /// 外部 CLI 自报的后台任务注册表（目前只有 claude：后台 Bash / 后台子代理，
     /// task_id → 条目）。由 `run.rs` 消费 `UnifiedAgentEvent::BackgroundTask` 时 upsert，
-    /// Background tasks 面板轮询读取。仅内存：任务活在 CLI 进程里，Kivio 重启即失效。
+    /// Background tasks 面板轮询读取。仅内存：任务活在 CLI 进程里，ABU Agent 重启即失效。
     pub external_background_tasks: Mutex<HashMap<String, ExternalBackgroundTask>>,
     /// 开发者「请求调试」内存环形缓冲：最近 [`REQUEST_DEBUG_CAPACITY`] 条 provider 调用的
     /// 请求（脱敏 headers + body）+ 响应摘要。默认关闭（`chat_tools.request_debug_enabled`），
@@ -298,7 +298,7 @@ pub struct AppState {
 }
 
 /// 一条外部 CLI 后台任务（claude 的 `system/task_started` / `task_notification`）。
-/// 任务本体活在 CLI 进程里，Kivio 只有观测与 `stop_task`，没有 pid、没有日志文件。
+/// 任务本体活在 CLI 进程里，ABU Agent 只有观测与 `stop_task`，没有 pid、没有日志文件。
 #[derive(Debug, Clone)]
 pub struct ExternalBackgroundTask {
     pub task_id: String,
@@ -447,7 +447,7 @@ impl AppState {
         }
     }
 
-    /// Build a headless `AppState` for the `kivio-code` terminal agent — no
+    /// Build a headless `AppState` for the `abu-agent-code` terminal agent — no
     /// `AppHandle`, no Tauri runtime. Differs from the live construction in
     /// `lib.rs::run` only in the two OCR clients (`headless()` constructors) and
     /// `usage_dir` (passed in). The agent loop only touches `settings`, the
@@ -1538,7 +1538,7 @@ pub(crate) fn test_app_state() -> AppState {
     let offline_models = OfflineModelManager::headless(Client::new());
     AppState::base(
         Settings::default(),
-        std::env::temp_dir().join(format!("kivio-test-usage-{}", uuid::Uuid::new_v4())),
+        std::env::temp_dir().join(format!("abu-agent-test-usage-{}", uuid::Uuid::new_v4())),
         Client::new(),
         #[cfg(target_os = "macos")]
         MacOcrClient::disabled(),
@@ -1811,7 +1811,7 @@ mod tests {
     #[test]
     fn mcp_tool_snapshot_ignores_corrupt_disk_file() {
         let usage_dir =
-            std::env::temp_dir().join(format!("kivio-test-usage-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("abu-agent-test-usage-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&usage_dir).expect("create usage dir");
         std::fs::write(mcp_tool_snapshot_path(&usage_dir), "{ not json !!")
             .expect("write corrupt snapshot file");

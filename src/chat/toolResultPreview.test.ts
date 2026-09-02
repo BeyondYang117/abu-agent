@@ -18,7 +18,7 @@ describe('formatToolResultPreview', () => {
 
   it('summarizes Tavily search results', () => {
     const raw = JSON.stringify({
-      query: 'kivio',
+      query: 'abu_agent',
       results: [{ title: 'ABU Agent Docs', content: 'Screen-level AI assistant', url: 'https://example.com' }],
     })
     const preview = formatToolResultPreview(raw)

@@ -21,14 +21,14 @@ struct SkillScanRoot {
 }
 
 /// 共享 Agent Skills 目录：`~/.agents/skills`（Codex / OpenCode / Pi 等共用）。
-/// 只扫描，Kivio 不往这里写、也不从这里删。
+/// 只扫描，ABU Agent 不往这里写、也不从这里删。
 pub fn home_agents_skills_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|base| base.home_dir().join(".agents").join("skills"))
 }
 
-/// Kivio 自己的个人技能目录：`~/.kivio/skills`（对齐 `~/.claude/skills` / `~/.codex/skills`）。
-pub fn kivio_skills_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|base| base.home_dir().join(".kivio").join("skills"))
+/// ABU Agent 自己的个人技能目录：`~/.abu-agent/skills`（对齐 `~/.claude/skills` / `~/.codex/skills`）。
+pub fn abu_agent_skills_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|base| base.home_dir().join(".abu-agent").join("skills"))
 }
 
 /// 旧版个人目录：`{app_data}/skills`。只扫已有内容，不再写入。
@@ -36,18 +36,18 @@ pub fn legacy_app_data_skills_dir() -> Option<PathBuf> {
     crate::app_data::app_data_dir().map(|dir| dir.join("skills"))
 }
 
-/// 个人 Skill 写入目录（导入 / 打开文件夹）：`~/.kivio/skills`。
+/// 个人 Skill 写入目录（导入 / 打开文件夹）：`~/.abu-agent/skills`。
 pub fn user_skills_dir(_app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = kivio_skills_dir().ok_or_else(|| "home directory unavailable".to_string())?;
+    let dir = abu_agent_skills_dir().ok_or_else(|| "home directory unavailable".to_string())?;
     fs::create_dir_all(&dir).map_err(|err| format!("create skills dir failed: {err}"))?;
     Ok(dir)
 }
 
 /// 从 `cwd` 向上收集项目技能目录（近的在前）。碰到 `.git` 或家目录停止。
-/// 每一层先 `.kivio/skills`（Kivio 自己的，对齐 `.claude/skills`），再 `.agents/skills`（共享）。
-/// 跳过全局 `~/.kivio/skills` 与 `~/.agents/skills`，避免把家目录当成项目。
+/// 每一层先 `.abu-agent/skills`（ABU Agent 自己的，对齐 `.claude/skills`），再 `.agents/skills`（共享）。
+/// 跳过全局 `~/.abu-agent/skills` 与 `~/.agents/skills`，避免把家目录当成项目。
 pub fn project_skill_dirs(cwd: &Path) -> Vec<PathBuf> {
-    let skip: Vec<PathBuf> = [kivio_skills_dir(), home_agents_skills_dir()]
+    let skip: Vec<PathBuf> = [abu_agent_skills_dir(), home_agents_skills_dir()]
         .into_iter()
         .flatten()
         .collect();
@@ -59,7 +59,7 @@ fn project_skill_dirs_inner(cwd: &Path, skip: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut current = cwd.to_path_buf();
     for _ in 0..MAX_PROJECT_WALK {
-        for rel in [".kivio", ".agents"] {
+        for rel in [".abu-agent", ".agents"] {
             let skills = current.join(rel).join("skills");
             if skills.is_dir() && !is_skipped(&skills, skip) {
                 out.push(skills);
@@ -115,7 +115,7 @@ fn scan_root_entries(
     if let Some(path) = bundled_skills_dir(app) {
         push_root(&mut roots, path, "builtin");
     }
-    // 项目优先于全局（同 id 近处覆盖远处）：`.kivio/skills` 再 `.agents/skills`，cwd → git 根。
+    // 项目优先于全局（同 id 近处覆盖远处）：`.abu-agent/skills` 再 `.agents/skills`，cwd → git 根。
     if let Some(cwd) = project_cwd {
         for path in project_skill_dirs(cwd) {
             push_root(&mut roots, path, "project");
@@ -125,7 +125,7 @@ fn scan_root_entries(
     for path in crate::plugins::enabled_skill_roots() {
         push_root(&mut roots, path, "plugin");
     }
-    if let Some(path) = kivio_skills_dir() {
+    if let Some(path) = abu_agent_skills_dir() {
         push_root(&mut roots, path, "user");
     }
     if let Some(path) = legacy_app_data_skills_dir() {
@@ -365,7 +365,7 @@ mod tests {
     use std::fs;
 
     fn temp_skill_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kivio-skill-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-skill-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(dir.join("scripts")).unwrap();
         fs::write(
             dir.join("SKILL.md"),
@@ -408,7 +408,7 @@ description: Test skill.
 
     #[test]
     fn project_walk_prefers_nearest_and_stops_at_git() {
-        let base = std::env::temp_dir().join(format!("kivio-agents-walk-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("abu-agent-agents-walk-{}", uuid::Uuid::new_v4()));
         let root = base.join("repo");
         let nested = root.join("packages").join("app");
         write_skill(
@@ -437,7 +437,7 @@ description: Test skill.
 
     #[test]
     fn project_walk_skips_global_home_agents() {
-        let base = std::env::temp_dir().join(format!("kivio-agents-skip-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("abu-agent-agents-skip-{}", uuid::Uuid::new_v4()));
         let global = base.join(".agents").join("skills");
         write_skill(&global.join("shared"), "shared");
         fs::create_dir_all(base.join(".git")).unwrap();
@@ -449,7 +449,7 @@ description: Test skill.
     #[test]
     fn same_id_prefers_project_over_agents() {
         let base =
-            std::env::temp_dir().join(format!("kivio-agents-dedup-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("abu-agent-agents-dedup-{}", uuid::Uuid::new_v4()));
         let project_root = base.join("project").join(".agents").join("skills");
         let agents_root = base.join("home").join(".agents").join("skills");
         write_skill(&project_root.join("shared"), "shared");
@@ -482,7 +482,7 @@ description: Test skill.
     #[test]
     fn same_source_duplicate_id_warns() {
         let base =
-            std::env::temp_dir().join(format!("kivio-agents-samedup-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("abu-agent-agents-samedup-{}", uuid::Uuid::new_v4()));
         let one = base.join("a");
         let two = base.join("b");
         write_skill(&one.join("shared"), "shared");
@@ -513,12 +513,12 @@ description: Test skill.
     }
 
     #[test]
-    fn project_walk_kivio_before_agents_at_same_level() {
-        let base = std::env::temp_dir().join(format!("kivio-proj-both-{}", uuid::Uuid::new_v4()));
+    fn project_walk_abu_agent_before_agents_at_same_level() {
+        let base = std::env::temp_dir().join(format!("abu-agent-proj-both-{}", uuid::Uuid::new_v4()));
         let root = base.join("repo");
         write_skill(
-            &root.join(".kivio").join("skills").join("kivio-one"),
-            "kivio-one",
+            &root.join(".abu-agent").join("skills").join("abu-agent-one"),
+            "abu-agent-one",
         );
         write_skill(
             &root.join(".agents").join("skills").join("agents-one"),
@@ -528,7 +528,7 @@ description: Test skill.
 
         let dirs = project_skill_dirs_inner(&root, &[]);
         assert_eq!(dirs.len(), 2);
-        assert!(dirs[0].ends_with(Path::new(".kivio").join("skills")));
+        assert!(dirs[0].ends_with(Path::new(".abu-agent").join("skills")));
         assert!(dirs[1].ends_with(Path::new(".agents").join("skills")));
 
         fs::remove_dir_all(base).unwrap();
@@ -536,8 +536,8 @@ description: Test skill.
 
     #[test]
     fn project_walk_skips_global_home_kivio() {
-        let base = std::env::temp_dir().join(format!("kivio-home-skip-{}", uuid::Uuid::new_v4()));
-        let global = base.join(".kivio").join("skills");
+        let base = std::env::temp_dir().join(format!("abu-agent-home-skip-{}", uuid::Uuid::new_v4()));
+        let global = base.join(".abu-agent").join("skills");
         write_skill(&global.join("shared"), "shared");
         fs::create_dir_all(base.join(".git")).unwrap();
         let dirs = project_skill_dirs_inner(&base, &[global]);
@@ -546,11 +546,11 @@ description: Test skill.
     }
 
     #[test]
-    fn kivio_skills_dir_is_dot_kivio_skills() {
-        let dir = kivio_skills_dir().expect("home directory");
+    fn abu_agent_skills_dir_is_dot_abu_agent_skills() {
+        let dir = abu_agent_skills_dir().expect("home directory");
         assert!(
-            dir.ends_with(Path::new(".kivio").join("skills")),
-            "expected ~/.kivio/skills, got {}",
+            dir.ends_with(Path::new(".abu-agent").join("skills")),
+            "expected ~/.abu-agent/skills, got {}",
             dir.display()
         );
     }

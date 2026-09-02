@@ -96,7 +96,7 @@ function baseServer(id: string, name: string): ChatMcpServer {
 }
 
 /** 注册表 transport 提示 → ABU Agent 支持的 transport（http/sse 统一走 streamable_http）。 */
-function kivioTransport(hint: 'stdio' | 'http' | 'sse'): ChatMcpServer['transport'] {
+function abuAgentTransport(hint: 'stdio' | 'http' | 'sse'): ChatMcpServer['transport'] {
   return hint === 'stdio' ? 'stdio' : 'streamable_http'
 }
 
@@ -340,7 +340,7 @@ function buildRemoteDraft(
   return makeDraft(
     {
       ...baseServer(slugifyServerId(baseName), baseName),
-      transport: kivioTransport(type),
+      transport: abuAgentTransport(type),
       url,
       headers,
     },

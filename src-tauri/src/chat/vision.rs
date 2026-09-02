@@ -359,7 +359,7 @@ pub(super) async fn read_image_as_tool_result(
 /// R1：MCP 工具结果里的图片 artifact「直达模型」。通用于所有 MCP server（非
 /// officecli 专属），复用 `read_image_as_tool_result` 已验证的两级策略：
 /// ① 主模型支持视觉 → 把图片作为 follow-up user 消息直喂（`data_url_image_part`，
-/// 不落盘）；② 纯文本主模型 → 落临时文件 `kivio-mcpimg-<uuid>.<ext>` 走辅助视觉
+/// 不落盘）；② 纯文本主模型 → 落临时文件 `abu-agent-mcpimg-<uuid>.<ext>` 走辅助视觉
 /// 模型做审查向分析（R2），把分析文字追加进 tool 结果的 content，随后删除临时
 /// 文件。全程尽力而为：拿不到会话上下文、无可用视觉模型、分析失败等任何一步
 /// 出错都原样保留 `[image: <mime>]` 占位符，不影响 MCP 工具调用本身的成败。
@@ -417,7 +417,7 @@ pub(super) async fn attach_image_artifacts_for_model(
     let mut temp_paths: Vec<PathBuf> = Vec::new();
     for (artifact, bytes) in &accepted {
         let ext = image_extension_for_mime(&artifact.mime_type);
-        let path = std::env::temp_dir().join(format!("kivio-mcpimg-{}.{ext}", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("abu-agent-mcpimg-{}.{ext}", Uuid::new_v4()));
         if fs::write(&path, bytes).is_ok() {
             temp_paths.push(path);
         }
@@ -498,9 +498,9 @@ pub(super) async fn attach_image_artifacts_for_model(
 // 逐条列出发现的问题，确无问题才允许写「未见视觉缺陷」。
 fn auxiliary_vision_system_prompt(language: &str) -> &'static str {
     if language.starts_with("zh") {
-        "你是 Kivio 的视觉副任务模型。你的任务是审查并描述用户提供的图片，输出给另一个主对话模型使用的文字观察。除描述图片中可见的信息、文字、结构、对象、界面状态和与用户问题相关的细节外，必须显式检查并逐条报告以下缺陷（如存在）：文字被截断或溢出容器、元素重叠、字面转义符（如按文字原样出现的 \\n、\\t）、明显的位置或对齐错位、对比度过低导致文字不可读。确认不存在以上问题才写「未见视觉缺陷」。不要回答最终问题，不要编造不可见内容。"
+        "你是 ABU Agent 的视觉副任务模型。你的任务是审查并描述用户提供的图片，输出给另一个主对话模型使用的文字观察。除描述图片中可见的信息、文字、结构、对象、界面状态和与用户问题相关的细节外，必须显式检查并逐条报告以下缺陷（如存在）：文字被截断或溢出容器、元素重叠、字面转义符（如按文字原样出现的 \\n、\\t）、明显的位置或对齐错位、对比度过低导致文字不可读。确认不存在以上问题才写「未见视觉缺陷」。不要回答最终问题，不要编造不可见内容。"
     } else {
-        "You are Kivio's auxiliary vision model. Read the user's images and produce textual observations for another main chat model, combining description with review. Beyond describing visible information, text, layout, objects, UI state, and details relevant to the user's request, you must explicitly check and list any of the following defects if present: text truncated or overflowing its container, overlapping elements, literal escape sequences appearing as text (e.g. \\n, \\t), obvious position or alignment misalignment, and low-contrast unreadable text. Only state \"no visual defects observed\" once you have confirmed none of these are present. Do not answer the final question and do not invent unseen content."
+        "You are ABU Agent's auxiliary vision model. Read the user's images and produce textual observations for another main chat model, combining description with review. Beyond describing visible information, text, layout, objects, UI state, and details relevant to the user's request, you must explicitly check and list any of the following defects if present: text truncated or overflowing its container, overlapping elements, literal escape sequences appearing as text (e.g. \\n, \\t), obvious position or alignment misalignment, and low-contrast unreadable text. Only state \"no visual defects observed\" once you have confirmed none of these are present. Do not answer the final question and do not invent unseen content."
     }
 }
 

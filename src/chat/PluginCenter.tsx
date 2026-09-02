@@ -140,7 +140,7 @@ function PluginCard({
               {plugin.path}
               {plugin.source === 'system'
                 ? t.chatPluginSourceSystemPath
-                : plugin.source === 'kivio'
+                : plugin.source === 'abu_agent'
                   ? t.chatPluginSourceABUAgent
                   : ''}
             </p>

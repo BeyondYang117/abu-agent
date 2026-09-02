@@ -89,7 +89,7 @@ impl MacOcrClient {
         })
     }
 
-    /// Headless (no-AppHandle) client for the `kivio-code` CLI, which has no
+    /// Headless (no-AppHandle) client for the `abu-agent-code` CLI, which has no
     /// Tauri runtime. OCR is never invoked from the terminal agent, so this
     /// mirrors `new` but carries `app: None` (the sidecar can never be spawned).
     pub fn headless() -> Arc<Self> {

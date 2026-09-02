@@ -2021,7 +2021,7 @@ mod tests {
         let adapter = AnthropicMessagesProvider::new(&state, &provider, 1);
         let body = adapter.request_body(&cache_test_request(), false);
         // 关缓存时 system 仍是裸字符串、没有任何 cache_control —— 与加这个功能之前逐字节一致。
-        assert_eq!(body["system"], serde_json::json!("you are kivio"));
+        assert_eq!(body["system"], serde_json::json!("you are abu_agent"));
         assert!(!body.to_string().contains("cache_control"), "body: {body}");
     }
 
@@ -2039,7 +2039,7 @@ mod tests {
         // system 从字符串变成块数组，最后一块带断点。
         assert_eq!(
             body["system"][0]["text"],
-            serde_json::json!("you are kivio")
+            serde_json::json!("you are abu_agent")
         );
         assert_eq!(body["system"][0]["cache_control"], ephemeral);
         // 只有最后一个工具带断点（前缀越长命中越多，中间打断点是浪费）。
@@ -2128,7 +2128,7 @@ mod tests {
         let mut request = cache_test_request();
         request.metadata.conversation_id = None;
         let body = adapter.request_body(&request, false);
-        assert_eq!(body["system"], serde_json::json!("you are kivio"));
+        assert_eq!(body["system"], serde_json::json!("you are abu_agent"));
         assert!(!body.to_string().contains("cache_control"), "body: {body}");
         // 空串也算没有会话。
         request.metadata.conversation_id = Some(String::new());
@@ -2206,7 +2206,7 @@ mod tests {
     fn cache_test_request() -> GenerateRequest {
         GenerateRequest {
             model: "claude-opus-4-8".into(),
-            system: "you are kivio".into(),
+            system: "you are abu_agent".into(),
             messages: vec![ModelMessage {
                 role: ModelRole::User,
                 content: vec![MessagePart::Text { text: "hi".into() }],
@@ -2226,7 +2226,7 @@ mod tests {
         // server_tool_use(web_search) → 查询；web_search_tool_result.content[] → 来源（去重）。
         let response = serde_json::json!({
             "content": [
-                { "type": "server_tool_use", "name": "web_search", "input": { "query": "kivio" } },
+                { "type": "server_tool_use", "name": "web_search", "input": { "query": "abu_agent" } },
                 {
                     "type": "web_search_tool_result",
                     "content": [
@@ -2241,7 +2241,7 @@ mod tests {
         });
         let parsed = parse_anthropic_response(&response);
         let web_search = parsed.web_search.expect("web_search present");
-        assert_eq!(web_search.queries, vec!["kivio".to_string()]);
+        assert_eq!(web_search.queries, vec!["abu_agent".to_string()]);
         assert_eq!(web_search.citations.len(), 2);
         assert_eq!(web_search.citations[0].title, "A 站");
         assert_eq!(web_search.citations[1].title, "https://b.com");
@@ -2262,10 +2262,10 @@ mod tests {
     /// 逐帧 `emit` 成 `StreamPart::WebSearch` 的来源。此测试钉住这条 wire → 增量的映射。
     #[test]
     fn stream_web_search_events_parse_query_then_results_increments() {
-        let query_line = "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"server_tool_use\",\"name\":\"web_search\",\"input\":{\"query\":\"kivio\"}}}";
+        let query_line = "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"server_tool_use\",\"name\":\"web_search\",\"input\":{\"query\":\"abu_agent\"}}}";
         match parse_anthropic_sse_event(query_line) {
             Some(AnthropicSseEvent::WebSearch(ws)) => {
-                assert_eq!(ws.queries, vec!["kivio".to_string()]);
+                assert_eq!(ws.queries, vec!["abu_agent".to_string()]);
                 assert!(ws.citations.is_empty());
             }
             _ => panic!("expected WebSearch query increment"),
@@ -2357,7 +2357,7 @@ mod tests {
             "content": [
                 {"type": "thinking", "thinking": "Plan"},
                 {"type": "text", "text": "Answer"},
-                {"type": "tool_use", "id": "toolu_1", "name": "web_search", "input": {"query": "kivio"}}
+                {"type": "tool_use", "id": "toolu_1", "name": "web_search", "input": {"query": "abu_agent"}}
             ],
             "stop_reason": "tool_use",
             "usage": {"input_tokens": 7, "output_tokens": 11}
@@ -2382,7 +2382,7 @@ mod tests {
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}",
             "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"web_search\",\"input\":{}}}",
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\"\"}}",
-            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\":\\\"kivio\\\"}\"}}",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\":\\\"abu_agent\\\"}\"}}",
             "data: {\"type\":\"content_block_stop\"}",
             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}",
         ];
@@ -2419,7 +2419,7 @@ mod tests {
         let call = assemble_tool_call_from_stream("toolu_123", "web_search", &input_parts);
 
         assert_eq!(call.function_name, "web_search");
-        assert_eq!(call.arguments["query"], "kivio");
+        assert_eq!(call.arguments["query"], "abu_agent");
         assert!(call.arguments_parse_error.is_none());
     }
 }

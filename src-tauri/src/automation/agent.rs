@@ -247,7 +247,7 @@ async fn run_builtin_agent_node(
     let state = app.state::<AppState>();
     let state: &AppState = &state;
     let settings = state.settings_read().clone();
-    let (provider_id, model) = resolve_kivio_model(&settings, spec)?;
+    let (provider_id, model) = resolve_abu_agent_model(&settings, spec)?;
     let provider = settings
         .get_provider(&provider_id)
         .filter(|p| p.enabled && !p.api_keys.is_empty())
@@ -415,7 +415,7 @@ async fn run_builtin_agent_node(
     }
 }
 
-fn resolve_kivio_model(
+fn resolve_abu_agent_model(
     settings: &crate::settings::Settings,
     spec: &AgentSpec,
 ) -> Result<(String, String), String> {

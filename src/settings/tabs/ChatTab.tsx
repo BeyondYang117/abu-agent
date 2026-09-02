@@ -105,9 +105,9 @@ export function ChatTab({
       </SettingsGroup>
 
       {/* ─── ABU Agent Agent ─── */}
-      <SettingsGroup title={t.kivioAgentSection}>
-        {t.kivioAgentSectionHint ? (
-          <p className="kv-row-desc mb-2 px-0">{t.kivioAgentSectionHint}</p>
+      <SettingsGroup title={t.abuAgentSection}>
+        {t.abuAgentSectionHint ? (
+          <p className="kv-row-desc mb-2 px-0">{t.abuAgentSectionHint}</p>
         ) : null}
 
         <SettingRow label={lang === 'zh' ? '普通对话工作目录' : 'Conversation workspace'} stack>
@@ -195,7 +195,7 @@ export function ChatTab({
         </SettingRow>
 
         <PromptField
-          label={t.kivioChatAgentSystemPrompt}
+          label={t.abuAgentChatSystemPrompt}
           description={t.chatSystemPromptHint}
           value={chatConfig.systemPrompt || ''}
           defaultText={chatDefaults || ''}
@@ -216,14 +216,14 @@ export function ChatTab({
       />
 
       {/* ─── ABU Agent Chat ─── */}
-      <SettingsGroup title={t.kivioChatSection}>
-        {t.kivioChatSectionHint ? (
-          <p className="kv-row-desc mb-1 px-0">{t.kivioChatSectionHint}</p>
+      <SettingsGroup title={t.abuAgentChatSection}>
+        {t.abuAgentChatSectionHint ? (
+          <p className="kv-row-desc mb-1 px-0">{t.abuAgentChatSectionHint}</p>
         ) : null}
 
         <PromptField
-          label={t.kivioChatSystemPrompt}
-          description={t.kivioChatSystemPromptHint}
+          label={t.abuAgentChatSystemPrompt}
+          description={t.abuAgentChatSystemPromptHint}
           value={chatMode.systemPrompt || ''}
           defaultText={chatRuntimeDefaults || ''}
           restoreLabel={t.restoreDefaultPrompt}
@@ -232,8 +232,8 @@ export function ChatTab({
 
 
         <SettingRow
-          label={t.kivioChatWebSearch}
-          description={t.kivioChatWebSearchHint}
+          label={t.abuAgentChatWebSearch}
+          description={t.abuAgentChatWebSearchHint}
         >
           <Toggle
             checked={Boolean(chatMode.webSearch)}
@@ -241,8 +241,8 @@ export function ChatTab({
           />
         </SettingRow>
         <SettingRow
-          label={t.kivioChatWebFetch}
-          description={t.kivioChatWebFetchHint}
+          label={t.abuAgentChatWebFetch}
+          description={t.abuAgentChatWebFetchHint}
         >
           <Toggle
             checked={Boolean(chatMode.webFetch)}
@@ -250,8 +250,8 @@ export function ChatTab({
           />
         </SettingRow>
         <SettingRow
-          label={t.kivioChatKnowledge}
-          description={t.kivioChatKnowledgeHint}
+          label={t.abuAgentChatKnowledge}
+          description={t.abuAgentChatKnowledgeHint}
         >
           <Toggle
             checked={Boolean(chatMode.knowledgeSearch)}
@@ -259,8 +259,8 @@ export function ChatTab({
           />
         </SettingRow>
         <SettingRow
-          label={t.kivioChatMemory}
-          description={t.kivioChatMemoryHint}
+          label={t.abuAgentChatMemory}
+          description={t.abuAgentChatMemoryHint}
         >
           <Toggle
             checked={Boolean(chatMode.memoryTools)}
@@ -268,8 +268,8 @@ export function ChatTab({
           />
         </SettingRow>
         <SettingRow
-          label={t.kivioChatMcpReadonly}
-          description={t.kivioChatMcpReadonlyHint}
+          label={t.abuAgentChatMcpReadonly}
+          description={t.abuAgentChatMcpReadonlyHint}
         >
           <Toggle
             checked={Boolean(chatMode.mcpReadOnly)}

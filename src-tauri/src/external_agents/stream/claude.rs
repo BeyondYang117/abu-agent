@@ -1012,10 +1012,10 @@ impl ClaudeStreamState {
                     // 就有 4 条，且 `hook_response.stdout` 会把整个 SessionStart 注入内容
                     // （本机实测 ~4KB 提示词全文）搬进流里——落进气泡就是刷屏。
                     // hook **失败**也无需在这里补：`outcome: "error"` 时 claude 自己会在
-                    // 后续帧里反映影响，而 Kivio 无法对别人的 hook 做任何有意义的处置。
+                    // 后续帧里反映影响，而 ABU Agent 无法对别人的 hook 做任何有意义的处置。
                     //
                     // `files_persisted`（`SDKFilesPersistedEvent`）：SDK 的文件上传通道产物，
-                    // Kivio 走本地 cwd + `--add-dir`，不用该通道，恒不出现。
+                    // ABU Agent 走本地 cwd + `--add-dir`，不用该通道，恒不出现。
                     //
                     // `task_updated` / `background_tasks_changed`：
                     // ponytail: 面板已有 started + progress + notification 三个信号，够画
@@ -1311,7 +1311,7 @@ impl ClaudeStreamState {
             // 走 `TextDelta` 则把它混进回答正文（它不是模型的回答）。两种都比不接更糟。
             //
             // `auth_status` / `keep_alive`：SDK 的 WebSocket/交互式登录通道产物，
-            // Kivio 走一次性子进程 + stdio，实测不出现。
+            // ABU Agent 走一次性子进程 + stdio，实测不出现。
             //
             // 未知 / 未来新增 type 一律安全忽略：不 panic、不中断流（spec 第 10 条）。
             _ => {}
@@ -2441,7 +2441,7 @@ mod tests {
     // ---- A2：零用量的 result 不许把分子清零 ----
 
     /// **本轮修复的核心**：没有 LLM 往返的轮次（未登录 / `/help` / 未知斜杠命令 /
-    /// Kivio 自己发的 `/compact`）返回 `iterations: []` + 顶层四字段全 0。
+    /// ABU Agent 自己发的 `/compact`）返回 `iterations: []` + 顶层四字段全 0。
     /// 不守就会产出 `total_tokens: Some(0)` 并落盘，`context.rs` 的 `is_some()` 判据命中它
     /// ⇒ 用量条从 47K 掉到 0。
     #[test]
@@ -3394,7 +3394,7 @@ mod live_tests {
     #[tokio::test]
     #[ignore = "spawns the real claude CLI and costs tokens; verifies --append-system-prompt-file survives turn 2"]
     async fn live_append_system_prompt_file_still_applies_on_the_second_turn() {
-        const SENTINEL: &str = "KIVIO-SENTINEL-8317";
+        const SENTINEL: &str = "ABU_AGENT-SENTINEL-8317";
         let Some(def) = get_agent_def("claude") else {
             eprintln!("SKIP: 没有 claude agent def");
             return;
@@ -3405,10 +3405,10 @@ mod live_tests {
         };
 
         let dir = std::env::temp_dir();
-        let prompt_file = dir.join(format!("kivio-extsys-live-{}.md", std::process::id()));
+        let prompt_file = dir.join(format!("abu-agent-extsys-live-{}.md", std::process::id()));
         std::fs::write(
             &prompt_file,
-            format!("Your Kivio session code is {SENTINEL}. When the user asks for the session code, reply with exactly that code and nothing else."),
+            format!("Your ABU Agent session code is {SENTINEL}. When the user asks for the session code, reply with exactly that code and nothing else."),
         )
         .expect("write system prompt file");
 
@@ -3451,7 +3451,7 @@ mod live_tests {
         }
         eprintln!("第一轮回答：{}", first.text.trim());
 
-        write_user(&mut child, "What is your Kivio session code?").await;
+        write_user(&mut child, "What is your ABU Agent session code?").await;
         let second = read_round(&mut lines).await;
         let _ = child.start_kill();
         let _ = std::fs::remove_file(&prompt_file);

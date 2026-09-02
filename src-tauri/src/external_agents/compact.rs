@@ -33,7 +33,7 @@ pub async fn request_external_compaction(
         .ok_or_else(|| "未选择外部 Agent".to_string())?;
     let compact_prompt = compact_prompt_for_agent(&agent_id).ok_or_else(|| {
         format!(
-            "{} 不支持从 Kivio 手动触发压缩，请在该 CLI 内使用其自带的 context 命令。",
+            "{} 不支持从 ABU Agent 手动触发压缩，请在该 CLI 内使用其自带的 context 命令。",
             get_agent_def(&agent_id)
                 .map(|def| def.name)
                 .unwrap_or(agent_id.as_str())

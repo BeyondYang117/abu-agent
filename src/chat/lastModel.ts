@@ -3,7 +3,7 @@
  * 以聊天界面的选择为准，不再单独设「Chat 默认模型」。仅前端偏好，存 localStorage。
  */
 
-export const LAST_MODEL_KEY = 'kivio.chat.lastModel'
+export const LAST_MODEL_KEY = 'abu_agent.chat.lastModel'
 
 export type ChatModelBinding = {
   providerId: string

@@ -47,7 +47,7 @@ impl ClassifiedError {
                 .unwrap_or_default();
             let fence = "`".repeat(longest_run.saturating_add(1).max(3));
             out.push_str(&format!(
-                "\n\n{fence}kivio-error-details\n{detail}\n{fence}"
+                "\n\n{fence}abu-agent-error-details\n{detail}\n{fence}"
             ));
         }
         out
@@ -382,7 +382,7 @@ mod tests {
         let bubble = c.render_bubble();
         // Main text is actionable; raw diagnostics use the frontend's safe disclosure block.
         assert!(bubble.starts_with("Grok CLI 未登录"));
-        assert!(bubble.contains("```kivio-error-details"));
+        assert!(bubble.contains("```abu-agent-error-details"));
         assert!(!bubble.contains("<details>"));
         assert!(bubble.contains("session-new: Authentication required"));
         assert!(bubble.contains("boom stderr"));
@@ -404,7 +404,7 @@ mod tests {
     fn detail_fence_expands_past_embedded_backticks() {
         let c = classify("protocol failed", None, "stderr with ``` inside", "pi");
         let bubble = c.render_bubble();
-        assert!(bubble.contains("````kivio-error-details"));
+        assert!(bubble.contains("````abu-agent-error-details"));
         assert!(bubble.ends_with("````"));
     }
 

@@ -115,7 +115,7 @@ pub struct McpSession {
     /// stdio 子进程 pid（HTTP 为 `None`）。`RunningService` 之后拿不到子进程句柄，
     /// 而「超时没杀掉健康子进程」「退出不留孤儿」这两条契约得靠 pid 才能断言。
     pub child_pid: Option<u32>,
-    /// 服务器侧 `tools/list_changed` 计数器（由 `conn::KivioClientHandler` 递增）。
+    /// 服务器侧 `tools/list_changed` 计数器（由 `conn::AbuAgentClientHandler` 递增）。
     /// 和 `transport` 一起换，`None` 时不参与比较。
     revision_source: Option<Arc<std::sync::atomic::AtomicU64>>,
     /// stderr 尾巴任务，换连接时 abort 掉旧的。
@@ -1707,16 +1707,16 @@ mod tests {
 
         /// 写一个 fake stdio MCP server python 脚本到临时文件，返回脚本路径。
         /// 协议：逐行读 JSON-RPC；initialize/tools/list/tools/call 各自回包；
-        /// 无 id 的通知忽略。若设置 `KIVIO_DIE_AFTER_CALL=N`，在第 N 次 tools/call 回包后退出，
+        /// 无 id 的通知忽略。若设置 `ABU_AGENT_DIE_AFTER_CALL=N`，在第 N 次 tools/call 回包后退出，
         /// 用于模拟子进程死亡 → 透明重连。
-        /// `KIVIO_DELAY_CALL_MS=N`：响应 tools/call 前先 sleep N 毫秒（模拟慢但健康的工具）。
-        /// `KIVIO_CALL_MARKER=path`：每次执行 tools/call 时往该文件追加一行（统计实际执行次数）。
+        /// `ABU_AGENT_DELAY_CALL_MS=N`：响应 tools/call 前先 sleep N 毫秒（模拟慢但健康的工具）。
+        /// `ABU_AGENT_CALL_MARKER=path`：每次执行 tools/call 时往该文件追加一行（统计实际执行次数）。
         fn write_fake_server() -> std::path::PathBuf {
             let script = r#"#!/usr/bin/env python3
 import sys, json, os, time
-die_after = int(os.environ.get("KIVIO_DIE_AFTER_CALL", "0"))
-delay_ms = int(os.environ.get("KIVIO_DELAY_CALL_MS", "0"))
-marker = os.environ.get("KIVIO_CALL_MARKER", "")
+die_after = int(os.environ.get("ABU_AGENT_DIE_AFTER_CALL", "0"))
+delay_ms = int(os.environ.get("ABU_AGENT_DELAY_CALL_MS", "0"))
+marker = os.environ.get("ABU_AGENT_CALL_MARKER", "")
 calls = 0
 while True:
     line = sys.stdin.readline()
@@ -1765,7 +1765,7 @@ while True:
     sys.stdout.flush()
 "#;
             let mut path = std::env::temp_dir();
-            path.push(format!("kivio-fake-mcp-{}.py", uuid::Uuid::new_v4()));
+            path.push(format!("abu-agent-fake-mcp-{}.py", uuid::Uuid::new_v4()));
             let mut file = std::fs::File::create(&path).expect("create fake server");
             file.write_all(script.as_bytes())
                 .expect("write fake server");
@@ -1814,16 +1814,16 @@ while True:
 
             let mut marker = std::env::temp_dir();
             marker.push(format!(
-                "kivio-fake-mcp-marker-{}.txt",
+                "abu-agent-fake-mcp-marker-{}.txt",
                 uuid::Uuid::new_v4()
             ));
 
             let mut server = python_server(&script);
             server
                 .env
-                .insert("KIVIO_DELAY_CALL_MS".to_string(), "2500".to_string());
+                .insert("ABU_AGENT_DELAY_CALL_MS".to_string(), "2500".to_string());
             server.env.insert(
-                "KIVIO_CALL_MARKER".to_string(),
+                "ABU_AGENT_CALL_MARKER".to_string(),
                 marker.to_string_lossy().into_owned(),
             );
 
@@ -1918,7 +1918,7 @@ while True:
             // server 在第 1 次 tools/call 后退出 → 第 2 次调用探活发现死连接 → 透明重连。
             server
                 .env
-                .insert("KIVIO_DIE_AFTER_CALL".to_string(), "1".to_string());
+                .insert("ABU_AGENT_DIE_AFTER_CALL".to_string(), "1".to_string());
 
             let first = state
                 .mcp_call_tool(None, &server, "echo", serde_json::json!({ "text": "a" }))
@@ -2145,8 +2145,8 @@ while True:
         fn write_fake_server() -> std::path::PathBuf {
             let script = r#"#!/usr/bin/env python3
 import sys, json, os, time
-delay_ms = int(os.environ.get("KIVIO_DELAY_CALL_MS", "0"))
-marker = os.environ.get("KIVIO_CALL_MARKER", "")
+delay_ms = int(os.environ.get("ABU_AGENT_DELAY_CALL_MS", "0"))
+marker = os.environ.get("ABU_AGENT_CALL_MARKER", "")
 changed = False
 while True:
     line = sys.stdin.readline()
@@ -2222,7 +2222,7 @@ while True:
     sys.stdout.flush()
 "#;
             let mut path = std::env::temp_dir();
-            path.push(format!("kivio-fake-mcp-xplat-{}.py", uuid::Uuid::new_v4()));
+            path.push(format!("abu-agent-fake-mcp-xplat-{}.py", uuid::Uuid::new_v4()));
             let mut file = std::fs::File::create(&path).expect("create fake server");
             file.write_all(script.as_bytes())
                 .expect("write fake server");
@@ -2237,7 +2237,7 @@ while True:
         /// （规范把这个方法删掉了），只认 `server/discover`。
         ///
         /// 现实中这种服务器还不存在，所以这条路只能这么验 —— 而它正是本次改动要防的那件事：
-        /// 不做的话，将来第一台这样的服务器出现时 Kivio 是**连不上**，不是降级。
+        /// 不做的话，将来第一台这样的服务器出现时 ABU Agent 是**连不上**，不是降级。
         fn write_discover_only_server() -> std::path::PathBuf {
             let script = r#"#!/usr/bin/env python3
 import sys, json
@@ -2272,7 +2272,7 @@ while True:
 "#;
             let mut path = std::env::temp_dir();
             path.push(format!(
-                "kivio-fake-mcp-discover-{}.py",
+                "abu-agent-fake-mcp-discover-{}.py",
                 uuid::Uuid::new_v4()
             ));
             let mut file = std::fs::File::create(&path).expect("create discover-only server");
@@ -2316,7 +2316,7 @@ while True:
         #[tokio::test]
         async fn a_server_that_cannot_start_is_not_retried_with_the_new_protocol() {
             let state = test_app_state();
-            let server = stdio_server("kivio-definitely-not-a-real-binary", &[]);
+            let server = stdio_server("abu-agent-definitely-not-a-real-binary", &[]);
             let err = state
                 .mcp_list_tools(None, &server)
                 .await
@@ -2331,10 +2331,10 @@ while True:
             let state = std::sync::Arc::new(test_app_state());
             state.settings_write().chat_tools.tool_timeout_ms = 1_000;
             let mut marker = std::env::temp_dir();
-            marker.push(format!("kivio-fake-mcp-hol-{}.txt", uuid::Uuid::new_v4()));
+            marker.push(format!("abu-agent-fake-mcp-hol-{}.txt", uuid::Uuid::new_v4()));
             let mut server = python_server(&script);
             server.env.insert(
-                "KIVIO_CALL_MARKER".to_string(),
+                "ABU_AGENT_CALL_MARKER".to_string(),
                 marker.to_string_lossy().into_owned(),
             );
 
@@ -2401,10 +2401,10 @@ while True:
             let script = write_fake_server();
             let state = test_app_state();
             let mut marker = std::env::temp_dir();
-            marker.push(format!("kivio-fake-mcp-ping-{}.txt", uuid::Uuid::new_v4()));
+            marker.push(format!("abu-agent-fake-mcp-ping-{}.txt", uuid::Uuid::new_v4()));
             let mut server = python_server(&script);
             server.env.insert(
-                "KIVIO_CALL_MARKER".to_string(),
+                "ABU_AGENT_CALL_MARKER".to_string(),
                 marker.to_string_lossy().into_owned(),
             );
 
@@ -2524,7 +2524,7 @@ while True:
             );
 
             let mut changed = server.clone();
-            changed.command = "kivio-definitely-missing-cmd".to_string();
+            changed.command = "abu-agent-definitely-missing-cmd".to_string();
             state
                 .mcp_list_tools(None, &changed)
                 .await
@@ -2545,7 +2545,7 @@ while True:
         #[tokio::test]
         async fn discovery_failures_are_throttled_but_explicit_connect_can_retry() {
             let state = test_app_state();
-            let server = stdio_server("kivio-definitely-missing-cmd", &[]);
+            let server = stdio_server("abu-agent-definitely-missing-cmd", &[]);
 
             state
                 .mcp_list_tools(None, &server)
@@ -2590,7 +2590,7 @@ while True:
         #[tokio::test]
         async fn never_connected_error_server_is_unreachable() {
             let state = test_app_state();
-            let server = stdio_server("kivio-definitely-missing-cmd", &[]);
+            let server = stdio_server("abu-agent-definitely-missing-cmd", &[]);
             assert!(
                 state.mcp_get_or_connect(None, &server).await.is_err(),
                 "missing command must fail"
@@ -2622,7 +2622,7 @@ while True:
             let mut server = python_server(&script);
             server
                 .env
-                .insert("KIVIO_DELAY_CALL_MS".to_string(), "2500".to_string());
+                .insert("ABU_AGENT_DELAY_CALL_MS".to_string(), "2500".to_string());
 
             let err = state
                 .mcp_call_tool(None, &server, "echo", serde_json::json!({ "text": "slow" }))

@@ -55,7 +55,7 @@ pub(crate) async fn run_chat_probe(
     state: &State<'_, AppState>,
     req: &ProbeRequest,
 ) -> Result<ProbeRun, ProbeRunError> {
-    const PROBE_PROJECT_ID: &str = "proj_kivio_probe";
+    const PROBE_PROJECT_ID: &str = "proj_abu_agent_probe";
     let resume_id = req
         .conversation_id
         .as_deref()

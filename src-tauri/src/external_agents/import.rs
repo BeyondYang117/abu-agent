@@ -28,9 +28,9 @@ pub struct ImportableSession {
     pub message_count: Option<usize>,
     /// 由本模块导入进来的。
     pub already_imported: bool,
-    /// 已经有 Kivio 对话绑着这条原生会话时，那条对话的 id。
+    /// 已经有 ABU Agent 对话绑着这条原生会话时，那条对话的 id。
     ///
-    /// **不等于"已导入"**：Kivio 自己创建的外部 CLI 对话运行时也会写绑定。两种都不能再导入
+    /// **不等于"已导入"**：ABU Agent 自己创建的外部 CLI 对话运行时也会写绑定。两种都不能再导入
     /// （绑定是 1:1 的），但界面上要说不同的话，并且都能点进去。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bound_conversation_id: Option<String>,
@@ -647,20 +647,20 @@ pub fn load_import_record(app: &tauri::AppHandle, conversation_id: &str) -> Opti
     serde_json::from_str(&raw).ok()
 }
 
-/// 已经有 Kivio 对话绑着的 `(agent_id, session_id)` → 绑定信息。
+/// 已经有 ABU Agent 对话绑着的 `(agent_id, session_id)` → 绑定信息。
 ///
 /// **注意这里有两种来源，含义不同**：
-/// - Kivio 自己创建的外部 CLI 对话，运行时就写了 `conv_*.json` / `live-*.json`；
+/// - ABU Agent 自己创建的外部 CLI 对话，运行时就写了 `conv_*.json` / `live-*.json`；
 /// - 本模块导入进来的，额外写了一份 `imported-*.json`。
 ///
-/// 两种都不能再导入（会话绑定是 1:1 的，两条 Kivio 对话绑同一条原生会话会让双方快照都残缺），
-/// 但**界面上要说不同的话**——把 Kivio 自己跑出来的会话标成"已导入"是在撒谎，用户根本没导过。
+/// 两种都不能再导入（会话绑定是 1:1 的，两条 ABU Agent 对话绑同一条原生会话会让双方快照都残缺），
+/// 但**界面上要说不同的话**——把 ABU Agent 自己跑出来的会话标成"已导入"是在撒谎，用户根本没导过。
 ///
 /// 直接扫绑定文件而不是另维护索引：绑定文件才是真相源，多一份索引就多一个会不一致的地方。
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoundConversation {
     pub conversation_id: String,
-    /// `true` = 由本模块导入；`false` = Kivio 自己创建该对话时产生的绑定。
+    /// `true` = 由本模块导入；`false` = ABU Agent 自己创建该对话时产生的绑定。
     pub imported: bool,
 }
 
@@ -714,7 +714,7 @@ pub fn bound_sessions(
 /// `bound_sessions` 的纯函数内核：把 `(文件名, JSON)` 分类成绑定表。
 ///
 /// 抽出来是因为**这里出过一次真 bug**：早期版本把所有绑定文件一律当成"已导入"，于是
-/// Kivio 自己跑出来的会话在导入列表里被标成"已导入"，而用户从没导过它。
+/// ABU Agent 自己跑出来的会话在导入列表里被标成"已导入"，而用户从没导过它。
 fn classify_binding_files(
     files: &[(String, serde_json::Value)],
 ) -> std::collections::HashMap<(String, String), BoundConversation> {
@@ -992,7 +992,7 @@ pub async fn import_one_session(
         id: conversation_id.clone(),
         revision: 0,
         title,
-        // 外部 CLI 对话不走 Kivio provider（ADR-0001），这两个字段留空。
+        // 外部 CLI 对话不走 ABU Agent provider（ADR-0001），这两个字段留空。
         provider_id: String::new(),
         model: String::new(),
         messages: chat_messages,
@@ -1101,10 +1101,10 @@ fn source_title(agent_id: &str, source: Option<&Path>) -> Option<String> {
     }
 }
 
-/// 一条**外部 CLI 对话**（不论是导入的还是 Kivio 自己创建的）在 CLI 那边的标题。
+/// 一条**外部 CLI 对话**（不论是导入的还是 ABU Agent 自己创建的）在 CLI 那边的标题。
 ///
 /// **为什么需要**：`resolve_conversation_title` 是拿 `conversation.provider_id`/`model` 去调模型
-/// 生成标题的，而外部 CLI 对话这两个字段是空的（ADR-0001：不归属任何 Kivio provider），
+/// 生成标题的，而外部 CLI 对话这两个字段是空的（ADR-0001：不归属任何 ABU Agent provider），
 /// 于是必然落到 `generate_title(第一句用户消息)` 兜底——用户看到的标题永远是自己问的第一句话。
 /// CLI 自己已经生成了标题，读它既准确又不花一次模型调用。
 ///
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn claude_identity_skips_leading_non_cwd_entries() {
-        let dir = std::env::temp_dir().join(format!("kivio-import-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-import-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("s.jsonl");
         // 实测开头确实可能是 queue-operation 这类不带 cwd 的记录。
@@ -1235,7 +1235,7 @@ mod tests {
 
     #[test]
     fn claude_detail_counts_messages_and_skips_sidechain() {
-        let dir = std::env::temp_dir().join(format!("kivio-import-test2-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-import-test2-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("s.jsonl");
         std::fs::write(
@@ -1266,11 +1266,11 @@ mod tests {
     }
 
     /// 拿本机真实的 `~/.claude/projects` 跑一遍。默认不跑（依赖本机数据）。
-    /// `cargo test --lib external_agents::import -- --ignored --nocapture KIVIO_IMPORT_ROOT=<项目根>`
+    /// `cargo test --lib external_agents::import -- --ignored --nocapture ABU_AGENT_IMPORT_ROOT=<项目根>`
     #[test]
     #[ignore]
     fn smoke_list_claude_sessions_against_real_home() {
-        let root = std::env::var("KIVIO_IMPORT_ROOT")
+        let root = std::env::var("ABU_AGENT_IMPORT_ROOT")
             .unwrap_or_else(|_| std::env::current_dir().unwrap().display().to_string());
         let sessions = list_claude_sessions(&root);
         println!("项目根 {root} 命中 {} 条 claude 会话", sessions.len());
@@ -1290,8 +1290,8 @@ mod tests {
     }
 
     #[test]
-    fn kivio_own_session_is_bound_but_not_imported() {
-        // 这是上线后第一个真 bug：Kivio 自己驱动 claude 跑出来的会话，在导入列表里被标成
+    fn abu_agent_own_session_is_bound_but_not_imported() {
+        // 这是上线后第一个真 bug：ABU Agent 自己驱动 claude 跑出来的会话，在导入列表里被标成
         // "已导入"——用户从没导过它。绑定文件存在 ≠ 导入过。
         let files = vec![(
             "conv_ad015aa2.json".to_string(),
@@ -1307,7 +1307,7 @@ mod tests {
             .get(&("claude".to_string(), "1433c5e7".to_string()))
             .expect("应该识别为已绑定");
         assert_eq!(hit.conversation_id, "conv_ad015aa2");
-        assert!(!hit.imported, "Kivio 自己创建的会话不是导入来的");
+        assert!(!hit.imported, "ABU Agent 自己创建的会话不是导入来的");
     }
 
     #[test]
@@ -1406,7 +1406,7 @@ mod tests {
 
     #[test]
     fn codex_detail_counts_user_and_assistant_but_not_developer() {
-        let dir = std::env::temp_dir().join(format!("kivio-import-codex-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-import-codex-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rollout.jsonl");
         std::fs::write(
@@ -1435,7 +1435,7 @@ mod tests {
     #[test]
     #[ignore]
     fn smoke_list_file_based_sessions_against_real_home() {
-        let root = std::env::var("KIVIO_IMPORT_ROOT")
+        let root = std::env::var("ABU_AGENT_IMPORT_ROOT")
             .unwrap_or_else(|_| std::env::current_dir().unwrap().display().to_string());
         let sessions = list_file_based_sessions(&root);
         let mut by_agent = std::collections::BTreeMap::new();
@@ -1459,11 +1459,11 @@ mod tests {
     }
 
     /// ACP 枚举跑真实数据。默认不跑（要起 CLI 进程）。
-    /// `KIVIO_IMPORT_ROOT=<项目根> cargo test --lib external_agents::import::tests::smoke_acp -- --ignored --nocapture`
+    /// `ABU_AGENT_IMPORT_ROOT=<项目根> cargo test --lib external_agents::import::tests::smoke_acp -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
     async fn smoke_list_acp_sessions_against_real_clis() {
-        let root = std::env::var("KIVIO_IMPORT_ROOT")
+        let root = std::env::var("ABU_AGENT_IMPORT_ROOT")
             .unwrap_or_else(|_| std::env::current_dir().unwrap().display().to_string());
         for agent in ACP_IMPORT_AGENTS {
             match list_acp_sessions(agent, &root).await {

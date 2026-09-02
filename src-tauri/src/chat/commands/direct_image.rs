@@ -11,7 +11,7 @@ use super::interaction::{emit_chat_stream_delta, wait_for_chat_cancel};
 use super::messages::{plain_text_segment, push_assistant_message};
 use super::{agent_run_entry_label, Conversation};
 
-const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]";
+const DIRECT_IMAGE_GENERATION_PENDING: &str = "[[ABU_AGENT_DIRECT_IMAGE_GENERATION_PENDING]]";
 
 pub(super) async fn complete_direct_image_generation_reply(
     app: &AppHandle,

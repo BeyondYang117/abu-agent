@@ -1,13 +1,13 @@
 //! 第三方供应商（中转站）的落地层：把设置页里选中的供应商变成**子进程能看见的东西**。
 //!
-//! Claude / Codex 继续使用 Kivio 私有配置；OpenCode / Pi / Grok 按各自官方约定写入原生配置：
+//! Claude / Codex 继续使用 ABU Agent 私有配置；OpenCode / Pi / Grok 按各自官方约定写入原生配置：
 //!
 //! 1. **环境变量** —— claude / gemini / 其余 env 系直接注入 `provider.env`
 //!    （出口是 `overrides::env_for` → `spawn::agent_cli_command` / `cli_command`）。
 //! 2. **claude 的 `--settings` 压制** —— 光注入环境变量**不够**：Claude Code 会把
 //!    `~/.claude/settings.json` 的 `env` 段注入自己进程，盖掉继承来的同名变量。用户那份
 //!    文件通常已被 cc-switch 写满了 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`，
-//!    于是「在 Kivio 里选了供应商却还是走老中转站」。所以额外物化一份只含 `{"env": …}`
+//!    于是「在 ABU Agent 里选了供应商却还是走老中转站」。所以额外物化一份只含 `{"env": …}`
 //!    的文件用 `--settings` 传进去，并把本供应商**没设的路由键补成空串**显式压掉。
 //!    聊天里选的模型按 cc-switch live 口径写入 `~/.claude/settings.json`：顶层 `model` +
 //!    `env.ANTHROPIC_MODEL`（能认出档位时再写对应 `ANTHROPIC_DEFAULT_*_MODEL`）。凭证 /
@@ -17,10 +17,10 @@
 //!    用户自己的 `~/.codex` 凭证与供应商表不动。聊天里选的模型按 cc-switch live 口径写入
 //!    `~/.codex/config.toml` 顶层 `model`（文件已存在时），并同步 CLI 正在读的那份
 //!    （挂了中转 = 私有 home）。**会话 jsonl** 仍接到用户 `~/.codex/sessions`，这样
-//!    Codex CLI / TUI 的 `/resume` 能看见 Kivio 里聊过的原生会话。WSL 二进制在没有
+//!    Codex CLI / TUI 的 `/resume` 能看见 ABU Agent 里聊过的原生会话。WSL 二进制在没有
 //!    私有 home 时直接把 `CODEX_HOME` 指到 Windows 的 `~/.codex`。
-//! 4. **opencode / pi 的原生配置** —— 字段级合并 Kivio 管理的 provider、凭据与默认模型；
-//!    其他 provider 和顶层设置原样保留。切回「CLI 自身配置」时恢复 Kivio 接管前的默认模型。
+//! 4. **opencode / pi 的原生配置** —— 字段级合并 ABU Agent 管理的 provider、凭据与默认模型；
+//!    其他 provider 和顶层设置原样保留。切回「CLI 自身配置」时恢复 ABU Agent 接管前的默认模型。
 //! 5. **grok 的 `~/.grok/config.toml`** —— 与 cc-switch 一样落盘（Grok 没有 env 通道，
 //!    base_url 只能写进 config.toml）。把供应商的 `config_toml` 里的 `[models]` /
 //!    `[model.*]` 合并进现有文件，marketplace / ui / cli 等用户段原样保留；首次接管前
@@ -29,14 +29,14 @@
 //!    shell 环境变量）。把供应商片段里的 `default_model` / `[providers.*]` / `[models.*]`
 //!    合并进现有文件；`managed:kimi-code` OAuth 段与其它用户配置原样保留。首次接管前
 //!    整份备份，切回「CLI 自身配置」时还原。
-//! 7. **dsh 的 Kivio 私有 profile** —— provider 本体由 `dsh_profile.rs` 写进
-//!    `profiles/kivio/cordis.patch.yml` 的 `llm-pi-ai.providers`；本层把 `apiKeyEnv`
-//!    指向的 Key 注入 Kivio 启动的进程。`settings.yaml` 只回写已存在路由上的模型
+//! 7. **dsh 的 ABU Agent 私有 profile** —— provider 本体由 `dsh_profile.rs` 写进
+//!    `profiles/abu_agent/cordis.patch.yml` 的 `llm-pi-ai.providers`；本层把 `apiKeyEnv`
+//!    指向的 Key 注入 ABU Agent 启动的进程。`settings.yaml` 只回写已存在路由上的模型
 //!    `input` / `defaultInput` / `reasoningEfforts`（官方 web 贴图与 effort 门控），
 //!    不新建供应商、不写密钥。
 //!
 //! 物化时机是**保存 / 切换供应商那一次**（`commands::chat_external_cli_provider_apply`），
-//! 不是每轮。ccgui 用的是 per-turn 临时目录 + `Drop` 删除，那套在 Kivio 会把常驻 claude
+//! 不是每轮。ccgui 用的是 per-turn 临时目录 + `Drop` 删除，那套在 ABU Agent 会把常驻 claude
 //! 会话中途要读的文件删掉。代价是文件长期留在 app data 里（0600，与 settings.json 里
 //! 本来就明文存 key 同一威胁模型）。
 use std::collections::{HashMap, HashSet};
@@ -212,7 +212,7 @@ fn codex_home_for(provider_id: &str) -> Option<PathBuf> {
     Some(profiles_dir()?.join(format!("codex-{}", sanitize_segment(provider_id)?)))
 }
 
-/// Codex CLI / TUI 读的那份用户 home（`~/.codex`）。Kivio 进程在 Windows 上时就是
+/// Codex CLI / TUI 读的那份用户 home（`~/.codex`）。ABU Agent 进程在 Windows 上时就是
 /// `%USERPROFILE%\.codex`，与用户在终端里跑 `codex` 看到的是同一处。
 pub fn native_codex_home() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|base| base.home_dir().join(".codex"))
@@ -236,7 +236,7 @@ pub fn ensure_private_codex_sessions_shared() {
         return;
     };
     let home = PathBuf::from(home);
-    if !is_kivio_private_codex_home(&home) {
+    if !is_abu_agent_private_codex_home(&home) {
         return;
     }
     if let Err(err) = share_codex_sessions_with_user_home(&home) {
@@ -342,7 +342,7 @@ pub fn materialize(agent_id: &str) -> Result<(), String> {
             .into_iter()
             .filter(|provider| !provider.disabled)
             .collect();
-        return crate::external_agents::dsh_plugins::sync_kivio_model_capabilities(&providers);
+        return crate::external_agents::dsh_plugins::sync_abu_agent_model_capabilities(&providers);
     }
     let Some(provider) = super::overrides::active_provider(agent_id) else {
         return Ok(());
@@ -453,7 +453,7 @@ fn materialize_codex(provider: &ExternalCliProvider) -> Result<(), String> {
 }
 
 /// 私有 `CODEX_HOME` 只承载中转 config/auth；把 `sessions/` 接到用户 `~/.codex/sessions`，
-/// 这样 Codex CLI / TUI 默认扫描的目录里能看到 Kivio 写下的 rollout。
+/// 这样 Codex CLI / TUI 默认扫描的目录里能看到 ABU Agent 写下的 rollout。
 fn share_codex_sessions_with_user_home(private_home: &Path) -> Result<(), String> {
     let Some(user_sessions) = native_codex_home().map(|home| home.join("sessions")) else {
         return Ok(());
@@ -461,7 +461,7 @@ fn share_codex_sessions_with_user_home(private_home: &Path) -> Result<(), String
     share_codex_sessions_dir(private_home, &user_sessions)
 }
 
-fn is_kivio_private_codex_home(path: &Path) -> bool {
+fn is_abu_agent_private_codex_home(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
@@ -606,7 +606,7 @@ fn write_codex_config_preserving_chat_model(path: &Path, config_toml: &str) -> R
     Ok(())
 }
 
-/// 把 Kivio 聊天里选的模型写进 Claude / Codex 的 **cc-switch live 文件**。
+/// 把 ABU Agent 聊天里选的模型写进 Claude / Codex 的 **cc-switch live 文件**。
 ///
 /// Auto / 空 / `default` 不写：沿用文件里已有的默认。其它 CLI 无操作。
 /// 失败由调用方记日志，不阻断换模型。
@@ -896,7 +896,7 @@ fn grok_state_path() -> Option<PathBuf> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 struct GrokManagedState {
-    /// 是否已由 Kivio 接管过 `config.toml`（有备份可还原）。
+    /// 是否已由 ABU Agent 接管过 `config.toml`（有备份可还原）。
     managed: bool,
     /// 接管前整份 `config.toml` 原文；切回「CLI 自身配置」时写回。
     previous_config: Option<String>,
@@ -1666,12 +1666,12 @@ fn native_cleanup_ids(
     }
     if let Some(name) = provider_name.map(str::trim).filter(|name| !name.is_empty()) {
         if let Some(slug) = slugify_provider_key(name) {
-            push(format!("kivio-{slug}"));
+            push(format!("abu-agent-{slug}"));
             push(slug);
         }
     }
     if let Some(slug) = slugify_provider_key(provider_id) {
-        push(format!("kivio-{slug}"));
+        push(format!("abu-agent-{slug}"));
         push(slug);
     }
     ids
@@ -1701,7 +1701,7 @@ fn ensure_provider_id_available(
         existing.contains_key(&entry.native_id) && !previous_ids.contains(&entry.native_id)
     }) {
         return Err(format!(
-            "原生配置中已存在非 Kivio 管理的供应商 id：{}",
+            "原生配置中已存在非 ABU Agent 管理的供应商 id：{}",
             entry.native_id
         ));
     }
@@ -1717,7 +1717,7 @@ fn ensure_auth_id_available(
         auth.contains_key(&entry.native_id) && !previous_ids.contains(&entry.native_id)
     }) {
         return Err(format!(
-            "原生 auth.json 中已存在非 Kivio 管理的供应商 id：{}",
+            "原生 auth.json 中已存在非 ABU Agent 管理的供应商 id：{}",
             entry.native_id
         ));
     }
@@ -2188,12 +2188,12 @@ mod tests {
             alternate_configs: Vec::new(),
             auth: root.join("auth.json"),
             settings: pi.then(|| root.join("settings.json")),
-            state: root.join("kivio-state.json"),
+            state: root.join("abu-agent-state.json"),
         }
     }
 
     fn temp_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("kivio-{label}-{}", uuid::Uuid::new_v4()))
+        std::env::temp_dir().join(format!("abu-agent-{label}-{}", uuid::Uuid::new_v4()))
     }
 
     fn native_provider(
@@ -2289,9 +2289,9 @@ mod tests {
     fn native_cleanup_ids_prefer_name_slug_and_keep_legacy_aliases() {
         let ids = native_cleanup_ids("p-msoeiznl", Some("Relay One"), None);
         assert!(ids.iter().any(|id| id == "relay-one"));
-        assert!(ids.iter().any(|id| id == "kivio-relay-one"));
+        assert!(ids.iter().any(|id| id == "abu-agent-relay-one"));
         assert!(ids.iter().any(|id| id == "p-msoeiznl"));
-        assert!(ids.iter().any(|id| id == "kivio-p-msoeiznl"));
+        assert!(ids.iter().any(|id| id == "abu-agent-p-msoeiznl"));
     }
 
     #[test]
@@ -2474,7 +2474,7 @@ mod tests {
         };
 
         let err = materialize_native_at("opencode", &config, &paths).unwrap_err();
-        assert!(err.contains("非 Kivio 管理"));
+        assert!(err.contains("非 ABU Agent 管理"));
         assert_eq!(std::fs::read_to_string(&paths.config).unwrap(), original);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2708,18 +2708,18 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_removes_legacy_kivio_alias_when_deleting_by_internal_id() {
+    fn cleanup_removes_legacy_abu_agent_alias_when_deleting_by_internal_id() {
         let root = temp_root("pi-cleanup-legacy");
         let paths = test_paths(&root, true);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             &paths.config,
-            r#"{"providers":{"relay-one":{"name":"Relay"},"kivio-p-msoeiznl":{"name":"Legacy"}}}"#,
+            r#"{"providers":{"relay-one":{"name":"Relay"},"abu-agent-p-msoeiznl":{"name":"Legacy"}}}"#,
         )
         .unwrap();
         std::fs::write(
             &paths.auth,
-            r#"{"relay-one":{"type":"api_key","key":"new"},"kivio-p-msoeiznl":{"type":"api_key","key":"old"}}"#,
+            r#"{"relay-one":{"type":"api_key","key":"new"},"abu-agent-p-msoeiznl":{"type":"api_key","key":"old"}}"#,
         )
         .unwrap();
         std::fs::write(
@@ -2729,7 +2729,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             &paths.state,
-            r#"{"managedProviderIds":["relay-one","kivio-p-msoeiznl"],"defaultsManaged":false}"#,
+            r#"{"managedProviderIds":["relay-one","abu-agent-p-msoeiznl"],"defaultsManaged":false}"#,
         )
         .unwrap();
 
@@ -2737,11 +2737,11 @@ mod tests {
         let models: Value =
             serde_json::from_str(&std::fs::read_to_string(&paths.config).unwrap()).unwrap();
         assert!(models["providers"].get("relay-one").is_none());
-        assert!(models["providers"].get("kivio-p-msoeiznl").is_none());
+        assert!(models["providers"].get("abu-agent-p-msoeiznl").is_none());
         let auth: Value =
             serde_json::from_str(&std::fs::read_to_string(&paths.auth).unwrap()).unwrap();
         assert!(auth.get("relay-one").is_none());
-        assert!(auth.get("kivio-p-msoeiznl").is_none());
+        assert!(auth.get("abu-agent-p-msoeiznl").is_none());
         let state = read_managed_state(&paths.state).unwrap();
         assert!(state.managed_provider_ids.is_empty());
         let _ = std::fs::remove_dir_all(root);
@@ -2756,13 +2756,13 @@ mod tests {
         std::fs::write(&paths.auth, "{}").unwrap();
         std::fs::write(
             paths.settings.as_ref().unwrap(),
-            r#"{"defaultProvider":"kivio-relay","defaultModel":"gpt-test","defaultThinkingLevel":"medium"}"#,
+            r#"{"defaultProvider":"abu-agent-relay","defaultModel":"gpt-test","defaultThinkingLevel":"medium"}"#,
         )
         .unwrap();
         std::fs::write(
             &paths.state,
             r#"{
-              "managedProviderIds": ["kivio-relay"],
+              "managedProviderIds": ["abu-agent-relay"],
               "defaultsManaged": true,
               "previousDefaults": {
                 "defaultProvider": {"present": true, "value": "user"},
@@ -3515,14 +3515,14 @@ max_context_size = 200000
     }
 
     #[test]
-    fn kivio_private_codex_home_is_the_materialized_dir() {
+    fn abu_agent_private_codex_home_is_the_materialized_dir() {
         // Join so macOS CI Path semantics match Windows (`\` is not a separator on Unix).
-        let private = Path::new("com.zmair.kivio")
+        let private = Path::new("com.zmair.abu-agent")
             .join("external-cli-providers")
             .join("codex-relay");
-        assert!(is_kivio_private_codex_home(&private));
-        assert!(!is_kivio_private_codex_home(Path::new(".codex")));
-        assert!(!is_kivio_private_codex_home(
+        assert!(is_abu_agent_private_codex_home(&private));
+        assert!(!is_abu_agent_private_codex_home(Path::new(".codex")));
+        assert!(!is_abu_agent_private_codex_home(
             &Path::new("external-cli-providers").join("other")
         ));
     }
@@ -3538,7 +3538,7 @@ max_context_size = 200000
             .join("08")
             .join("24");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("rollout-kivio.jsonl"), "kivio\n").unwrap();
+        std::fs::write(nested.join("rollout-abu_agent.jsonl"), "abu_agent\n").unwrap();
         std::fs::create_dir_all(user_sessions.join("2026")).unwrap();
         std::fs::write(user_sessions.join("2026").join("keep-me.jsonl"), "tui\n").unwrap();
 
@@ -3551,10 +3551,10 @@ max_context_size = 200000
                     .join("2026")
                     .join("08")
                     .join("24")
-                    .join("rollout-kivio.jsonl")
+                    .join("rollout-abu_agent.jsonl")
             )
             .unwrap(),
-            "kivio\n"
+            "abu_agent\n"
         );
         assert_eq!(
             std::fs::read_to_string(user_sessions.join("2026").join("keep-me.jsonl")).unwrap(),

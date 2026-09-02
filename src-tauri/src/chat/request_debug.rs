@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn record_mirrors_to_disk_and_clear_removes_it() {
         // Isolated usage_dir so the on-disk mirror lands in a unique place.
-        let base = std::env::temp_dir().join(format!("kivio-dbg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("abu-agent-dbg-test-{}", Uuid::new_v4()));
         let usage_dir = base.join("usage");
         std::fs::create_dir_all(&usage_dir).unwrap();
         let state = AppState::new_headless(crate::settings::Settings::default(), usage_dir);

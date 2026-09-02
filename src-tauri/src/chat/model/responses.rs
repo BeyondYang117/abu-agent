@@ -1624,7 +1624,7 @@ mod tests {
         };
         let request = GenerateRequest {
             model: model.into(),
-            system: "你是 Kivio".into(),
+            system: "你是 ABU Agent".into(),
             messages: vec![ModelMessage {
                 role: ModelRole::User,
                 content: vec![MessagePart::Text { text: "hi".into() }],
@@ -1669,7 +1669,7 @@ mod tests {
         // 直接删 instructions 会让系统提示词凭空消失——必须搬进 input 首位。
         let input = body["input"].as_array().expect("input array");
         assert_eq!(input[0]["role"], "system");
-        assert_eq!(input[0]["content"][0]["text"], "你是 Kivio");
+        assert_eq!(input[0]["content"][0]["text"], "你是 ABU Agent");
         assert_eq!(input[1]["role"], "user");
     }
 
@@ -1732,7 +1732,7 @@ mod tests {
         };
         let request = GenerateRequest {
             model: "gpt-5.5".into(),
-            system: "你是 Kivio".into(),
+            system: "你是 ABU Agent".into(),
             messages: vec![ModelMessage {
                 role: ModelRole::User,
                 content: vec![MessagePart::Text { text: "hi".into() }],
@@ -1748,7 +1748,7 @@ mod tests {
             },
         };
         let body = OpenAiResponsesProvider::new(&state, &provider, 1).request_body(&request, false);
-        assert_eq!(body["instructions"], "你是 Kivio");
+        assert_eq!(body["instructions"], "你是 ABU Agent");
         assert_eq!(body["store"], false);
         assert_eq!(body["reasoning"]["effort"], "high");
         assert_eq!(body["prompt_cache_key"], "conv_abc");
@@ -1904,7 +1904,7 @@ mod tests {
     fn web_search_parsed_from_responses_output() {
         // web_search_call → query；message.content.annotations[url_citation] → 来源（去重）。
         let output = serde_json::json!([
-            { "type": "web_search_call", "action": { "type": "search", "query": "kivio release" } },
+            { "type": "web_search_call", "action": { "type": "search", "query": "abu_agent release" } },
             {
                 "type": "message",
                 "content": [{
@@ -1920,7 +1920,7 @@ mod tests {
         ]);
         let parsed = web_search_from_responses_output(output.as_array().unwrap())
             .expect("web_search present");
-        assert_eq!(parsed.queries, vec!["kivio release".to_string()]);
+        assert_eq!(parsed.queries, vec!["abu_agent release".to_string()]);
         assert_eq!(parsed.citations.len(), 2);
         assert_eq!(parsed.citations[0].title, "A 站");
         assert_eq!(parsed.citations[0].url, "https://a.com");

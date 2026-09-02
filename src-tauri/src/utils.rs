@@ -4,7 +4,7 @@ use std::path::PathBuf;
 ///
 /// Rust file APIs accept verbatim paths. Node (`dsh`, other CLIs) does not:
 /// `fs.realpath('\\?\E:\foo')` throws `EISDIR ... lstat 'E:'`, so Host Workspace
-/// attach fails and the session never joins the folder the user opened in Kivio.
+/// attach fails and the session never joins the folder the user opened in ABU Agent.
 pub fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {

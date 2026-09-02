@@ -9,7 +9,7 @@
 
 use crate::settings::{ModelProvider, ProviderCustomHeader};
 
-/// 由 Kivio 自己管理、不允许用户覆盖的头。放开会让鉴权/路由错乱。
+/// 由 ABU Agent 自己管理、不允许用户覆盖的头。放开会让鉴权/路由错乱。
 const RESERVED_HEADER_KEYS: &[&str] = &[
     "authorization",
     "x-api-key",
@@ -226,14 +226,14 @@ mod tests {
     fn custom_headers_pass_through_and_reserved_are_dropped() {
         let provider = provider_with(ProviderRequestConfig {
             custom_headers: vec![
-                header("X-Title", "kivio"),
+                header("X-Title", "ABU Agent"),
                 header("Authorization", "Bearer stolen"),
                 header("x-api-key", "nope"),
             ],
             ..Default::default()
         });
         let pairs = header_pairs(&provider, None);
-        assert_eq!(pairs, vec![("X-Title".to_string(), "kivio".to_string())]);
+        assert_eq!(pairs, vec![("X-Title".to_string(), "ABU Agent".to_string())]);
     }
 
     #[test]

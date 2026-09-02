@@ -16,8 +16,8 @@ pub struct SpawnedAgent {
     pub resolved_bin: PathBuf,
 }
 
-/// 标记「当前进程正跑在某个 CLI 的会话里」的环境变量。Kivio 若是从 Claude Code 内启动
-/// （开发时 `npm run dev`、或用户把 Kivio 挂在某个 agent 下），这些会**继承**到 Kivio 进程、
+/// 标记「当前进程正跑在某个 CLI 的会话里」的环境变量。ABU Agent 若是从 Claude Code 内启动
+/// （开发时 `npm run dev`、或用户把 ABU Agent 挂在某个 agent 下），这些会**继承**到 ABU Agent 进程、
 /// 再泄漏给它拉起的 CLI 子进程，让子进程误以为自己嵌套在另一个会话里而拒绝启动
 /// （claude 报 "cannot be launched inside another session"）。
 ///
@@ -61,7 +61,7 @@ pub fn strip_parent_session_env(command: &mut Command) -> &mut Command {
 /// 构造一个拉起外部 CLI 的 `Command`：等价于 `Command::new(program)` 但**已剥离父会话身份变量**。
 ///
 /// 新增拉起 CLI 的代码请一律用它而不是 `Command::new`——忘记剥离不会编译报错、
-/// 也不会立刻出错，只在「Kivio 从某个 agent 里启动」这种特定场景下才炸，极难排查。
+/// 也不会立刻出错，只在「ABU Agent 从某个 agent 里启动」这种特定场景下才炸，极难排查。
 fn command_for_program(program: &OsStr) -> Command {
     if let Some(target) = crate::external_agents::wsl::parse_wsl_target(Path::new(program)) {
         return crate::external_agents::wsl::wsl_exec_command(&target);
@@ -620,14 +620,14 @@ pub fn parse_json_line(line: &str) -> Option<serde_json::Value> {
 mod tests {
     use super::*;
 
-    /// `cli_command` 必须剥掉父会话身份变量，否则 Kivio 从 Claude Code 内启动时，
+    /// `cli_command` 必须剥掉父会话身份变量，否则 ABU Agent 从 Claude Code 内启动时，
     /// 这些变量会继承进来再泄漏给 CLI 子进程，子进程以为自己嵌套在别的会话里而拒绝启动。
     ///
     /// 这里断言的是**实际子进程看到的 env**（跑一个 `env` / `printenv` 子进程读回来），
     /// 而不是 `Command` 的内部状态——后者测了等于没测。
     #[tokio::test]
     async fn cli_command_strips_parent_session_env_from_the_child() {
-        // 先在本进程设上，模拟「Kivio 被 Claude Code 拉起」。
+        // 先在本进程设上，模拟「ABU Agent 被 Claude Code 拉起」。
         std::env::set_var("CLAUDECODE", "1");
         std::env::set_var("CLAUDE_CODE_ENTRYPOINT", "cli");
         std::env::set_var("CLAUDE_AGENT_SDK_VERSION", "0.0.0");
@@ -636,7 +636,7 @@ mod tests {
         std::env::set_var("CLAUDE_CODE_HOST_AUTH_ENV_VAR", "ANTHROPIC_AUTH_TOKEN");
         // 对照组：这两个**不该**被剥——前者是用户配置的凭据、后者是自定义端点，
         // 剥了子进程就真的没法认证了。剥得过头与剥得不够同样是 bug。
-        std::env::set_var("KIVIO_SPAWN_TEST_KEEP", "keep-me");
+        std::env::set_var("ABU_AGENT_SPAWN_TEST_KEEP", "keep-me");
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "sk-test-token");
 
         let out = if cfg!(windows) {
@@ -672,7 +672,7 @@ mod tests {
             "CLAUDE_CODE_HOST_AUTH_ENV_VAR 泄漏 → claude 会报 Not logged in"
         );
         assert!(
-            has("KIVIO_SPAWN_TEST_KEEP"),
+            has("ABU_AGENT_SPAWN_TEST_KEEP"),
             "剥得过头了：非会话身份的变量也被清掉，子进程会丢失凭据/用户配置"
         );
         assert!(
@@ -685,7 +685,7 @@ mod tests {
         std::env::remove_var("CLAUDE_AGENT_SDK_VERSION");
         std::env::remove_var("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
         std::env::remove_var("CLAUDE_CODE_HOST_AUTH_ENV_VAR");
-        std::env::remove_var("KIVIO_SPAWN_TEST_KEEP");
+        std::env::remove_var("ABU_AGENT_SPAWN_TEST_KEEP");
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     }
 
@@ -880,7 +880,7 @@ mod probe_tests {
     impl Fixtures {
         fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "kivio-probe-{}-{}-{tag}",
+                "abu-agent-probe-{}-{}-{tag}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1004,7 +1004,7 @@ mod probe_tests {
         std::fs::create_dir_all(&dir_a).unwrap();
         std::fs::create_dir_all(&dir_b).unwrap();
         for dir in [&dir_a, &dir_b] {
-            let p = dir.join("kivio-fake-cli");
+            let p = dir.join("abu-agent-fake-cli");
             std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -1014,7 +1014,7 @@ mod probe_tests {
             format!("{}:{}:{original}", dir_a.display(), dir_b.display()),
         );
 
-        let found = which_all("kivio-fake-cli").await;
+        let found = which_all("abu-agent-fake-cli").await;
         std::env::set_var("PATH", original);
 
         assert_eq!(
@@ -1035,11 +1035,11 @@ mod probe_tests {
         std::fs::create_dir_all(&bad_dir).unwrap();
         std::fs::create_dir_all(&good_dir).unwrap();
         // 坏的：丢执行权限（spawn 时 EACCES）
-        let bad = bad_dir.join("kivio-shim-cli");
+        let bad = bad_dir.join("abu-agent-shim-cli");
         std::fs::write(&bad, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
         // 好的
-        let good = good_dir.join("kivio-shim-cli");
+        let good = good_dir.join("abu-agent-shim-cli");
         std::fs::write(&good, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -1050,7 +1050,7 @@ mod probe_tests {
         );
 
         let mut def = crate::external_agents::registry::AGENT_DEFS[0].clone();
-        def.bin = "kivio-shim-cli";
+        def.bin = "abu-agent-shim-cli";
         def.fallback_bins = &[];
         let resolved = resolve_binary(&def).await;
 

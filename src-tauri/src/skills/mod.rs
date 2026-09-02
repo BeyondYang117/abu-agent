@@ -7,7 +7,7 @@ mod types;
 pub use catalog::format_catalog;
 pub use discover::{
     build_registry, build_registry_in, build_registry_metadata, build_registry_metadata_in,
-    home_agents_skills_dir, kivio_skills_dir, legacy_app_data_skills_dir, user_skills_dir,
+    home_agents_skills_dir, abu_agent_skills_dir, legacy_app_data_skills_dir, user_skills_dir,
 };
 pub use parse::parse_skill_markdown;
 pub use runtime::{
@@ -196,7 +196,7 @@ pub fn chat_skills_import(app: AppHandle, path: String) -> SkillImportResult {
     }
 }
 
-/// 卸载用户技能：先删 `~/.kivio/skills/<id>`，再回退旧 `{app_data}/skills/<id>`。
+/// 卸载用户技能：先删 `~/.abu-agent/skills/<id>`，再回退旧 `{app_data}/skills/<id>`。
 /// `~/.agents/skills` 是共享目录，不从这里删。内置与插件技能也无法经此删除。
 #[tauri::command]
 pub fn chat_skills_uninstall(app: AppHandle, id: String) -> Result<(), String> {
@@ -214,7 +214,7 @@ pub fn chat_skills_uninstall(app: AppHandle, id: String) -> Result<(), String> {
         .into_iter()
         .find(|path| path.is_dir())
         .ok_or_else(|| {
-            "技能不存在或不可删除（仅 ~/.kivio/skills 与旧个人目录可删除）".to_string()
+            "技能不存在或不可删除（仅 ~/.abu-agent/skills 与旧个人目录可删除）".to_string()
         })?;
     fs::remove_dir_all(&dir).map_err(|err| format!("删除技能失败: {err}"))?;
     Ok(())
@@ -275,7 +275,7 @@ pub async fn download_skill_zip_into(url: &str, skills_dir: &Path) -> Result<Ski
     let client = crate::api::build_http_client();
     let response = client
         .get(&download_url)
-        .header(reqwest::header::USER_AGENT, "kivio-skill-market")
+        .header(reqwest::header::USER_AGENT, "abu-agent-skill-market")
         .timeout(std::time::Duration::from_secs(60))
         .send()
         .await
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn install_skill_zip_bytes_lands_skill_and_files() {
-        let dir = std::env::temp_dir().join(format!("kivio-skilltest-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-skilltest-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn install_skill_zip_bytes_bad_zip_errors_without_dir() {
-        let dir = std::env::temp_dir().join(format!("kivio-skilltest-bad-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-skilltest-bad-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 

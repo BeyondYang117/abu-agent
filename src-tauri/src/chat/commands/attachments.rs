@@ -35,7 +35,7 @@ pub(crate) fn chat_open_attachment(
     app.shell().open(path_str, None).map_err(|e| e.to_string())
 }
 
-/// 用系统默认应用打开生成产物文件。仅允许打开 Kivio sandbox export 目录下的文件。
+/// 用系统默认应用打开生成产物文件。仅允许打开 ABU Agent sandbox export 目录下的文件。
 #[tauri::command]
 #[allow(deprecated)]
 pub(crate) fn chat_open_generated_artifact(app: AppHandle, path: String) -> Result<(), String> {
@@ -44,7 +44,7 @@ pub(crate) fn chat_open_generated_artifact(app: AppHandle, path: String) -> Resu
     app.shell().open(path_str, None).map_err(|e| e.to_string())
 }
 
-/// 在文件系统中打开生成产物所在目录。仅允许 Kivio sandbox export 目录下的文件。
+/// 在文件系统中打开生成产物所在目录。仅允许 ABU Agent sandbox export 目录下的文件。
 #[tauri::command]
 #[allow(deprecated)]
 pub(crate) fn chat_reveal_generated_artifact(app: AppHandle, path: String) -> Result<(), String> {

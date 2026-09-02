@@ -11,10 +11,10 @@ use base64::{engine::general_purpose, Engine as _};
 /// Legacy per-conversation output root from versions before ordinary chats used
 /// a unified workbench. Nothing writes here anymore; existing data is migrated
 /// lazily or removed with its conversation.
-const OUTPUTS_ROOT: &str = "Kivio/outputs";
+const OUTPUTS_ROOT: &str = "ABU Agent/outputs";
 /// Legacy ephemeral exports tree from prior versions. Still GC'd at startup so
 /// old runs go away; nothing writes here anymore.
-const LEGACY_RUNS_ROOT: &str = "Kivio/runs";
+const LEGACY_RUNS_ROOT: &str = "ABU Agent/runs";
 const LEGACY_RUNS_RETENTION_DAYS: u64 = 7;
 const MAX_EXPORT_FILE_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_EXPORT_FILES_PER_RUN: usize = 16;
@@ -459,10 +459,10 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
-/// Startup GC for the legacy ephemeral exports tree (`~/Kivio/runs/`) from
+/// Startup GC for the legacy ephemeral exports tree (`~/ABU Agent/runs/`) from
 /// prior versions. The legacy outputs tree is preserved for lazy migration into
 /// conversation workbenches and is only removed with its conversation. Old runs
-/// are eventually removed; nothing writes to `~/Kivio/runs/` anymore.
+/// are eventually removed; nothing writes to `~/ABU Agent/runs/` anymore.
 pub fn cleanup_stale_sandbox_exports() {
     let retention = Duration::from_secs(LEGACY_RUNS_RETENTION_DAYS * 24 * 60 * 60);
     let home = match user_home_dir() {
@@ -519,7 +519,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("kivio_{label}_{}", uuid::Uuid::new_v4().simple()))
+        std::env::temp_dir().join(format!("abu_agent_{label}_{}", uuid::Uuid::new_v4().simple()))
     }
 
     #[test]

@@ -1071,7 +1071,7 @@ mod tests {
             span("s3", "run:", 160.0, 325.0, 80.0, 46.0),
             span(
                 "s4",
-                "xattr -cr /Applications/Kivio.app",
+                "xattr -cr /Applications/ABU Agent.app",
                 190.0,
                 397.0,
                 560.0,
@@ -1225,7 +1225,7 @@ mod tests {
         let spans = vec![
             span(
                 "s0",
-                "xattr -cr /Applications/Kivio.app",
+                "xattr -cr /Applications/ABU Agent.app",
                 190.0,
                 397.0,
                 560.0,
@@ -1291,19 +1291,19 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn layout_real_fixture() {
-        let model_dir = std::env::var_os("KIVIO_RAPIDOCR_MODEL_DIR")
+        let model_dir = std::env::var_os("ABU_AGENT_RAPIDOCR_MODEL_DIR")
             .map(std::path::PathBuf::from)
-            .expect("set KIVIO_RAPIDOCR_MODEL_DIR");
-        let image_path = std::env::var_os("KIVIO_REPLACE_LAYOUT_IMAGE")
+            .expect("set ABU_AGENT_RAPIDOCR_MODEL_DIR");
+        let image_path = std::env::var_os("ABU_AGENT_REPLACE_LAYOUT_IMAGE")
             .map(std::path::PathBuf::from)
-            .expect("set KIVIO_REPLACE_LAYOUT_IMAGE");
+            .expect("set ABU_AGENT_REPLACE_LAYOUT_IMAGE");
         let client =
             crate::rapidocr::RapidOcrClient::with_model_dir(model_dir, reqwest::Client::new());
         let spans = client
             .ocr_image_lines(&image_path, crate::rapidocr::ModelTier::High)
             .await
             .expect("run OCR");
-        if std::env::var_os("KIVIO_REPLACE_DEBUG_SPANS").is_some() {
+        if std::env::var_os("ABU_AGENT_REPLACE_DEBUG_SPANS").is_some() {
             eprintln!(
                 "{}",
                 serde_json::to_string_pretty(&spans).expect("serialize spans")

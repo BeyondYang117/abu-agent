@@ -274,9 +274,9 @@ export function agentRuntimesEqual(
     && (a.externalAgentPreset ?? null) === (b.externalAgentPreset ?? null)
 }
 
-const mockStorageKey = 'kivio-chat-dev-conversations'
-const mockProjectsStorageKey = 'kivio-chat-dev-projects'
-const mockAssistantsStorageKey = 'kivio-chat-dev-assistants'
+const mockStorageKey = 'abu-agent-chat-dev-conversations'
+const mockProjectsStorageKey = 'abu-agent-chat-dev-projects'
+const mockAssistantsStorageKey = 'abu-agent-chat-dev-assistants'
 
 const nowSeconds = () => Math.floor(Date.now() / 1000)
 

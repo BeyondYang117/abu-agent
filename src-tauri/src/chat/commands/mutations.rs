@@ -121,7 +121,7 @@ pub(super) fn prepare_reply_with_model(
     preferred_group_id: Option<&str>,
 ) -> Result<ReplyWithModelPrep, String> {
     if conversation.agent_runtime.is_external() {
-        return Err("换模型回答仅支持 Kivio Agent 和 Kivio Chat".to_string());
+        return Err("换模型回答仅支持 ABU Agent 和 ABU Agent Chat".to_string());
     }
     if crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
         || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state)

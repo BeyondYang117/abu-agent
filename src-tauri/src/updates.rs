@@ -45,7 +45,7 @@ async fn try_api_latest(state: &AppState, repo: &str, current: &str) -> Option<s
             .http
             .get(&url)
             // GitHub API 要求显式 User-Agent
-            .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+            .header("User-Agent", format!("ABU-Agent/{}", env!("CARGO_PKG_VERSION")))
             .header("Accept", "application/vnd.github+json"),
     )
     .send()
@@ -87,7 +87,7 @@ async fn try_atom_latest(state: &AppState, repo: &str, current: &str) -> Option<
         state
             .http
             .get(&url)
-            .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+            .header("User-Agent", format!("ABU-Agent/{}", env!("CARGO_PKG_VERSION")))
             .header("Accept", "application/atom+xml"),
     )
     .send()
@@ -220,12 +220,12 @@ pub(crate) async fn download_update_asset(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("bin");
-    let dest = std::env::temp_dir().join(format!("kivio-update-{version}.{ext}"));
+    let dest = std::env::temp_dir().join(format!("abu-agent-update-{version}.{ext}"));
 
     let mut resp = state
         .http
         .get(&asset_url)
-        .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("ABU-Agent/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await
         .map_err(|e| format!("下载失败: {e}"))?;
@@ -336,9 +336,9 @@ pub(crate) fn install_update_and_quit(app: AppHandle, path: String) -> Result<()
         use std::process::Command;
         // 显式指定挂载点（用 UUID 避免与同名 volume 已挂载时的名字冲突）。比解析 `hdiutil attach` 的
         // 默认表格输出鲁棒很多 —— 那个输出列用空格 padding,VolumeName 含空格(如重复挂载产生的
-        // "Kivio 1")会被 split_whitespace 截断。
+        // "ABU Agent 1")会被 split_whitespace 截断。
         let mount_id = Uuid::new_v4().to_string();
-        let mount_point = std::env::temp_dir().join(format!("kivio-mount-{mount_id}"));
+        let mount_point = std::env::temp_dir().join(format!("abu-agent-mount-{mount_id}"));
         fs::create_dir_all(&mount_point).map_err(|e| format!("创建挂载目录失败: {e}"))?;
         let mount_str = mount_point.to_string_lossy().to_string();
         let attach = Command::new("hdiutil")

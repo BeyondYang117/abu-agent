@@ -14,12 +14,12 @@ describe('chat performance browser report', () => {
     vi.useRealTimers()
     resetChatPerfProbeForTests()
     vi.restoreAllMocks()
-    delete (globalThis as { __KIVIO_CHAT_PERF__?: boolean }).__KIVIO_CHAT_PERF__
+    delete (globalThis as { __ABU_AGENT_CHAT_PERF__?: boolean }).__ABU_AGENT_CHAT_PERF__
   })
 
   it('keeps profiler, window samples, and long tasks in one executable report', () => {
-    const perfGlobal = globalThis as { __KIVIO_CHAT_PERF__?: boolean }
-    perfGlobal.__KIVIO_CHAT_PERF__ = true
+    const perfGlobal = globalThis as { __ABU_AGENT_CHAT_PERF__?: boolean }
+    perfGlobal.__ABU_AGENT_CHAT_PERF__ = true
 
     recordChatPerfSample({
       name: 'conversation-switch',
@@ -52,8 +52,8 @@ describe('chat performance browser report', () => {
   })
 
   it('is bounded and resettable for long manual browser sessions', () => {
-    const perfGlobal = globalThis as { __KIVIO_CHAT_PERF__?: boolean }
-    perfGlobal.__KIVIO_CHAT_PERF__ = true
+    const perfGlobal = globalThis as { __ABU_AGENT_CHAT_PERF__?: boolean }
+    perfGlobal.__ABU_AGENT_CHAT_PERF__ = true
     for (let index = 0; index < 2_050; index += 1) {
       recordChatPerfSample({ name: `sample-${index}`, durationMs: 1, mountedRows: 1, domNodes: 1 })
       recordChatPerfLongTask({ durationMs: index, startTime: index })
@@ -71,8 +71,8 @@ describe('chat performance browser report', () => {
   })
 
   it('keeps profiler totals after the console window is flushed', () => {
-    const perfGlobal = globalThis as { __KIVIO_CHAT_PERF__?: boolean }
-    perfGlobal.__KIVIO_CHAT_PERF__ = true
+    const perfGlobal = globalThis as { __ABU_AGENT_CHAT_PERF__?: boolean }
+    perfGlobal.__ABU_AGENT_CHAT_PERF__ = true
     vi.useFakeTimers()
 
     onChatPerfProfiler('MessageList', 'update', 4, 6, 0, 0)
@@ -86,8 +86,8 @@ describe('chat performance browser report', () => {
   })
 
   it('summarizes and evaluates exported guardrails', () => {
-    const perfGlobal = globalThis as { __KIVIO_CHAT_PERF__?: boolean }
-    perfGlobal.__KIVIO_CHAT_PERF__ = true
+    const perfGlobal = globalThis as { __ABU_AGENT_CHAT_PERF__?: boolean }
+    perfGlobal.__ABU_AGENT_CHAT_PERF__ = true
     recordChatPerfSample({ name: 'message-list-window', durationMs: 20, mountedRows: 12, domNodes: 300 })
     recordChatPerfLongTask({ durationMs: 80, startTime: 10 })
 

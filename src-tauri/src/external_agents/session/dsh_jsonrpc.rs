@@ -1,8 +1,8 @@
 //! DeepSeek Harness SDK JSON-RPC persistent session.
 //!
 //! dsh 没有「一条命令直接出流式 JSON」的模式，它只能 boot profile。本模块拉起
-//! `dsh --profile kivio`（profile 由 `dsh_profile.rs` 维护），再驱动
-//! Kivio 自带的 resumable JSON-RPC bridge（profile 由 `dsh_profile.rs` 维护）。
+//! `dsh --profile abu_agent`（profile 由 `dsh_profile.rs` 维护），再驱动
+//! ABU Agent 自带的 resumable JSON-RPC bridge（profile 由 `dsh_profile.rs` 维护）。
 //!
 //! # 线协议（0.1.0-rc.6 实测；rc.8 斜杠命令补了 `images`）
 //!
@@ -19,10 +19,10 @@
 //! - `session/cancel { sessionId }`
 //! - `shutdown`
 //!
-//! 服务端 → 客户端请求（官方传输层支持，官方 server 自己不发；Kivio bridge 补这一条）：
+//! 服务端 → 客户端请求（官方传输层支持，官方 server 自己不发；ABU Agent bridge 补这一条）：
 //! - `session/ask { sessionId, questions }` → `{ answers: [{ id, selected, custom? }] }`
 //!   这是 `ctx.userQuestions` 的跨进程出口：preset 里的 `ask_user_question` 会停在
-//!   `UserQuestionProvider.ask()`，bridge 把官方问题形状原样转给宿主，等 Kivio 已有的
+//!   `UserQuestionProvider.ask()`，bridge 把官方问题形状原样转给宿主，等 ABU Agent 已有的
 //!   问用户卡片作答后再把官方 `AskUserQuestionAnswer` 回给工具。
 //!
 //! 服务端把完整的持久会话日志广播成 `session.event`，另有 `session.status`。一轮工具循环
@@ -34,7 +34,7 @@
 //! 父工具卡上，不进父气泡。`subagent.started` / `subagent.finished` 没有 `sessionId`，
 //! 改按 `parentSessionId` 认父会话。父轮结束后 `tool-jobs` 会对空闲父会话
 //! `followup` 开一轮汇报（和官方 web 同一条路）；空闲读要攒这轮 `TextDelta`，
-//! `turn/end` 时落成一条助手消息，不能只留任务边沿。Kivio bridge 直接调用 dsh
+//! `turn/end` 时落成一条助手消息，不能只留任务边沿。ABU Agent bridge 直接调用 dsh
 //! 公共的 `agents.resume()` 与 `agent.cancel()`，所以进程重建和用户停止都不会再丢失原生会话。
 
 use std::collections::{HashMap, VecDeque};
@@ -72,7 +72,7 @@ const CHILD_STEPS_MAX: usize = 24;
 const DEFAULT_PROVIDER: &str = "deepseek-official";
 const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 
-// reasoningEffort 只能写进共享的 profiles/kivio patch。锁必须覆盖「写 patch → spawn →
+// reasoningEffort 只能写进共享的 profiles/abu_agent patch。锁必须覆盖「写 patch → spawn →
 // initialize」整个窗口；只锁文件写入仍会让并发启动的另一轮在进程读配置前把值换掉。
 static DSH_PROFILE_BOOT_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -218,7 +218,7 @@ enum ReadStep {
 }
 
 impl DshJsonRpcSession {
-    /// 生成 Kivio profile、拉起 dsh，并完成 `initialize` 握手。
+    /// 生成 ABU Agent profile、拉起 dsh，并完成 `initialize` 握手。
     pub async fn connect(
         resolved_bin: &Path,
         args: &[String],
@@ -253,7 +253,7 @@ impl DshJsonRpcSession {
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| format!("kivio-{}", Uuid::new_v4()));
+            .unwrap_or_else(|| format!("abu-agent-{}", Uuid::new_v4()));
         let wants_resume = resume_session_id.is_some_and(|id| !id.trim().is_empty());
         let mut command = crate::external_agents::spawn::cli_command(resolved_bin);
         command
@@ -366,9 +366,9 @@ impl DshJsonRpcSession {
                 .and_then(|value| value.get("cancel"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            if name != "kivio-dsh-sdk-runtime" || !resumable || !cancellable {
+            if name != "abu-agent-dsh-sdk-runtime" || !resumable || !cancellable {
                 return Err(format!(
-                    "dsh initialize: Kivio resumable bridge unavailable (server={name:?})"
+                    "dsh initialize: ABU Agent resumable bridge unavailable (server={name:?})"
                 ));
             }
 
@@ -1243,7 +1243,7 @@ fn classify_idle_incoming_rpc(value: &Value) -> DshIdlePump {
     ))
 }
 
-/// 本进程只服务这一条 Kivio 对话。`askViaHost` 会带 `request.agent.id`（子代理
+/// 本进程只服务这一条 ABU Agent 对话。`askViaHost` 会带 `request.agent.id`（子代理
 /// 自己的 session id），不能要求它等于父 `session/open` 的 id。
 fn session_ask_id_accepted(ask_session_id: Option<&str>) -> bool {
     ask_session_id.is_some_and(|id| !id.trim().is_empty())
@@ -2385,13 +2385,13 @@ fn rpc_error_line(id: &Value, code: i64, message: &str, data: Option<Value>) -> 
     line
 }
 
-/// 官方 `todo/write` 快照 → Kivio 对话上的 todo 列表。
+/// 官方 `todo/write` 快照 → ABU Agent 对话上的 todo 列表。
 ///
 /// 条目没有 id，官方用 **content** 当身份（重复 content 会被 execute 拒）。
 /// 多个 `in_progress` 原样保留（preset 的 `allowParallelInProgress: true`）；
 /// 不要走内置 `normalized_state`，那条会把多余的进行中降成 pending。
 ///
-/// ponytail: 官方 web 在 `turn/start` 清掉 standing plan。Kivio 的列表挂在对话上，
+/// ponytail: 官方 web 在 `turn/start` 清掉 standing plan。ABU Agent 的列表挂在对话上，
 /// 跨轮保留，和内置 `todo_write` 一样。
 pub(crate) fn todo_state_from_write(data: &Value) -> Option<crate::chat::types::AgentTodoState> {
     let raw = data.get("todos")?.as_array()?;
@@ -2546,7 +2546,7 @@ fn map_tool_results(
 mod tests {
     use std::path::PathBuf;
 
-    use crate::external_agents::dsh_profile::KIVIO_PROFILE;
+    use crate::external_agents::dsh_profile::ABU_AGENT_PROFILE;
 
     use super::*;
     use serde_json::Value;
@@ -2587,7 +2587,7 @@ mod tests {
             "id": "req_abc",
             "method": "session/ask",
             "params": {
-                "sessionId": "kivio-1",
+                "sessionId": "abu-agent-1",
                 "questions": [{ "id": "q1", "question": "Tea or coffee?" }]
             }
         });
@@ -2596,7 +2596,7 @@ mod tests {
         assert!(!is_incoming_rpc_request(&json!({
             "jsonrpc": "2.0",
             "method": "session.event",
-            "params": { "sessionId": "kivio-1" }
+            "params": { "sessionId": "abu-agent-1" }
         })));
     }
 
@@ -2688,13 +2688,13 @@ mod tests {
     #[test]
     fn classifies_only_missing_resume_targets_for_fresh_fallback() {
         assert!(is_missing_session_error(
-            "dsh session/open: session \"kivio-old\" not found"
+            "dsh session/open: session \"abu-agent-old\" not found"
         ));
         assert!(is_missing_session_error(
-            "dsh session/open: session 'kivio-old' not found"
+            "dsh session/open: session 'abu-agent-old' not found"
         ));
         assert!(is_missing_session_error(
-            "dsh session/open: Session kivio-old not found"
+            "dsh session/open: Session abu-agent-old not found"
         ));
         assert!(is_missing_session_error(
             "dsh session/open: resume mismatch (requested=true, actual=false)"
@@ -2741,7 +2741,7 @@ mod tests {
 
     #[test]
     fn session_ask_accepts_any_non_empty_session_id_from_this_process() {
-        assert!(session_ask_id_accepted(Some("kivio-parent")));
+        assert!(session_ask_id_accepted(Some("abu-agent-parent")));
         assert!(session_ask_id_accepted(Some("child-subagent-9")));
         assert!(!session_ask_id_accepted(Some("")));
         assert!(!session_ask_id_accepted(Some("   ")));
@@ -3210,7 +3210,7 @@ mod tests {
             map_subagent_notification(
                 "subagent.started",
                 &json!({
-                    "parentSessionId": "kivio-1",
+                    "parentSessionId": "abu-agent-1",
                     "childSessionId": "child-9"
                 }),
             ),
@@ -3227,7 +3227,7 @@ mod tests {
             map_subagent_notification(
                 "subagent.finished",
                 &json!({
-                    "parentSessionId": "kivio-1",
+                    "parentSessionId": "abu-agent-1",
                     "childSessionId": "child-9",
                     "status": "error",
                     "stopReason": "error",
@@ -3385,12 +3385,12 @@ mod tests {
 
     #[test]
     fn slash_turns_use_session_command_not_prompt() {
-        let (method, params) = turn_rpc("kivio-1", "  /compact ", &[]);
+        let (method, params) = turn_rpc("abu-agent-1", "  /compact ", &[]);
         assert_eq!(method, "session/command");
-        assert_eq!(params["sessionId"], "kivio-1");
+        assert_eq!(params["sessionId"], "abu-agent-1");
         assert_eq!(params["line"], "/compact");
         assert_eq!(params["images"].as_array().map(Vec::len), Some(0));
-        let (method, params) = turn_rpc("kivio-1", "hello", &[]);
+        let (method, params) = turn_rpc("abu-agent-1", "hello", &[]);
         assert_eq!(method, "session/prompt");
         assert_eq!(params["contentBlocks"][0]["text"], "hello");
         assert_eq!(params["contentBlocks"].as_array().map(Vec::len), Some(1));
@@ -3399,7 +3399,7 @@ mod tests {
             mime: "image/png".to_string(),
             path: PathBuf::from("shot.png"),
         };
-        let (method, params) = turn_rpc("kivio-1", "这是什么", &[image]);
+        let (method, params) = turn_rpc("abu-agent-1", "这是什么", &[image]);
         assert_eq!(method, "session/prompt");
         assert_eq!(params["contentBlocks"][0]["text"], "这是什么");
         assert_eq!(params["contentBlocks"][1]["type"], "image");
@@ -3424,7 +3424,7 @@ mod tests {
             mime: "image/jpg".to_string(),
             path: PathBuf::from("shot.jpg"),
         };
-        let (method, params) = turn_rpc("kivio-1", "/goal rebuild the cathedral", &[image]);
+        let (method, params) = turn_rpc("abu-agent-1", "/goal rebuild the cathedral", &[image]);
         assert_eq!(method, "session/command");
         assert_eq!(params["line"], "/goal rebuild the cathedral");
         assert_eq!(params["images"][0]["data"], "Zm9v");
@@ -3440,8 +3440,8 @@ mod tests {
             mime: "image/png".to_string(),
             path: PathBuf::from("shot.png"),
         };
-        let params = steer_rpc("kivio-1", "改用 rg", &[image]);
-        assert_eq!(params["sessionId"], "kivio-1");
+        let params = steer_rpc("abu-agent-1", "改用 rg", &[image]);
+        assert_eq!(params["sessionId"], "abu-agent-1");
         assert_eq!(params["contentBlocks"][0]["text"], "改用 rg");
         assert_eq!(params["contentBlocks"][1]["type"], "image");
         assert_eq!(params["contentBlocks"][1]["data"], "Zm9v");
@@ -3486,11 +3486,11 @@ mod tests {
     #[test]
     fn follow_up_reuses_prompt_and_steer_uses_bridge_method() {
         let (steer_method, steer_params) =
-            dsh_injection_rpc(MessageInjectionKind::Steer, "kivio-1", "改用 rg", &[]);
+            dsh_injection_rpc(MessageInjectionKind::Steer, "abu-agent-1", "改用 rg", &[]);
         assert_eq!(steer_method, "session/steer");
         assert_eq!(steer_params["contentBlocks"][0]["text"], "改用 rg");
         let (follow_method, follow_params) =
-            dsh_injection_rpc(MessageInjectionKind::FollowUp, "kivio-1", "接着做", &[]);
+            dsh_injection_rpc(MessageInjectionKind::FollowUp, "abu-agent-1", "接着做", &[]);
         assert_eq!(follow_method, "session/prompt");
         assert_eq!(follow_params["contentBlocks"][0]["text"], "接着做");
     }
@@ -3545,10 +3545,10 @@ mod tests {
 
     #[test]
     fn stop_job_rpc_uses_session_and_job_id() {
-        let params = stop_job_params("kivio-1", "bash-3");
-        assert_eq!(params["sessionId"], "kivio-1");
+        let params = stop_job_params("abu-agent-1", "bash-3");
+        assert_eq!(params["sessionId"], "abu-agent-1");
         assert_eq!(params["jobId"], "bash-3");
-        let child = stop_job_params("kivio-1", "018b08fc-ee7f-4ea5-b77c-9c5d1c6ecf50");
+        let child = stop_job_params("abu-agent-1", "018b08fc-ee7f-4ea5-b77c-9c5d1c6ecf50");
         assert_eq!(child["jobId"], "018b08fc-ee7f-4ea5-b77c-9c5d1c6ecf50");
     }
 
@@ -3567,7 +3567,7 @@ mod tests {
             });
         assert!(bin.is_file(), "dsh binary missing: {}", bin.display());
         let cwd = std::env::current_dir().expect("cwd");
-        let args = vec!["--profile".to_string(), KIVIO_PROFILE.to_string()];
+        let args = vec!["--profile".to_string(), ABU_AGENT_PROFILE.to_string()];
         let mut session = DshJsonRpcSession::connect(
             &bin,
             &args,
@@ -3584,7 +3584,7 @@ mod tests {
         let (_control_tx, mut control_rx) = mpsc::channel(4);
         session
             .run_turn(
-                "必须调用 bash 工具执行 `printf KIVIO_DSH_E2E`，然后只回答命令输出。",
+                "必须调用 bash 工具执行 `printf ABU_AGENT_DSH_E2E`，然后只回答命令输出。",
                 Some("deepseek-v4-flash"),
                 &[],
                 &event_tx,
@@ -3634,7 +3634,7 @@ mod tests {
                     .join(".local/bin/dsh")
             });
         let cwd = std::env::current_dir().expect("cwd");
-        let args = vec!["--profile".to_string(), KIVIO_PROFILE.to_string()];
+        let args = vec!["--profile".to_string(), ABU_AGENT_PROFILE.to_string()];
         let mut session = DshJsonRpcSession::connect(
             &bin,
             &args,
@@ -3652,7 +3652,7 @@ mod tests {
         let (_control_tx, mut control_rx) = mpsc::channel(4);
         session
             .run_turn(
-                "记住验证码 KIVIO-7429。只回答 ACK。",
+                "记住验证码 ABU_AGENT-7429。只回答 ACK。",
                 Some("deepseek-v4-flash"),
                 &[],
                 &event_tx,
@@ -3705,7 +3705,7 @@ mod tests {
             }
         }
         assert!(
-            text.contains("KIVIO-7429"),
+            text.contains("ABU_AGENT-7429"),
             "second turn lost context: {text:?}"
         );
         assert!(saw_reasoning, "high effort emitted no reasoning delta");
@@ -3725,7 +3725,7 @@ mod tests {
                     .join(".local/bin/dsh")
             });
         let cwd = std::env::current_dir().expect("cwd");
-        let args = vec!["--profile".to_string(), KIVIO_PROFILE.to_string()];
+        let args = vec!["--profile".to_string(), ABU_AGENT_PROFILE.to_string()];
         let mut session = DshJsonRpcSession::connect(
             &bin,
             &args,

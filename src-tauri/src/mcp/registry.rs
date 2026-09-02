@@ -1383,7 +1383,7 @@ while True:
     sys.stdout.flush()
 "#;
             let mut path = std::env::temp_dir();
-            path.push(format!("kivio-fake-mcp-warm-{}.py", uuid::Uuid::new_v4()));
+            path.push(format!("abu-agent-fake-mcp-warm-{}.py", uuid::Uuid::new_v4()));
             let mut file = std::fs::File::create(&path).expect("create fake server");
             file.write_all(script.as_bytes())
                 .expect("write fake server");
@@ -1497,7 +1497,7 @@ while True:
 
     fn temp_home(tag: &str) -> std::path::PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("kivio-cli-import-{tag}-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("abu-agent-cli-import-{tag}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("create temp home");
         dir
     }

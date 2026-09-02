@@ -54,9 +54,9 @@ describe('normalizeStoredChatRoute', () => {
 describe('right dock tab persistence', () => {
   it('falls back to files for the removed trajectory / Pi sessions keys', () => {
     window.localStorage.clear()
-    window.localStorage.setItem('kivio-chat-dock-tab', 'trajectory')
+    window.localStorage.setItem('abu-agent-chat-dock-tab', 'trajectory')
     expect(getRememberedDockTab()).toBe('files')
-    window.localStorage.setItem('kivio-chat-dock-tab', 'piSessions')
+    window.localStorage.setItem('abu-agent-chat-dock-tab', 'piSessions')
     expect(getRememberedDockTab()).toBe('files')
     rememberDockTab('git')
     expect(getRememberedDockTab()).toBe('git')
@@ -86,10 +86,10 @@ describe('last route memory (Rust-persisted, auto-migrates from localStorage)', 
   })
 
   it('auto-migrates legacy localStorage on first getRememberedChatRoute call', () => {
-    window.localStorage.setItem('kivio-chat-last-route', '#chat/conv-legacy')
+    window.localStorage.setItem('abu-agent-chat-last-route', '#chat/conv-legacy')
     const route = getRememberedChatRoute()
     expect(route).toBe('#chat/conv-legacy')
-    expect(window.localStorage.getItem('kivio-chat-last-route')).toBeNull()
+    expect(window.localStorage.getItem('abu-agent-chat-last-route')).toBeNull()
     
     // 第二次调用应返回缓存值，不再读 localStorage
     expect(getRememberedChatRoute()).toBe('#chat/conv-legacy')
@@ -97,7 +97,7 @@ describe('last route memory (Rust-persisted, auto-migrates from localStorage)', 
 
 
   it('falls back to the legacy localStorage value only when the cache is empty', () => {
-    window.localStorage.setItem('kivio-chat-last-route', '#chat/conv-legacy')
+    window.localStorage.setItem('abu-agent-chat-last-route', '#chat/conv-legacy')
     expect(getRememberedChatRoute()).toBe('#chat/conv-legacy')
   })
 })

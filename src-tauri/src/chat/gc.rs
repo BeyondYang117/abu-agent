@@ -10,8 +10,8 @@
 //! - **孤儿附件**：消息被删/重新生成后，它引用的 `msgimg-*` / `artifact-*` 文件仍留在
 //!   `<conv_id>_attachments/` 里。
 //!
-//! **共同的红线：只碰 Kivio 自己造的目录。** 绑定项目的会话工作目录指向**用户自己的项目根**，
-//! 那里可能是一整个 git 仓库；本模块所有扫描都锚定在 Kivio 数据目录下的 `chat-workspaces/`
+//! **共同的红线：只碰 ABU Agent 自己造的目录。** 绑定项目的会话工作目录指向**用户自己的项目根**，
+//! 那里可能是一整个 git 仓库；本模块所有扫描都锚定在 ABU Agent 数据目录下的 `chat-workspaces/`
 //! 与 `conversations/`，且只认 `conv_` 前缀的条目，绝不接受外部传入的路径。
 //!
 //! 全部「尽力而为」：任何一步失败只记日志、继续下一项，绝不向上抛错。GC 是优化，
@@ -87,12 +87,12 @@ fn sweep_with_roots(app: &AppHandle) -> GcReport {
     };
     let alive = alive_conversation_ids(&conversations);
 
-    // ① + ② 工作区：Kivio 数据目录下的 chat-workspaces/，以及用户配置的内置 runtime 工作根。
+    // ① + ② 工作区：ABU Agent 数据目录下的 chat-workspaces/，以及用户配置的内置 runtime 工作根。
     let mut workspace_roots: Vec<PathBuf> = Vec::new();
     if let Some(parent) = conversations.parent() {
         workspace_roots.push(parent.join("chat-workspaces"));
     }
-    // 内置 runtime 的工作根（默认 ~/Kivio/workspace）。只扫它下面的 `conv_*` 子目录，
+    // 内置 runtime 的工作根（默认 ~/ABU Agent/workspace）。只扫它下面的 `conv_*` 子目录，
     // 根目录本身是用户的、绝不动。
     if let Some(state) = app.try_state::<crate::state::AppState>() {
         let configured = state
@@ -306,7 +306,7 @@ pub fn referenced_attachment_names(conversation: &super::Conversation) -> HashSe
                 }
             }
         }
-        // 中断草稿的 `api_messages` 里图片被外置成 `kivio-attachment://<mime>/<文件名>`
+        // 中断草稿的 `api_messages` 里图片被外置成 `abu-agent-attachment://<mime>/<文件名>`
         // 哨兵（`attachments::externalize_api_message_images`）。**这也是一处引用来源**，
         // 漏掉就会把中断草稿还要用的图当成孤儿删掉。
         for api_message in &message.api_messages {
@@ -316,7 +316,7 @@ pub fn referenced_attachment_names(conversation: &super::Conversation) -> HashSe
     referenced
 }
 
-/// 从一条 wire 消息里挖出所有 `kivio-attachment://` 哨兵引用的文件名。
+/// 从一条 wire 消息里挖出所有 `abu-agent-attachment://` 哨兵引用的文件名。
 ///
 /// 不复用 `attachments::api_message_image_url_slots`（那个要 `&mut`），这里是纯只读遍历，
 /// 且刻意**不限定部件 type**：宁可多认几个槽位，也不要漏掉一个引用而误删文件。
@@ -342,7 +342,7 @@ fn collect_attachment_uri_names(value: &serde_json::Value, out: &mut HashSet<Str
 }
 
 fn attachment_uri_file_name(url: &str) -> Option<&str> {
-    let rest = url.strip_prefix("kivio-attachment://")?;
+    let rest = url.strip_prefix("abu-agent-attachment://")?;
     let (_mime, file_name) = rest.rsplit_once('/')?;
     if file_name.is_empty() || Path::new(file_name).components().count() != 1 {
         return None;
@@ -400,7 +400,7 @@ mod tests {
     use super::*;
 
     fn temp_root(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kivio-gc-{tag}-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-gc-{tag}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -506,11 +506,11 @@ mod tests {
                 { "type": "text", "text": "看图" },
                 {
                     "type": "image_url",
-                    "image_url": { "url": "kivio-attachment://image/png/msgimg-wire.png" }
+                    "image_url": { "url": "abu-agent-attachment://image/png/msgimg-wire.png" }
                 },
                 {
                     "type": "input_image",
-                    "image_url": "kivio-attachment://image/jpeg/msgimg-responses.jpg"
+                    "image_url": "abu-agent-attachment://image/jpeg/msgimg-responses.jpg"
                 }
             ]
         });
@@ -526,10 +526,10 @@ mod tests {
     #[test]
     fn attachment_uri_names_reject_traversal() {
         assert_eq!(
-            attachment_uri_file_name("kivio-attachment://image/png/msgimg-ok.png"),
+            attachment_uri_file_name("abu-agent-attachment://image/png/msgimg-ok.png"),
             Some("msgimg-ok.png")
         );
-        assert!(attachment_uri_file_name("kivio-attachment://image/png/").is_none());
+        assert!(attachment_uri_file_name("abu-agent-attachment://image/png/").is_none());
         assert!(attachment_uri_file_name("data:image/png;base64,AAAA").is_none());
     }
 }

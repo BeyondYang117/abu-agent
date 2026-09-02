@@ -48,7 +48,7 @@ import {
 } from './segments'
 import type { TimelineGroupItem } from './segments'
 
-const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
+const DIRECT_IMAGE_GENERATION_PENDING = '[[ABU_AGENT_DIRECT_IMAGE_GENERATION_PENDING]]'
 
 // 模块级稳定引用：内联箭头每次渲染新建会打穿 ChatMarkdown 的 memo（导致公式重渲）。
 const handleChatImageClick = (src: string, alt: string, name?: string) =>

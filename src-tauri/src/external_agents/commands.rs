@@ -378,7 +378,7 @@ pub async fn chat_set_agent_runtime(
 /// `AppHandle`). Returns `Err` with a user-facing message when the switch is forbidden.
 ///
 /// Rule: **one agent per conversation**. Empty conversations may switch freely; once any message
-/// exists, `kind` and `external_agent_id` are frozen (covers both local CLI *and* Kivio builtin).
+/// exists, `kind` and `external_agent_id` are frozen (covers both local CLI *and* ABU Agent builtin).
 /// Same-agent model / reasoning / sandbox updates remain allowed.
 fn check_runtime_switch_allowed(
     current: &AgentRuntimeConfig,
@@ -407,9 +407,9 @@ fn check_runtime_switch_allowed(
                 .or_else(|| normalize_id(&current.external_agent_id))
                 .unwrap_or_else(|| "当前 CLI".to_string())
         } else if current.is_chat() {
-            "Kivio Chat".to_string()
+            "ABU Agent Chat".to_string()
         } else {
-            "Kivio Agent".to_string()
+            "ABU Agent".to_string()
         };
         return Err(format!("会话已绑定 {bound_name}，新建会话可切换 Agent"));
     }

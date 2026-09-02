@@ -331,7 +331,7 @@ const ChatSettingsPane = memo(function ChatSettingsPane({
  * 记住用户在顶栏最后一次选的思考等级，作为新会话/空会话草稿（以用户的选择为准，
  * 也不再把思考等级硬回落到 high）。仅前端偏好，存 localStorage。聊天模型见 lastModel.ts。
  */
-const LAST_THINKING_KEY = 'kivio.chat.lastThinkingLevel'
+const LAST_THINKING_KEY = 'abu_agent.chat.lastThinkingLevel'
 
 const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set([
   'off',
@@ -344,7 +344,7 @@ const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set([
 
 // 网络搜索模式全局默认（任务 07-23，与思考等级同款「记住上次选择」模式）：
 // 选一次即成为新会话/未显式设置会话的默认，免去每个对话重复切换。
-const LAST_WEB_SEARCH_MODE_KEY = 'kivio.chat.lastWebSearchMode'
+const LAST_WEB_SEARCH_MODE_KEY = 'abu_agent.chat.lastWebSearchMode'
 const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party', 'platform'])
 
 function loadLastWebSearchMode(): WebSearchMode | undefined {

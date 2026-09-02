@@ -258,7 +258,7 @@ pub struct LiveSessionHandle {
 }
 
 impl LiveSessionHandle {
-    /// Same Kivio conversation + same CLI protocol ⇒ resume this native id.
+    /// Same ABU Agent conversation + same CLI protocol ⇒ resume this native id.
     ///
     /// Cwd is **not** part of the match. The file is already keyed by conversation_id;
     /// requiring a byte-identical cwd string (Windows `E:\` vs `E:/`, WSL `/mnt/e/...`)
@@ -364,8 +364,8 @@ pub fn clear_live_handle(app: &AppHandle, conversation_id: &str) {
 /// **不清会留下幽灵绑定**：那条原生会话会在导入列表里永远显示"已导入"、永远不能再导，
 /// 点进去还跳到一条已经不存在的对话。
 ///
-/// **不碰 CLI 自己的 transcript**——`~/.claude/projects/` 之类是 CLI 的数据，Kivio 从不写它，
-/// 删 Kivio 对话不该连带毁掉用户在终端里还能 resume 的会话。
+/// **不碰 CLI 自己的 transcript**——`~/.claude/projects/` 之类是 CLI 的数据，ABU Agent 从不写它，
+/// 删 ABU Agent 对话不该连带毁掉用户在终端里还能 resume 的会话。
 ///
 /// 尽力而为：单个文件删不掉只记警告，不让删除对话整体失败。
 pub fn remove_all_bindings(app: &AppHandle, conversation_id: &str) -> Vec<String> {

@@ -697,7 +697,7 @@ pub(crate) fn delete_conversation(app: &AppHandle, id: &str) -> Result<Vec<Strin
         remove_conversation_side_artifacts(workspace.as_deref(), attachments_dir.as_deref());
 
     // 外部 CLI 的会话绑定也要跟着走，否则那条原生会话会永远显示"已导入"、再也导不进来。
-    // 只删 Kivio 侧的绑定记录，**不动 CLI 自己的 transcript**（用户在终端里还要 resume）。
+    // 只删 ABU Agent 侧的绑定记录，**不动 CLI 自己的 transcript**（用户在终端里还要 resume）。
     warnings.extend(crate::external_agents::session::remove_all_bindings(
         app, id,
     ));
@@ -2633,7 +2633,7 @@ mod index_self_heal_tests {
     use std::thread;
 
     fn temp_dir() -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("kivio-storage-test-{}", uuid::Uuid::new_v4()));
+        let d = std::env::temp_dir().join(format!("abu-agent-storage-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&d).unwrap();
         d
     }
@@ -2809,7 +2809,7 @@ mod delete_side_artifact_tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kivio_del_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu_agent_del_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -2911,7 +2911,7 @@ mod delete_side_artifact_tests {
 
     #[test]
     fn normalize_additional_directories_errors_on_missing_path() {
-        let missing = std::env::temp_dir().join("kivio-additional-dir-does-not-exist-xyz");
+        let missing = std::env::temp_dir().join("abu-agent-additional-dir-does-not-exist-xyz");
         let err = normalize_additional_directories(
             vec![AdditionalDirectory {
                 path: missing.to_string_lossy().to_string(),

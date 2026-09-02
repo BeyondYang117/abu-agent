@@ -1,7 +1,7 @@
 //! 内置插件目录：广场条目 + 安装规范 + 启用后注入的 MCP / 提示。
 //!
 //! CLI 插件（OfficeCLI、Cua Driver）用**官方安装器**；Skill 落在 `~/.agents/skills`，
-//! Kivio 直接扫描。「让 AI 代装」只是可选。ego lite 仍在启用时从仓库下载 Skill。
+//! ABU Agent 直接扫描。「让 AI 代装」只是可选。ego lite 仍在启用时从仓库下载 Skill。
 
 /// 官方 README 里的安装命令（按平台）。只给后端自动执行，不展示给用户。
 #[derive(Debug, Clone)]
@@ -44,12 +44,12 @@ pub struct CatalogPlugin {
     pub skill_download_url: Option<&'static str>,
     /// 可选 MCP：启用时自动注册 stdio server
     pub mcp: Option<PluginMcpSpec>,
-    /// **Kivio 安装契约**（薄层）：流程/约束/验收；具体命令以 README 为准，勿与 README 冲突
+    /// **ABU Agent 安装契约**（薄层）：流程/约束/验收；具体命令以 README 为准，勿与 README 冲突
     pub install_doc: &'static str,
 }
 
 impl CatalogPlugin {
-    /// 官方安装器把 Skill 写到 `~/.agents/skills` 等共享目录；Kivio 直接扫描，启用时不必再拷贝。
+    /// 官方安装器把 Skill 写到 `~/.agents/skills` 等共享目录；ABU Agent 直接扫描，启用时不必再拷贝。
     pub fn uses_shared_skill_dirs(&self) -> bool {
         !self.skill_ids.is_empty()
             && self.skill_md.trim().is_empty()
@@ -104,7 +104,7 @@ pub const PLUGIN_CATALOG: &[CatalogPlugin] = &[CatalogPlugin {
             command: "irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex",
         },
     ],
-    // Kivio 适配策略（英文）：仅保留 officecli 专属约束（MCP 优先、禁 watch、禁 mcp <ide>）+ skill 路由表；
+    // ABU Agent 适配策略（英文）：仅保留 officecli 专属约束（MCP 优先、禁 watch、禁 mcp <ide>）+ skill 路由表；
     // 通用能力（图直喂 R1、临时目录/清理/绝对路径 R3、bash R4）已下沉到运行时，不再靠 hint 打补丁。
     system_hint: "\
 ### OfficeCLI (plugin: officecli)\n\
@@ -118,21 +118,21 @@ pub const PLUGIN_CATALOG: &[CatalogPlugin] = &[CatalogPlugin {
 Do **not** start layout-heavy work without the domain skill.\n\
 \n\
 **Do NOT:**\n\
-- Run `officecli` via bash / run_command — always use the MCP `officecli` tool (one persistent process holds the document warm; bash cold-starts a new process per call and skips Kivio's live preview).\n\
-- Run `officecli watch` / `unwatch` (MCP edits don't drive watch; Kivio provides its own preview).\n\
-- Run `officecli mcp claude|cursor|vscode|…` (Kivio already registers the official stdio server as plugin-officecli).\n\
+- Run `officecli` via bash / run_command — always use the MCP `officecli` tool (one persistent process holds the document warm; bash cold-starts a new process per call and skips ABU Agent's live preview).\n\
+- Run `officecli watch` / `unwatch` (MCP edits don't drive watch; ABU Agent provides its own preview).\n\
+- Run `officecli mcp claude|cursor|vscode|…` (ABU Agent already registers the official stdio server as plugin-officecli).\n\
 \n\
 **Done.** Tell the user the final saved file path(s).",
     // 官方 skill id = load_skill frontmatter `name`（启用时从 CLI 全量同步）
     skill_ids: OFFICECLI_OFFICIAL_SKILL_IDS,
-    skill_md: "", // 空 + 无 download = 官方安装器写入 ~/.agents/skills，Kivio 直接扫描
+    skill_md: "", // 空 + 无 download = 官方安装器写入 ~/.agents/skills，ABU Agent 直接扫描
     skill_download_url: None,
     mcp: Some(PluginMcpSpec { args: &["mcp"] }),
     install_doc: OFFICECLI_INSTALL_DOC,
 }, CatalogPlugin {
     id: "ego-lite",
     name: "ego lite",
-    description: "面向 AI Agent 的 Chromium 浏览器（macOS）。Agent 在独立空间复用你的登录态，用于打开网页、填表、点击、截图、抓取、Web 测试等。附带 ego-browser Skill（由 Kivio 从仓库自动下载）。",
+    description: "面向 AI Agent 的 Chromium 浏览器（macOS）。Agent 在独立空间复用你的登录态，用于打开网页、填表、点击、截图、抓取、Web 测试等。附带 ego-browser Skill（由 ABU Agent 从仓库自动下载）。",
     binary: "ego-browser",
     tags: &["Browser", "Automation", "Skill", "macOS"],
     homepage: "https://lite.ego.app/",
@@ -155,7 +155,7 @@ Do **not** start layout-heavy work without the domain skill.\n\
 Prefer the `ego-browser` skill over web_fetch / built-in browsing whenever the task needs real page interaction.\n\
 Activate the `ego-browser` skill, then run browser work via run_command as `ego-browser nodejs <<'EOF' … EOF` (default one invocation per task). Do NOT import Playwright or launch another browser.",
     skill_ids: &["ego-browser"],
-    skill_md: "", // 由 Kivio 从 skill_download_url 下载
+    skill_md: "", // 由 ABU Agent 从 skill_download_url 下载
     skill_download_url: Some("https://github.com/citrolabs/ego-lite"),
     mcp: None,
     install_doc: EGO_LITE_INSTALL_DOC,
@@ -196,7 +196,7 @@ Prefer this plugin over ad-hoc GUI scripts (PyAutoGUI, osascript click storms, c
 **Skill.** Activate `cua-driver` before substantial desktop-driving work. Follow its snapshot-before-action loop; do not call tools ad-hoc.\n\
 \n\
 **Do NOT:**\n\
-- Run `cua-driver mcp-config --client claude|cursor|…` (Kivio already registers the official stdio server as plugin-cua-driver).\n\
+- Run `cua-driver mcp-config --client claude|cursor|…` (ABU Agent already registers the official stdio server as plugin-cua-driver).\n\
 - Run `pip install cua` for this plugin — that is the separate Sandbox SDK, not the desktop driver.\n\
 - Launch a second computer-use driver when this plugin is enabled.\n\
 \n\
@@ -206,7 +206,7 @@ Prefer this plugin over ad-hoc GUI scripts (PyAutoGUI, osascript click storms, c
 \n\
 **Done.** Report the app/window driven and what you verified (screenshot / AX tree).",
     skill_ids: &["cua-driver"],
-    skill_md: "", // 空 + 无 download = 官方 `skills install` 写入 ~/.agents 等，Kivio 直接扫描
+    skill_md: "", // 空 + 无 download = 官方 `skills install` 写入 ~/.agents 等，ABU Agent 直接扫描
     skill_download_url: None,
     mcp: Some(PluginMcpSpec { args: &["mcp"] }),
     install_doc: CUA_DRIVER_INSTALL_DOC,
@@ -246,7 +246,7 @@ pub fn catalog_plugin(id: &str) -> Option<&'static CatalogPlugin> {
     PLUGIN_CATALOG.iter().find(|p| p.id == id)
 }
 
-/// ego lite 安装补充：GUI 应用（macOS .dmg），Skill 由 Kivio 下载，无 MCP、无 brew。
+/// ego lite 安装补充：GUI 应用（macOS .dmg），Skill 由 ABU Agent 下载，无 MCP、无 brew。
 const EGO_LITE_INSTALL_DOC: &str = r#"## 本插件补充（ego lite）
 
 - **仅 macOS**。ego lite 是 GUI 应用（.dmg）；`ego-browser` 命令由 app 完成首次 onboarding 后注册到 PATH（通常 `~/.local/bin`）。
@@ -260,11 +260,11 @@ const EGO_LITE_INSTALL_DOC: &str = r#"## 本插件补充（ego lite）
   console.log('ego-browser ready')
   EOF
   ```
-- **Skill 由 Kivio 负责**：用户点「启用」后，Kivio 自动从仓库下载 `ego-browser` Skill 并接入对话——**你（AI）不要手写 Skill，也不要配置任何 MCP（本插件无 MCP）**。
+- **Skill 由 ABU Agent 负责**：用户点「启用」后，ABU Agent 自动从仓库下载 `ego-browser` Skill 并接入对话——**你（AI）不要手写 Skill，也不要配置任何 MCP（本插件无 MCP）**。
 - **无 brew cask**：不要 `brew install`。
 "#;
 
-/// 插件专属补充。通用「读 GitHub / 兼容 Kivio」写在 get_install_brief 模板里。
+/// 插件专属补充。通用「读 GitHub / 兼容 ABU Agent」写在 get_install_brief 模板里。
 const OFFICECLI_INSTALL_DOC: &str = r#"## 本插件补充（OfficeCLI）
 
 | 字段 | 值 |
@@ -274,7 +274,7 @@ const OFFICECLI_INSTALL_DOC: &str = r#"## 本插件补充（OfficeCLI）
 | 官网 | https://officecli.ai |
 | 常见 Windows 安装目录 | `%LOCALAPPDATA%\OfficeCLI\officecli.exe` |
 
-### 安装阶段（本对话 · 由 Kivio AI 执行，非后台脚本）
+### 安装阶段（本对话 · 由 ABU Agent AI 执行，非后台脚本）
 
 1. 按 README 安装 **官方** `officecli` 二进制：
    ```
@@ -284,15 +284,15 @@ const OFFICECLI_INSTALL_DOC: &str = r#"## 本插件补充（OfficeCLI）
    irm https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.ps1 | iex
    ```
    验收 `officecli --version`。
-2. **官方 Skills**：官方安装器 / `officecli skills install …` 会写入 `~/.agents/skills`（以及 `~/.claude/skills` 等）。Kivio 直接扫描这些目录，**不必**再拷进插件目录。
+2. **官方 Skills**：官方安装器 / `officecli skills install …` 会写入 `~/.agents/skills`（以及 `~/.claude/skills` 等）。ABU Agent 直接扫描这些目录，**不必**再拷进插件目录。
    若本机还没有，再执行 `officecli skills install`，以及领域包：`pptx` `word` `excel` `morph-ppt` `morph-ppt-3d` `pitch-deck` `academic-paper` `data-dashboard` `financial-model` `word-form`。
 3. **不要**执行 `officecli mcp claude|cursor|vscode|…`（那是给其它 IDE 的）。
 
-### 启用阶段（用户拨开关 · Kivio 运行时自动）
+### 启用阶段（用户拨开关 · ABU Agent 运行时自动）
 
 1. **MCP**：注册官方 stdio `plugin-officecli` = `{绝对路径} mcp`（官方内置 MCP）。
 2. **Skill**：已在 `~/.agents/skills` 的官方 skill 直接进对话（插件启用后才放行）。
-3. **系统提示**：Kivio 适配策略（优先 MCP、禁止 watch 等）。
+3. **系统提示**：ABU Agent 适配策略（优先 MCP、禁止 watch 等）。
 
 装完官方二进制后提醒用户去插件页 **刷新并启用**，否则 MCP 不会进对话。
 "#;
@@ -311,7 +311,7 @@ const CUA_DRIVER_INSTALL_DOC: &str = r#"## 本插件补充（Cua Driver）
 
 **范围：** 本插件只要 **Cua Driver**（本机后台桌面操控）。不要安装 Cua Sandbox / Cua Bench / Lume，也不要 `pip install cua`。
 
-### 安装阶段（本对话 · 由 Kivio AI 执行，非后台脚本）
+### 安装阶段（本对话 · 由 ABU Agent AI 执行，非后台脚本）
 
 1. 按 README 安装官方 **cua-driver** 二进制（以刚读到的 README 为准；常见一键脚本）：
    - macOS / Linux：`/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"`
@@ -327,14 +327,14 @@ const CUA_DRIVER_INSTALL_DOC: &str = r#"## 本插件补充（Cua Driver）
    cua-driver permissions grant
    ```
    告诉用户：系统弹窗点「打开系统设置」后，在 **辅助功能** 和 **屏幕录制** 里打开 CuaDriver。完成后跑 `cua-driver permissions status`，两项都应为 granted。
-4. **官方 Skill：** `cua-driver skills install --all-platforms` 写入 `~/.agents/skills` / `~/.cua-driver/skills`。Kivio 直接扫描，**不必**再拷进插件目录。
+4. **官方 Skill：** `cua-driver skills install --all-platforms` 写入 `~/.agents/skills` / `~/.cua-driver/skills`。ABU Agent 直接扫描，**不必**再拷进插件目录。
 5. **不要**执行 `cua-driver mcp-config --client claude|cursor|vscode|…`（那是给其它 IDE 写配置的）。
 
-### 启用阶段（用户拨开关 · Kivio 运行时自动）
+### 启用阶段（用户拨开关 · ABU Agent 运行时自动）
 
 1. **MCP**：注册官方 stdio `plugin-cua-driver` = `{绝对路径} mcp`。
 2. **Skill**：已在 `~/.agents/skills` 的 `cua-driver` 直接进对话（插件启用后才放行）。
-3. **系统提示**：Kivio 适配策略（优先 MCP、禁止 mcp-config）。
+3. **系统提示**：ABU Agent 适配策略（优先 MCP、禁止 mcp-config）。
 
 装完官方二进制后提醒用户去插件页 **刷新并启用**，否则 MCP 不会进对话。
 "#;

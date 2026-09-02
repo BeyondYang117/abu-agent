@@ -615,7 +615,7 @@ fn tool_draft_span_id(round: u32, tool_call_id: &str) -> String {
 
 fn tool_draft_arguments(name: &str, phase: &str, argument_chars: usize) -> String {
     serde_json::json!({
-        "_kivioToolDraft": true,
+        "_abuAgentToolDraft": true,
         "tool": name,
         "phase": phase,
         "argumentChars": argument_chars,
@@ -1172,12 +1172,12 @@ mod tests {
         })
         .expect("open card");
         sink.emit(StreamPart::WebSearch {
-            queries: vec!["kivio release".to_string()],
+            queries: vec!["abu_agent release".to_string()],
             citations: Vec::new(),
         })
         .expect("query frame");
         sink.emit(StreamPart::WebSearch {
-            queries: vec!["kivio release".to_string()],
+            queries: vec!["abu_agent release".to_string()],
             citations: vec![
                 WebCitation {
                     title: "A".to_string(),

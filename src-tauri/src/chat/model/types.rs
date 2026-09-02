@@ -1223,7 +1223,7 @@ MCP note after the path.";
         let messages = vec![
             serde_json::json!({
                 "role": "system",
-                "content": format!("You are Kivio.\n\n{workbench}"),
+                "content": format!("You are ABU Agent.\n\n{workbench}"),
             }),
             serde_json::json!({ "role": "user", "content": "hello" }),
             serde_json::json!({ "role": "assistant", "content": "hi" }),
@@ -1237,7 +1237,7 @@ MCP note after the path.";
             "t",
             Default::default(),
         );
-        assert_eq!(request.system, "You are Kivio.");
+        assert_eq!(request.system, "You are ABU Agent.");
         assert!(!request.system.contains("conv_abc"));
 
         let first_user = request
@@ -1266,7 +1266,7 @@ MCP note after the path.";
     #[test]
     fn generate_request_leaves_system_alone_without_workbench_paragraph() {
         let messages = vec![
-            serde_json::json!({ "role": "system", "content": "You are Kivio." }),
+            serde_json::json!({ "role": "system", "content": "You are ABU Agent." }),
             serde_json::json!({ "role": "user", "content": "hello" }),
         ];
         let request = generate_request_from_openai_messages(
@@ -1277,7 +1277,7 @@ MCP note after the path.";
             "t",
             Default::default(),
         );
-        assert_eq!(request.system, "You are Kivio.");
+        assert_eq!(request.system, "You are ABU Agent.");
         let MessagePart::Text { text } = &request.messages[0].content[0] else {
             panic!("expected text part");
         };

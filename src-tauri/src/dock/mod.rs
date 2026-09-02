@@ -1,6 +1,6 @@
 //! 右侧 Dock（文件树 + Git 面板 + 终端面板）后端：文件系统命令、Git 命令、
 //! PTY 终端会话、workspace 变更监听。
-//! 架构思路参考 LiveAgent 的 Right Dock，按 kivio 惯例精简重写（命令返回
+//! 架构思路参考 LiveAgent 的 Right Dock，按 abu_agent 惯例精简重写（命令返回
 //! `Result<T, String>`，响应结构体 serde camelCase）。
 
 pub mod fs;
@@ -12,7 +12,7 @@ pub mod watch;
 /// - 外部 Agent（claude/codex/kimi…）：`resolve_effective_cwd` → 项目根，否则
 ///   `chat-workspaces/<conversation_id>`；
 /// - 内置 runtime：`resolve_conversation_working_directory` → 项目根，否则
-///   `<nativeTools.workingDirectory>/<conversation_id>`（默认 `~/Kivio/workspace/<id>`）。
+///   `<nativeTools.workingDirectory>/<conversation_id>`（默认 `~/ABU Agent/workspace/<id>`）。
 /// 一律走前者会让内置 runtime 的无项目会话盯着一个 agent 从不写入的目录（树永远为空）。
 #[tauri::command]
 pub async fn dock_resolve_cwd(
@@ -73,7 +73,7 @@ pub async fn dock_resolve_cwd(
             }
         }
 
-        // 无项目草稿：内置 runtime 工作根下的会话目录（默认 ~/Kivio/workspace/<id>）。
+        // 无项目草稿：内置 runtime 工作根下的会话目录（默认 ~/ABU Agent/workspace/<id>）。
         let settings = crate::settings::load_settings(&app);
         let configured = settings.chat_tools.native_tools.working_directory;
         let working_root = {

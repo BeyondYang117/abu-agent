@@ -7,7 +7,7 @@ export type ChatImageViewerItem = {
   conversationId?: string | null
 }
 
-const CHAT_IMAGE_VIEWER_EVENT = 'kivio-chat-open-image-viewer'
+const CHAT_IMAGE_VIEWER_EVENT = 'abu-agent-chat-open-image-viewer'
 
 export function openChatImageViewer(item: ChatImageViewerItem) {
   window.dispatchEvent(new CustomEvent<ChatImageViewerItem>(CHAT_IMAGE_VIEWER_EVENT, {

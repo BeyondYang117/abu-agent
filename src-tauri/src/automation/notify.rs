@@ -3,6 +3,8 @@
 
 use std::process::Command;
 
+pub(crate) const WINDOWS_TOAST_APP_NAME: &str = "ABU Agent Desktop";
+
 pub(crate) fn show(title: &str, body: &str) {
     let title = sanitize_toast_text(title, 80);
     let body = sanitize_toast_text(body, 240);
@@ -66,7 +68,7 @@ fn windows_notify(title: &str, body: &str) {
          $xml = New-Object Windows.Data.Xml.Dom.XmlDocument; \
          $xml.LoadXml(@'\n{xml}\n'@); \
          $toast = [Windows.UI.Notifications.ToastNotification]::new($xml); \
-         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Kivio Desktop').Show($toast)"
+         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{WINDOWS_TOAST_APP_NAME}').Show($toast)"
     );
     let _ = Command::new("powershell")
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
@@ -84,7 +86,12 @@ fn xml_escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_toast_text;
+    use super::{sanitize_toast_text, WINDOWS_TOAST_APP_NAME};
+
+    #[test]
+    fn windows_toast_brand_is_abu_agent_desktop() {
+        assert_eq!(WINDOWS_TOAST_APP_NAME, "ABU Agent Desktop");
+    }
 
     #[test]
     fn strips_newlines_so_powershell_here_string_cannot_close() {

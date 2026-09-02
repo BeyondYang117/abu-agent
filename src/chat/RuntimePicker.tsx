@@ -11,7 +11,7 @@ import type { AgentRuntimeConfig } from './types'
 import { rememberedExternalRuntime } from './lastAgentRuntime'
 import './runtimePicker.css'
 
-const KIVIO_LOGO_SRC = '/logo-mark.png'
+const ABU_AGENT_LOGO_SRC = '/logo-mark.png'
 
 /** Same brand mark as Agent; `variant` only changes color treatment so the shape stays identical. */
 function ABUAgentMark({
@@ -23,7 +23,7 @@ function ABUAgentMark({
 }) {
   return (
     <img
-      src={KIVIO_LOGO_SRC}
+      src={ABU_AGENT_LOGO_SRC}
       alt=""
       aria-hidden="true"
       className={

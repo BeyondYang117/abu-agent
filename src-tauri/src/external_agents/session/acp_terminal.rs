@@ -545,7 +545,7 @@ mod tests {
     async fn create_wait_output_and_release_a_short_command() {
         let cwd = std::env::temp_dir();
         let mut host = AcpTerminalHost::new(cwd.clone());
-        let (command, args) = echo_command("kivio-acp-term");
+        let (command, args) = echo_command("abu-agent-acp-term");
         let created = host.handle(
             "terminal/create",
             &json!({
@@ -589,7 +589,7 @@ mod tests {
         ) {
             TerminalReply::Result(value) => {
                 let output = value["output"].as_str().unwrap_or("");
-                assert!(output.contains("kivio-acp-term"), "output={output:?}");
+                assert!(output.contains("abu-agent-acp-term"), "output={output:?}");
                 assert_eq!(value["truncated"], json!(false));
                 assert_eq!(value["exitStatus"]["exitCode"], json!(0));
             }
@@ -608,7 +608,7 @@ mod tests {
             .preview_output(&terminal_id)
             .expect("release must keep captured output for the tool card");
         assert!(
-            preview.contains("kivio-acp-term"),
+            preview.contains("abu-agent-acp-term"),
             "preview after release={preview:?}"
         );
         match host.handle(

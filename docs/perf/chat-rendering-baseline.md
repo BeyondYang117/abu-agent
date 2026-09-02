@@ -15,13 +15,13 @@ network data and use a fixed timestamp so the same run produces the same row key
 
 ## Collection
 
-Run the UI in development mode with `__KIVIO_CHAT_PERF__ = true`. The chat probe
+Run the UI in development mode with `__ABU_AGENT_CHAT_PERF__ = true`. The chat probe
 records React Profiler commits, mounted rows, DOM nodes, conversation visibility,
 sidebar collapse duration, and long tasks. Compare the same fixture at the same
 viewport width with the four `chat.performance.*` flags enabled and disabled one
 at a time. In DevTools, run
-`window.__KIVIO_CHAT_PERF_REPORT__()` to export the current JSON report; run
-`window.__KIVIO_CHAT_PERF_RESET__()` before each fixture.
+`window.__ABU_AGENT_CHAT_PERF_REPORT__()` to export the current JSON report; run
+`window.__ABU_AGENT_CHAT_PERF_RESET__()` before each fixture.
 Save that object as `report.json`, then run
 `npm run probe:chat-performance -- report.json` for a repeatable guardrail
 check. The default guardrails are intentionally broad until target-device

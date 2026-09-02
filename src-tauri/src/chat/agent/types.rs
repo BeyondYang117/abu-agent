@@ -66,7 +66,7 @@ pub struct AgentRunConfig<'a> {
     /// 锚点响应**之后**（不含响应本身，响应用 output 计入锚点）新增消息的字符估算，由 commands.rs
     /// 组装 runtime_messages 时算好。与 `initial_anchor_total_tokens` 配对：`effective = 锚点 + 该 trailing`。
     pub initial_anchor_trailing_estimate: usize,
-    /// 对话工作目录，用于扫描项目 `.kivio/skills` 与 `.agents/skills`。
+    /// 对话工作目录，用于扫描项目 `.abu-agent/skills` 与 `.agents/skills`。
     pub skill_project_cwd: Option<std::path::PathBuf>,
 }
 
@@ -96,7 +96,7 @@ pub struct AgentRunResult {
     pub last_step_usage: Option<crate::chat::model::ModelUsage>,
     /// 本轮发生了上下文压缩（L2 摘要）时，这里携带压缩后的**完整历史**
     /// （system + 摘要 + 受保护尾段 + 本轮后续消息 + 最终 assistant 回答）。
-    /// 跨轮调用方（kivio-code 交互模式）据此**替换**自己累积的 runtime_messages，
+    /// 跨轮调用方（abu-agent-code 交互模式）据此**替换**自己累积的 runtime_messages，
     /// 让压缩真正跨轮生效；为 None 时维持"追加 api_messages"的旧行为。
     pub compacted_history: Option<Vec<Value>>,
     /// Agent-loop L2 compaction boundary for timeline UI persistence.

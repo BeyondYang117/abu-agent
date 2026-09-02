@@ -12,8 +12,8 @@ const TIMEOUT_MAX_MS = 600_000
 const TIMEOUT_DEFAULT_MS = 60_000
 const METHODS = ['POST', 'GET', 'PUT', 'PATCH', 'DELETE']
 const SCRIPT_PLACEHOLDER = getPlatform() === 'windows'
-  ? 'echo done >> %TEMP%\\kivio-hook.log'
-  : 'echo done >> /tmp/kivio-hook.log'
+  ? 'echo done >> %TEMP%\\abu-agent-hook.log'
+  : 'echo done >> /tmp/abu-agent-hook.log'
 
 function headersToText(headers: Record<string, string>): string {
   return Object.entries(headers)

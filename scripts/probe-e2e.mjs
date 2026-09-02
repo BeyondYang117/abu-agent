@@ -27,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-const APP_IDENTIFIER = 'com.zmair.kivio'
+const APP_IDENTIFIER = 'com.zmair.abu-agent'
 /**
  * 首次就绪握手的等待上限（秒）。默认 60s 够覆盖「app 正在启动」；`npm run dev` 还要先编译
  * Rust，那种情况用 `--wait 600` 让脚本一直等。等不到就 skip（不是 fail）。
@@ -62,7 +62,7 @@ const AGENT = argValue('--agent', 'claude')
 const VERBOSE = flags.has('--verbose')
 
 function resolveProbeDir() {
-  const override = process.env.KIVIO_PROBE_DIR || argValue('--probe-dir', null)
+  const override = process.env.ABU_AGENT_PROBE_DIR || argValue('--probe-dir', null)
   if (override) return override
   if (process.platform === 'win32') {
     const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
@@ -85,9 +85,9 @@ const RUN_ID = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
  * 「Chat Probe」项目根是全局共享的、每次请求都会被改写 —— 中途换 cwd 等于把已建立的
  * 常驻会话判成不可复用，"同一个 pid" 这条断言会莫名其妙地红。
  */
-const WORKDIR = path.join(os.tmpdir(), 'kivio-probe-e2e')
+const WORKDIR = path.join(os.tmpdir(), 'abu-agent-probe-e2e')
 const SENTINEL_NAME = 'sentinel.txt'
-const SENTINEL_TEXT = `KIVIO-PROBE-SENTINEL-${RUN_ID}`
+const SENTINEL_TEXT = `ABU_AGENT-PROBE-SENTINEL-${RUN_ID}`
 
 // ---------------------------------------------------------------------------------------------
 // 输出
@@ -673,7 +673,7 @@ async function main() {
     return 1
   }
 
-  log(`${C.cyan}Kivio probe e2e${C.off} — agent=${AGENT}, ${selected.length} 个场景`)
+  log(`${C.cyan}ABU Agent probe e2e${C.off} — agent=${AGENT}, ${selected.length} 个场景`)
   info(`probe 目录：${PROBE_DIR}`)
   info(`工作目录：${WORKDIR}`)
 

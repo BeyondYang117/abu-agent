@@ -240,7 +240,7 @@ fn strip_image_payloads_from_model_messages(messages: &mut [crate::chat::model::
 
 /// `strip_image_payloads_from_model_messages` 的 wire-JSON 版：把 `api_messages` 里
 /// 图片部件的 `data:` URL 换成短占位串。**只动发给前端的内存副本**，磁盘上是
-/// `kivio-attachment://` 哨兵（见 `attachments::externalize_api_message_images`）。
+/// `abu-agent-attachment://` 哨兵（见 `attachments::externalize_api_message_images`）。
 fn strip_image_payloads_from_api_messages(messages: &mut [serde_json::Value]) {
     for message in messages.iter_mut() {
         let Some(parts) = message.get_mut("content").and_then(|c| c.as_array_mut()) else {
@@ -721,7 +721,7 @@ fn builder_system_prompt(app: &AppHandle, settings: &Settings) -> String {
         Err(_) => "（无可用技能）".to_string(),
     };
     format!(
-        "你是「专家搭建助手」。任务:通过对话帮用户创建一个新的 Kivio 专家(assistant),最后调用 save_assistant 工具落库。回答语言跟随用户。\n\n\
+        "你是「专家搭建助手」。任务:通过对话帮用户创建一个新的 ABU Agent 专家(assistant),最后调用 save_assistant 工具落库。回答语言跟随用户。\n\n\
 流程:\n\
 1. 先用一两个问题问清这个专家「要做什么、面向什么场景、语气/风格、有没有边界或禁忌」。一次只问一两个,别一次性列一堆。\n\
 2. 据此为它撰写 system_prompt(这是该专家自己的系统指令,用第二人称写给它)。\n\

@@ -445,7 +445,7 @@ pub(crate) async fn chat_steer_message(
 /// 原生 follow-up：把消息排到当前运行结束后，由同一个常驻会话 / 内置循环继续处理。
 ///
 /// 外部 CLI：Pi RPC `follow_up`；dsh 官方 `session/prompt` → `agent.followup()`。
-/// 内置 Kivio Agent / Chat：放进 `pending_chat_follow_up` 信箱，终答边界注入（不打断工具循环）。
+/// 内置 ABU Agent / Chat：放进 `pending_chat_follow_up` 信箱，终答边界注入（不打断工具循环）。
 /// 空闲（没有在飞轮次）时回 false，前端再按普通新轮发出。
 ///
 /// 返回 false 时前端保留本地队列，轮末按普通消息发送；只有对端明确响应 success 才返回 true。

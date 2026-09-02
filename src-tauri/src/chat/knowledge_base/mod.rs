@@ -665,7 +665,7 @@ mod tests {
     // ===== full storage + retrieval e2e (temp dir, no AppHandle / network) =====
 
     fn temp_root() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("kivio-kb-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-kb-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

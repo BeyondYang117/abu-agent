@@ -21,7 +21,7 @@
      缺了这段会掉进浏览器默认的宋体（衬线），代码/diff 里的中文很难看。 */
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Cascadia Mono", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", monospace;
 
-  /* Streamdown / shadcn 设计 token → 接到 Kivio 主题色（只映射，不改 Streamdown 组件 class） */
+  /* Streamdown / shadcn 设计 token → 接到 ABU Agent 主题色（只映射，不改 Streamdown 组件 class） */
   --color-background: var(--theme-surface, #fdfcfa);
   --color-foreground: var(--text, #171717);
   --color-card: var(--theme-surface, #fdfcfa);
@@ -3590,7 +3590,7 @@ button.chat-composer-status-item:hover {
   }
 }
 
-/* ===== Kivio Settings redesign ===== */
+/* ===== ABU Agent Settings redesign ===== */
 .kv {
   --bg: var(--theme-surface);
   --bg-sidebar: var(--theme-surface-muted);
@@ -3797,7 +3797,7 @@ button.chat-composer-status-item:hover {
   color: var(--text-muted);
 }
 .kv-nav-item.active svg { color: var(--accent); }
-/* Kivio logo mark：纯黑 PNG，尺寸对齐其它线性图标；暗色反白。 */
+/* ABU Agent logo mark：纯黑 PNG，尺寸对齐其它线性图标；暗色反白。 */
 .kv-nav-logo-mark {
   display: block;
   width: 14px;

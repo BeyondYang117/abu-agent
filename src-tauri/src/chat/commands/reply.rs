@@ -194,7 +194,7 @@ pub(super) async fn complete_assistant_reply_inner(
         1
     };
     let chat_mode = conversation.agent_runtime.is_chat();
-    // Plan/Orchestrate only apply to the full Kivio Agent runtime, not Chat.
+    // Plan/Orchestrate only apply to the full ABU Agent runtime, not Chat.
     let plan_mode = !chat_mode && crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
     let orchestrate_mode =
         !chat_mode && crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);

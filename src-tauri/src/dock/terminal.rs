@@ -153,7 +153,7 @@ fn resolve_shell_priority(login: Option<&str>, shell_env: Option<&str>) -> Strin
             return shell.to_string();
         }
     }
-    // kivio 只发 macOS/Windows，zsh 是 macOS 默认 shell。
+    // abu_agent 只发 macOS/Windows，zsh 是 macOS 默认 shell。
     "/bin/zsh".to_string()
 }
 
@@ -184,7 +184,7 @@ fn login_shell() -> Option<String> {
         .map(str::to_string)
 }
 
-/// Linux：getent passwd 末段即登录 shell（kivio 目前不发 Linux，保留兜底路径）。
+/// Linux：getent passwd 末段即登录 shell（abu_agent 目前不发 Linux，保留兜底路径）。
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn login_shell() -> Option<String> {
     let user = std::env::var("USER").ok()?;
@@ -505,12 +505,12 @@ mod tests {
     fn validate_workdir_rejects_empty_and_missing() {
         assert!(validate_workdir("").is_err());
         assert!(validate_workdir("   ").is_err());
-        assert!(validate_workdir("/definitely/not/a/real/path/kivio").is_err());
+        assert!(validate_workdir("/definitely/not/a/real/path/abu_agent").is_err());
     }
 
     #[test]
     fn validate_workdir_rejects_file_accepts_dir() {
-        let dir = std::env::temp_dir().join(format!("kivio-dock-term-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("abu-agent-dock-term-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let file = dir.join("a.txt");
         let mut f = std::fs::File::create(&file).expect("create temp file");

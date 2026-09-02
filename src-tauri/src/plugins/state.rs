@@ -75,8 +75,8 @@ fn binary_filename(catalog: &CatalogPlugin) -> String {
     }
 }
 
-/// Kivio 托管安装目录中的二进制（不论是否启用）。
-pub fn kivio_binary_path(id: &str) -> Option<PathBuf> {
+/// ABU Agent 托管安装目录中的二进制（不论是否启用）。
+pub fn abu_agent_binary_path(id: &str) -> Option<PathBuf> {
     let catalog = catalog_plugin(id)?;
     let dir = plugin_dir(id)?;
     let name = read_meta(id)
@@ -193,9 +193,9 @@ fn known_binary_path(catalog: &CatalogPlugin) -> Option<PathBuf> {
     None
 }
 
-/// 解析可用二进制：Kivio 托管 → 刷新后 PATH → 官方常见安装路径。
+/// 解析可用二进制：ABU Agent 托管 → 刷新后 PATH → 官方常见安装路径。
 pub fn resolve_binary(id: &str) -> Option<PathBuf> {
-    if let Some(path) = kivio_binary_path(id) {
+    if let Some(path) = abu_agent_binary_path(id) {
         return Some(path);
     }
     let catalog = catalog_plugin(id)?;
@@ -358,7 +358,7 @@ pub fn enabled_system_prompt() -> Option<String> {
         None
     } else {
         let mut out = String::from(
-            "[Kivio Plugins]\n\
+            "[ABU Agent Plugins]\n\
 The following capability plugins are enabled. Prefer their declared entry points over ad-hoc alternatives. \
 Do not re-install them or write MCP config for third-party IDEs.",
         );

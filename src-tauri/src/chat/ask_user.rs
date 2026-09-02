@@ -91,7 +91,7 @@ pub fn ask_user_tool() -> ChatToolDefinition {
         description: "Ask the user blocking clarification questions with concrete answer options, then continue this same run from the structured answer.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("ABU Agent".to_string()),
         input_schema: input_schema(),
         sensitive: false,
         annotations: Some(serde_json::json!({

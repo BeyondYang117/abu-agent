@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use kivio::chat::protocol::{
+use abu_agent::chat::protocol::{
     ChatAskUserOptionPayload, ChatAskUserPromptPayload, ChatAskUserQuestionPayload,
     ChatCompactionBoundaryPayload, ChatCompactionSnapshot, ChatContextClearBoundaryPayload,
     ChatContextStatePayload, ChatContextSummaryPayload, ChatContextUsagePayload,

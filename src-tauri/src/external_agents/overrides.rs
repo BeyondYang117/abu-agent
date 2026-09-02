@@ -25,7 +25,7 @@ fn get(id: &str) -> Option<ExternalCliAgentConfig> {
     OVERRIDES.read().ok()?.get(id).cloned()
 }
 
-/// 原生落盘层需要整份配置：不仅要看当前项，还要同步全部 Kivio 管理的 provider。
+/// 原生落盘层需要整份配置：不仅要看当前项，还要同步全部 ABU Agent 管理的 provider。
 pub fn agent_config(id: &str) -> Option<ExternalCliAgentConfig> {
     get(id)
 }

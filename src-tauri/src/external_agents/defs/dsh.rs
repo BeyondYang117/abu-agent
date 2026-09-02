@@ -6,7 +6,7 @@
 //! 结论：那是 automation-only 的桥，**只发 committed 的 `agent_message_chunk`**。实测
 //! （0.1.0-rc.6；rc.8 的 ACP 包仍是同一条 automation 桥）确认它没有 token 级 delta、
 //! 没有 reasoning、没有 tool call，
-//! `session/load` 直接回 `-32601 Method not found`。接进 Kivio 的话工具卡与思考块永远是空的，
+//! `session/load` 直接回 `-32601 Method not found`。接进 ABU Agent 的话工具卡与思考块永远是空的，
 //! 等于把一个 agent harness 退化成问答框。
 //!
 //! 所以走 `@deepseek-ai/dsh-sdk-jsonrpc-server`（`StreamFormat::DshJsonRpc`）：同一个 CLI，
@@ -18,11 +18,11 @@
 //! # 启动形状
 //!
 //! dsh 没有「一条命令直接出流式 JSON」的模式，它**只能 boot profile**。所以启动参数是
-//! `--profile <kivio profile>`，而那个 profile 由 `dsh_profile.rs` 生成并维护（Kivio 自己的
+//! `--profile <abu_agent profile>`，而那个 profile 由 `dsh_profile.rs` 生成并维护（ABU Agent 自己的
 //! 目录，绝不改用户的 `profiles/web` 或家目录 `cordis.patch.yml`）。进程 cwd、`initialize.cwd`
-//! 与 Host Workspace 挂载都指向 Kivio 项目根；不只是提示词里写一条路径。
+//! 与 Host Workspace 挂载都指向 ABU Agent 项目根；不只是提示词里写一条路径。
 //!
-//! 模型 / 推理档位不是启动 flag，而是 `initialize` 的 RPC 参数（模型）与 Kivio profile
+//! 模型 / 推理档位不是启动 flag，而是 `initialize` 的 RPC 参数（模型）与 ABU Agent profile
 //! `cordis.patch.yml` 中的 `llm-deepseek.reasoningEffort`（档位）—— 见 `dsh_profile.rs`。
 
 use super::super::types::{
@@ -30,7 +30,7 @@ use super::super::types::{
     RuntimeContext, SlashStrategy, StreamFormat,
 };
 
-/// Fallback `/` menu before a live kivio dsh session has reported
+/// Fallback `/` menu before a live abu_agent dsh session has reported
 /// `session/commands`. Official web-only entries that are not registered in
 /// this headless profile stay off the fallback; discovery lists whatever
 /// `ctx.commands.list` actually returns.
@@ -70,7 +70,7 @@ pub fn builtin_slash_commands() -> Vec<ExternalCliSlashCommand> {
 /// `llm-pi-ai.providers` 里配的中转路由）；这张表只是读不到时的兜底，前端标「默认列表」。
 ///
 /// `deepseek-v4-flash-vision-exp` 是 0.1.1 起的多模态目录项（`inputModalities: [text, image]`）。
-/// 能力写在 dsh 自己的 catalog 里，Kivio 不往 `llm-deepseek` 补这份声明——Flash / Pro
+/// 能力写在 dsh 自己的 catalog 里，ABU Agent 不往 `llm-deepseek` 补这份声明——Flash / Pro
 /// 仍是纯文本，硬开 `inputModalities` 会 400。
 const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("default", "Default"),
@@ -96,7 +96,7 @@ const REASONING: &[(&str, &str)] = &[
 
 /// `dsh --profile <name>`。
 ///
-/// profile 名固定（`dsh_profile::KIVIO_PROFILE`）：它是 Kivio 私有的一份装配，与用户自己的
+/// profile 名固定（`dsh_profile::ABU_AGENT_PROFILE`）：它是 ABU Agent 私有的一份装配，与用户自己的
 /// `web` / `tui` profile 并存互不影响。模型/档位都不进 argv，见模块注释。
 pub fn build_dsh_args(
     _ctx: &RuntimeContext,
@@ -105,7 +105,7 @@ pub fn build_dsh_args(
 ) -> Vec<String> {
     vec![
         "--profile".to_string(),
-        crate::external_agents::dsh_profile::KIVIO_PROFILE.to_string(),
+        crate::external_agents::dsh_profile::ABU_AGENT_PROFILE.to_string(),
     ]
 }
 
@@ -136,11 +136,11 @@ pub const DSH_AGENT_DEF: RuntimeAgentDef = RuntimeAgentDef {
     prompt_via_stdin: false,
     prompt_input_format: PromptInputFormat::Text,
     stream_format: StreamFormat::DshJsonRpc,
-    // 原生 session id 由 Kivio bridge 的 `session/open` 创建/恢复，不进 argv；因此这里仍不是
+    // 原生 session id 由 ABU Agent bridge 的 `session/open` 创建/恢复，不进 argv；因此这里仍不是
     // `resumes_session_via_cli`（该字段只描述 `--resume` 一类 CLI 参数形状）。
     resumes_session_via_cli: false,
     // `session/prompt` 的官方 image 块是 `{type:"image", attachment:{attachmentId,…}}`。
-    // Kivio 先发 base64，bridge 经 `ctx.attachments.saveImage` 落库后再改写成引用。
+    // ABU Agent 先发 base64，bridge 经 `ctx.attachments.saveImage` 落库后再改写成引用。
     supports_native_image: true,
     // Bridge 补 `session/steer` → `agent.steer()`（next-step inbox，当前轮下一步）。
     // 官方 `session/prompt` → `agent.followup()`（下一轮 FIFO）。两套都接。
@@ -172,10 +172,10 @@ mod tests {
     }
 
     #[test]
-    fn launches_the_kivio_profile() {
+    fn launches_the_abu_agent_profile() {
         assert_eq!(
             (DSH_AGENT_DEF.build_args)(&ctx(), &opts(), None),
-            vec!["--profile".to_string(), "kivio".to_string()]
+            vec!["--profile".to_string(), "abu_agent".to_string()]
         );
     }
 
@@ -193,7 +193,7 @@ mod tests {
             },
             Some("hello"),
         );
-        assert_eq!(args, vec!["--profile".to_string(), "kivio".to_string()]);
+        assert_eq!(args, vec!["--profile".to_string(), "abu_agent".to_string()]);
     }
 
     /// 这条线的能力边界是**实测**出来的，不是保守估计。改任一项之前先按模块注释复验协议。

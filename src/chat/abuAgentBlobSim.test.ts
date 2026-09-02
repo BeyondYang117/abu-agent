@@ -12,9 +12,9 @@ import {
   polyPath,
   queueBlink,
   resolveBlobMood,
-} from './kivioBlobSim'
+} from './abuAgentBlobSim'
 
-describe('kivioBlobSim', () => {
+describe('abuAgentBlobSim', () => {
   it('queueBlink 走 70ms 眯 → 150ms 过冲 → 300ms 睁开', () => {
     const q: { at: number; v: number }[] = []
     queueBlink(q, 1000, () => 1)

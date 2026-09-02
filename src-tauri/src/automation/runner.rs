@@ -336,9 +336,9 @@ async fn execute_node(
                 .clone()
                 .unwrap_or_else(|| "zh".to_string());
             let title = if language == "en" {
-                "Kivio automation"
+                "ABU Agent automation"
             } else {
-                "Kivio 自动化"
+                "ABU Agent 自动化"
             };
             notify::show(title, &body);
             Ok((NodeOutput::from_text(body), None))

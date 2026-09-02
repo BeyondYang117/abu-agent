@@ -1,6 +1,6 @@
 //! Dock Git 面板命令：status / diff / log / branches / stage / commit 等。
 //! 直接 shell 调用 git 二进制（不引 git2），思路参考 LiveAgent
-//! `commands/workspace/git.rs`，精简为 kivio 的 `Result<T, String>` 模型。
+//! `commands/workspace/git.rs`，精简为 abu_agent 的 `Result<T, String>` 模型。
 
 use std::fs;
 use std::io::Read;
@@ -115,7 +115,7 @@ struct GitOutput {
 
 // ---- 进程执行 ----
 
-/// 进程组处理复用 kivio `native_tools/shell.rs` 的做法：Unix setsid 让 git
+/// 进程组处理复用 abu_agent `native_tools/shell.rs` 的做法：Unix setsid 让 git
 /// 自成进程组，超时杀整组；Windows 起新进程组 + 隐藏控制台。
 fn configure_git_command(command: &mut Command) {
     #[cfg(unix)]
@@ -1395,7 +1395,7 @@ mod tests {
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("kivio-dock-git-{tag}-{}-{id}", std::process::id()));
+            std::env::temp_dir().join(format!("abu-agent-dock-git-{tag}-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("create temp dir");
         fs::canonicalize(&dir).expect("canonicalize temp dir")
     }
@@ -1536,7 +1536,7 @@ mod tests {
         assert!(git_init_sync(&root, Some("-bad".to_string())).is_err());
         assert!(git_init_sync(&root, Some("a b".to_string())).is_err());
         // 不存在的目录被拒绝。
-        assert!(git_init_sync("/nonexistent/kivio-dock-git-init-dir", None).is_err());
+        assert!(git_init_sync("/nonexistent/abu-agent-dock-git-init-dir", None).is_err());
         fs::remove_dir_all(&dir).ok();
     }
 

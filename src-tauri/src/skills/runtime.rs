@@ -17,7 +17,7 @@ pub struct SkillRunCache {
     /// 当前对话助手允许激活的技能 id 白名单(冻结自助手快照)。
     /// `None` = 无助手限制(全局行为);`Some(ids)` = 仅这些技能可激活,空集合 = 一个都不可。
     allowed_skill_ids: Option<Vec<String>>,
-    /// 对话工作目录：扫描项目 `.kivio/skills` 与 `.agents/skills`（cwd → git 根）。
+    /// 对话工作目录：扫描项目 `.abu-agent/skills` 与 `.agents/skills`（cwd → git 根）。
     project_cwd: Option<std::path::PathBuf>,
 }
 

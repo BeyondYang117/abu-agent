@@ -2,8 +2,8 @@
 # 部署 website/ 到 GreenCloudVPS 上的 Caddy 静态站点。详见 DEPLOY.md。
 set -euo pipefail
 
-HOST="${KIVIO_DEPLOY_HOST:-root@185.200.65.236}"
-DEST="${KIVIO_DEPLOY_DEST:-/opt/domain-gateway/sites/kivio-desktop}"
+HOST="${ABU_AGENT_DEPLOY_HOST:-root@185.200.65.236}"
+DEST="${ABU_AGENT_DEPLOY_DEST:-/opt/domain-gateway/sites/abu-agent-desktop}"
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
 # 上传（排除文档/脚本，不发到公开目录）
@@ -12,4 +12,4 @@ COPYFILE_DISABLE=1 tar czf - -C "$SRC" \
   | ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
       "tar xzf - -C '$DEST' && echo '已更新：'$DEST"
 
-echo "完成 → https://kivio-desktop.xyz"
+echo "完成 → https://abu-agent-desktop.xyz"

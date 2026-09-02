@@ -35,7 +35,7 @@ import { SkillIcon } from '../settings/NavIcons'
 interface SkillCenterProps {
   /** Skill 启用状态 / 列表变化后通知 Chat 刷新其技能列表 */
   onSkillsChanged?: () => void
-  /** 当前对话工作目录：扫描项目 `.kivio/skills` 与 `.agents/skills` */
+  /** 当前对话工作目录：扫描项目 `.abu-agent/skills` 与 `.agents/skills` */
   projectCwd?: string
 }
 

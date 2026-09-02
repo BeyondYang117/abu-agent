@@ -35,7 +35,7 @@ const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 /// …or one per this many bytes accumulated, whichever comes first.
 const PROGRESS_EMIT_BYTES: u64 = 1024 * 1024;
 const DOWNLOAD_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Kivio/1.0";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 ABU Agent/1.0";
 
 #[cfg(target_os = "macos")]
 pub const ONNX_RUNTIME_FILE_NAME: &str = "libonnxruntime.dylib";
@@ -1327,7 +1327,7 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("kivio-offline-models-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("abu-agent-offline-models-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }

@@ -254,7 +254,7 @@ fn browser_like_headers() -> header::HeaderMap {
     headers.insert(
         header::USER_AGENT,
         header::HeaderValue::from_static(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Kivio/1.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 ABU Agent/1.0",
         ),
     );
     headers.insert(

@@ -3,8 +3,8 @@ import type { HistoryItem } from './types'
 export const HISTORY_MAX = 20
 export const HISTORY_THUMB_SIZE = 96
 
-const HISTORY_STORAGE_KEY = 'kivio:lens-history:v1'
-const HISTORY_STORAGE_KEY_LEGACY = 'keylingo:lens-history:v1'
+const HISTORY_STORAGE_KEY = 'abu_agent:lens-history:v1'
+const HISTORY_STORAGE_KEY_LEGACY = 'abu-agent:lens-history:v1'
 
 /** Canvas 缩放截图为小缩略图，避免历史记录把整张原图（几 MB）写进 localStorage */
 export async function makeThumbnail(dataUrl: string, maxSize: number): Promise<string> {
@@ -30,7 +30,7 @@ export async function makeThumbnail(dataUrl: string, maxSize: number): Promise<s
 }
 
 /** 从 localStorage 读历史。失败 / 损坏数据 → 空数组。
-    一次性迁移：keylingo:lens-history:v1 → kivio:lens-history:v1 */
+    一次性迁移：abu-agent:lens-history:v1 → abu_agent:lens-history:v1 */
 export function loadHistoryFromStorage(): HistoryItem[] {
   try {
     let raw = localStorage.getItem(HISTORY_STORAGE_KEY)

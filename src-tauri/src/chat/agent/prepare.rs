@@ -73,7 +73,7 @@ pub fn apply_skill_fallback_when_tools_unavailable(
 pub fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String> {
     let mut names = tools
         .iter()
-        .filter(|tool| is_kivio_builtin_tool(tool))
+        .filter(|tool| is_abu_agent_builtin_tool(tool))
         .map(|tool| tool.name.clone())
         .collect::<Vec<_>>();
     names.sort();
@@ -91,7 +91,7 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
         || EXTRA_BUILTIN_NAMES.contains(&function_name);
     if is_builtin {
         Some(format!(
-            "Kivio tool `{function_name}` is not enabled for this chat. Do not call it again; answer using the available context and enabled tools only."
+            "ABU Agent tool `{function_name}` is not enabled for this chat. Do not call it again; answer using the available context and enabled tools only."
         ))
     } else {
         None
@@ -103,7 +103,7 @@ pub fn is_native_skill_tool_name(name: &str) -> bool {
     matches!(name, "skill" | "skill_activate")
 }
 
-pub fn is_kivio_builtin_tool(tool: &ChatToolDefinition) -> bool {
+pub fn is_abu_agent_builtin_tool(tool: &ChatToolDefinition) -> bool {
     matches!(tool.source.as_str(), "native" | "mixer")
         && !is_native_skill_tool_name(&tool.name)
         && !crate::chat::todo::is_agent_todo_tool_name(&tool.name)
@@ -508,7 +508,7 @@ pub fn build_chat_system_prompt_with_segments(
             action_examples.join(", ")
         );
         runtime.push_str(
-            " Only claim that a tool was used, a script was run, a file was read, or the web was searched after Kivio returns an actual tool result in the conversation.",
+            " Only claim that a tool was used, a script was run, a file was read, or the web was searched after ABU Agent returns an actual tool result in the conversation.",
         );
         runtime.push_str(
             " If the user only asks for today/tomorrow/weekday derivable from the system date above, answer directly without calling tools.",
@@ -985,7 +985,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         );
     } else if has("automation_list") {
         bullets.push(
-            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires Kivio Agent (automation_upsert).".to_string(),
+            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires ABU Agent (automation_upsert).".to_string(),
         );
     }
     if has_write || has_edit || has_bash {
@@ -1109,7 +1109,7 @@ mod tests {
             None,
             None,
             None,
-            Some("/Users/me/Kivio/workspace/conv_abc"),
+            Some("/Users/me/ABU Agent/workspace/conv_abc"),
             None,
             None,
             &[],
@@ -1117,7 +1117,7 @@ mod tests {
 
         // Workbench + write: surface the absolute workbench path
         // and keep explicit external paths allowed.
-        assert!(prompt.contains("/Users/me/Kivio/workspace/conv_abc"));
+        assert!(prompt.contains("/Users/me/ABU Agent/workspace/conv_abc"));
         assert!(prompt.contains("Current default workbench"));
         assert!(prompt.contains("NOT a sandbox or access restriction"));
         assert!(prompt.contains("use that exact location instead"));
@@ -1127,7 +1127,7 @@ mod tests {
         // Per-conversation path must sit after the static tool/skill rules so
         // prefix cache can share those across conversations.
         let path_at = prompt
-            .find("/Users/me/Kivio/workspace/conv_abc")
+            .find("/Users/me/ABU Agent/workspace/conv_abc")
             .expect("workbench path");
         assert!(
             prompt
@@ -1177,7 +1177,7 @@ mod tests {
             None,
             None,
             None,
-            Some("/Users/me/Kivio/workspace/conv_abc"),
+            Some("/Users/me/ABU Agent/workspace/conv_abc"),
             None,
             None,
             &extra,
@@ -1188,7 +1188,7 @@ mod tests {
             last.starts_with(WORKBENCH_LOCATION_PROMPT_HEAD),
             "additional directories must stay in the last workbench paragraph, got: {last}"
         );
-        assert!(last.contains("/Users/me/Kivio/workspace/conv_abc"));
+        assert!(last.contains("/Users/me/ABU Agent/workspace/conv_abc"));
         assert!(last.contains("/Users/me/biz-a"));
         assert!(last.contains("biz-a"));
         assert!(last.contains("glob/grep"));
@@ -1628,11 +1628,11 @@ mod tests {
 
         assert!(prompt.contains("当前日期"), "{prompt}");
         assert!(!prompt.contains("Be concise"), "{prompt}");
-        assert!(!prompt.contains("Kivio Chat"), "{prompt}");
+        assert!(!prompt.contains("ABU Agent Chat"), "{prompt}");
         assert!(!prompt.contains("conversational research"), "{prompt}");
         assert!(!prompt.contains("These limits override"), "{prompt}");
         assert!(!prompt.contains("Do not edit files"), "{prompt}");
-        assert!(!prompt.contains("switch to Kivio Agent"), "{prompt}");
+        assert!(!prompt.contains("switch to ABU Agent"), "{prompt}");
         assert!(!prompt.contains("Built-in tools enabled"), "{prompt}");
         assert!(!prompt.contains("search_web"), "{prompt}");
         assert!(!prompt.contains("ask_user"), "{prompt}");
