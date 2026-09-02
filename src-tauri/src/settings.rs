@@ -19,7 +19,7 @@ pub struct OpenAIConfig {
     pub api_key: String,
     #[serde(default = "default_openai_base_url")]
     pub base_url: String,
-    #[serde(default = "default_openai_model")]
+    #[serde(default)]
     pub model: String,
 }
 
@@ -28,7 +28,7 @@ impl Default for OpenAIConfig {
         Self {
             api_key: "".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o".to_string(),
+            model: String::new(),
         }
     }
 }
@@ -326,7 +326,7 @@ pub struct ScreenshotTranslationConfig {
     pub replace_enabled: bool,
     #[serde(default)]
     pub provider_id: String,
-    #[serde(default = "default_openai_model")]
+    #[serde(default)]
     pub model: String,
     #[serde(default = "default_false")]
     pub direct_translate: bool,
@@ -383,8 +383,8 @@ impl Default for ScreenshotTranslationConfig {
             text_hotkey: "CommandOrControl+Shift+T".to_string(),
             replace_hotkey: "CommandOrControl+Shift+R".to_string(),
             replace_enabled: true,
-            provider_id: "default-ocr".to_string(),
-            model: "gpt-4o".to_string(),
+            provider_id: String::new(),
+            model: String::new(),
             direct_translate: false,
             thinking_enabled: false,
             stream_enabled: true,
@@ -1581,7 +1581,7 @@ pub struct Settings {
     pub keep_chat_window_alive: bool,
     #[serde(default)]
     pub translator_provider_id: String,
-    #[serde(default = "default_openai_model")]
+    #[serde(default)]
     pub translator_model: String,
     #[serde(default)]
     pub chat_provider_id: String,
@@ -1816,8 +1816,8 @@ impl Default for Settings {
             launch_at_startup: false,
             launch_minimized_to_tray: false,
             keep_chat_window_alive: false,
-            translator_provider_id: "default-translator".to_string(),
-            translator_model: "gpt-4o".to_string(),
+            translator_provider_id: String::new(),
+            translator_model: String::new(),
             chat_provider_id: String::new(),
             chat_model: String::new(),
             default_models: DefaultModelsConfig::default(),
@@ -1974,7 +1974,9 @@ fn sanitize_default_model_selection(
         return;
     };
 
-    if !provider.enabled_models.is_empty() && !provider.enabled_models.contains(&selection.model) {
+    if provider.enabled_models.is_empty() {
+        selection.model.clear();
+    } else if !provider.enabled_models.contains(&selection.model) {
         selection.model = provider.enabled_models.first().cloned().unwrap_or_default();
     }
 }
@@ -3144,10 +3146,6 @@ fn default_openai_base_url() -> String {
     "https://api.openai.com/v1".to_string()
 }
 
-fn default_openai_model() -> String {
-    "gpt-4o".to_string()
-}
-
 fn default_settings_language() -> Option<String> {
     Some("zh".to_string())
 }
@@ -3212,6 +3210,19 @@ fn normalize_hotkey(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_settings_do_not_invent_unconfigured_models() {
+        let settings = Settings::default();
+        assert!(settings.translator_provider_id.is_empty());
+        assert!(settings.translator_model.is_empty());
+        assert!(settings.screenshot_translation.provider_id.is_empty());
+        assert!(settings.screenshot_translation.model.is_empty());
+
+        let parsed: Settings = serde_json::from_str("{}").expect("empty settings should load");
+        assert!(parsed.translator_model.is_empty());
+        assert!(parsed.screenshot_translation.model.is_empty());
+    }
 
     #[test]
     fn legacy_settings_disable_translucent_sidebar_by_default() {
@@ -4229,6 +4240,59 @@ mod tests {
         assert_eq!(s.chat_model, "m2");
         assert_eq!(s.default_models.chat.provider_id, "chat");
         assert_eq!(s.default_models.chat.model, "m2");
+    }
+
+    #[test]
+    fn sanitize_settings_replaces_stale_legacy_model_across_translation_slots() {
+        let mut s = Settings::default();
+        s.providers.push(ModelProvider {
+            id: "primary".to_string(),
+            name: "Primary".to_string(),
+            api_keys: vec!["sk".to_string()],
+            api_key_legacy: None,
+            base_url: "https://api.example.com/v1".to_string(),
+            available_models: vec![],
+            enabled_models: vec!["current-model".to_string()],
+            api_format: "openai".to_string(),
+            enabled: true,
+            model_overrides: std::collections::HashMap::new(),
+            compress_request_body: false,
+            request: Default::default(),
+            active_key_index: 0,
+        });
+        s.translator_provider_id = "primary".to_string();
+        s.translator_model = "gpt-4o".to_string();
+        s.screenshot_translation.provider_id = "primary".to_string();
+        s.screenshot_translation.model = "gpt-4o".to_string();
+        s.lens.provider_id = "primary".to_string();
+        s.lens.model = "gpt-4o".to_string();
+        s.default_models.chat.provider_id = "primary".to_string();
+        s.default_models.chat.model = "gpt-4o".to_string();
+        s.default_models.vision.provider_id = "primary".to_string();
+        s.default_models.vision.model = "gpt-4o".to_string();
+        s.default_models.title_summary.provider_id = "primary".to_string();
+        s.default_models.title_summary.model = "gpt-4o".to_string();
+        s.default_models.compression.provider_id = "primary".to_string();
+        s.default_models.compression.model = "gpt-4o".to_string();
+        s.default_models.image_generation.provider_id = "primary".to_string();
+        s.default_models.image_generation.model = "gpt-4o".to_string();
+        s.default_models.advisor.provider_id = "primary".to_string();
+        s.default_models.advisor.model = "gpt-4o".to_string();
+
+        let s = sanitize_settings(s);
+        assert_eq!(s.translator_model, "current-model");
+        assert_eq!(s.screenshot_translation.model, "current-model");
+        assert_eq!(s.lens.model, "current-model");
+        for selection in [
+            s.default_models.chat,
+            s.default_models.vision,
+            s.default_models.title_summary,
+            s.default_models.compression,
+            s.default_models.image_generation,
+            s.default_models.advisor,
+        ] {
+            assert_eq!(selection.model, "current-model");
+        }
     }
 
     #[test]

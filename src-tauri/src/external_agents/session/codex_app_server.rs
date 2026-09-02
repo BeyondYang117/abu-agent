@@ -1352,6 +1352,8 @@ impl CodexAppServerSession {
         let chosen_effort = normalize_codex_effort(reasoning);
         let turn_id = self.next_id;
         self.next_id += 1;
+        let mut turn_input = vec![json!({ "type": "text", "text": prompt })];
+        turn_input.extend(local_image_items(&self.cli_bin, images));
 
         if is_compact_slash(prompt) {
             // Real compaction RPC; the server runs it as a turn (contextCompaction item +
@@ -1366,12 +1368,10 @@ impl CodexAppServerSession {
         } else {
             // Codex reads images as `localImage` items pointing at on-disk files; copy each into a
             // private temp dir (its sandbox can't reach the conversation attachments dir).
-            let mut input = vec![json!({ "type": "text", "text": prompt })];
-            input.extend(local_image_items(&self.cli_bin, images));
             let turn_params = build_codex_turn_params(
                 &self.thread_id,
                 &self.cwd,
-                input,
+                turn_input.clone(),
                 chosen_model,
                 chosen_effort.as_deref(),
                 extra_writable_roots,
@@ -1512,6 +1512,29 @@ impl CodexAppServerSession {
                         return Ok(());
                     }
                     CodexMapResult::TurnFailed(message) => {
+                        if !effort_retry_attempted
+                            && chosen_effort.is_some()
+                            && is_codex_effort_rejection(&message)
+                            && !is_compact_slash(prompt)
+                        {
+                            effort_retry_attempted = true;
+                            let retry_id = self.next_id;
+                            self.next_id += 1;
+                            let retry_params = build_codex_turn_params(
+                                &self.thread_id,
+                                &self.cwd,
+                                turn_input.clone(),
+                                chosen_model,
+                                None,
+                                extra_writable_roots,
+                                self.approval_policy,
+                            );
+                            write_rpc(&mut self.stdin, retry_id, "turn/start", retry_params)
+                                .await?;
+                            turn_rpc_id = retry_id;
+                            self.active_turn_id = None;
+                            continue;
+                        }
                         self.active_turn_id = None;
                         return Err(message);
                     }
@@ -1537,12 +1560,10 @@ impl CodexAppServerSession {
                         effort_retry_attempted = true;
                         let retry_id = self.next_id;
                         self.next_id += 1;
-                        let mut input = vec![json!({ "type": "text", "text": prompt })];
-                        input.extend(local_image_items(&self.cli_bin, images));
                         let retry_params = build_codex_turn_params(
                             &self.thread_id,
                             &self.cwd,
-                            input,
+                            turn_input.clone(),
                             chosen_model,
                             None,
                             extra_writable_roots,
@@ -2613,13 +2634,13 @@ mod tests {
             "GPT-5.5"
         );
         assert_eq!(merged.reasoning_by_model.get("gpt-5.5").unwrap().len(), 2);
-        // sol keeps curated ultra ladder
+        // Static fallback stays conservative; runtime-probed efforts are still preserved above.
         assert!(merged
             .reasoning_by_model
             .get("gpt-5.6-sol")
             .unwrap()
             .iter()
-            .any(|e| e.id == "ultra"));
+            .all(|e| matches!(e.id.as_str(), "low" | "medium" | "high")));
     }
 
     #[test]

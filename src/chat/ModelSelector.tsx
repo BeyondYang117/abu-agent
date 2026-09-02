@@ -8,6 +8,7 @@ import { ModelIcon } from './ModelIcon'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import { chatTitlebarPillButtonClass } from './platform'
 import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
+import { ModelAbilityTags } from './ModelAbilityTags'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -179,6 +180,7 @@ function ModelSelectorBase({
         >
           <ModelIcon model={model} size={16} />
           <span className="min-w-0 truncate">{model}</span>
+          <ModelAbilityTags model={model} modelOverrides={providers.find((provider) => provider.id === providerId)?.modelOverrides} />
         </button>
         <button
           type="button"

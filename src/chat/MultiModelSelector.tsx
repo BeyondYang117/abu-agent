@@ -8,6 +8,7 @@ import { ModelIcon } from './ModelIcon'
 import { IconButton } from '../components/Button'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { ModelRef } from './types'
+import { ModelAbilityTags } from './ModelAbilityTags'
 
 const MAX_REPLY_MODELS = 4
 
@@ -184,6 +185,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up' }: MultiMode
                     </span>
                     <ModelIcon model={model} size={16} />
                     <span className="min-w-0 truncate">{model}</span>
+                    <ModelAbilityTags model={model} modelOverrides={provider.modelOverrides} />
                   </button>
                 )
               })}

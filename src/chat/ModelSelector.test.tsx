@@ -51,4 +51,18 @@ describe('ModelSelector', () => {
 
     expect(screen.getAllByText('gpt-4o')).toHaveLength(2)
   })
+
+  it('shows the model ability tag in the dropdown', async () => {
+    render(
+      <ModelSelector
+        currentProviderId="abu-api-relay"
+        currentModel="gpt-4o"
+        onModelChange={() => {}}
+      />,
+    )
+
+    await waitFor(() => expect(listModelsMock).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getAllByText('视觉')).toHaveLength(1)
+  })
 })

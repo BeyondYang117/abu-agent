@@ -9,6 +9,7 @@ import { ModelIcon } from './ModelIcon'
 import { MAX_REPLY_MODELS } from './messageGroups'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { ModelRef } from './types'
+import { ModelAbilityTags } from './ModelAbilityTags'
 
 const favKey = (providerId: string, model: string) => `${providerId}:${model}`
 const parseFavKey = (key: string): { providerId: string; model: string } | null => {
@@ -151,6 +152,7 @@ export function ReplyWithModelButton({ occupied, onSelect }: ReplyWithModelButto
         >
           <ModelIcon model={model} size={16} />
           <span className="min-w-0 truncate">{model}</span>
+          <ModelAbilityTags model={model} modelOverrides={providers.find((provider) => provider.id === providerId)?.modelOverrides} />
           {occupiedAlready && <Check size={12} strokeWidth={2.5} className="ml-auto shrink-0" />}
         </button>
         <button
