@@ -132,15 +132,15 @@ export function AgentInspector({
     return () => { cancelled = true }
   }, [agent.runtimeKind, agent.externalAgentId])
 
-  const kivioModelValue = agent.providerId && agent.model
+  const abuAgentModelValue = agent.providerId && agent.model
     ? `${agent.providerId}:${agent.model}`
     : ''
-  const kivioModels = useMemo(
+  const abuAgentModels = useMemo(
     () => withOrphanOption(
       [{ value: '', label: t.chatAutomationAgentModelDefault }, ...modelOptions(providers)],
-      kivioModelValue,
+      abuAgentModelValue,
     ),
-    [providers, kivioModelValue, t.chatAutomationAgentModelDefault],
+    [providers, abuAgentModelValue, t.chatAutomationAgentModelDefault],
   )
   const cliModelOptions = useMemo(
     () => withOrphanOption(
@@ -238,7 +238,7 @@ export function AgentInspector({
         {agent.runtimeKind !== 'external' ? (
           <FieldBlock label={t.chatAutomationAgentModel}>
             <Select
-              value={kivioModelValue}
+              value={abuAgentModelValue}
               onChange={(value) => {
                 if (!value) {
                   patch(withRuntimeKind({ ...agent, providerId: null, model: null }, agent.runtimeKind))
@@ -251,7 +251,7 @@ export function AgentInspector({
                   model: value.slice(idx + 1),
                 }, agent.runtimeKind))
               }}
-              options={kivioModels}
+              options={abuAgentModels}
             />
           </FieldBlock>
         ) : (

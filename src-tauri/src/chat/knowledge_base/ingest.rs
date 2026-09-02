@@ -355,7 +355,7 @@ pub(crate) async fn kb_import_url(
             state
                 .http
                 .get(&url)
-                .header("User-Agent", "Mozilla/5.0 (compatible; KivioBot/1.0)"),
+                .header("User-Agent", "Mozilla/5.0 (compatible; ABUAgentBot/1.0)"),
         )
         .send()
         .await
