@@ -198,7 +198,7 @@
   <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="" />KIVIO DESKTOP<span class="docs-tag">DOCS · v2.9.2</span></a>
   <div class="spacer"></div>
   <a class="top-link" href="../index.html">← 官网</a>
-  <a class="icon-link" href="https://github.com/abu/kivio" target="_blank" rel="noopener" aria-label="GitHub">
+  <a class="icon-link" href="https://github.com/abu/abu-agent-desktop" target="_blank" rel="noopener" aria-label="GitHub">
     <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
   </a>
 </div>
@@ -312,7 +312,7 @@
       <h1>快速上手</h1>
       <p class="lead">从安装 v2.9.2 到第一轮智能体对话，再试一次屏幕工具与本地 Agent。</p>
       <h2 id="qs-install">第一步 · 安装并启动</h2>
-      <p>从 <a href="https://github.com/abu/kivio/releases/latest" target="_blank" rel="noopener">GitHub Releases ↗</a> 下载最新版：macOS Apple Silicon 使用 <code>.dmg</code>，Windows x64 使用 NSIS <code>-setup.exe</code>。macOS DMG 未签名，首次启动需要右键 →「打开」。详细权限与更新说明见 <a href="#/install">安装</a>。</p>
+      <p>从 <a href="https://github.com/abu/abu-agent-desktop/releases/latest" target="_blank" rel="noopener">GitHub Releases ↗</a> 下载最新版：macOS Apple Silicon 使用 <code>.dmg</code>，Windows x64 使用 NSIS <code>-setup.exe</code>。macOS DMG 未签名，首次启动需要右键 →「打开」。详细权限与更新说明见 <a href="#/install">安装</a>。</p>
       <h2 id="qs-key">第二步 · 完成首次引导</h2>
       <p>首次启动会依次引导你添加模型服务商、可选配置联网搜索、确认全局热键。Provider 可以从 DeepSeek、OpenRouter、SiliconFlow、GLM、Ollama 预设开始，也可以手动填写任意 OpenAI Chat Completions、Anthropic Messages、Gemini generateContent 或 OpenAI Responses 兼容服务商。粘贴 API Key 后获取模型列表，并明确勾选要启用的模型。详见 <a href="#/providers">模型服务商</a>。</p>
       <h2 id="qs-chat">第三步 · 发起第一次对话</h2>
@@ -750,7 +750,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
     <article data-page="changelog" class="hidden">
       <div class="crumb">更多</div>
       <h1>更新日志</h1>
-      <p class="lead">每个版本的变化。完整发布记录见 <a href="https://github.com/abu/kivio/releases" target="_blank" rel="noopener" style="border-bottom:1px solid var(--fg)">GitHub Releases ↗</a>。</p>
+      <p class="lead">每个版本的变化。完整发布记录见 <a href="https://github.com/abu/abu-agent-desktop/releases" target="_blank" rel="noopener" style="border-bottom:1px solid var(--fg)">GitHub Releases ↗</a>。</p>
       <h2 id="changelog-292">v2.9.2 · 2026-08-19</h2>
       <ul>
         <li><b>Pi</b> —— 常驻会话补齐问用户、原生图片、轮内引导和下一轮排队，控制不再每轮丢掉。右侧 Dock「轨迹」可查看、分叉、克隆分支成新对话。设置里管理 Pi Package（npm / git / 本地）和本地扩展，以及 <code>~/.pi</code>、共享 <code>~/.agents</code>、Package 和额外扫描路径里的 Skill（可挂 Claude Code / Codex 目录，不复制文件）。</li>
@@ -762,7 +762,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>聊天体验</b> —— Kivio Agent 的跟进等到本轮答完再发，不打断正在跑的工具。集编辑器换成更大的卡片。账户菜单显示今日用量。切对话后退出，重开还是你离开时那条。引用角标不再被裁切。沙箱导出和附件文件名保留中文。</li>
         <li><b>安装</b> —— Windows 装到当前用户目录，应用内更新静默覆盖、不弹 UAC。长 MCP 服务名不再撞名。去掉 Email 连接器。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.9.2" target="_blank" rel="noopener">查看 v2.9.2 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.9.2" target="_blank" rel="noopener">查看 v2.9.2 Release notes ↗</a></p>
       <h2 id="changelog-291">v2.9.1 · 2026-08-16</h2>
       <ul>
         <li><b>DeepSeek Harness</b> —— 补齐图片、附件路径、停任务（含子代理）和斜杠发现；模型图片与推理档写回已有路由；第三方供应商握手不再空转。空白机器可一键安装并填官方密钥。凭据按官方分层识别环境变量、凭据文件和 <code>.env</code>，第三方路由用各自的密钥环境变量，不再误拦。</li>
@@ -771,7 +771,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>启动体验</b> —— 启动后可最小化到托盘；开机自启不再强行弹出聊天窗。</li>
         <li><b>聊天</b> —— 工作台路径挪到 tools 之后，避免跨会话打穿前缀缓存。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.9.1" target="_blank" rel="noopener">查看 v2.9.1 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.9.1" target="_blank" rel="noopener">查看 v2.9.1 Release notes ↗</a></p>
       <h2 id="changelog-290">v2.9.0 · 2026-08-15</h2>
       <ul>
         <li><b>DeepSeek Harness</b> —— 新增 dsh 作为外部 CLI 代理：官方供应商、四档 Agent 模式、插件页、斜杠命令（已知命令高亮）、工具卡、压缩，以及 <code>/compact</code> <code>/goal</code> <code>/feedback</code>。重启或改启动配置后仍续上原生会话；顶栏显示实际模型与思考档。后台子代理显示实时进度，完成后把汇报写回父对话，和官方 web 一致。用量条不再把已排除的缓存输入减第二次。</li>
@@ -784,7 +784,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>会话存储</b> —— 会话 JSON 不再存图片 base64，改为内容寻址外置，同一张图看多次只留一个文件；打开即迁移存量大文件。启动回收空工作区和已删会话的孤儿附件，非空工作区与用户上传不自动删。含图会话不再把磁盘和打开时的内存打满。</li>
         <li><b>聊天体验</b> —— 重复点击已打开的会话不再重载；带图会话打开时等 Mermaid 落地再对齐；长文本不再全量哈希。生成中也能钉住。贴底打字不再整屏抖；暗色切会话不闪白。标题打字机失效已修。设置里添加 CLI 模型不再一闪即消。工具轮次默认不限（旧默认 20 会迁一次）。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.9.0" target="_blank" rel="noopener">查看 v2.9.0 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.9.0" target="_blank" rel="noopener">查看 v2.9.0 Release notes ↗</a></p>
       <h2 id="changelog-289">v2.8.9 · 2026-08-11</h2>
       <ul>
         <li><b>长对话性能大修</b> —— 消息列表重做虚拟化与滚动跟随：屏外消息卸载、流式行独立渲染、重内容延迟挂载。长对话打开更快，流式生成与回翻历史更流畅，修复多种滚动跳动与生成结束时的闪动。</li>
@@ -795,7 +795,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>界面修复</b> —— 恢复细胶囊滚动条并保持聊天滚动条可见，侧栏列表滚动时自动隐藏；统一设置面板头部与背景；CLI 供应商弹窗改为卡片分区。</li>
         <li><b>安全与稳定</b> —— HTML 预览 iframe 沙箱化；Lens 覆盖层失活时后端强制关闭兜底；自动保存的设置在关闭窗口时同步到聊天视图。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.9" target="_blank" rel="noopener">查看 v2.8.9 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.9" target="_blank" rel="noopener">查看 v2.8.9 Release notes ↗</a></p>
       <h2 id="changelog-288">v2.8.8 · 2026-08-08</h2>
       <ul>
         <li><b>对话库</b> —— 新增对话管理中心：搜索、书架分类、排序分组、多选批量操作、归档。插件管理改到设置页。</li>
@@ -808,7 +808,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>设置与用量统计</b> —— 调整设置导航顺序与记忆页布局；用量统计新增请求成功率。</li>
         <li><b>问题修复</b> —— 修复流式中断后内容丢失、重复消息、滚动异常、批量删除残留，以及对话库切换闪白。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.8" target="_blank" rel="noopener">查看 v2.8.8 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.8" target="_blank" rel="noopener">查看 v2.8.8 Release notes ↗</a></p>
       <h2 id="changelog-287">v2.8.7 · 2026-08-06</h2>
       <ul>
         <li><b>外部 CLI Agent 能力补齐</b> —— Claude Code 接入问用户、计划批准、后台任务和子代理实时进度；子代理调用独立显示为卡片。内置 Agent 改进读文件输出上限、上下文超窗压缩、空响应判定与用量统计。</li>
@@ -820,7 +820,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>OpenCode、模型与用量</b> —— 完善 OpenCode 原生供应商配置；外部 CLI 上下文用量按轮更新，新增首 token 延迟和思考档位记录，修复模型映射与统计口径。</li>
         <li><b>其它体验改进</b> —— 支持生成中消息排队与立即引导，检查更新可就地执行，发送后为新消息留出阅读空间；设置页供应商与 CLI 分栏更紧凑，并修复 Edge/WebView2 密码可见按钮重复。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.7" target="_blank" rel="noopener">查看 v2.8.7 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.7" target="_blank" rel="noopener">查看 v2.8.7 Release notes ↗</a></p>
       <h2 id="changelog-286">v2.8.6 · 2026-08-04</h2>
       <ul>
         <li><b>实时协议版本化</b> —— 聊天实时通信统一为单条 <code>chat-protocol</code> 通道：运行事件带版本与序号，会话事件带 revision，断线后按快照重放，类型与 JSON Schema 由 Rust 侧生成。同时修复会话持久化的并发竞争、侧栏刷新的全量扫盘与独占锁、单个订阅者异常中断整条流。</li>
@@ -833,18 +833,18 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>退出清理</b> —— 修复退出时的 panic；此前会跳过外部 CLI 会话、后台命令进程组、OCR sidecar 与插件预览的清理，每次关窗都遗留子进程。</li>
         <li><b>移除项（不兼容）</b> —— 「流式输出」与「思考模式」开关已移除，两者恒为开启。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.6" target="_blank" rel="noopener">查看 v2.8.6 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.6" target="_blank" rel="noopener">查看 v2.8.6 Release notes ↗</a></p>
       <h2 id="changelog-285">v2.8.5 · 2026-08-01</h2>
       <ul>
         <li><b>输入区与快捷键</b> —— 输入框上的选择器改为紧凑的按钮锚定弹层（助手 / 多模型 / 来源统一），上下文指示器与代码块外框重做；快捷键页新增「关闭聊天窗」，补上恢复默认与占用检测。</li>
         <li><b>一 agent 一对话</b> —— 内置 Agent 的会话一旦有消息就锁定 agent 切换（此前只有本地 CLI 这么锁，中途换等于换个大脑接着同一段上下文）。</li>
         <li><b>思考等级不再被静默降档</b> —— 四个适配器原样下发所选档位，能选哪几档由模型库门控，并可在模型详情里逐模型覆盖。</li>
         <li><b>消息列表部分虚拟化</b> —— 只虚拟化更早的历史，最近一段始终实挂载；钉底不再抢用户滚动，读历史时脚下不再跳。</li>
-        <li><b>macOS 图标适配系统外观</b> —— 感谢 @abu（<a href="https://github.com/abu/kivio/pull/22" target="_blank" rel="noopener">#22</a>）。</li>
+        <li><b>macOS 图标适配系统外观</b> —— 感谢 @abu（<a href="https://github.com/abu/abu-agent-desktop/pull/22" target="_blank" rel="noopener">#22</a>）。</li>
         <li><b>窗口材质与帧率</b> —— 修好台前调度切窗掉帧（macOS 材质改为常驻，焦点交给 AppKit）；Win10 没有 Mica 时不再误判材质生效、透出桌面。</li>
         <li><b>运行时选择与界面细节</b> —— Kivio Agent 作为第一张卡片直接排进代理列表；上下文圆环换成 SVG 描边；内嵌设置页与首次引导变成浮起卡片；扩展页互切与弹层展开的第一帧不再闪。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.5" target="_blank" rel="noopener">查看 v2.8.5 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.5" target="_blank" rel="noopener">查看 v2.8.5 Release notes ↗</a></p>
       <h2 id="changelog-284">v2.8.4 · 2026-07-31</h2>
       <ul>
         <li><b>右侧 Dock：文件树、Git 审查、真实终端</b> —— 聊天窗右侧新增按工作目录绑定的 IDE 侧栏。文件树支持框选多选、拖拽移动、批量删除、内联新建/重命名与就地查看编辑；Git 面板看改动与 diff；终端是真正的 PTY（forkpty / ConPTY）。工具卡片的 Write/Edit 显示 <code>+N -N</code>，展开是带行号列与词级高亮的 diff，点文件名即在右侧预览。</li>
@@ -859,7 +859,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>claude 模型清单剔掉 6 个退役 / 会被静默换掉的模型</b> —— 目录不等于可用：4 个已退役（选了只回退役警告），<code>opus-4-1</code> / <code>opus-4-0</code> 更糟——不报错，直接给你 Opus 4.8。</li>
         <li><b>稳定性与正确性修复</b> —— 退出不再留孤儿 claude 进程及其 MCP 子孙；外部 CLI 调过工具的回答不再渲染两遍；grok 的 token 用量在 <code>_meta</code> 里，此前一路读空；系统提示改走 <code>--append-system-prompt-file</code>，长会话压缩后不再静默失效；<code>/cost</code> 等客户端斜杠命令输出不再被吞；被截断的回答不再标成「完成」；探测不再堆空壳会话；流式思考不再逐帧抖动。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.4" target="_blank" rel="noopener">查看 v2.8.4 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.4" target="_blank" rel="noopener">查看 v2.8.4 Release notes ↗</a></p>
       <h2 id="changelog-283">v2.8.3 · 2026-07-25</h2>
       <ul>
         <li><b>翻译 / 截图 / Lens 支持全部模型协议</b> —— 这三个功能此前把请求硬编码成 OpenAI 的 <code>chat/completions</code> 格式，配置成 Gemini、Anthropic 或 OpenAI Responses 协议的供应商一用就 404。现在与聊天共用同一套模型适配层，四种协议都能用。</li>
@@ -874,7 +874,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>输入与界面修复</b> —— 所有输入框关闭 WebKit 智能输入（修自动大写与 autocorrect 插空格）；模型下拉按能力筛选（生图/视觉/embedding）；弹层与右键菜单按视口边缘自适应；对话搜索可全文匹配正文；输入框草稿跨对话保留；新增模型级 <code>extra_body</code> 透传。</li>
         <li><b>稳定性修复</b> —— HTTP 连接池加保活（修长时运行后 <code>error sending request</code>）；请求调试 token 不再恒为 0；修复会话重复加载、多模型并答流式栏冻结、<code>Retry-After</code> 巨值长时挂起、后台命令未按会话隔离、检索 rerank 分被覆盖与结果静默截断。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.3" target="_blank" rel="noopener">查看 v2.8.3 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.3" target="_blank" rel="noopener">查看 v2.8.3 Release notes ↗</a></p>
       <h2 id="changelog-282">v2.8.2 · 2026-07-20</h2>
       <ul>
         <li><b>笔记中心升级</b> —— 加入文件夹式管理与 Milkdown 实时预览编辑器，可把卡片移动到文件夹、用内联弹框管理文件夹。</li>
@@ -883,7 +883,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>连接测试更可靠</b> —— 测试连接按供应商 api_format 分派正确协议，改为模型批量测试，密码框去掉重复的原生眼睛图标。</li>
         <li><b>外部 Agent 与体验细节</b> —— 本地 CLI 可接收图片/文件附件，可用性与模型探测拆分（不再频繁重复检测），移除 Kivio Code 终端 agent；修复暗色模式可见性；优化检索面板与知识库 tab；Lens 输入栏置于截图选区之上。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.2" target="_blank" rel="noopener">查看 v2.8.2 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.2" target="_blank" rel="noopener">查看 v2.8.2 Release notes ↗</a></p>
       <h2 id="changelog-281">v2.8.1 · 2026-07-19</h2>
       <ul>
         <li><b>扩展中心</b> —— 新增 MCP 注册表市场（Official/Smithery/Glama）与技能商店（ClawHub + URL 安装），知识库整合进扩展中心，可在应用内浏览、安装、卸载。</li>
@@ -892,7 +892,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>外部 Agent</b> —— 新增 Grok CLI（xAI Grok Build）；Codex 走真实压缩 RPC 与真实上下文窗口；为 Anthropic 补齐悬空 tool_use 的合成 tool_result。</li>
         <li><b>更快更省内存</b> —— 插件页秒开（消除打开时的 shell 探测开销），长时运行的运行时资源会被主动回收。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.1" target="_blank" rel="noopener">查看 v2.8.1 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.1" target="_blank" rel="noopener">查看 v2.8.1 Release notes ↗</a></p>
       <h2 id="changelog-280">v2.8.0 · 2026-07-17</h2>
       <ul>
         <li><b>模型参数</b> —— temperature 改为可选且按模型生效，服务商请求遵循模型元数据，模型详情页展示更新后的能力与参数。</li>
@@ -900,7 +900,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li><b>OCR 内存</b> —— RapidOCR 与图片修复模型在每次操作后释放内存，减少连续使用时的驻留占用。</li>
         <li><b>本地 Agent</b> —— Pi 正常结束不再触发收尾阶段 <code>EPIPE</code>；OpenCode 支持从全局及项目 <code>opencode.jsonc</code> 发现自定义模型。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.8.0" target="_blank" rel="noopener">查看 v2.8.0 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.8.0" target="_blank" rel="noopener">查看 v2.8.0 Release notes ↗</a></p>
       <h2 id="changelog-279">v2.7.9 · 2026-07-16</h2>
       <ul>
         <li>产品统一更名为 Kivio Desktop，同时保持 <code>kivio</code> CLI、Bundle ID 与现有数据路径兼容。</li>
@@ -908,7 +908,7 @@ kivio code --no-approve -p "审查当前项目"</code></pre>
         <li>远程 MCP 增加 OAuth 2.1、PKCE 与动态客户端注册支持。</li>
         <li>改进首次引导、Lens 历史保存与 AI 客户端界面细节。</li>
       </ul>
-      <p><a href="https://github.com/abu/kivio/releases/tag/v2.7.9" target="_blank" rel="noopener">查看 v2.7.9 Release notes ↗</a></p>
+      <p><a href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.7.9" target="_blank" rel="noopener">查看 v2.7.9 Release notes ↗</a></p>
     </article>
 
     <div class="pager" id="pager"></div>

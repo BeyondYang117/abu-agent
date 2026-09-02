@@ -520,12 +520,12 @@ mod tests {
             Some("/mnt/c/Users/me/proj".into())
         );
         assert_eq!(
-            host_path_to_wsl(Path::new(r"\\?\E:\ZM database\kivioC")),
-            Some("/mnt/e/ZM database/kivioC".into())
+            host_path_to_wsl(Path::new(r"\\?\E:\workspace\abu-agent")),
+            Some("/mnt/e/workspace/abu-agent".into())
         );
         assert_eq!(
-            host_path_to_wsl(Path::new(r"E:\ZM database\kivioC")),
-            Some("/mnt/e/ZM database/kivioC".into())
+            host_path_to_wsl(Path::new(r"E:\workspace\abu-agent")),
+            Some("/mnt/e/workspace/abu-agent".into())
         );
         assert_eq!(host_path_to_wsl(Path::new(r"D:\")), Some("/mnt/d".into()));
     }

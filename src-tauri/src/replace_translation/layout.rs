@@ -1126,7 +1126,7 @@ mod tests {
     fn spaced_menu_rows_split_but_wrapped_item_lines_merge() {
         let image = RgbImage::from_pixel(720, 700, image::Rgb([255, 255, 255]));
         let spans = vec![
-            span("s0", "abu/kivio", 129.0, 194.0, 167.0, 40.0),
+            span("s0", "abu/abu-agent-desktop", 129.0, 194.0, 167.0, 40.0),
             span("s1", "abu/Longtxt", 129.0, 251.0, 208.0, 43.0),
             span("s2", "hekaixin66-sketch/DFOX-", 129.0, 312.0, 340.0, 37.0),
             span(
@@ -1188,7 +1188,7 @@ mod tests {
     fn conservative_default_never_merges_spaced_menu_rows_into_one_translation_group() {
         let image = RgbImage::from_pixel(720, 700, image::Rgb([255, 255, 255]));
         let spans = vec![
-            span("s0", "abu/kivio", 129.0, 194.0, 167.0, 40.0),
+            span("s0", "abu/abu-agent-desktop", 129.0, 194.0, 167.0, 40.0),
             span("s1", "abu/Longtxt", 129.0, 251.0, 208.0, 43.0),
             span("s2", "abu/nabai", 129.0, 468.0, 180.0, 40.0),
         ];

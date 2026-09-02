@@ -269,10 +269,10 @@ mod tests {
     fn image_note_translates_windows_path_for_wsl_cli() {
         let note = image_paths_note_for(
             Some(Path::new(r"\\wsl$\Ubuntu\usr\bin\claude")),
-            &[PathBuf::from(r"E:\ZM database\kivioC\shot.png")],
+            &[PathBuf::from(r"E:\workspace\abu-agent\shot.png")],
         );
         assert!(
-            note.contains("/mnt/e/ZM database/kivioC/shot.png"),
+            note.contains("/mnt/e/workspace/abu-agent/shot.png"),
             "{note}"
         );
         assert!(!note.contains(r"E:\"));
@@ -282,9 +282,9 @@ mod tests {
     fn image_note_keeps_windows_path_for_win32_cli() {
         let note = image_paths_note_for(
             Some(Path::new(r"C:\Users\me\AppData\Roaming\npm\claude.cmd")),
-            &[PathBuf::from(r"E:\ZM database\kivioC\shot.png")],
+            &[PathBuf::from(r"E:\workspace\abu-agent\shot.png")],
         );
-        assert!(note.contains(r"E:\ZM database\kivioC\shot.png"), "{note}");
+        assert!(note.contains(r"E:\workspace\abu-agent\shot.png"), "{note}");
     }
 
     #[test]

@@ -139,8 +139,8 @@ mod tests {
     #[test]
     fn strip_windows_verbatim_prefix_unwraps_drive_and_unc() {
         assert_eq!(
-            strip_windows_verbatim_prefix(PathBuf::from(r"\\?\E:\ZM database\kivioC")),
-            PathBuf::from(r"E:\ZM database\kivioC")
+            strip_windows_verbatim_prefix(PathBuf::from(r"\\?\E:\workspace\abu-agent")),
+            PathBuf::from(r"E:\workspace\abu-agent")
         );
         assert_eq!(
             strip_windows_verbatim_prefix(PathBuf::from(r"\\?\UNC\server\share\dir")),
@@ -155,7 +155,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn strip_windows_verbatim_prefix_is_a_noop_off_windows() {
-        let path = PathBuf::from(r"\\?\E:\ZM database\kivioC");
+        let path = PathBuf::from(r"\\?\E:\workspace\abu-agent");
         assert_eq!(strip_windows_verbatim_prefix(path.clone()), path);
     }
 }

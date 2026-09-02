@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::api::with_standard_request_timeout;
 use crate::state::AppState;
 
-const RELEASE_REPO: &str = "BeyondYang117/abu-agent";
+const RELEASE_REPO: &str = "abu/abu-agent-desktop";
 
 /// 检查 GitHub Releases 的最新版本。
 ///
@@ -546,7 +546,7 @@ mod tests {
     fn release_download_url_uses_tag_specific_public_asset_path() {
         assert_eq!(
             release_download_url(
-                "BeyondYang117/abu-agent",
+                "abu/abu-agent-desktop",
                 "2.8.1",
                 "Kivio.Desktop_2.8.1_aarch64.dmg"
             ),

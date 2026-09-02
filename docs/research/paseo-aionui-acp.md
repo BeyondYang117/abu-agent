@@ -5,9 +5,9 @@
 
 | Repo | Path | HEAD |
 | --- | --- | --- |
-| getpaseo/paseo | `E:\ZM database\_acp-host-refs\paseo` | `54299a2` |
-| iOfficeAI/AionUi | `E:\ZM database\_acp-host-refs\AionUi` | `16589d8` |
-| iOfficeAI/AionCore | `E:\ZM database\_acp-host-refs\AionCore` | `3f5c9f9` |
+| getpaseo/paseo | `E:\workspace\_acp-host-refs\paseo` | `54299a2` |
+| iOfficeAI/AionUi | `E:\workspace\_acp-host-refs\AionUi` | `16589d8` |
+| iOfficeAI/AionCore | `E:\workspace\_acp-host-refs\AionCore` | `3f5c9f9` |
 
 **ABU Agent (this repo, read-only except this note):** `src-tauri/src/external_agents/session/acp.rs` (`acp_initialize_params`), `acp_terminal.rs`. Background: [acp-host-adaptation.md](./acp-host-adaptation.md).
 

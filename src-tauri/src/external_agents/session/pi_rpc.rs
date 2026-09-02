@@ -2944,17 +2944,17 @@ mod tests {
     fn missing_pi_session_file_is_not_a_successful_resume() {
         assert!(!pi_native_session_present(
             "kivio-missing-session-id-for-test",
-            Path::new(r"E:\ZM database\kivioC"),
+            Path::new(r"E:\workspace\abu-agent"),
         ));
         assert!(!pi_resume_is_live(
             Path::new(r"C:\npm\pi.cmd"),
             "kivio-missing-session-id-for-test",
-            Path::new(r"E:\ZM database\kivioC"),
+            Path::new(r"E:\workspace\abu-agent"),
         ));
         assert!(pi_resume_is_live(
             Path::new(r"\\wsl$\Ubuntu\usr\bin\pi"),
             "kivio-missing-session-id-for-test",
-            Path::new(r"E:\ZM database\kivioC"),
+            Path::new(r"E:\workspace\abu-agent"),
         ));
         assert!(is_missing_pi_session_error("Pi session \"abc\" not found"));
         assert!(!is_missing_pi_session_error("Pi RPC timed out"));
@@ -2963,8 +2963,8 @@ mod tests {
     #[test]
     fn encode_pi_session_cwd_matches_pi_cli() {
         assert_eq!(
-            encode_pi_session_cwd(Path::new(r"E:\ZM database\kivioC")),
-            "--E--ZM database-kivioC--"
+            encode_pi_session_cwd(Path::new(r"E:\workspace\abu-agent")),
+            "--E--workspace-abu-agent--"
         );
         assert_eq!(
             encode_pi_session_cwd(Path::new(
@@ -2983,7 +2983,7 @@ mod tests {
                 .expect("time")
                 .as_nanos()
         ));
-        let cwd = Path::new(r"E:\ZM database\kivioC");
+        let cwd = Path::new(r"E:\workspace\abu-agent");
         let dir = root.join(encode_pi_session_cwd(cwd));
         std::fs::create_dir_all(&dir).expect("session dir");
         let id = "01a032ac-ca3e-74c1-86c8-97a023960553";
