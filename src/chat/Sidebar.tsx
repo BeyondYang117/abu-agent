@@ -1907,12 +1907,8 @@ export const Sidebar = memo(function Sidebar({
         onOpenLogin={onOpenLogin ?? onOpenSettings}
         onLogout={async () => {
           try {
-            const { api } = await import('../api/tauri')
-            const { abuApiAuthStore } = await import('../api/abuApiAuth')
-            // 清除登录状态
-            await api.clearAbuApiAuth()
-            abuApiAuthStore.logout()
-            // 刷新界面
+            const { logout } = await import('../api/abuApiAuth')
+            await logout()
             window.location.reload()
           } catch (err) {
             console.error('Failed to logout:', err)

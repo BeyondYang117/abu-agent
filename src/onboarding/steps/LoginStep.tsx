@@ -216,23 +216,23 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 <p className="text-sm text-neutral-600 dark:text-neutral-400">
                   {t.onboardingLoginCodeLabel || '验证码：'}
                 </p>
-                <div className="flex items-center gap-2 justify-center">
-                  <div className="onboarding-login-code">{deviceFlow.userCode}</div>
+                <div className="onboarding-login-code-container">
+                  <span className="onboarding-login-code">{deviceFlow.userCode}</span>
                   <button
                     type="button"
                     onClick={copyCode}
-                    className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+                    className="onboarding-login-copy-btn"
                     data-tauri-drag-region="false"
                     title={copied ? (t.lensCopied || '已复制') : (t.lensCopy || '复制')}
                   >
                     {copied ? (
                       <>
-                        <Check size={16} className="text-green-600 dark:text-green-400" />
+                        <Check size={14} className="text-green-600 dark:text-green-400" />
                         <span>{t.lensCopied || '已复制'}</span>
                       </>
                     ) : (
                       <>
-                        <Copy size={16} />
+                        <Copy size={14} />
                         <span>{t.lensCopy || '复制'}</span>
                       </>
                     )}

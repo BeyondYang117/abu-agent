@@ -1995,6 +1995,16 @@ export const api = {
       revoked_at?: number | null
     }>('abu_api_register_device', args),
   loadAbuApiConfig: () => invoke<AbuApiConfig>('load_abu_api_config'),
+  abuApiGetUserInfo: () =>
+    invoke<{
+      id: number
+      username: string
+      display_name?: string
+      email?: string
+      quota: number
+      used_quota: number
+      group: string
+    }>('abu_api_get_user_info'),
   saveAbuApiConfig: (config: AbuApiConfig) =>
     invoke<void>('save_abu_api_config', { config }),
   /** 清除 session token，保留 device_id 以便下次登录复用同一设备记录。 */

@@ -47,9 +47,10 @@ export const UserAccountButton = memo(function UserAccountButton({
 
     if (isAuthenticated) {
       setLoading(true)
-      getAbuApiClient()
-        .getUserInfo()
-        .then((info) => {
+      const fetchInfo = async () => {
+        try {
+          const client = getAbuApiClient()
+          const info = await client.getUserInfo()
           if (!cancelled) {
             setAccountInfo({
               username: info.username,
@@ -60,16 +61,16 @@ export const UserAccountButton = memo(function UserAccountButton({
               group: info.group,
             })
           }
-        })
-        .catch((err) => {
+        } catch (err) {
           console.error('Failed to load account info:', err)
           if (!cancelled) {
             setAccountInfo(null)
           }
-        })
-        .finally(() => {
+        } finally {
           if (!cancelled) setLoading(false)
-        })
+        }
+      }
+      void fetchInfo()
     } else {
       setAccountInfo(null)
     }
@@ -94,7 +95,17 @@ export const UserAccountButton = memo(function UserAccountButton({
   }, [isAuthenticated, menuRect, onOpenLogin])
 
   // 显示名称
-  const displayName = accountInfo?.displayName || accountInfo?.username || profile.displayName || 'ABU Agent'
+  const displayName =
+    accountInfo?.displayName ||
+    accountInfo?.username ||
+    profile.displayName ||
+    (isAuthenticated ? (lang === 'zh' ? '已登录账户' : 'Connected') : 'ABU Agent')
+
+  // 用户头像 Profile
+  const avatarProfile: ChatUserProfile = {
+    ...profile,
+    displayName: accountInfo?.displayName || accountInfo?.username || profile.displayName,
+  }
 
   // 余额
   const balance = accountInfo ? (accountInfo.quota / 100).toFixed(2) : null
@@ -115,10 +126,10 @@ export const UserAccountButton = memo(function UserAccountButton({
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
           aria-haspopup="menu"
           aria-expanded={menuRect !== null}
-          title={isAuthenticated ? lang === 'zh' ? '点击查看账户详情' : 'Click to view account details' : lang === 'zh' ? '点击登录' : 'Click to log in'}
+          title={isAuthenticated ? (lang === 'zh' ? '点击查看账户详情' : 'Click to view account details') : (lang === 'zh' ? '点击登录' : 'Click to log in')}
         >
           {isAuthenticated ? (
-            <UserAvatar profile={profile} size={22} />
+            <UserAvatar profile={avatarProfile} size={22} />
           ) : (
             <div className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-neutral-200 dark:bg-neutral-700">
               <User size={12} strokeWidth={2} className="text-neutral-500 dark:text-neutral-400" />

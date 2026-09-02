@@ -1913,7 +1913,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   onLogout={async () => {
                     if (confirm(lang === 'zh' ? '确定要退出登录吗？' : 'Are you sure you want to log out?')) {
                       try {
-                        await api.clearAbuApiSession()
+                        const { logout } = await import('../api/abuApiAuth')
+                        await logout()
                         window.location.reload()
                       } catch (error) {
                         console.error('Logout failed:', error)
@@ -1921,8 +1922,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                     }
                   }}
                   onLoginRequest={() => {
-                    // 打开登录对话框
-                    setShowAbuApiLoginDialog(true)
+                    window.location.hash = '#chat/onboarding?step=login&return=chat'
                   }}
                 />
 

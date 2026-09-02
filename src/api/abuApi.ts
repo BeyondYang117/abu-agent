@@ -1,3 +1,6 @@
+import { api, isTauriRuntime } from './tauri'
+import { abuApiAuthStore } from './abuApiAuth'
+
 /**
  * ABU API 客户端
  *
@@ -227,6 +230,12 @@ export class AbuApiClient {
     used_quota: number
     group: string
   }> {
+    if (isTauriRuntime()) {
+      // Do not fall back to WebView fetch on desktop: the ABU API session is
+      // not represented by browser cookies, and fetch only masks the native
+      // error as the unhelpful "Load failed" CORS message.
+      return api.abuApiGetUserInfo()
+    }
     return this.request('/api/user/self')
   }
 
@@ -364,7 +373,9 @@ export function initAbuApiClient(baseUrl: string, sessionToken?: string): AbuApi
 
 export function getAbuApiClient(): AbuApiClient {
   if (!defaultClient) {
-    throw new Error('ABU API client not initialized')
+    const auth = abuApiAuthStore.getState()
+    const baseUrl = auth.baseUrl || DEFAULT_ABU_API_BASE_URL
+    defaultClient = new AbuApiClient(baseUrl, auth.sessionToken || undefined)
   }
   return defaultClient
 }

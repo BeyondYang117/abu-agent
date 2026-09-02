@@ -38,5 +38,19 @@ export function UserAvatar({ profile, size = 28, className }: UserAvatarProps) {
     )
   }
 
+  const name = profile.displayName?.trim()
+  if (name && name !== 'ABU Agent') {
+    const initial = name.charAt(0).toUpperCase()
+    return (
+      <div
+        className={`flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-semibold shadow-xs select-none ${className ?? ''}`}
+        style={{ width: size, height: size, fontSize: Math.max(10, Math.floor(size * 0.48)) }}
+        aria-hidden
+      >
+        {initial}
+      </div>
+    )
+  }
+
   return <AppLogoAvatar size={size} className={className} />
 }

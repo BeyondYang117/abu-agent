@@ -174,8 +174,15 @@ function virtualItemIdentity(item: RenderItem): string {
 
 function streamErrorDegraded(error: string): DegradedAnswer {
   const normalized = error.toLowerCase()
-  const kind: DegradedAnswer['kind'] =
-    normalized.includes('stream_read_error')
+  const isAuth =
+    normalized.includes('尚未登录') ||
+    normalized.includes('重新登录') ||
+    normalized.includes('unauthorized') ||
+    normalized.includes('session_token') ||
+    normalized.includes('未注册为 abu 设备')
+  const kind: DegradedAnswer['kind'] = isAuth
+    ? 'auth_required'
+    : normalized.includes('stream_read_error')
       || normalized.includes('timeout')
       || normalized.includes('timed out')
       || normalized.includes('连接')
@@ -188,9 +195,11 @@ function streamErrorDegraded(error: string): DegradedAnswer {
         : normalized.includes('rate') || normalized.includes('quota') || normalized.includes('限流')
           ? 'rate_limited'
           : 'unknown'
-  const reason = kind === 'timeout'
-    ? '模型流式响应中途断开。'
-    : '回复生成失败。'
+  const reason = isAuth
+    ? '需要登录 ABU 账户才能继续使用。'
+    : kind === 'timeout'
+      ? '模型流式响应中途断开。'
+      : '回复生成失败。'
   return { kind, reason, detail: error, text: reason }
 }
 

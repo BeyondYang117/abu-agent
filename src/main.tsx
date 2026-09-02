@@ -21,8 +21,8 @@ api
     })
 
     // 如果已登录，初始化 ABU API 客户端
-    if (config.session_token && config.base_url) {
-      initAbuApiClient(config.base_url, config.session_token)
+    if (config.session_token) {
+      initAbuApiClient(config.base_url || DEFAULT_ABU_API_BASE_URL, config.session_token)
     }
   })
   .catch((err: unknown) => {

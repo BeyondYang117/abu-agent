@@ -155,9 +155,34 @@ export async function completeLogin(sessionToken: string): Promise<void> {
     runtime_mode: 'cloud',
   })
 
+  // 刷新前端 settings 缓存并广播给所有监听者
+  try {
+    const { refreshSettings } = await import('./settingsCache')
+    await refreshSettings()
+  } catch (err) {
+    console.warn('Failed to refresh settings cache:', err)
+  }
+
   // 初始化 ABU API 客户端
   initAbuApiClient(baseUrl, sessionToken)
 
   // 更新内存状态
   abuApiAuthStore.login(sessionToken, deviceId, baseUrl)
+}
+
+// 退出登录
+export async function logout(): Promise<void> {
+  const { api } = await import('./tauri')
+  try {
+    await api.clearAbuApiSession()
+  } catch (err) {
+    console.error('Failed to clear Abu API session in backend:', err)
+  }
+  try {
+    const { refreshSettings } = await import('./settingsCache')
+    await refreshSettings()
+  } catch (err) {
+    console.warn('Failed to refresh settings cache after logout:', err)
+  }
+  abuApiAuthStore.logout()
 }

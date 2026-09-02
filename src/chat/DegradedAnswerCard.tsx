@@ -1,4 +1,4 @@
-import { AlertTriangle, Ban, Gauge, MessageSquareOff, PlugZap, Scissors } from 'lucide-react'
+import { AlertTriangle, Ban, Gauge, LogIn, MessageSquareOff, PlugZap, Scissors } from 'lucide-react'
 import type { DegradedAnswer } from './types'
 
 /**
@@ -13,6 +13,7 @@ const KIND_META: Record<
   string,
   { Icon: typeof AlertTriangle; label: string; tone: string }
 > = {
+  auth_required: { Icon: LogIn, label: '尚未登录 / 认证失效', tone: 'amber' },
   rate_limited: { Icon: Gauge, label: '限流 / 配额', tone: 'amber' },
   context_overflow: { Icon: Scissors, label: '上下文超长', tone: 'amber' },
   timeout: { Icon: PlugZap, label: '超时 / 连接中断', tone: 'amber' },
@@ -40,6 +41,11 @@ export function DegradedAnswerCard({ degraded }: { degraded: DegradedAnswer }) {
   const { Icon } = meta
   const summaries = degraded.toolSummaries ?? []
   const detail = degraded.detail?.trim()
+  const isAuthIssue =
+    degraded.kind === 'auth_required' ||
+    detail?.includes('尚未登录') ||
+    detail?.includes('重新登录') ||
+    detail?.includes('未注册为 ABU 设备')
 
   return (
     <div
@@ -59,6 +65,22 @@ export function DegradedAnswerCard({ degraded }: { degraded: DegradedAnswer }) {
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-black/[0.04] px-2.5 py-1.5 font-mono text-[11.5px] leading-relaxed text-neutral-600 dark:bg-white/[0.06] dark:text-neutral-400">
               {detail}
             </pre>
+          )}
+
+          {isAuthIssue && (
+            <div className="mt-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.hash = '#chat/onboarding?step=login&return=chat'
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 shadow-sm transition-colors hover:bg-amber-50 dark:border-amber-700/60 dark:bg-neutral-800 dark:text-amber-200 dark:hover:bg-neutral-700"
+                data-tauri-drag-region="false"
+              >
+                <LogIn size={13} />
+                <span>立即登录 ABU 账户</span>
+              </button>
+            </div>
           )}
 
           {/* 工具结果本身已在上方的工具卡片里，这里只给一句计数指路，不再复述一遍列表。 */}

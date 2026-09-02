@@ -174,6 +174,73 @@ pub async fn abu_api_register_device(
         .map_err(|e| format!("ABU API 设备响应格式错误：{e}"))
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct UserInfoResponse {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub quota: i64,
+    #[serde(default)]
+    pub used_quota: i64,
+    #[serde(default)]
+    pub group: String,
+}
+
+fn agent_user_info_url(base_url: &str) -> String {
+    format!("{}/api/agent/user", base_url.trim_end_matches('/'))
+}
+
+/// 通过 Rust 网络层获取当前登录用户信息，避免 WebView CORS 导致的请求失败。
+#[command]
+pub async fn abu_api_get_user_info(state: State<'_, AppState>) -> Result<UserInfoResponse, String> {
+    let (base_url, session_token) = {
+        let settings = state.settings_read();
+        let base_url = settings
+            .abu_api_base_url
+            .clone()
+            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
+        let session_token = settings
+            .abu_api_session_token
+            .clone()
+            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
+        (base_url, session_token)
+    };
+
+    let url = agent_user_info_url(&base_url);
+    let response = reqwest::Client::new()
+        .get(url)
+        .header("X-Abu-Session-Token", &session_token)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("获取用户信息失败")
+        ));
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 用户信息格式错误：{e}"))
+}
+
 /// 获取设备指纹（稳定唯一标识符）。
 ///
 /// 薄封装：真正的计算在 `compute_device_fingerprint()` 里，
@@ -315,34 +382,39 @@ pub fn get_default_device_name() -> Result<String, String> {
 #[command]
 pub async fn save_abu_api_config(
     app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     config: AbuApiConfig,
 ) -> Result<(), String> {
-    let mut settings = crate::settings::load_settings(&app);
+    let snapshot = {
+        let mut guard = state.settings_write();
+        guard.abu_api_base_url = Some(config.base_url);
+        guard.abu_api_session_token = config.session_token;
+        guard.abu_api_device_id = config.device_id;
+        guard.runtime_mode = config.runtime_mode;
+        guard.clone()
+    };
 
-    // 扩展 Settings 结构体以支持 abu_api 字段
-    settings.abu_api_base_url = Some(config.base_url);
-    settings.abu_api_session_token = config.session_token;
-    settings.abu_api_device_id = config.device_id;
-    settings.runtime_mode = config.runtime_mode;
-
-    crate::settings::persist_settings(&app, &settings)?;
+    crate::settings::persist_settings(&app, &snapshot)?;
 
     Ok(())
 }
 
 /// 加载 ABU API 配置
 #[command]
-pub async fn load_abu_api_config(app: AppHandle) -> Result<AbuApiConfig, String> {
-    let settings = crate::settings::load_settings(&app);
+pub async fn load_abu_api_config(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AbuApiConfig, String> {
+    let settings = state.settings_read();
 
     Ok(AbuApiConfig {
         base_url: settings
             .abu_api_base_url
+            .clone()
             .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string()),
-        session_token: settings.abu_api_session_token,
-        device_id: settings.abu_api_device_id,
-        runtime_mode: settings.runtime_mode,
+        session_token: settings.abu_api_session_token.clone(),
+        device_id: settings.abu_api_device_id.clone(),
+        runtime_mode: settings.runtime_mode.clone(),
     })
 }
 
@@ -350,14 +422,15 @@ pub async fn load_abu_api_config(app: AppHandle) -> Result<AbuApiConfig, String>
 #[command]
 pub async fn clear_abu_api_session(
     app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut settings = crate::settings::load_settings(&app);
+    let snapshot = {
+        let mut guard = state.settings_write();
+        guard.abu_api_session_token = None;
+        guard.clone()
+    };
 
-    settings.abu_api_session_token = None;
-    // 保留 device_id，方便下次登录时复用
-
-    crate::settings::persist_settings(&app, &settings)?;
+    crate::settings::persist_settings(&app, &snapshot)?;
 
     Ok(())
 }
@@ -365,6 +438,14 @@ pub async fn clear_abu_api_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_info_request_uses_agent_endpoint() {
+        assert_eq!(
+            agent_user_info_url("https://api.example.com/"),
+            "https://api.example.com/api/agent/user"
+        );
+    }
 
     #[test]
     fn test_device_fingerprint_stable() {

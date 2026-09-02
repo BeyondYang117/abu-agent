@@ -32,6 +32,7 @@ describe('DegradedAnswerCard', () => {
 
   it('按 kind 选择标签（不解析文案）', () => {
     const cases: Array<[string, string]> = [
+      ['auth_required', '尚未登录 / 认证失效'],
       ['rate_limited', '限流 / 配额'],
       ['context_overflow', '上下文超长'],
       ['timeout', '超时 / 连接中断'],
@@ -43,6 +44,18 @@ describe('DegradedAnswerCard', () => {
       expect(screen.getByText(label)).toBeTruthy()
       unmount()
     }
+  })
+
+  it('遇到认证问题时展示一键登录按钮', () => {
+    render(
+      <DegradedAnswerCard
+        degraded={makeDegraded({
+          kind: 'auth_required',
+          detail: '尚未登录 ABU 账户，请到设置 > 账户重新登录。',
+        })}
+      />,
+    )
+    expect(screen.getByText('立即登录 ABU 账户')).toBeTruthy()
   })
 
   it('未知 kind 回落到通用标签而非崩溃', () => {
