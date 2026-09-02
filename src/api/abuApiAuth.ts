@@ -109,7 +109,7 @@ export const abuApiAuthActions = {
 
 // 完成登录流程（在 Onboarding 中调用）
 export async function completeLogin(sessionToken: string): Promise<void> {
-  const { api } = await import('./tauri')
+  const { api, isTauriRuntime } = await import('./tauri')
   const { DEFAULT_ABU_API_BASE_URL, initAbuApiClient, AbuApiClient } = await import('./abuApi')
   const fingerprint = await api.getDeviceFingerprint()
   const baseUrl = abuApiAuthStore.getState().baseUrl || DEFAULT_ABU_API_BASE_URL
@@ -122,16 +122,27 @@ export async function completeLogin(sessionToken: string): Promise<void> {
   const clientVersion = await api.getClientVersion()
   const deviceName = await api.getDefaultDeviceName()
 
-  const device = await client.registerDevice({
-    fingerprint,
+  const capabilities = JSON.stringify({
     platform,
-    client_version: clientVersion,
-    device_name: deviceName,
-    capabilities: JSON.stringify({
-      platform,
-      version: clientVersion,
-    }),
+    version: clientVersion,
   })
+  const device = isTauriRuntime()
+    ? await api.abuApiRegisterDevice({
+        baseUrl,
+        sessionToken,
+        fingerprint,
+        platform,
+        clientVersion,
+        deviceName,
+        capabilities,
+      })
+    : await client.registerDevice({
+        fingerprint,
+        platform,
+        client_version: clientVersion,
+        device_name: deviceName,
+        capabilities,
+      })
 
   // 使用服务端返回的 device.id 而不是本地指纹
   const deviceId = device.id

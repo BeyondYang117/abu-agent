@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, State};
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceAuthResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_at: i64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeviceAuthExchangeResponse {
+    pub status: String,
+    pub session_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AgentDeviceResponse {
+    pub id: String,
+    pub platform: String,
+    pub client_version: String,
+    pub device_name: String,
+    pub capabilities: String,
+    pub status: String,
+    pub last_seen_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub revoked_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AbuApiConfig {
     pub base_url: String,
     pub session_token: Option<String>,
@@ -19,6 +48,130 @@ pub struct DeviceRegistration {
     pub client_version: String,
     pub device_name: String,
     pub capabilities: Option<String>,
+}
+
+/// 通过 Rust 网络层创建设备授权请求，避免 WebView 跨域/CORS 导致的 "Load failed"。
+#[command]
+pub async fn abu_api_create_device_authorization(
+    base_url: String,
+    device_name: String,
+) -> Result<DeviceAuthResponse, String> {
+    let url = format!("{}/api/agent/auth/device", base_url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&serde_json::json!({ "device_name": device_name }))
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ABU API 授权请求失败")
+            .to_string());
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 授权响应格式错误：{e}"))
+}
+
+/// 通过 Rust 网络层轮询设备授权状态。
+#[command]
+pub async fn abu_api_exchange_device_authorization(
+    base_url: String,
+    device_code: String,
+) -> Result<DeviceAuthExchangeResponse, String> {
+    let url = format!(
+        "{}/api/agent/auth/device/exchange",
+        base_url.trim_end_matches('/')
+    );
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&serde_json::json!({ "device_code": device_code }))
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        // 服务端用 409/410 表示授权已拒绝/过期，但仍在 data.status 中返回终态，
+        // 这不是网络故障，交给前端展示对应提示并停止轮询。
+        if let Some(data) = body.get("data") {
+            if let Ok(terminal) = serde_json::from_value::<DeviceAuthExchangeResponse>(data.clone())
+            {
+                if matches!(terminal.status.as_str(), "denied" | "expired") {
+                    return Ok(terminal);
+                }
+            }
+        }
+        return Err(body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ABU API 授权轮询失败")
+            .to_string());
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 授权响应格式错误：{e}"))
+}
+
+/// 通过 Rust 网络层注册登录设备，避免授权完成后的设备请求再次触发 WebView CORS 错误。
+#[command]
+pub async fn abu_api_register_device(
+    base_url: String,
+    session_token: String,
+    fingerprint: String,
+    platform: String,
+    client_version: String,
+    device_name: String,
+    capabilities: Option<String>,
+) -> Result<AgentDeviceResponse, String> {
+    let url = format!("{}/api/agent/devices", base_url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(url)
+        .header("X-Abu-Session-Token", session_token)
+        .json(&serde_json::json!({
+            "fingerprint": fingerprint,
+            "platform": platform,
+            "client_version": client_version,
+            "device_name": device_name,
+            "capabilities": capabilities.unwrap_or_default(),
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ABU API 设备注册失败")
+            .to_string());
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 设备响应格式错误：{e}"))
 }
 
 /// 获取设备指纹（稳定唯一标识符）。

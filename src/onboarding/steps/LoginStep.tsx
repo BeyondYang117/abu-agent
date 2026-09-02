@@ -1,9 +1,9 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { ExternalLink, Loader2, Copy, Check } from 'lucide-react'
 import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
 import { AbuApiClient } from '../../api/abuApi'
-import { api } from '../../api/tauri'
+import { api, isTauriRuntime } from '../../api/tauri'
 
 type LoginStepProps = {
   t: I18n
@@ -37,7 +37,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
   const [copied, setCopied] = useState(false)
 
   // 创建临时客户端（登录前不需要 session token）
-  const client = new AbuApiClient(abuApiBaseUrl)
+  const client = useMemo(() => new AbuApiClient(abuApiBaseUrl), [abuApiBaseUrl])
 
   // 复制验证码
   const copyCode = useCallback(async () => {
@@ -51,44 +51,15 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
     }
   }, [deviceFlow])
 
-  // 开始 Device Code Flow
-  const startDeviceFlow = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      // 1. 获取设备名称（用于显示）
-      const deviceName = await getDeviceName()
-
-      // 2. 请求 device code
-      const response = await client.createDeviceAuthorization(deviceName)
-      setDeviceFlow({
-        deviceCode: response.device_code,
-        userCode: response.user_code,
-        verificationUri: response.verification_uri,
-        expiresAt: response.expires_at,
-      })
-
-      // 3. 打开浏览器到验证页面
-      const verificationUrl = `${abuApiBaseUrl}${response.verification_uri}?code=${response.user_code}`
-      await api.openExternal(verificationUrl)
-
-      // 4. 开始轮询
-      startPolling(response.device_code, response.interval)
-    } catch (err) {
-      console.error('Failed to start device flow:', err)
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [client, abuApiBaseUrl])
-
   // 轮询兑换 token
   const startPolling = useCallback(
     (deviceCode: string, intervalSeconds: number) => {
       setPolling(true)
       const intervalId = setInterval(async () => {
         try {
-          const response = await client.exchangeDeviceAuthorization(deviceCode)
+          const response = isTauriRuntime()
+            ? await api.abuApiExchangeDeviceAuthorization(abuApiBaseUrl, deviceCode)
+            : await client.exchangeDeviceAuthorization(deviceCode)
 
           if (response.status === 'consumed' && response.session_token) {
             clearInterval(intervalId)
@@ -121,8 +92,46 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         }
       }, 10 * 60 * 1000)
     },
-    [client, onLoginSuccess, polling, t],
+    [abuApiBaseUrl, client, onLoginSuccess, polling, t],
   )
+
+  // 开始 Device Code Flow
+  const startDeviceFlow = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      // 1. 获取设备名称（用于显示）
+      const deviceName = await getDeviceName()
+
+      // 2. 请求 device code
+      const response = isTauriRuntime()
+        ? await api.abuApiCreateDeviceAuthorization(abuApiBaseUrl, deviceName)
+        : await client.createDeviceAuthorization(deviceName)
+      setDeviceFlow({
+        deviceCode: response.device_code,
+        userCode: response.user_code,
+        verificationUri: response.verification_uri,
+        expiresAt: response.expires_at,
+      })
+
+      // 3. 打开浏览器到验证页面
+      const verificationUrl = `${abuApiBaseUrl}${response.verification_uri}?code=${response.user_code}`
+      try {
+        await api.openExternal(verificationUrl)
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        throw new Error(`授权请求已创建，但无法打开系统浏览器：${detail}`)
+      }
+
+      // 4. 开始轮询
+      startPolling(response.device_code, response.interval)
+    } catch (err) {
+      console.error('Failed to start device flow:', err)
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [abuApiBaseUrl, client, startPolling])
 
   // 密码登录
   const handlePasswordLogin = useCallback(async () => {
@@ -214,17 +223,17 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                     onClick={copyCode}
                     className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                     data-tauri-drag-region="false"
-                    title={copied ? (t.copied || '已复制') : (t.copy || '复制')}
+                    title={copied ? (t.lensCopied || '已复制') : (t.lensCopy || '复制')}
                   >
                     {copied ? (
                       <>
                         <Check size={16} className="text-green-600 dark:text-green-400" />
-                        <span>{t.copied || '已复制'}</span>
+                        <span>{t.lensCopied || '已复制'}</span>
                       </>
                     ) : (
                       <>
                         <Copy size={16} />
-                        <span>{t.copy || '复制'}</span>
+                        <span>{t.lensCopy || '复制'}</span>
                       </>
                     )}
                   </button>

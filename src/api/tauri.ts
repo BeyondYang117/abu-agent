@@ -1963,6 +1963,37 @@ export const api = {
   getPlatform: () => invoke<string>('get_platform'),
   getClientVersion: () => invoke<string>('get_client_version'),
   getDefaultDeviceName: () => invoke<string>('get_default_device_name'),
+  abuApiCreateDeviceAuthorization: (baseUrl: string, deviceName: string) =>
+    invoke<{ device_code: string; user_code: string; verification_uri: string; expires_at: number; interval: number }>(
+      'abu_api_create_device_authorization',
+      { baseUrl, deviceName },
+    ),
+  abuApiExchangeDeviceAuthorization: (baseUrl: string, deviceCode: string) =>
+    invoke<{ status: string; session_token?: string | null }>('abu_api_exchange_device_authorization', {
+      baseUrl,
+      deviceCode,
+    }),
+  abuApiRegisterDevice: (args: {
+    baseUrl: string
+    sessionToken: string
+    fingerprint: string
+    platform: string
+    clientVersion: string
+    deviceName: string
+    capabilities?: string
+  }) =>
+    invoke<{
+      id: string
+      platform: string
+      client_version: string
+      device_name: string
+      capabilities: string
+      status: string
+      last_seen_at: number
+      created_at: number
+      updated_at: number
+      revoked_at?: number | null
+    }>('abu_api_register_device', args),
   loadAbuApiConfig: () => invoke<AbuApiConfig>('load_abu_api_config'),
   saveAbuApiConfig: (config: AbuApiConfig) =>
     invoke<void>('save_abu_api_config', { config }),
