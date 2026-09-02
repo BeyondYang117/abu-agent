@@ -20,6 +20,14 @@ type DeviceFlowState = {
   expiresAt: number
 }
 
+function buildDeviceAuthorizationUrl(
+  baseUrl: string,
+  verificationUri: string,
+  userCode: string,
+): string {
+  return `${baseUrl}${verificationUri}?user_code=${userCode}`
+}
+
 export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) {
   const [mode, setMode] = useState<LoginMode>('device')
   const [loading, setLoading] = useState(false)
@@ -115,7 +123,11 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
       })
 
       // 3. 打开浏览器到验证页面
-      const verificationUrl = `${abuApiBaseUrl}${response.verification_uri}?code=${response.user_code}`
+      const verificationUrl = buildDeviceAuthorizationUrl(
+        abuApiBaseUrl,
+        response.verification_uri,
+        response.user_code,
+      )
       try {
         await api.openExternal(verificationUrl)
       } catch (err) {
@@ -256,7 +268,11 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 <Button
                   variant="ghost"
                   onClick={() => {
-                    const url = `${abuApiBaseUrl}${deviceFlow.verificationUri}?code=${deviceFlow.userCode}`
+                    const url = buildDeviceAuthorizationUrl(
+                      abuApiBaseUrl,
+                      deviceFlow.verificationUri,
+                      deviceFlow.userCode,
+                    )
                     api.openExternal(url)
                   }}
                   data-tauri-drag-region="false"
