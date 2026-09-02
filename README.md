@@ -32,10 +32,10 @@
 <table>
 <tr>
 <td width="180" align="center" valign="middle">
-<a href="https://api.abuai.chat"><img src="docs/sponsors/hezubus.png" alt="abu-api abu-api" width="150"></a>
+<a href="https://api.abuai.chat/"><img src="public/logo-mark.png" alt="abu-api" width="150"></a>
 </td>
 <td>
-感谢 <a href="https://api.abuai.chat">abu-api</a> 赞助本项目。<a href="https://api.abuai.chat">abu-api</a> 提供 GPT / Claude 等多款模型的官方稳定极速 API 中转服务，支持企业级定制、报销开票、7×16h 专属技术支持，更有独家适配的 WebSocket 连接方式，畅享极速首字速度。Codex 补贴倍率低至 0.08。<a href="https://api.abuai.chat">点此注册</a>。
+感谢 <a href="https://api.abuai.chat/">abu-api</a> 赞助本项目。abu-api 是 ABU Agent 自有的 AI 平台，提供统一的账户、模型和用量服务。<a href="https://api.abuai.chat/">立即访问 abu-api</a>。
 </td>
 </tr>
 </table>
@@ -68,7 +68,7 @@
 
 ## 功能
 
-完整记录见 [Releases](https://github.com/abu/abu-agent-desktop/releases) · 当前版本说明：[v2.9.5](docs/releases/v2.9.5.md)
+完整记录见 [Releases](https://github.com/abu/abu-agent-desktop/releases) · 当前版本说明：[v0.1.0](docs/releases/v0.1.0.md)
 
 ### 聊天与 Agent
 

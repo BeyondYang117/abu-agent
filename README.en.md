@@ -14,10 +14,7 @@
 
 [中文](README.md) · **English** · [Changelog](https://github.com/abu/abu-agent-desktop/releases)
 
-[Download](https://github.com/abu/abu-agent-desktop/releases/latest) · [Features](#features) · [Help](#help) · QQ **1104450740**
-
-<img src="docs/screenshots/qq-group.png" width="220" alt="ABU Agent QQ group 1104450740">
-
+[Download](https://github.com/abu/abu-agent-desktop/releases/latest) · [Features](#features) · [Help](#help)
 </div>
 
 Lives in the tray. Hotkeys translate typing, selection, or what's on screen; capture a region and ask. The client is a full agent: tools, sub-agents, Skills, MCP, knowledge base, multi-model replies.
@@ -26,7 +23,7 @@ Bring your own keys. No account, no proxy, no telemetry. Data stays on disk.
 
 ## ❤️ Sponsor
 
-> Want to appear here? Reach us via [GitHub Issues](https://github.com/abu/abu-agent-desktop/issues) or QQ group **1104450740**.
+> Want to appear here? Reach us via [GitHub Issues](https://github.com/abu/abu-agent-desktop/issues).
 
 <details open>
 <summary>Click to collapse</summary>
@@ -34,10 +31,10 @@ Bring your own keys. No account, no proxy, no telemetry. Data stays on disk.
 <table>
 <tr>
 <td width="180" align="center" valign="middle">
-<a href="https://api.abuai.chat"><img src="docs/sponsors/hezubus.png" alt="abu-api" width="150"></a>
+<a href="https://api.abuai.chat/"><img src="public/logo-mark.png" alt="abu-api" width="150"></a>
 </td>
 <td>
-Thanks to <a href="https://api.abuai.chat">abu-api</a> for sponsoring this project. <a href="https://api.abuai.chat">abu-api</a> provides official, stable, high-speed API relay for GPT, Claude, and other models, with enterprise customization, invoicing, and 7×16h dedicated support. It also offers a purpose-built WebSocket connection for faster time-to-first-token. Codex subsidy rates go as low as 0.08×. <a href="https://api.abuai.chat">Register here</a>.
+Thanks to <a href="https://api.abuai.chat/">abu-api</a> for sponsoring this project. abu-api is ABU Agent's own AI platform, providing unified account, model, and usage services. <a href="https://api.abuai.chat/">Visit abu-api</a>.
 </td>
 </tr>
 </table>
@@ -70,7 +67,7 @@ Text on screen, a captured region, and coding CLIs you already installed do not 
 
 ## Features
 
-Full history: [Releases](https://github.com/abu/abu-agent-desktop/releases) · current notes: [v2.9.5](docs/releases/v2.9.5.md)
+Full history: [Releases](https://github.com/abu/abu-agent-desktop/releases) · current notes: [v0.1.0](docs/releases/v0.1.0.md)
 
 ### Chat & agent
 

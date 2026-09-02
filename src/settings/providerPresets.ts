@@ -13,12 +13,12 @@ export type ProviderPreset = {
   sponsored?: boolean
 }
 
-/** 顺序：赞助中转 → 国内 Coding / Token 套餐 → 一线实验室 → 云厂商/聚合 → 本地 → 少用的。 */
+/** 顺序：赞助平台 → 国内 Coding / Token 套餐 → 一线实验室 → 云厂商/聚合 → 本地 → 少用的。 */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     name: 'abu-api',
     baseUrl: 'https://api.abuai.chat/',
-    apiKeyUrl: 'https://api.abuai.chat/console',
+    apiKeyUrl: 'https://api.abuai.chat/',
     sponsored: true,
   },
   {

@@ -1,10 +1,14 @@
 {
   "name": "abu-agent-desktop",
   "private": true,
-  "version": "2.9.5",
+  "version": "0.1.0",
   "description": "ABU Agent Desktop - AI assistant for macOS and Windows",
   "license": "GPL-3.0-or-later",
-  "author": "ZM",
+  "author": "abu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abu/abu-agent-desktop.git"
+  },
   "type": "module",
   "scripts": {
     "protocol:generate": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin export-chat-protocol",

@@ -32,7 +32,7 @@ export function AppInfoGroup({
         <span className="kv-tag">v{appVersion}</span>
       </SettingRow>
       <SettingRow label={lang === 'zh' ? '开发者' : 'Developer'}>
-        <span className="kv-row-desc">ZM</span>
+        <span className="kv-row-desc">abu</span>
       </SettingRow>
     </SettingsGroup>
   )

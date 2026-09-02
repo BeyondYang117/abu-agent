@@ -1,9 +1,10 @@
 # ABU Agent Rust 后端 Cargo 配置
 [package]
 name = "kivio"
-version = "2.9.5"
+version = "0.1.0"
 description = "ABU Agent Desktop - Screen-level AI assistant for macOS/Windows"
-authors = ["ZM"]
+authors = ["abu"]
+repository = "https://github.com/abu/abu-agent-desktop"
 license = "GPL-3.0-or-later"
 edition = "2021"
 # `tauri dev` 跑裸 `cargo run`，没有 default-run 会因「不知道跑哪个 binary」直接报错退出。

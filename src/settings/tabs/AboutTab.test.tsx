@@ -45,6 +45,12 @@ describe('AppInfoGroup', () => {
     render(<AppInfoGroup t={t} lang="zh" appVersion="2.8.3" />)
     expect(screen.getByText('v2.8.3')).toBeTruthy()
   })
+
+  it('显示当前项目开发者 abu', () => {
+    render(<AppInfoGroup t={t} lang="zh" appVersion="2.8.3" />)
+    expect(screen.getByText('abu')).toBeTruthy()
+    expect(screen.queryByText('ZM')).toBeNull()
+  })
 })
 
 describe('UpdateGroup', () => {
