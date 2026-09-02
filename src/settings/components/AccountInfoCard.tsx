@@ -100,16 +100,35 @@ export function AccountInfoCard({
               {lang === 'zh' ? '加载失败：' : 'Failed to load: '}
               {error}
             </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={loadAccountInfo}
-              data-tauri-drag-region="false"
-              className="w-full"
-            >
-              <RefreshCw size={14} />
-              {lang === 'zh' ? '重试' : 'Retry'}
-            </Button>
+            {error.includes('401') || error.includes('403') || error.includes('Unauthorized') || error.includes('session') ? (
+              <div className="text-xs text-neutral-600 dark:text-neutral-400 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded p-2">
+                {lang === 'zh'
+                  ? '登录已过期，请退出后重新登录'
+                  : 'Session expired, please log out and log in again'}
+              </div>
+            ) : null}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={loadAccountInfo}
+                data-tauri-drag-region="false"
+                className="flex-1"
+              >
+                <RefreshCw size={14} />
+                {lang === 'zh' ? '重试' : 'Retry'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onLogout}
+                data-tauri-drag-region="false"
+                className="flex-1"
+              >
+                <LogOut size={14} />
+                {lang === 'zh' ? '退出登录' : 'Log Out'}
+              </Button>
+            </div>
           </div>
         ) : accountInfo ? (
           <>

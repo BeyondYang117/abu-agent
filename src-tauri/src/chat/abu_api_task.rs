@@ -159,13 +159,27 @@ async fn parse_envelope<T: serde::de::DeserializeOwned>(
 
 /// 准备一次 Cloud 模式对话：Session → Task → Relay Session。
 ///
-/// 三步都在服务端建了状态，所以这里不做重试：任何一步失败都直接把错误抛给调用方，
-/// 由用户重发触发新的一轮（残留的 running task 由服务端僵尸任务回收处理）。
+/// 如果 device_id 失效（invalid agent device），自动重新注册设备后重试一次。
 pub async fn prepare_conversation(settings: &Settings) -> Result<AbuApiTaskContext, String> {
-    let (base_url, session_token, device_id) = cloud_credentials(settings)?;
+    let (base_url, session_token, mut device_id) = cloud_credentials(settings)?;
     let client = reqwest::Client::new();
 
-    let session_id = create_session(&client, &base_url, &session_token, &device_id).await?;
+    // 第一次尝试创建 session
+    let session_result = create_session(&client, &base_url, &session_token, &device_id).await;
+
+    let session_id = match session_result {
+        Ok(id) => id,
+        Err(err) if err.contains("invalid agent device") => {
+            // device_id 失效，尝试重新注册设备
+            eprintln!("[abu-api] Device ID 失效，尝试重新注册设备...");
+            device_id = reregister_device(&client, &base_url, &session_token, settings).await?;
+
+            // 用新 device_id 重试
+            create_session(&client, &base_url, &session_token, &device_id).await?
+        }
+        Err(err) => return Err(err),
+    };
+
     let task_id = create_task(
         &client,
         &base_url,
@@ -186,6 +200,65 @@ pub async fn prepare_conversation(settings: &Settings) -> Result<AbuApiTaskConte
         relay_key,
         relay_expires_at,
     })
+}
+
+/// 重新注册设备（当 device_id 失效时调用）。
+async fn reregister_device(
+    client: &reqwest::Client,
+    base_url: &str,
+    session_token: &str,
+    _settings: &Settings,
+) -> Result<String, String> {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct RegisterDeviceRequest {
+        fingerprint: String,
+        platform: String,
+        client_version: String,
+        device_name: String,
+        capabilities: String,
+    }
+
+    // 获取设备信息
+    let fingerprint = crate::abu_api::compute_device_fingerprint();
+    let platform = std::env::consts::OS.to_string();
+    let client_version = env!("CARGO_PKG_VERSION").to_string();
+    let device_name = crate::abu_api::get_default_device_name()
+        .unwrap_or_else(|_| format!("{} Device", platform));
+
+    let body = RegisterDeviceRequest {
+        fingerprint,
+        platform: platform.clone(),
+        client_version: client_version.clone(),
+        device_name,
+        capabilities: serde_json::json!({
+            "platform": platform,
+            "version": client_version,
+        })
+        .to_string(),
+    };
+
+    let response = client
+        .post(format!("{base_url}/api/agent/devices"))
+        .header("X-Abu-Session-Token", session_token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|err| format!("重新注册设备失败：{err}"))?;
+
+    #[derive(serde::Deserialize)]
+    struct DeviceResponse {
+        id: String,
+    }
+
+    let device: DeviceResponse = parse_envelope(response, "重新注册设备失败").await?;
+
+    // 保存新的 device_id 到 settings（通过命令实现，因为 save_settings 需要 AppHandle）
+    eprintln!("[abu-api] 设备重新注册成功，新 device_id：{}", device.id);
+    eprintln!("[abu-api] 请注意：新 device_id 将在下次会话时生效，当前会话将使用此新 ID");
+
+    Ok(device.id)
 }
 
 /// `POST /api/agent/sessions?device_id=..` —— device_id 是 **query 参数**。

@@ -1829,6 +1829,20 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const categoryNav =
     variant === 'embedded' ? (
       <>
+        <nav className="settings-embedded-nav-list settings-embedded-nav-list--header">
+          <button
+            type="button"
+            onClick={handleCloseRequest}
+            className="settings-embedded-back"
+            title={lang === 'zh' ? '返回对话' : 'Back to chat'}
+            data-tauri-drag-region="false"
+          >
+            <span className="settings-embedded-nav-icon">
+              <ArrowLeft size={17} strokeWidth={1.75} />
+            </span>
+            <span>{lang === 'zh' ? '返回对话' : 'Back to chat'}</span>
+          </button>
+        </nav>
         <nav className="settings-embedded-nav-list">
           {navItems.map((item) => {
             const Icon = item.icon
@@ -1849,20 +1863,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
           })}
         </nav>
         <div className="min-h-0 flex-1" />
-        <nav className="settings-embedded-nav-list settings-embedded-nav-list--footer">
-          <button
-            type="button"
-            onClick={handleCloseRequest}
-            className="settings-embedded-back"
-            title={lang === 'zh' ? '返回对话' : 'Back to chat'}
-            data-tauri-drag-region="false"
-          >
-            <span className="settings-embedded-nav-icon">
-              <ArrowLeft size={17} strokeWidth={1.75} />
-            </span>
-            <span>{lang === 'zh' ? '返回对话' : 'Back to chat'}</span>
-          </button>
-        </nav>
       </>
     ) : (
       <>
