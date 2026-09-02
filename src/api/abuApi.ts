@@ -4,7 +4,7 @@ import { abuApiAuthStore } from './abuApiAuth'
 /**
  * ABU API 客户端
  *
- * 对接 abu-api (https://github.com/BeyondYang117/abu-api) 的 Agent 认证、
+ * 对接 abu-api (https://api.abuai.chat/) 的 Agent 认证、
  * 设备管理、模型列表和中转请求接口。
  */
 

@@ -7,7 +7,7 @@
   "author": "abu",
   "repository": {
     "type": "git",
-    "url": "https://github.com/abu/abu-agent-desktop.git"
+    "url": "https://github.com/abu/abu-agent-desktop"
   },
   "type": "module",
   "scripts": {
