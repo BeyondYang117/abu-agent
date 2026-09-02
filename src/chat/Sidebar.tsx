@@ -26,6 +26,7 @@ import { CliImportDialog } from './CliImportDialog'
 import { SetContextMenu } from './SetContextMenu'
 import { SetDialog } from './SetDialog'
 import { SidebarAccountMenu } from './SidebarAccountMenu'
+import { UserAccountButton } from './UserAccountButton'
 import { getSettingsCached } from '../api/settingsCache'
 import { IconButton } from '../components/Button'
 import { chatApi } from './api'
@@ -206,6 +207,8 @@ export interface SidebarProps {
   /** 真实会话列表 refetch 落地后回调（父组件据此剪枝乐观条目，见 visibleConversations 注释）。 */
   onConversationsLoaded?: () => void
   onOpenSettings: () => void
+  /** 未登录账户入口；缺省时回退到设置，兼容非聊天宿主调用方。 */
+  onOpenLogin?: () => void
   onOpenExtensionsItem: (item: ExtensionsNavItem) => void
   onSelectLang: (lang: Lang) => void
   onOpenUsage: () => void
@@ -616,6 +619,7 @@ export const Sidebar = memo(function Sidebar({
   onForceDropConversation,
   onConversationsLoaded,
   onOpenSettings,
+  onOpenLogin,
   onOpenExtensionsItem,
   onSelectLang,
   onOpenUsage,
@@ -1895,13 +1899,25 @@ export const Sidebar = memo(function Sidebar({
         )}
       </div>
 
-      <SidebarUserFooter
+      <UserAccountButton
         profile={userProfile}
         lang={lang}
         settingsActive={settingsActive}
         onOpenSettings={onOpenSettings}
-        onSelectLang={onSelectLang}
-        onOpenUsage={onOpenUsage}
+        onOpenLogin={onOpenLogin ?? onOpenSettings}
+        onLogout={async () => {
+          try {
+            const { api } = await import('../api/tauri')
+            const { abuApiAuthStore } = await import('../api/abuApiAuth')
+            // 清除登录状态
+            await api.clearAbuApiAuth()
+            abuApiAuthStore.logout()
+            // 刷新界面
+            window.location.reload()
+          } catch (err) {
+            console.error('Failed to logout:', err)
+          }
+        }}
       />
 
       {projectMenuState && menuProject && (

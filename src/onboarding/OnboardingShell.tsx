@@ -5,7 +5,7 @@ import { getSettingsCached, saveSettingsCached } from '../api/settingsCache'
 import { i18n, type Lang } from '../settings/i18n'
 import { usesNativeTitlebar } from '../chat/platform'
 import { Button } from '../components/Button'
-import { ONBOARDING_STEPS, getOnboardingSteps, type OnboardingStepId } from './types'
+import { getOnboardingSteps, type OnboardingStepId } from './types'
 import { canCompleteOnboarding, validateProviderStep } from './validation'
 import { DoneStep } from './steps/DoneStep'
 import { HotkeyStep } from './steps/HotkeyStep'
@@ -42,8 +42,20 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const [loginCompleted, setLoginCompleted] = useState(false)
 
   const { isAuthenticated } = useAbuApiAuth()
+  const loginOnly = new URLSearchParams(window.location.hash.split('?')[1] || '').get('return') === 'chat'
   // Cloud 模式跳过 provider 步，步骤序列动态计算。
   const steps = useMemo(() => getOnboardingSteps(settings?.runtimeMode), [settings?.runtimeMode])
+  useEffect(() => {
+    const syncRequestedStep = () => {
+      const requestedStep = new URLSearchParams(window.location.hash.split('?')[1] || '').get('step')
+      if (!requestedStep) return
+      const requestedIndex = steps.indexOf(requestedStep as OnboardingStepId)
+      if (requestedIndex >= 0) setStepIndex(requestedIndex)
+    }
+    syncRequestedStep()
+    window.addEventListener('hashchange', syncRequestedStep)
+    return () => window.removeEventListener('hashchange', syncRequestedStep)
+  }, [steps])
   const stepId = steps[stepIndex] ?? 'welcome'
   const lang = (settings?.settingsLanguage || 'zh') as Lang
   const t = i18n[lang]
@@ -224,6 +236,11 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     try {
       await completeLogin(sessionToken)
       setLoginCompleted(true)
+      const returnToChat = new URLSearchParams(window.location.hash.split('?')[1] || '').get('return') === 'chat'
+      if (returnToChat) {
+        onComplete()
+        return
+      }
       // 重新加载 settings 以获取更新后的 runtime_mode
       const reloaded = await getSettingsCached()
       setSettings(reloaded)
@@ -233,6 +250,30 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
       console.error('Failed to complete login:', err)
       setSaveError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  if (loginOnly) {
+    return (
+      <div className="onboarding-shell onboarding-login-only settings-embedded kv">
+        <div className="onboarding-main">
+          <div className="onboarding-body kv-scroll" data-tauri-drag-region="false">
+            <div className="onboarding-login-only-inner">
+              <div className="onboarding-login-only-brand" aria-hidden="true">
+                <img src="/logo-mark.png" alt="" draggable={false} />
+                <span>ABU Agent</span>
+              </div>
+              <div className="onboarding-login-only-card">
+                <LoginStep
+                  t={t}
+                  abuApiBaseUrl={settings.abu_api_base_url || DEFAULT_ABU_API_BASE_URL}
+                  onLoginSuccess={handleLoginSuccess}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

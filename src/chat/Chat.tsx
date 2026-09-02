@@ -4696,6 +4696,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     openEmbeddedSettings('chat')
   }, [chatView, extensionsNavItem, handleSettingsClose, openEmbeddedSettings])
 
+  const handleSidebarOpenLogin = useCallback(() => {
+    setExtensionsNavItem(null)
+    setChatView('onboarding')
+    syncOnboardingRoute('login', true)
+  }, [syncOnboardingRoute])
+
   // 侧栏账户菜单：语言切换 / 用量。都是全局行为，所以留在 Chat 这层，
   // 侧栏只负责触发（它拿不到 settings 也不该自己全量保存）。
   const handleSidebarSelectLang = useCallback((next: Lang) => {
@@ -5266,6 +5272,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           onConversationsLoaded={handleSidebarConversationsLoaded}
           onOpenExtensionsItem={handleSidebarOpenExtensionsItem}
           onOpenSettings={handleSidebarOpenSettings}
+          onOpenLogin={handleSidebarOpenLogin}
           onSelectLang={handleSidebarSelectLang}
           onOpenUsage={handleSidebarOpenUsage}
           settingsActive={settingsPanelActive}

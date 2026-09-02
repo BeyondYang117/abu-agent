@@ -190,4 +190,14 @@ describe('useChatRouting sync*Route', () => {
     act(() => { r.syncConversationRoute(null) })
     expect(window.location.hash).toBe('#chat')
   })
+
+  it('syncOnboardingRoute 可直达登录步骤', () => {
+    const { result } = setup('#chat')
+
+    act(() => {
+      result.current.routing.syncOnboardingRoute('login', true)
+    })
+
+    expect(window.location.hash).toBe('#chat/onboarding?step=login&return=chat')
+  })
 })

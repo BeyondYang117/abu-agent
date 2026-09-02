@@ -13,6 +13,95 @@
 
 /* ==================== 登录步骤 ==================== */
 
+.onboarding-login-only .onboarding-main {
+  background: var(--bg);
+}
+
+.onboarding-login-only .onboarding-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.onboarding-login-only-inner {
+  width: min(100%, 440px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.onboarding-login-only-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.onboarding-login-only-brand img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.onboarding-login-only-card {
+  width: 100%;
+  padding: 28px 30px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-input) 94%, transparent);
+  box-shadow: 0 12px 30px -20px rgba(24, 24, 27, 0.35);
+}
+
+.dark .onboarding-login-only-card {
+  box-shadow: 0 16px 36px -22px rgba(0, 0, 0, 0.8);
+}
+
+.onboarding-login-only-card .onboarding-step {
+  max-width: none;
+}
+
+.onboarding-login-only-card .onboarding-title {
+  text-align: center;
+  font-size: 22px;
+}
+
+.onboarding-login-only-card .onboarding-subtitle {
+  margin: 8px auto 0;
+  text-align: center;
+  line-height: 1.55;
+}
+
+.onboarding-login-only-card .onboarding-login-device,
+.onboarding-login-only-card .onboarding-login-password {
+  max-width: none;
+  gap: 1rem;
+}
+
+.onboarding-login-only-card .onboarding-panel-note {
+  text-align: center;
+  line-height: 1.55;
+}
+
+.onboarding-login-only-card .onboarding-login-mode-switch {
+  margin-top: 20px;
+  padding-top: 16px;
+}
+
+@media (max-width: 520px) {
+  .onboarding-login-only .onboarding-body {
+    padding: 24px 14px;
+  }
+
+  .onboarding-login-only-card {
+    padding: 24px 18px 20px;
+  }
+}
+
 .onboarding-login-device,
 .onboarding-login-password {
   display: flex;

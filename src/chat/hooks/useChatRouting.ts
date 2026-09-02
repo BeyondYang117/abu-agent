@@ -55,7 +55,15 @@ export function useChatRouting({
   }, [])
 
   const syncSettingsRoute = useCallback(() => setHash('#chat/settings'), [])
-  const syncOnboardingRoute = useCallback(() => setHash('#chat/onboarding'), [])
+  const syncOnboardingRoute = useCallback((step?: string, returnToChat = false) => {
+    if (!step) {
+      setHash('#chat/onboarding')
+      return
+    }
+    const params = new URLSearchParams({ step })
+    if (returnToChat) params.set('return', 'chat')
+    setHash(`#chat/onboarding?${params.toString()}`)
+  }, [])
   const syncAssistantCenterRoute = useCallback(() => setHash('#chat/assistants'), [])
   const syncSkillCenterRoute = useCallback(() => setHash('#chat/skill'), [])
   const syncMcpCenterRoute = useCallback(() => setHash('#chat/mcp'), [])

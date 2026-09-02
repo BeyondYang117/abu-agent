@@ -5,6 +5,7 @@ import { getSettingsCached } from '../api/settingsCache'
 import { chatApi } from './api'
 import { Sidebar } from './Sidebar'
 import type { ChatProject, Conversation, ConversationListItem } from './types'
+import { abuApiAuthStore } from '../api/abuApiAuth'
 
 vi.mock('../api/settingsCache', () => ({
   getSettingsCached: vi.fn().mockResolvedValue({ chat: {} }),
@@ -144,6 +145,47 @@ describe('Sidebar conversation navigation', () => {
       onlyConversation,
       { project: project2, set: null },
     )
+  })
+})
+
+describe('Sidebar account navigation', () => {
+  it('uses the dedicated login callback when the account is logged out', async () => {
+    abuApiAuthStore.logout()
+    const user = userEvent.setup()
+    const onOpenSettings = vi.fn()
+    const onOpenLogin = vi.fn()
+    vi.spyOn(chatApi, 'getProjects').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getSets').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getAssistants').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getConversations').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getConversationPins').mockResolvedValue({})
+
+    render(
+      <Sidebar
+        lang="zh"
+        selectedProject={null}
+        onSelectProject={vi.fn()}
+        selectedSet={null}
+        onSelectSet={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onNewConversation={vi.fn()}
+        onOpenSettings={onOpenSettings}
+        onOpenLogin={onOpenLogin}
+        onOpenExtensionsItem={vi.fn()}
+        onSelectLang={vi.fn()}
+        onOpenUsage={vi.fn()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+        refreshKey={0}
+        searchOpen={false}
+        onSearchOpenChange={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: /ABU Agent 未登录/ }))
+
+    expect(onOpenLogin).toHaveBeenCalledOnce()
+    expect(onOpenSettings).not.toHaveBeenCalled()
   })
 })
 

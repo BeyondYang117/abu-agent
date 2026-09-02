@@ -1920,15 +1920,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                       }
                     }
                   }}
-                  onLoginRequest={async () => {
-                    try {
-                      // 清除当前会话
-                      await api.clearAbuApiSession()
-                      // 重新加载以触发 onboarding 流程
-                      window.location.reload()
-                    } catch (error) {
-                      console.error('Failed to initiate login:', error)
-                    }
+                  onLoginRequest={() => {
+                    // 打开登录对话框
+                    setShowAbuApiLoginDialog(true)
                   }}
                 />
 
