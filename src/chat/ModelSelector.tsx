@@ -32,7 +32,6 @@ function ModelSelectorBase({
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
-  const [cloudModels, setCloudModels] = useState<string[] | null>(null)
   const [cloudError, setCloudError] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const maxH = usePopoverMaxHeight(open, menuRef, 'down', 400)
@@ -47,7 +46,6 @@ function ModelSelectorBase({
         setCloudError(null)
         try {
           const response = await listModels()
-          setCloudModels(response.models)
           // 构造虚拟 Provider（用于 UI 渲染，实际调用时 Rust 侧会替换）
           const virtualProvider: ModelProvider = {
             id: ABU_API_PROVIDER_ID,
@@ -64,11 +62,9 @@ function ModelSelectorBase({
           console.error('Failed to load cloud models:', err)
           setCloudError(err instanceof Error ? err.message : String(err))
           setProviders([])
-          setCloudModels([])
         }
       } else {
         // Local 模式：使用本地配置的 providers
-        setCloudModels(null)
         setCloudError(null)
         setProviders(settings.providers || [])
       }
@@ -96,7 +92,18 @@ function ModelSelectorBase({
     // 设置页自动保存（无保存按钮）与返回聊天视图是并发的：挂载时那次读可能拿到落盘
     // 回包前的旧快照。订阅缓存更新，保存完成后立即拿到新 providers/收藏。
     return subscribeSettings((settings) => {
-      setProviders(settings.providers || [])
+      // Cloud providers are fetched from the API. A settings-cache broadcast can
+      // contain the local provider list and must not overwrite the virtual cloud
+      // provider after its model request completes.
+      if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+        // Login/settings refresh can switch an already-mounted chat into Cloud
+        // mode; reload the server-backed virtual provider instead of using the
+        // local provider array from the settings snapshot.
+        void loadSettings()
+      } else {
+        setProviders(settings.providers || [])
+        setCloudError(null)
+      }
       setFavorites(settings.favoriteModels || [])
     })
   }, [loadSettings])

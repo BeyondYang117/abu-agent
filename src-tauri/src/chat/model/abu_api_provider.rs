@@ -216,10 +216,9 @@ mod tests {
         let provider = create_abu_api_virtual_provider("https://x", "rk", "task-99");
         let pairs = crate::provider_request::header_pairs(&provider, None);
         assert!(
-            pairs
-                .iter()
-                .any(|(name, value)| name.eq_ignore_ascii_case(TASK_ID_HEADER)
-                    && value == "task-99"),
+            pairs.iter().any(
+                |(name, value)| name.eq_ignore_ascii_case(TASK_ID_HEADER) && value == "task-99"
+            ),
             "header_pairs 没带上 task 头：{pairs:?}"
         );
     }

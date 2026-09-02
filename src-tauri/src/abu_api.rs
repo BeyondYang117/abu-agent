@@ -192,8 +192,19 @@ pub struct UserInfoResponse {
     pub group: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct AgentModelsResponse {
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub recommended: String,
+}
+
 fn agent_user_info_url(base_url: &str) -> String {
-    format!("{}/api/agent/user", base_url.trim_end_matches('/'))
+    format!(
+        "{}/api/agent/devices?include_account=1",
+        base_url.trim_end_matches('/')
+    )
 }
 
 /// 通过 Rust 网络层获取当前登录用户信息，避免 WebView CORS 导致的请求失败。
@@ -239,6 +250,56 @@ pub async fn abu_api_get_user_info(state: State<'_, AppState>) -> Result<UserInf
     }
     serde_json::from_value(body.get("data").cloned().unwrap_or_default())
         .map_err(|e| format!("ABU API 用户信息格式错误：{e}"))
+}
+
+fn agent_models_url(base_url: &str) -> String {
+    format!("{}/api/agent/models", base_url.trim_end_matches('/'))
+}
+
+/// 通过 Rust 网络层获取可用模型，避免 Tauri WebView 的跨域请求失败。
+#[command]
+pub async fn abu_api_list_models(
+    state: State<'_, AppState>,
+) -> Result<AgentModelsResponse, String> {
+    let (base_url, session_token) = {
+        let settings = state.settings_read();
+        let base_url = settings
+            .abu_api_base_url
+            .clone()
+            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
+        let session_token = settings
+            .abu_api_session_token
+            .clone()
+            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
+        (base_url, session_token)
+    };
+
+    let response = reqwest::Client::new()
+        .get(agent_models_url(&base_url))
+        .header("X-Abu-Session-Token", &session_token)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("获取模型列表失败")
+        ));
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 模型列表格式错误：{e}"))
 }
 
 /// 获取设备指纹（稳定唯一标识符）。
@@ -345,8 +406,7 @@ pub fn get_hostname() -> Result<String, String> {
     }
     #[cfg(windows)]
     {
-        std::env::var("COMPUTERNAME")
-            .map_err(|_| "Failed to get hostname".to_string())
+        std::env::var("COMPUTERNAME").map_err(|_| "Failed to get hostname".to_string())
     }
 }
 
@@ -443,7 +503,15 @@ mod tests {
     fn user_info_request_uses_agent_endpoint() {
         assert_eq!(
             agent_user_info_url("https://api.example.com/"),
-            "https://api.example.com/api/agent/user"
+            "https://api.example.com/api/agent/devices?include_account=1"
+        );
+    }
+
+    #[test]
+    fn models_request_uses_agent_endpoint() {
+        assert_eq!(
+            agent_models_url("https://api.example.com/"),
+            "https://api.example.com/api/agent/models"
         );
     }
 

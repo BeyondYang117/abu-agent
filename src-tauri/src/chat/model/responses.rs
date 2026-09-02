@@ -2297,10 +2297,7 @@ mod tests {
             "data: {\"type\":\"error\",\"message\":\"stream ended without terminal event or completed response\"}\n",
         );
         let err = output_from_sse_body(body).expect_err("empty stream should fail");
-        assert!(
-            err.to_string().contains("without terminal"),
-            "got {err}"
-        );
+        assert!(err.to_string().contains("without terminal"), "got {err}");
     }
 
     /// A plain JSON body is not mistaken for SSE; the happy path stays unchanged.

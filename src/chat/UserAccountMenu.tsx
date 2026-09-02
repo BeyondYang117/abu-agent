@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { LogOut, User, Mail, Coins, Crown, Calendar, Settings, Gift, TrendingUp } from 'lucide-react'
 import { useCloseAnimation } from './useCloseAnimation'
 import { i18n, type Lang } from '../settings/i18n'
+import { formatAbuQuota } from '../api/quota'
 
 interface AccountInfo {
   username: string
@@ -53,8 +54,8 @@ export function UserAccountMenu({
     }
   }, [onClose])
 
-  const balance = accountInfo ? (accountInfo.quota / 100).toFixed(2) : '0.00'
-  const usedBalance = accountInfo ? (accountInfo.usedQuota / 100).toFixed(2) : '0.00'
+  const balance = accountInfo ? formatAbuQuota(accountInfo.quota) : '0.00'
+  const usedBalance = accountInfo ? formatAbuQuota(accountInfo.usedQuota) : '0.00'
   const isVip = accountInfo?.group === 'vip'
 
   const menu = (

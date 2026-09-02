@@ -4,6 +4,7 @@ import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import { useAbuApiAuth } from '../../api/abuApiAuth'
 import { getAbuApiClient } from '../../api/abuApi'
+import { formatAbuQuota } from '../../api/quota'
 
 interface AccountInfo {
   username: string
@@ -156,10 +157,10 @@ export function AccountInfoCard({
               <span className="text-neutral-700 dark:text-neutral-300">
                 {lang === 'zh' ? '余额：' : 'Balance: '}
                 <span className="font-semibold text-neutral-900 dark:text-neutral-100">
-                  ${(accountInfo.quota / 100).toFixed(2)}
+                  ${formatAbuQuota(accountInfo.quota)}
                 </span>
                 <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-1">
-                  ({lang === 'zh' ? '已用' : 'used'} ${(accountInfo.usedQuota / 100).toFixed(2)})
+                  ({lang === 'zh' ? '已用' : 'used'} ${formatAbuQuota(accountInfo.usedQuota)})
                 </span>
               </span>
             </div>

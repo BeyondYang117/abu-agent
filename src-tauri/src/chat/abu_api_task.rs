@@ -180,14 +180,7 @@ pub async fn prepare_conversation(settings: &Settings) -> Result<AbuApiTaskConte
         Err(err) => return Err(err),
     };
 
-    let task_id = create_task(
-        &client,
-        &base_url,
-        &session_token,
-        &session_id,
-        &device_id,
-    )
-    .await?;
+    let task_id = create_task(&client, &base_url, &session_token, &session_id, &device_id).await?;
     let (relay_key, relay_expires_at) =
         create_relay_session(&client, &base_url, &session_token, &device_id, &task_id).await?;
 
@@ -465,8 +458,8 @@ fn start_heartbeat_loop(context: &AbuApiTaskContext) -> tauri::async_runtime::Jo
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(HEARTBEAT_INTERVAL).await;
-            if let Err(err) = super::model::send_task_heartbeat(&base_url, &session_token, &task_id)
-                .await
+            if let Err(err) =
+                super::model::send_task_heartbeat(&base_url, &session_token, &task_id).await
             {
                 eprintln!("[abu-api] 心跳失败（task={task_id}）：{err}");
             }

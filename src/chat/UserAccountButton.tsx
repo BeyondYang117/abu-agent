@@ -7,6 +7,7 @@ import type { ChatUserProfile } from './types'
 import { i18n, type Lang } from '../settings/i18n'
 import { IconButton } from '../components/Button'
 import { UserAccountMenu } from './UserAccountMenu'
+import { formatAbuQuota } from '../api/quota'
 
 interface UserAccountButtonProps {
   profile: ChatUserProfile
@@ -108,7 +109,7 @@ export const UserAccountButton = memo(function UserAccountButton({
   }
 
   // 余额
-  const balance = accountInfo ? (accountInfo.quota / 100).toFixed(2) : null
+  const balance = accountInfo ? formatAbuQuota(accountInfo.quota) : null
 
   return (
     <div className="px-2">

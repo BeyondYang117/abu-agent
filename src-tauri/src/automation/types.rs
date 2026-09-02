@@ -358,12 +358,16 @@ mod tests {
             created_at: "t0".into(),
             updated_at: "t1".into(),
         };
-        assert_eq!(automation.meta().trigger_type.as_deref(), Some("trigger.hotkey"));
+        assert_eq!(
+            automation.meta().trigger_type.as_deref(),
+            Some("trigger.hotkey")
+        );
     }
 
     #[test]
     fn upsert_example_deserializes_without_ids_or_timestamps() {
-        let automation: Automation = serde_json::from_str(UPSERT_MINIMAL_EXAMPLE).expect("example json");
+        let automation: Automation =
+            serde_json::from_str(UPSERT_MINIMAL_EXAMPLE).expect("example json");
         assert_eq!(automation.name, "AI briefing");
         assert_eq!(automation.nodes.len(), 5);
         assert!(automation.id.is_empty());

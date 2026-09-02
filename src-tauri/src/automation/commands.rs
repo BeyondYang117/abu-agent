@@ -100,7 +100,10 @@ pub fn automation_import(app: AppHandle, path: String) -> Result<Automation, Str
 }
 
 #[tauri::command]
-pub fn automation_runs_list(app: AppHandle, id: String) -> Result<Vec<AutomationRunSummary>, String> {
+pub fn automation_runs_list(
+    app: AppHandle,
+    id: String,
+) -> Result<Vec<AutomationRunSummary>, String> {
     history::list(&app, &id)
 }
 

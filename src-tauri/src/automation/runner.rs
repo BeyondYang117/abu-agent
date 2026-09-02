@@ -146,10 +146,7 @@ pub fn cancel(app: &AppHandle, id: &str) -> Result<(), String> {
     if let Ok(automation) = storage::get(app, id) {
         for node in automation.nodes {
             if node.node_type == "action.agent" {
-                state.cancel_chat_generation(&workspace::external_conversation_id(
-                    id,
-                    &node.id,
-                ));
+                state.cancel_chat_generation(&workspace::external_conversation_id(id, &node.id));
             }
         }
     }
@@ -377,10 +374,7 @@ async fn execute_node(
         "logic.switch" => {
             let handle = eval_switch(node, prev);
             Ok((
-                NodeOutput::with_json(
-                    handle.clone(),
-                    json!({ "result": handle.clone() }),
-                ),
+                NodeOutput::with_json(handle.clone(), json!({ "result": handle.clone() })),
                 Some(handle),
             ))
         }
@@ -411,11 +405,7 @@ fn build_set_output(fields: &Value, prev: &NodeOutput) -> NodeOutput {
     let mut map = serde_json::Map::new();
     if let Some(items) = fields.as_array() {
         for item in items {
-            let key = item
-                .get("key")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim();
+            let key = item.get("key").and_then(Value::as_str).unwrap_or("").trim();
             if key.is_empty() {
                 continue;
             }
@@ -441,7 +431,10 @@ async fn execute_delay(app: &AppHandle, run_id: &str, node: &FlowNode) -> Result
         .data
         .get("delay")
         .and_then(|v| v.get("seconds"))
-        .and_then(|v| v.as_u64().or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+        })
         .unwrap_or(1)
         .clamp(1, 600);
     let sleep = tokio::time::sleep(Duration::from_secs(seconds));
@@ -522,7 +515,10 @@ async fn execute_command(
     prev: &NodeOutput,
 ) -> Result<NodeOutput, String> {
     let spec = node.data.get("command").cloned().unwrap_or(Value::Null);
-    let cmd = interpolate(spec.get("command").and_then(Value::as_str).unwrap_or(""), prev);
+    let cmd = interpolate(
+        spec.get("command").and_then(Value::as_str).unwrap_or(""),
+        prev,
+    );
     if cmd.trim().is_empty() {
         return Err("command is empty".to_string());
     }
@@ -532,7 +528,10 @@ async fn execute_command(
         .unwrap_or(false);
     let timeout_ms = spec
         .get("timeoutSeconds")
-        .and_then(|v| v.as_u64().or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+        })
         .unwrap_or(30)
         .saturating_mul(1000)
         .clamp(CHAT_TOOL_MIN_TIMEOUT_MS, CHAT_TOOL_MAX_TIMEOUT_MS);
@@ -651,10 +650,7 @@ fn eval_switch(node: &FlowNode, prev: &NodeOutput) -> String {
         let Some(id) = id else {
             continue;
         };
-        let op = case
-            .get("op")
-            .and_then(Value::as_str)
-            .unwrap_or("contains");
+        let op = case.get("op").and_then(Value::as_str).unwrap_or("contains");
         let expected = interpolate(
             case.get("value").and_then(Value::as_str).unwrap_or(""),
             prev,
@@ -695,10 +691,7 @@ async fn execute_http(
         .and_then(|v| v.as_str())
         .unwrap_or("GET")
         .to_ascii_uppercase();
-    let url = interpolate(
-        http.get("url").and_then(|v| v.as_str()).unwrap_or(""),
-        prev,
-    );
+    let url = interpolate(http.get("url").and_then(|v| v.as_str()).unwrap_or(""), prev);
     let url = url.trim();
     if url.is_empty() {
         return Err("HTTP URL is empty".to_string());
@@ -707,10 +700,7 @@ async fn execute_http(
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("HTTP node only allows http:// or https:// URLs".to_string());
     }
-    let headers_raw = http
-        .get("headers")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let headers_raw = http.get("headers").and_then(|v| v.as_str()).unwrap_or("");
     let body = interpolate(
         http.get("body").and_then(|v| v.as_str()).unwrap_or(""),
         prev,
@@ -789,7 +779,11 @@ pub(crate) fn reaches(automation: &Automation, from: &str, until: &str) -> bool 
     false
 }
 
-pub(crate) fn next_node_ids(automation: &Automation, from: &str, handle: Option<&str>) -> Vec<String> {
+pub(crate) fn next_node_ids(
+    automation: &Automation,
+    from: &str,
+    handle: Option<&str>,
+) -> Vec<String> {
     automation
         .edges
         .iter()
@@ -873,11 +867,7 @@ fn merge_agent_object(spec: &mut serde_json::Map<String, Value>, part: &Value, k
 }
 
 fn compose_agent_spec(automation: &Automation, node: &FlowNode) -> Value {
-    let mut spec = node
-        .data
-        .get("agent")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let mut spec = node.data.get("agent").cloned().unwrap_or_else(|| json!({}));
     if !spec.is_object() {
         spec = json!({});
     }
@@ -982,7 +972,7 @@ pub(crate) fn clip_bytes(text: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::automation::types::{FlowEdge, SCHEMA_VERSION, Vec2, Viewport};
+    use crate::automation::types::{FlowEdge, Vec2, Viewport, SCHEMA_VERSION};
 
     fn node(id: &str, node_type: &str) -> FlowNode {
         FlowNode {
@@ -1034,7 +1024,10 @@ mod tests {
             next_node_ids(&automation, "i", Some("false")),
             vec!["no".to_string()]
         );
-        assert_eq!(next_node_ids(&automation, "yes", None), Vec::<String>::new());
+        assert_eq!(
+            next_node_ids(&automation, "yes", None),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1099,7 +1092,8 @@ mod tests {
         let mut agent = node("a", "action.agent");
         agent.data = json!({ "agent": { "prompt": "legacy" } });
         let mut runtime = node("r", "agent.runtime");
-        runtime.data = json!({ "agent": { "runtimeKind": "chat", "model": "m", "providerId": "p" } });
+        runtime.data =
+            json!({ "agent": { "runtimeKind": "chat", "model": "m", "providerId": "p" } });
         let mut context = node("c", "agent.context");
         context.data = json!({ "agent": { "prompt": "hello {{output}}" } });
         let automation = Automation {

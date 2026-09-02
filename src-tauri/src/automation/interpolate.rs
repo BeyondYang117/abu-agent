@@ -15,7 +15,10 @@ pub fn interpolate(template: &str, prev: &NodeOutput) -> String {
             break;
         };
         let path = &out[abs + 7..abs + 7 + end];
-        if path.is_empty() || !path.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        if path.is_empty()
+            || !path
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
         {
             search_from = abs + 7;
             continue;
@@ -49,7 +52,9 @@ pub fn eval_if(op: &str, expected: &str, actual: &str) -> bool {
 }
 
 pub fn node_disabled(data: &Value) -> bool {
-    data.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false)
+    data.get("disabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -70,10 +75,7 @@ mod tests {
 
     #[test]
     fn does_not_rescan_placeholders_inside_output_text() {
-        let prev = NodeOutput::with_json(
-            "see {{json.status}}",
-            json!({ "status": 200 }),
-        );
+        let prev = NodeOutput::with_json("see {{json.status}}", json!({ "status": 200 }));
         assert_eq!(interpolate("{{output}}", &prev), "see {{json.status}}");
         assert_eq!(
             interpolate("{{output}} / {{json.status}}", &prev),
@@ -83,10 +85,7 @@ mod tests {
 
     #[test]
     fn does_not_expand_output_placeholder_inside_json_values() {
-        let prev = NodeOutput::with_json(
-            "HELLO",
-            json!({ "note": "see {{output}}" }),
-        );
+        let prev = NodeOutput::with_json("HELLO", json!({ "note": "see {{output}}" }));
         assert_eq!(interpolate("{{json.note}}", &prev), "see {{output}}");
     }
 

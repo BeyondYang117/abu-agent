@@ -397,7 +397,7 @@
     "contextWindow": 200000,
     "maxOutput": 64000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
-    "reasoningEfforts": ["low", "medium", "high"],
+    "reasoningEfforts": [],
     "pricing": { "input": 1.00, "output": 5.00, "cachedInput": 0.10 }
   },
   "claude-3.5-haiku": {

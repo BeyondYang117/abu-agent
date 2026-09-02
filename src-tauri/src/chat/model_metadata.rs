@@ -1019,11 +1019,11 @@ mod tests {
         );
         assert_eq!(
             reasoning_efforts_for_model(None, "claude-haiku-4-5"),
-            vec!["low", "medium", "high"]
+            Vec::<String>::new()
         );
         assert_eq!(
             reasoning_efforts_for_model(None, "claude-haiku-4.5"),
-            vec!["low", "medium", "high"]
+            Vec::<String>::new()
         );
         assert_eq!(
             reasoning_efforts_for_model(None, "claude-opus-4-5"),

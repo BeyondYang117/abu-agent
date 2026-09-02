@@ -1109,6 +1109,23 @@ pub fn normalize_codex_effort(raw: Option<&str>) -> Option<String> {
     }
 }
 
+fn is_codex_effort_rejection(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    let mentions_effort = lower.contains("effort") || lower.contains("reasoning");
+    let rejects_value = [
+        "invalid",
+        "unsupported",
+        "unknown",
+        "unrecognized",
+        "not support",
+        "not allowed",
+        "must be one of",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    mentions_effort && rejects_value
+}
+
 /// Build the `turn/start` params, applying the per-turn `model` / reasoning `effort` (R4: codex
 /// applies both every turn, so a mid-session switch takes effect on the next turn). Pure so the
 /// per-turn application is unit-testable.
@@ -1363,6 +1380,9 @@ impl CodexAppServerSession {
             write_rpc(&mut self.stdin, turn_id, "turn/start", turn_params).await?;
         }
 
+        let mut turn_rpc_id = turn_id;
+        let mut effort_retry_attempted = false;
+
         // 已发出、还在等响应的 `turn/steer`（rpc_id → (steer_id, 文本, 回执通道)）。
         // 受理与否只有响应说得准，所以 oneshot 在这里排队、由读循环兑付。
         let mut pending_steers: std::collections::HashMap<
@@ -1502,6 +1522,37 @@ impl CodexAppServerSession {
             // （review / compact 轮次不可 steer、expectedTurnId 已过期）回的是带 id 的
             // error，落到通用分支会把整轮判死 —— 用户只是插话没插上，不该赔掉这一轮。
             if let Some(rpc_id) = value.get("id").and_then(Value::as_u64) {
+                if rpc_id == turn_rpc_id
+                    && !effort_retry_attempted
+                    && chosen_effort.is_some()
+                    && value.get("error").is_some()
+                {
+                    let message = value
+                        .get("error")
+                        .map(codex_error_message)
+                        .unwrap_or_default();
+                    if is_codex_effort_rejection(&message) {
+                        // Some older Codex builds reject newer effort ids at turn/start.
+                        // Retry once without the optional effort so the model can still answer.
+                        effort_retry_attempted = true;
+                        let retry_id = self.next_id;
+                        self.next_id += 1;
+                        let mut input = vec![json!({ "type": "text", "text": prompt })];
+                        input.extend(local_image_items(&self.cli_bin, images));
+                        let retry_params = build_codex_turn_params(
+                            &self.thread_id,
+                            &self.cwd,
+                            input,
+                            chosen_model,
+                            None,
+                            extra_writable_roots,
+                            self.approval_policy,
+                        );
+                        write_rpc(&mut self.stdin, retry_id, "turn/start", retry_params).await?;
+                        turn_rpc_id = retry_id;
+                        continue;
+                    }
+                }
                 if let Some((steer_id, steer_text, accepted)) = pending_steers.remove(&rpc_id) {
                     let ok = value.get("result").is_some();
                     let _ = accepted.send(ok);
@@ -1946,22 +1997,10 @@ pub struct CodexModelsProbe {
 /// **omits** gpt-5.6-* — so we do **not** dump that list into the picker. Runtime is
 /// only used to enrich efforts/labels for ids that already sit in this curated table.
 const CODEX_CURATED_CATALOG: &[(&str, &str, &[&str])] = &[
-    (
-        "gpt-5.6-sol",
-        "gpt-5.6-sol",
-        &["low", "medium", "high", "xhigh", "max", "ultra"],
-    ),
-    (
-        "gpt-5.6-terra",
-        "gpt-5.6-terra",
-        &["low", "medium", "high", "xhigh", "max", "ultra"],
-    ),
-    (
-        "gpt-5.6-luna",
-        "gpt-5.6-luna",
-        &["low", "medium", "high", "xhigh", "max"],
-    ),
-    ("gpt-5.5", "gpt-5.5", &["low", "medium", "high", "xhigh"]),
+    ("gpt-5.6-sol", "gpt-5.6-sol", &["low", "medium", "high"]),
+    ("gpt-5.6-terra", "gpt-5.6-terra", &["low", "medium", "high"]),
+    ("gpt-5.6-luna", "gpt-5.6-luna", &["low", "medium", "high"]),
+    ("gpt-5.5", "gpt-5.5", &["low", "medium", "high"]),
 ];
 
 fn effort_options(ids: &[&str]) -> Vec<crate::external_agents::types::RuntimeModelOption> {
@@ -2044,10 +2083,7 @@ pub fn merge_codex_model_catalog(
                     context_window_tokens: None,
                 },
             );
-            reasoning_by_model.insert(
-                cfg.to_string(),
-                effort_options(&["low", "medium", "high", "xhigh", "max", "ultra"]),
-            );
+            reasoning_by_model.insert(cfg.to_string(), effort_options(&["low", "medium", "high"]));
         }
     }
 
@@ -2607,6 +2643,28 @@ mod tests {
             normalize_codex_effort(Some("ultra")).as_deref(),
             Some("ultra")
         );
+    }
+
+    #[test]
+    fn effort_rejection_detection_only_matches_unsupported_effort_errors() {
+        assert!(is_codex_effort_rejection(
+            "unsupported reasoning effort: ultra"
+        ));
+        assert!(is_codex_effort_rejection("invalid effort value"));
+        assert!(!is_codex_effort_rejection("UsageLimitExceeded: quota"));
+        assert!(!is_codex_effort_rejection(
+            "stream disconnected before completion"
+        ));
+    }
+
+    #[test]
+    fn static_fallback_uses_conservative_reasoning_levels() {
+        let fallback = codex_static_fallback_probe();
+        for options in fallback.reasoning_by_model.values() {
+            assert!(options
+                .iter()
+                .all(|option| { matches!(option.id.as_str(), "low" | "medium" | "high") }));
+        }
     }
 
     #[test]

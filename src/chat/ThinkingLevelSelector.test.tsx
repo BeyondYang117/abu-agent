@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ThinkingLevelSelector } from './ThinkingLevelSelector'
 
@@ -92,5 +92,21 @@ describe('ThinkingLevelSelector', () => {
     })
     expect(screen.getByRole('button')).toHaveTextContent('XHigh')
     expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('模型没有思考能力时不显示思考等级旋钮', async () => {
+    reasoningEffortsForModel.mockResolvedValueOnce([])
+    render(
+      <ThinkingLevelSelector
+        value="medium"
+        currentProviderId="anthropic"
+        currentModel="claude-haiku-4-5"
+        onChange={() => {}}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    })
   })
 })

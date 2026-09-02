@@ -163,8 +163,14 @@ fn tick_once(app: &AppHandle) -> Duration {
             }
             Due::Wait => {}
         }
-        if let Some(due) = next_fire(&spec.kind, spec.hour, spec.minute, spec.interval_minutes, last, now)
-        {
+        if let Some(due) = next_fire(
+            &spec.kind,
+            spec.hour,
+            spec.minute,
+            spec.interval_minutes,
+            last,
+            now,
+        ) {
             next_wake = Some(match next_wake {
                 Some(cur) if cur <= due => cur,
                 _ => due,
@@ -203,8 +209,7 @@ fn next_fire(
                 if weekdays_only && date.weekday().number_from_monday() > 5 {
                     continue;
                 }
-                let Some(candidate) = date.and_time(time).and_local_timezone(Local).single()
-                else {
+                let Some(candidate) = date.and_time(time).and_local_timezone(Local).single() else {
                     continue;
                 };
                 if candidate > now {
@@ -254,7 +259,11 @@ fn is_due(
             let Some(naive) = NaiveTime::from_hms_opt(hour.min(23), minute.min(59), 0) else {
                 return Due::Wait;
             };
-            let Some(target) = now.date_naive().and_time(naive).and_local_timezone(Local).single()
+            let Some(target) = now
+                .date_naive()
+                .and_time(naive)
+                .and_local_timezone(Local)
+                .single()
             else {
                 return Due::Wait;
             };
@@ -289,14 +298,8 @@ mod tests {
     fn interval_arms_then_fires() {
         let t0 = at(9, 0);
         assert_eq!(is_due("interval", 9, 0, 60, None, t0), Due::Arm);
-        assert_eq!(
-            is_due("interval", 9, 0, 60, Some(t0), at(9, 30)),
-            Due::Wait
-        );
-        assert_eq!(
-            is_due("interval", 9, 0, 60, Some(t0), at(10, 0)),
-            Due::Fire
-        );
+        assert_eq!(is_due("interval", 9, 0, 60, Some(t0), at(9, 30)), Due::Wait);
+        assert_eq!(is_due("interval", 9, 0, 60, Some(t0), at(10, 0)), Due::Fire);
     }
 
     #[test]

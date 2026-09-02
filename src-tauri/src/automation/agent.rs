@@ -12,11 +12,11 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
-use crate::chat::agent::{
-    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, AgentRunEntry, ToolExecutionContext, ToolExecutor,
-    ToolExecutorFuture,
-};
 use crate::chat::agent::prepare::{available_builtin_tool_names, build_chat_system_prompt};
+use crate::chat::agent::{
+    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, AgentRunEntry,
+    ToolExecutionContext, ToolExecutor, ToolExecutorFuture,
+};
 use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
 use crate::chat::types::{
     AgentPlanState, AgentRuntimeConfig, AgentRuntimeKind, AgentTodoState, ChatMessage,
@@ -236,7 +236,6 @@ async fn run_builtin_agent_node(
     prompt: &str,
     spec: &AgentSpec,
 ) -> Result<NodeOutput, String> {
-
     let state = app.state::<AppState>();
     let state: &AppState = &state;
     let settings = state.settings_read().clone();
@@ -276,9 +275,7 @@ async fn run_builtin_agent_node(
         &settings.chat_tools.native_tools.working_directory,
         automation_id,
     );
-    let workdir_str = workdir
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned());
+    let workdir_str = workdir.as_ref().map(|p| p.to_string_lossy().into_owned());
     let registry = skills::build_registry_in(
         app,
         &settings.chat_tools.skill_scan_paths,
@@ -414,7 +411,9 @@ fn resolve_kivio_model(
     match (&spec.provider_id, &spec.model) {
         (Some(provider_id), Some(model)) => Ok((provider_id.clone(), model.clone())),
         (None, None) => Ok(settings.effective_chat_model()),
-        _ => Err("Agent model is incomplete: set both provider and model, or leave both empty".into()),
+        _ => Err(
+            "Agent model is incomplete: set both provider and model, or leave both empty".into(),
+        ),
     }
 }
 
@@ -460,8 +459,7 @@ fn is_workflow_forbidden_tool(tool: &ChatToolDefinition) -> bool {
 }
 
 fn is_always_on_automation_tool(tool: &ChatToolDefinition) -> bool {
-    !is_workflow_forbidden_tool(tool)
-        && (is_skill_activate_tool(tool) || tool.is_read_only_tool())
+    !is_workflow_forbidden_tool(tool) && (is_skill_activate_tool(tool) || tool.is_read_only_tool())
 }
 
 fn ensure_skill_activate_tool(tools: &mut Vec<ChatToolDefinition>) {
@@ -774,8 +772,11 @@ mod tests {
             tool("native__memory_search", "memory_search"),
             tool("native__memory_modify", "memory_modify"),
         ];
-        apply_agent_tool_whitelist(&mut tools, &["native__read".into(), "native__memory_read".into()])
-            .unwrap();
+        apply_agent_tool_whitelist(
+            &mut tools,
+            &["native__read".into(), "native__memory_read".into()],
+        )
+        .unwrap();
         strip_workflow_forbidden_tools(&mut tools);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "read");
@@ -796,10 +797,7 @@ mod tests {
 
     #[test]
     fn sub_agent_tool_is_stripped_even_when_selected() {
-        let mut tools = vec![
-            tool("native__read", "read"),
-            tool("native__agent", "agent"),
-        ];
+        let mut tools = vec![tool("native__read", "read"), tool("native__agent", "agent")];
         apply_agent_tool_whitelist(&mut tools, &["agent".into()]).unwrap();
         strip_workflow_forbidden_tools(&mut tools);
         assert_eq!(tools.len(), 1);

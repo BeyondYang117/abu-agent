@@ -236,7 +236,7 @@ export class AbuApiClient {
       // error as the unhelpful "Load failed" CORS message.
       return api.abuApiGetUserInfo()
     }
-    return this.request('/api/user/self')
+    return this.request('/api/agent/devices?include_account=1')
   }
 
   // ==================== 模型与会话 ====================
@@ -245,6 +245,11 @@ export class AbuApiClient {
    * 获取当前用户可用的模型列表
    */
   async listModels(): Promise<AgentModelsResponse> {
+    if (isTauriRuntime()) {
+      // Keep desktop requests on Rust's network stack to avoid WebView CORS
+      // failures being surfaced as the unhelpful "Load failed" message.
+      return api.abuApiListModels()
+    }
     return this.request<AgentModelsResponse>('/api/agent/models')
   }
 

@@ -2005,6 +2005,8 @@ export const api = {
       used_quota: number
       group: string
     }>('abu_api_get_user_info'),
+  abuApiListModels: () =>
+    invoke<{ models: string[]; recommended: string }>('abu_api_list_models'),
   saveAbuApiConfig: (config: AbuApiConfig) =>
     invoke<void>('save_abu_api_config', { config }),
   /** 清除 session token，保留 device_id 以便下次登录复用同一设备记录。 */

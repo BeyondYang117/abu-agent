@@ -789,6 +789,7 @@ pub fn run() {
             abu_api::abu_api_exchange_device_authorization,
             abu_api::abu_api_register_device,
             abu_api::abu_api_get_user_info,
+            abu_api::abu_api_list_models,
             abu_api::load_abu_api_config,
             abu_api::save_abu_api_config,
             abu_api::clear_abu_api_session,

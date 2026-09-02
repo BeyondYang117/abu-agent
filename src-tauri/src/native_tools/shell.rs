@@ -284,7 +284,10 @@ pub struct CapturedCommand {
     pub stderr: String,
 }
 
-fn deny_unsafe_command(command: &str, allow_host_python_package_install: bool) -> Result<(), String> {
+fn deny_unsafe_command(
+    command: &str,
+    allow_host_python_package_install: bool,
+) -> Result<(), String> {
     let lowered = command.to_ascii_lowercase();
     for denied in COMMAND_DENYLIST {
         if lowered.contains(denied) {
