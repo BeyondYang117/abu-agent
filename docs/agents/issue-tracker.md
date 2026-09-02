@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues in [`abu/abu-agent-desktop`](https://github.com/abu/abu-agent-desktop). Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues in [`BeyondYang117/abu-agent`](https://github.com/BeyondYang117/abu-agent). Use the `gh` CLI for all operations.
 
 ## Conventions
 

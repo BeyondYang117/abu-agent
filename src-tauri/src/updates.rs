@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::api::with_standard_request_timeout;
 use crate::state::AppState;
 
-const RELEASE_REPO: &str = "abu/abu-agent-desktop";
+const RELEASE_REPO: &str = "BeyondYang117/abu-agent";
 
 /// 检查 GitHub Releases 的最新版本。
 ///
@@ -184,9 +184,9 @@ fn normalize_release_version(version: &str) -> Option<String> {
 /// 根据发布打包契约生成当前平台的远端资产名，不再依赖 GitHub API 列举 assets。
 fn release_asset_name_for(version: &str, os: &str, arch: &str) -> Option<String> {
     match (os, arch) {
-        ("macos", "aarch64") => Some(format!("Kivio.Desktop_{version}_aarch64.dmg")),
-        ("macos", "x86_64") => Some(format!("Kivio.Desktop_{version}_x64.dmg")),
-        ("windows", "x86_64") => Some(format!("Kivio.Desktop_{version}_x64-setup.exe")),
+        ("macos", "aarch64") => Some(format!("ABU Agent Desktop_{version}_aarch64.dmg")),
+        ("macos", "x86_64") => Some(format!("ABU Agent Desktop_{version}_x64.dmg")),
+        ("windows", "x86_64") => Some(format!("ABU.Agent.Desktop_{version}_x64-setup.exe")),
         _ => None,
     }
 }
@@ -322,7 +322,7 @@ fn launch_nsis_silent_update(path: &str) -> Result<(), String> {
 }
 
 /// 启动安装包并退出当前应用。
-/// - macOS（.dmg）：hdiutil 挂载 → cp Kivio Desktop.app 到 /Applications → 卸载 → open 新版 → app.exit(0)
+/// - macOS（.dmg）：hdiutil 挂载 → cp ABU Agent Desktop.app 到 /Applications → 卸载 → open 新版 → app.exit(0)
 /// - Windows（.exe）：ShellExecute 跑 NSIS 静默更新，立即 exit 让 installer 能覆盖正在运行的 exe
 #[tauri::command]
 pub(crate) fn install_update_and_quit(app: AppHandle, path: String) -> Result<(), String> {
@@ -433,7 +433,7 @@ mod tests {
     fn package_metadata_identifies_current_project_and_developer() {
         assert_eq!(
             option_env!("CARGO_PKG_REPOSITORY"),
-            Some("https://github.com/abu/abu-agent-desktop")
+            Some("https://github.com/BeyondYang117/abu-agent")
         );
         assert_eq!(
             format!("https://github.com/{RELEASE_REPO}"),
@@ -481,10 +481,10 @@ mod tests {
   <entry>
     <id>tag:github.com,2008:Repository/1/v2.7.5</id>
     <title>v2.7.5</title>
-    <link rel="alternate" type="text/html" href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.7.5"/>
+    <link rel="alternate" type="text/html" href="https://github.com/BeyondYang117/abu-agent/releases/tag/v2.7.5"/>
   </entry>
   <entry>
-    <link rel="alternate" type="text/html" href="https://github.com/abu/abu-agent-desktop/releases/tag/v2.7.4"/>
+    <link rel="alternate" type="text/html" href="https://github.com/BeyondYang117/abu-agent/releases/tag/v2.7.4"/>
   </entry>
 </feed>"#;
         assert_eq!(parse_latest_tag_from_atom(xml).as_deref(), Some("v2.7.5"));
@@ -529,15 +529,15 @@ mod tests {
     fn release_asset_names_follow_packaging_contract() {
         assert_eq!(
             release_asset_name_for("2.8.1", "macos", "aarch64").as_deref(),
-            Some("Kivio.Desktop_2.8.1_aarch64.dmg")
+            Some("ABU Agent Desktop_2.8.1_aarch64.dmg")
         );
         assert_eq!(
             release_asset_name_for("2.8.1", "macos", "x86_64").as_deref(),
-            Some("Kivio.Desktop_2.8.1_x64.dmg")
+            Some("ABU Agent Desktop_2.8.1_x64.dmg")
         );
         assert_eq!(
             release_asset_name_for("2.8.1", "windows", "x86_64").as_deref(),
-            Some("Kivio.Desktop_2.8.1_x64-setup.exe")
+            Some("ABU.Agent.Desktop_2.8.1_x64-setup.exe")
         );
         assert_eq!(release_asset_name_for("2.8.1", "linux", "x86_64"), None);
     }
@@ -546,11 +546,11 @@ mod tests {
     fn release_download_url_uses_tag_specific_public_asset_path() {
         assert_eq!(
             release_download_url(
-                "abu/abu-agent-desktop",
+                "BeyondYang117/abu-agent",
                 "2.8.1",
-                "Kivio.Desktop_2.8.1_aarch64.dmg"
+                "ABU Agent Desktop_2.8.1_aarch64.dmg"
             ),
-            "https://github.com/abu/abu-agent-desktop/releases/download/v2.8.1/Kivio.Desktop_2.8.1_aarch64.dmg"
+            "https://github.com/BeyondYang117/abu-agent/releases/download/v2.8.1/ABU Agent Desktop_2.8.1_aarch64.dmg"
         );
     }
 

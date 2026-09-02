@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { LogIn, LogOut, User, Settings, Coins, Crown, Calendar } from 'lucide-react'
+import { User, Settings, Coins, Crown } from 'lucide-react'
 import { useAbuApiAuth } from '../api/abuApiAuth'
 import { getAbuApiClient } from '../api/abuApi'
 import { UserAvatar } from './UserAvatar'
@@ -8,6 +8,7 @@ import { i18n, type Lang } from '../settings/i18n'
 import { IconButton } from '../components/Button'
 import { UserAccountMenu } from './UserAccountMenu'
 import { formatAbuQuota } from '../api/quota'
+import { resolveAccountDisplayName } from './accountDisplayName'
 
 interface UserAccountButtonProps {
   profile: ChatUserProfile
@@ -96,11 +97,10 @@ export const UserAccountButton = memo(function UserAccountButton({
   }, [isAuthenticated, menuRect, onOpenLogin])
 
   // 显示名称
-  const displayName =
-    accountInfo?.displayName ||
-    accountInfo?.username ||
-    profile.displayName ||
-    (isAuthenticated ? (lang === 'zh' ? '已登录账户' : 'Connected') : 'ABU Agent')
+  const displayName = resolveAccountDisplayName(
+    accountInfo,
+    profile.displayName || (isAuthenticated ? (lang === 'zh' ? '已登录账户' : 'Connected') : 'ABU Agent'),
+  )
 
   // 用户头像 Profile
   const avatarProfile: ChatUserProfile = {

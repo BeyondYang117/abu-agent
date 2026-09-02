@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'docs', 'star-history.svg')
-const REPO = 'abu/abu-agent-desktop'
+const REPO = 'BeyondYang117/abu-agent'
 
 const pages = JSON.parse(
   execFileSync(

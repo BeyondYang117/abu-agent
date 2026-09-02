@@ -43,8 +43,8 @@ jobs:
           esac
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Kivio Desktop $RELEASE_TAG" \
-            --notes "Automated macOS (Apple Silicon) + Windows (x64 installer and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
+            --title "ABU Agent Desktop $RELEASE_TAG" \
+            --notes "Automated macOS (Apple Silicon + Intel) + Windows (x64 NSIS/MSI installers and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
             --verify-tag \
             "${extra[@]}"
 
@@ -54,13 +54,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-latest is Apple Silicon; the DMG name stays *_aarch64.dmg.
+          # macos-latest is Apple Silicon; macos-13 provides an Intel build.
           - platform: macos-latest
-            name: macOS
+            name: macOS Apple Silicon
+            args: --bundles dmg
+          - platform: macos-13
+            name: macOS Intel
             args: --bundles dmg
           - platform: windows-latest
             name: Windows
-            args: --bundles nsis
+            args: --bundles nsis,msi
     runs-on: ${{ matrix.platform }}
 
     steps:
@@ -91,12 +94,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: Kivio Desktop ${{ env.RELEASE_TAG }}
+          releaseName: ABU Agent Desktop ${{ env.RELEASE_TAG }}
           releaseBody: |
-            Automated macOS (Apple Silicon / aarch64, unsigned) + Windows (x64) build for ${{ env.RELEASE_TAG }}.
+            Automated macOS (Apple Silicon + Intel, unsigned) + Windows (x64) build for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
-            - macOS: DMG (unsigned — first launch: right-click → Open, or `xattr -cr "/Applications/Kivio Desktop.app"`)
-            - Windows: NSIS installer (.exe) and portable zip (unzip and run)
+            - macOS: DMG (unsigned — first launch: right-click → Open, or `xattr -cr "/Applications/ABU Agent Desktop.app"`)
+            - Windows: NSIS installer (.exe), MSI installer, and portable zip (unzip and run)
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
@@ -111,6 +114,6 @@ jobs:
         run: |
           $ver = $env:RELEASE_TAG.TrimStart('v')
           & ./scripts/package-windows-portable.ps1 -Version $ver
-          $zip = "src-tauri/target/release/bundle/portable/Kivio.Desktop_${ver}_x64-portable.zip"
+          $zip = "src-tauri/target/release/bundle/portable/ABU.Agent.Desktop_${ver}_x64-portable.zip"
           if (-not (Test-Path -LiteralPath $zip)) { throw "portable zip not found: $zip" }
           gh release upload $env:RELEASE_TAG $zip --clobber --repo $env:GITHUB_REPOSITORY

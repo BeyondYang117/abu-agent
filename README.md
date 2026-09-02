@@ -6,15 +6,15 @@
 
 ### macOS / Windows 屏幕级 AI 助手：Agent 客户端，加上翻译、截图 OCR 与视觉问答
 
-[![Release](https://img.shields.io/github/v/release/abu/abu-agent-desktop?style=flat-square&color=4f46e5&label=release)](https://github.com/abu/abu-agent-desktop/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/abu/abu-agent-desktop/releases)
+[![Release](https://img.shields.io/github/v/release/BeyondYang117/abu-agent?style=flat-square&color=4f46e5&label=release)](https://github.com/BeyondYang117/abu-agent/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/BeyondYang117/abu-agent/releases)
 [![Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange?style=flat-square)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/abu/abu-agent-desktop/total?style=flat-square)](https://github.com/abu/abu-agent-desktop/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BeyondYang117/abu-agent/total?style=flat-square)](https://github.com/BeyondYang117/abu-agent/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-**中文** · [English](README.en.md) · [更新日志](https://github.com/abu/abu-agent-desktop/releases)
+**中文** · [English](README.en.md) · [更新日志](https://github.com/BeyondYang117/abu-agent/releases)
 
-[下载](https://github.com/abu/abu-agent-desktop/releases/latest) · [功能](#功能) · [帮助](#帮助)
+[下载](https://github.com/BeyondYang117/abu-agent/releases/latest) · [功能](#功能) · [帮助](#帮助)
 
 </div>
 
@@ -24,7 +24,7 @@
 
 ## ❤️ 赞助
 
-> 想出现在这里？欢迎通过 [GitHub Issues](https://github.com/abu/abu-agent-desktop/issues) 联系。
+> 想出现在这里？欢迎通过 [GitHub Issues](https://github.com/BeyondYang117/abu-agent/issues) 联系。
 
 <details open>
 <summary>点击折叠</summary>
@@ -68,7 +68,7 @@
 
 ## 功能
 
-完整记录见 [Releases](https://github.com/abu/abu-agent-desktop/releases) · 当前版本说明：[v0.1.0](docs/releases/v0.1.0.md)
+完整记录见 [Releases](https://github.com/BeyondYang117/abu-agent/releases) · 当前版本说明：[v0.1.0](docs/releases/v0.1.0.md)
 
 ### 聊天与 Agent
 
@@ -105,14 +105,16 @@
 
 ### 系统要求
 
-- **macOS**：Apple Silicon（`.dmg` 未签名）
+- **macOS**：Apple Silicon 或 Intel（`.dmg` 未签名）
 - **Windows**：Windows 10 / 11（需要 Edge WebView2，系统通常已带）
 
-从 [Releases](https://github.com/abu/abu-agent-desktop/releases/latest) 下载：
+从 [Releases](https://github.com/BeyondYang117/abu-agent/releases/latest) 下载：
 
-- macOS：`ABU Agent.Desktop_*_aarch64.dmg`
-- Windows 安装包：`ABU Agent.Desktop_*_x64-setup.exe`
-- Windows 便携版：`ABU Agent.Desktop_*_x64-portable.zip`（解压即用）
+- macOS Apple Silicon：`ABU Agent Desktop_*_aarch64.dmg`
+- macOS Intel：`ABU Agent Desktop_*_x64.dmg`
+- Windows NSIS 安装包：`ABU.Agent.Desktop_*_x64-setup.exe`
+- Windows MSI 安装包：`ABU.Agent.Desktop_*_x64_en-US.msi`
+- Windows 便携版：`ABU.Agent.Desktop_*_x64-portable.zip`（解压即用）
 
 macOS 首次请右键打开，或：
 
@@ -124,8 +126,8 @@ macOS 需要**辅助功能**与**屏幕录制**权限。启动后按引导填供
 
 ## 帮助
 
-- [更新日志](https://github.com/abu/abu-agent-desktop/releases) — 各版本下载与亮点
-- [问题反馈](https://github.com/abu/abu-agent-desktop/issues)
+- [更新日志](https://github.com/BeyondYang117/abu-agent/releases) — 各版本下载与亮点
+- [问题反馈](https://github.com/BeyondYang117/abu-agent/issues)
 
 ## 快速开始
 
@@ -232,7 +234,7 @@ npm run protocol:check
 
 ## 贡献
 
-欢迎 [Issues](https://github.com/abu/abu-agent-desktop/issues) 与 PR。提交前请确保：
+欢迎 [Issues](https://github.com/BeyondYang117/abu-agent/issues) 与 PR。提交前请确保：
 
 - `npm run lint`
 - `npm run typecheck`
@@ -242,7 +244,7 @@ npm run protocol:check
 
 ## Star History
 
-[![Star History Chart](docs/star-history.svg)](https://github.com/abu/abu-agent-desktop/stargazers)
+[![Star History Chart](docs/star-history.svg)](https://github.com/BeyondYang117/abu-agent/stargazers)
 
 ## License
 

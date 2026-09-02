@@ -6,15 +6,15 @@
 
 ### A screen-level AI assistant for macOS and Windows: an agentic client, plus translation, screenshot OCR, and visual Q&A
 
-[![Release](https://img.shields.io/github/v/release/abu/abu-agent-desktop?style=flat-square&color=4f46e5&label=release)](https://github.com/abu/abu-agent-desktop/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/abu/abu-agent-desktop/releases)
+[![Release](https://img.shields.io/github/v/release/BeyondYang117/abu-agent?style=flat-square&color=4f46e5&label=release)](https://github.com/BeyondYang117/abu-agent/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/BeyondYang117/abu-agent/releases)
 [![Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange?style=flat-square)](https://tauri.app/)
-[![Downloads](https://img.shields.io/github/downloads/abu/abu-agent-desktop/total?style=flat-square)](https://github.com/abu/abu-agent-desktop/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BeyondYang117/abu-agent/total?style=flat-square)](https://github.com/BeyondYang117/abu-agent/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-[中文](README.md) · **English** · [Changelog](https://github.com/abu/abu-agent-desktop/releases)
+[中文](README.md) · **English** · [Changelog](https://github.com/BeyondYang117/abu-agent/releases)
 
-[Download](https://github.com/abu/abu-agent-desktop/releases/latest) · [Features](#features) · [Help](#help)
+[Download](https://github.com/BeyondYang117/abu-agent/releases/latest) · [Features](#features) · [Help](#help)
 </div>
 
 Lives in the tray. Hotkeys translate typing, selection, or what's on screen; capture a region and ask. The client is a full agent: tools, sub-agents, Skills, MCP, knowledge base, multi-model replies.
@@ -23,7 +23,7 @@ Bring your own keys. No account, no proxy, no telemetry. Data stays on disk.
 
 ## ❤️ Sponsor
 
-> Want to appear here? Reach us via [GitHub Issues](https://github.com/abu/abu-agent-desktop/issues).
+> Want to appear here? Reach us via [GitHub Issues](https://github.com/BeyondYang117/abu-agent/issues).
 
 <details open>
 <summary>Click to collapse</summary>
@@ -67,7 +67,7 @@ Text on screen, a captured region, and coding CLIs you already installed do not 
 
 ## Features
 
-Full history: [Releases](https://github.com/abu/abu-agent-desktop/releases) · current notes: [v0.1.0](docs/releases/v0.1.0.md)
+Full history: [Releases](https://github.com/BeyondYang117/abu-agent/releases) · current notes: [v0.1.0](docs/releases/v0.1.0.md)
 
 ### Chat & agent
 
@@ -104,14 +104,16 @@ Toggles, remappable in Settings.
 
 ### Requirements
 
-- **macOS**: Apple Silicon (`.dmg` is unsigned)
+- **macOS**: Apple Silicon or Intel (`.dmg` is unsigned)
 - **Windows**: Windows 10 / 11 (Edge WebView2; usually already installed)
 
-Get the latest from [Releases](https://github.com/abu/abu-agent-desktop/releases/latest):
+Get the latest from [Releases](https://github.com/BeyondYang117/abu-agent/releases/latest):
 
-- macOS: `ABU Agent.Desktop_*_aarch64.dmg`
-- Windows installer: `ABU Agent.Desktop_*_x64-setup.exe`
-- Windows portable: `ABU Agent.Desktop_*_x64-portable.zip`
+- macOS Apple Silicon: `ABU Agent Desktop_*_aarch64.dmg`
+- macOS Intel: `ABU Agent Desktop_*_x64.dmg`
+- Windows NSIS installer: `ABU.Agent.Desktop_*_x64-setup.exe`
+- Windows MSI installer: `ABU.Agent.Desktop_*_x64_en-US.msi`
+- Windows portable: `ABU.Agent.Desktop_*_x64-portable.zip`
 
 The DMG is unsigned. First launch: right-click → Open, or:
 
@@ -123,8 +125,8 @@ macOS needs **Accessibility** and **Screen Recording**. Then follow the onboardi
 
 ## Help
 
-- [Changelog](https://github.com/abu/abu-agent-desktop/releases) — downloads and highlights
-- [Issues](https://github.com/abu/abu-agent-desktop/issues)
+- [Changelog](https://github.com/BeyondYang117/abu-agent/releases) — downloads and highlights
+- [Issues](https://github.com/BeyondYang117/abu-agent/issues)
 - QQ group **1104450740**
 
 ## Quick start
@@ -232,7 +234,7 @@ Module map: [CLAUDE.md](CLAUDE.md).
 
 ## Contributing
 
-[Issues](https://github.com/abu/abu-agent-desktop/issues) and PRs are welcome. Before a PR, please run:
+[Issues](https://github.com/BeyondYang117/abu-agent/issues) and PRs are welcome. Before a PR, please run:
 
 - `npm run lint`
 - `npm run typecheck`
@@ -242,7 +244,7 @@ Open an issue first for larger features. Tracker conventions: [docs/agents/issue
 
 ## Star History
 
-[![Star History Chart](docs/star-history.svg)](https://github.com/abu/abu-agent-desktop/stargazers)
+[![Star History Chart](docs/star-history.svg)](https://github.com/BeyondYang117/abu-agent/stargazers)
 
 ## License
 

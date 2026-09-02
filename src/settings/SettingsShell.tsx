@@ -583,7 +583,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   /** 检查失败兜底：打开 GitHub releases 页（github.com 主体，通常可访问） */
   const handleOpenGithubReleases = useCallback(async () => {
     try {
-      await api.openExternal('https://github.com/abu/abu-agent-desktop/releases')
+      await api.openExternal('https://github.com/BeyondYang117/abu-agent/releases')
     } catch (err) {
       console.error('Open GitHub releases failed:', err)
     }

@@ -3,7 +3,7 @@ import { Settings as SettingsIcon, Cpu } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { api, isTauriRuntime } from './api/tauri'
-import { getSettingsCached } from './api/settingsCache'
+import { getSettingsCached, saveSettingsCached } from './api/settingsCache'
 import { i18n, type Lang } from './settings/i18n'
 import { useWindowInteractionFocus } from './utils/windowFocus'
 import { ChatWindowHost } from './chat/ChatWindowHost'
@@ -21,6 +21,7 @@ import {
 import { isChatPopoutPath } from './chat/popout/popoutRoutes'
 import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import { normalizeThemeColorId } from './themeColors'
+import { nextThemeMode, type ThemeMode } from './chat/themeMode'
 import './index.css'
 
 const Lens = lazy(() => import('./Lens'))
@@ -237,7 +238,7 @@ function App() {
   }
 
   const [mode, setMode] = useState(getMode)
-  const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system')
+  const [themeMode, setThemeMode] = useState<ThemeMode>('system')
   const [translucentSidebar, setTranslucentSidebar] = useState(false)
   const [translateSource, setTranslateSource] = useState<string>('')
   const [lang, setLang] = useState<Lang>('zh')
@@ -262,7 +263,7 @@ function App() {
   }, [])
 
   // 应用主题设置
-  const applyTheme = async () => {
+  const applyTheme = useCallback(async () => {
     const settings = await getSettingsCached()
     const nextMode = (settings.theme || 'system') as 'system' | 'light' | 'dark'
     setThemeMode(nextMode)
@@ -305,7 +306,18 @@ function App() {
     requestAnimationFrame(() => {
       document.documentElement.classList.add('theme-transitions-ready')
     })
-  }
+  }, [])
+
+  const toggleTheme = useCallback(async () => {
+    try {
+      const settings = await getSettingsCached()
+      const theme = nextThemeMode((settings.theme || 'system') as ThemeMode)
+      await saveSettingsCached({ ...settings, theme })
+      await applyTheme()
+    } catch (err) {
+      console.error('[App] Failed to toggle theme:', err)
+    }
+  }, [applyTheme])
 
   // 初始化主题并监听系统主题变化
   useEffect(() => {
@@ -316,7 +328,7 @@ function App() {
     }
     mq.addEventListener('change', changeHandler)
     return () => mq.removeEventListener('change', changeHandler)
-  }, [themeMode])
+  }, [applyTheme, themeMode])
 
   // 监听 hash 变化切换模式
   useEffect(() => {
@@ -539,7 +551,12 @@ function App() {
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
+            <Chat
+              onSettingsChange={applyTheme}
+              onContentReady={revealChatWindowNow}
+              themeMode={themeMode}
+              onToggleTheme={toggleTheme}
+            />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>

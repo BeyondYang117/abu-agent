@@ -323,7 +323,7 @@ Bundled document Skills (`pdf` / `docx` / `xlsx`) tell the model to use host `re
 
 ### Issue tracker
 
-议题走 GitHub Issues（`abu/abu-agent-desktop`），用 `gh` CLI 读写。见 `docs/agents/issue-tracker.md`。
+议题走 GitHub Issues（`BeyondYang117/abu-agent`），用 `gh` CLI 读写。见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 

@@ -39,28 +39,29 @@ GitHub release packaging (this is the official path — do not build installers 
    ```
    Pushing the `v*` tag is what starts packaging. To rebuild an existing tag after a workflow change:
    ```bash
-   gh workflow run release.yml --repo abu/abu-agent-desktop --ref main -f tag=vX.Y.Z -f ref=vX.Y.Z
+   gh workflow run release.yml --repo BeyondYang117/abu-agent --ref main -f tag=vX.Y.Z -f ref=vX.Y.Z
    ```
-5. `.github/workflows/release.yml` builds **both** installers on GitHub Actions and uploads them to the tag's release:
-   - `macos-latest` (Apple Silicon / aarch64) with `--bundles dmg` → `ABU Agent.Desktop_X.Y.Z_aarch64.dmg`
-   - `windows-latest` (x64) with `--bundles nsis` → `ABU Agent.Desktop_X.Y.Z_x64-setup.exe`
-   - After the NSIS build, Windows also packs `scripts/package-windows-portable.ps1` → `ABU Agent.Desktop_X.Y.Z_x64-portable.zip` (unzip and run `ABU Agent Desktop.exe`; no Start Menu). In-app update still downloads the NSIS installer.
-   - GitHub normalizes spaces in `productName` to dots in the asset file names.
+5. `.github/workflows/release.yml` builds all configured installers on GitHub Actions and uploads them to the tag's release:
+   - `macos-latest` (Apple Silicon / aarch64) with `--bundles dmg` → `ABU Agent Desktop_X.Y.Z_aarch64.dmg`
+   - `macos-13` (Intel / x86_64) with `--bundles dmg` → `ABU Agent Desktop_X.Y.Z_x64.dmg`
+   - `windows-latest` (x64) with `--bundles nsis,msi` → `ABU.Agent.Desktop_X.Y.Z_x64-setup.exe` and `ABU.Agent.Desktop_X.Y.Z_x64_en-US.msi`
+   - After the Windows build, `scripts/package-windows-portable.ps1` creates `ABU.Agent.Desktop_X.Y.Z_x64-portable.zip` (unzip and run `ABU Agent Desktop.exe`; no Start Menu). In-app update downloads the NSIS installer.
+   - Tauri preserves spaces in macOS DMG names and normalizes spaces to dots in Windows installer names.
    - The macOS DMG is **unsigned** (no signing secrets configured); first launch needs right-click → Open, or `xattr -cr "/Applications/ABU Agent Desktop.app"`.
 6. Watch the workflow and inspect the release assets:
    ```bash
-   gh run watch <RUN_ID> --repo abu/abu-agent-desktop --exit-status
-   gh release view vX.Y.Z --repo abu/abu-agent-desktop --json url,assets
+   gh run watch <RUN_ID> --repo BeyondYang117/abu-agent --exit-status
+   gh release view vX.Y.Z --repo BeyondYang117/abu-agent --json url,assets
    ```
 7. **Replace the CI-generated release body with hand-written bilingual notes.** The
    workflow publishes the release with a boilerplate body ("Automated macOS…");
    overwrite it to match the prior `v2.7.x` release format — title, a `## 下载 / Downloads`
-   block (Windows NSIS + Windows portable zip + macOS DMG, plus the macOS "unsigned / first launch" note), a
+   block (Windows NSIS + MSI + Windows portable zip + macOS Apple Silicon/Intel DMGs, plus the macOS "unsigned / first launch" note), a
    `## 新版本亮点 / What's New` bilingual bullet list (中文 + English inline per bullet,
    matching `docs/releases/vX.Y.Z.md`, not an inline README changelog), and a `完整变更 / Full changelog: …compare/vPREV...vX.Y.Z`
    link:
    ```bash
-   gh release edit vX.Y.Z --repo abu/abu-agent-desktop --notes-file docs/releases/vX.Y.Z.md
+   gh release edit vX.Y.Z --repo BeyondYang117/abu-agent --notes-file docs/releases/vX.Y.Z.md
    ```
 
 ## Resources That Must Be Packaged
@@ -111,7 +112,7 @@ find "src-tauri/target/release/bundle/macos/ABU Agent Desktop.app/Contents/Resou
 For GitHub Releases:
 
 ```bash
-gh release view vX.Y.Z --repo abu/abu-agent-desktop --json url,assets
+gh release view vX.Y.Z --repo BeyondYang117/abu-agent --json url,assets
 ```
 
 The release is not complete until the final installer contains loose `Contents/Resources/skills/pdf|docx|xlsx` Skill files.
@@ -137,7 +138,7 @@ Keep `README.md` and `README.en.md` in lockstep. A release bump that edits one m
 3. **❤️ 赞助 / Sponsor** — `<details open>`. Table: logo 150px in the left cell (`docs/sponsors/…`), sponsor-provided copy in the right cell. Copy is the sponsor's; do not append in-app setup steps (“设置 → 供应商 → 添加驱动…”). Contact line stays GitHub Issues + QQ.
 4. 为什么用 ABU Agent / Why ABU Agent
 5. 截图 / Screenshots (`docs/screenshots/`)
-6. 功能 / Features — link [Releases](https://github.com/abu/abu-agent-desktop/releases) **and** `docs/releases/vX.Y.Z.md`. **This version pointer is the only README line a release should change.** Do not paste the changelog into README.
+6. 功能 / Features — link [Releases](https://github.com/BeyondYang117/abu-agent/releases) **and** `docs/releases/vX.Y.Z.md`. **This version pointer is the only README line a release should change.** Do not paste the changelog into README.
 7. 热键 / Hotkeys
 8. 下载安装 / Download
 9. 帮助 / Help — Releases + Issues + QQ only. **Do not** list PRDs, architecture drafts, Chat Probe, packaging checklists, perf baselines, `CLAUDE.md`, or the model-adapter contract. Those stay in the repo for contributors (see 开发).
@@ -152,13 +153,13 @@ Keep `README.md` and `README.en.md` in lockstep. A release bump that edits one m
 In `README.md` 功能:
 
 ```markdown
-完整记录见 [Releases](https://github.com/abu/abu-agent-desktop/releases) · 当前版本说明：[vX.Y.Z](docs/releases/vX.Y.Z.md)
+完整记录见 [Releases](https://github.com/BeyondYang117/abu-agent/releases) · 当前版本说明：[vX.Y.Z](docs/releases/vX.Y.Z.md)
 ```
 
 In `README.en.md` Features:
 
 ```markdown
-Full history: [Releases](https://github.com/abu/abu-agent-desktop/releases) · current notes: [vX.Y.Z](docs/releases/vX.Y.Z.md)
+Full history: [Releases](https://github.com/BeyondYang117/abu-agent/releases) · current notes: [vX.Y.Z](docs/releases/vX.Y.Z.md)
 ```
 
 Badges already resolve to `releases/latest`; do not hard-code the version in badge URLs.
@@ -168,4 +169,3 @@ A README-only bump is docs; `.github/workflows/ci.yml` skips `**.md` / `docs/**`
 ## Common Failure To Avoid
 
 Do not treat "Skill files are bundled" as equivalent to "the host can parse those documents." `SKILL.md` only tells the model to use host `read`/`bash` tools. If Python or a PDF/Office CLI is missing, the agent should say so rather than inventing contents.
-

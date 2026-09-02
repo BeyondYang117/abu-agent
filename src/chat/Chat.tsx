@@ -32,6 +32,8 @@ import { ApprovalCard } from './ApprovalCard'
 import { AskUserBlock } from './AskUserBlock'
 import { ChatTitlebar } from './ChatTitlebar'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
+import { ThemeToggleButton } from './ThemeToggleButton'
+import type { ThemeMode } from './themeMode'
 import {
   beginConversationTransition,
   cancelConversationTransition,
@@ -229,6 +231,8 @@ type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | '
 
 interface ChatProps {
   onSettingsChange: () => void
+  themeMode: ThemeMode
+  onToggleTheme: () => void
   /**
    * 首屏内容就绪回调（一次性）。宿主（App）据此把窗口 show 从“App 挂载即弹出”推迟到
    * “Chat 首屏可渲染”，避免窗口弹出后仍在转圈。初始视图为设置页时，就绪信号来自
@@ -619,7 +623,7 @@ type SendMessageOptions = {
 /** 稳定空数组：没有排队消息时不要每次渲染都造一个新引用。 */
 const NO_QUEUED_MESSAGES: QueuedMessage[] = []
 
-export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
+export default function Chat({ onSettingsChange, onContentReady, themeMode, onToggleTheme }: ChatProps) {
   useChatPerfRenderProbe('Chat', { view: hashPath() })
   useChatPerfLongTaskProbe()
   const [chatView, setChatView] = useState<ChatView>(() => {
@@ -4896,6 +4900,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             </IconButton>
           </div>
         )}
+        <ThemeToggleButton themeMode={themeMode} onToggle={onToggleTheme} />
       </div>
     </>
   ), [
@@ -4918,6 +4923,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     uiLang,
     usesChatRuntime,
     usesExternalRuntime,
+    themeMode,
+    onToggleTheme,
   ])
 
   const handleTitlebarToggleSidebar = useCallback(() => {
