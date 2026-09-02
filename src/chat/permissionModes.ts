@@ -37,12 +37,24 @@ export interface PermissionModes {
 
 /** ABU Agent Agent 三档 —— 仅内置 Agent 运行时显示；ABU Agent Chat 不显示此胶囊。 */
 export const AGENT_MODE_OPTIONS: ModeOption[] = [
-  { value: 'act', label: 'Act', description: '普通模式 · Normal', icon: Zap, tone: 'neutral' },
-  { value: 'plan', label: 'Plan', description: '计划模式 · Enter plan mode', icon: ListChecks, tone: 'emerald' },
+  {
+    value: 'act',
+    label: '直接执行',
+    description: 'Act · 直接调用工具完成任务',
+    icon: Zap,
+    tone: 'neutral',
+  },
+  {
+    value: 'plan',
+    label: '先做计划',
+    description: 'Plan · 先列出步骤，确认后再执行',
+    icon: ListChecks,
+    tone: 'emerald',
+  },
   {
     value: 'orchestrate',
-    label: 'Orchestrate',
-    description: '主动派 Subagent · Proactive subagents',
+    label: '分派子代理',
+    description: 'Orchestrate · 把复杂任务拆开并行处理',
     icon: Network,
     tone: 'violet',
   },

@@ -61,12 +61,12 @@ describe('InputBar 底栏模式胶囊', () => {
       agentRuntime: runtime,
       agentPlanMode: 'act',
     }))
-    openModeMenu('Act')
+    openModeMenu('直接执行')
     const items = screen.getAllByRole('menuitemradio')
     expect(items.map((item) => item.textContent)).toEqual([
-      'Act普通模式 · Normal',
-      'Plan计划模式 · Enter plan mode',
-      'Orchestrate主动派 Subagent · Proactive subagents',
+      '直接执行Act · 直接调用工具完成任务',
+      '先做计划Plan · 先列出步骤，确认后再执行',
+      '分派子代理Orchestrate · 把复杂任务拆开并行处理',
     ])
     expect(items[0]).toHaveAttribute('aria-checked', 'true')
   })

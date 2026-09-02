@@ -8,10 +8,11 @@
   appearance: none;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
+  justify-content: flex-start;
+  width: auto;
+  max-width: 190px;
   height: 32px;
-  padding: 0;
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -20,6 +21,27 @@
   transition:
     background-color var(--kv-dur-instant) ease,
     transform var(--kv-dur-instant) ease;
+}
+
+.kv-runtime-picker__chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.kv-runtime-picker__chip-caret {
+  flex-shrink: 0;
+  margin-left: 3px;
+  color: rgb(163 163 163);
+  transition: transform var(--kv-dur-instant) ease;
+}
+
+.kv-runtime-picker__chip-caret.is-open {
+  transform: rotate(180deg);
 }
 
 .dark .kv-runtime-picker__chip {
@@ -195,6 +217,7 @@
 }
 
 .kv-runtime-picker__agent {
+  position: relative;
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -208,6 +231,22 @@
   color: rgb(38 38 38);
   font-size: 12px;
   cursor: pointer;
+}
+
+.kv-runtime-picker__tooltip-portal {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 8px 10px;
+  border: 1px solid rgb(64 64 64);
+  border-radius: 8px;
+  background: rgb(38 38 38);
+  color: white;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
 }
 
 .dark .kv-runtime-picker__agent {
@@ -246,12 +285,35 @@
 }
 
 .kv-runtime-picker__agent-name {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+  font-weight: 600;
+}
+
+.kv-runtime-picker__agent-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.kv-runtime-picker__agent-description {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(115 115 115);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dark .kv-runtime-picker__agent-description {
+  color: rgb(163 163 163);
 }
 
 .agent-icon {

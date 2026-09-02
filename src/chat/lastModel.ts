@@ -39,11 +39,33 @@ export function saveLastModel(providerId: string, model: string): void {
   }
 }
 
-function providerExists(
-  providers: Array<{ id: string }>,
-  providerId: string,
-): boolean {
-  return Boolean(providerId) && providers.some((provider) => provider.id === providerId)
+type ChatModelProvider = {
+  id: string
+  enabledModels?: string[]
+  availableModels?: string[]
+}
+
+function providerForModel(
+  providers: ChatModelProvider[],
+  binding: ChatModelBinding,
+): ChatModelProvider | undefined {
+  if (!binding.providerId) return undefined
+  const provider = providers.find((candidate) => candidate.id === binding.providerId)
+  if (!provider) return undefined
+  const models = provider.enabledModels?.length
+    ? provider.enabledModels
+    : provider.availableModels
+  if (models?.length && !models.includes(binding.model)) return undefined
+  return provider
+}
+
+function firstAvailableModel(providers: ChatModelProvider[]): ChatModelBinding | undefined {
+  for (const provider of providers) {
+    const models = provider.enabledModels?.length ? provider.enabledModels : provider.availableModels
+    const model = models?.find((candidate) => candidate.trim())
+    if (model) return { providerId: provider.id, model }
+  }
+  return undefined
 }
 
 /**
@@ -51,23 +73,27 @@ function providerExists(
  * 旧字段 chatProviderId → Lens → 翻译。
  */
 export function resolvePreferredChatModel(input: {
-  providers: Array<{ id: string }>
+  providers: ChatModelProvider[]
   last: ChatModelBinding | null
   storedChat: ChatModelBinding
   legacyChat: ChatModelBinding
   lens: ChatModelBinding
   translator: ChatModelBinding
 }): ChatModelBinding {
-  if (input.last && providerExists(input.providers, input.last.providerId)) {
+  if (input.last && providerForModel(input.providers, input.last)) {
     return input.last
   }
-  if (providerExists(input.providers, input.storedChat.providerId)) {
+  if (providerForModel(input.providers, input.storedChat)) {
     return input.storedChat
   }
-  if (providerExists(input.providers, input.legacyChat.providerId)) {
+  if (providerForModel(input.providers, input.legacyChat)) {
     return input.legacyChat
   }
-  if (providerExists(input.providers, input.lens.providerId)) {
+  // A configured model may have been removed from the provider catalog. Prefer
+  // the first currently available model over stale Lens/translator fallbacks.
+  const first = firstAvailableModel(input.providers)
+  if (first) return first
+  if (providerForModel(input.providers, input.lens)) {
     return input.lens
   }
   return input.translator

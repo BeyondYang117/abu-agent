@@ -338,6 +338,52 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
     ])
   })
 
+  it('运行时胶囊直接显示当前代理名称，不只显示图标', async () => {
+    render(
+      <RuntimePicker
+        agentRuntime={{ kind: 'builtin' }}
+        onRuntimeChange={() => {}}
+        conversationId={null}
+      />,
+    )
+    const trigger = screen.getByRole('button', { name: 'ABU Agent' })
+    expect(trigger).toHaveTextContent('ABU Agent')
+  })
+
+  it('代理菜单显示不同运行时的能力说明', async () => {
+    render(
+      <RuntimePicker
+        agentRuntime={{ kind: 'builtin' }}
+        onRuntimeChange={() => {}}
+        conversationId={null}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
+    expect(screen.getByText('完整工具、文件和子代理')).toBeInTheDocument()
+    expect(screen.getByText('搜索、网页和知识库')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByText('本机 CLI').length).toBeGreaterThan(0))
+    expect(screen.getByRole('radio', { name: 'ABU Agent' })).toHaveAttribute(
+      'title',
+      '可读写项目文件、运行命令、使用工具，并派出子代理完成复杂任务。',
+    )
+    fireEvent.mouseEnter(screen.getByRole('radio', { name: 'ABU Agent' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('可读写项目文件、运行命令、使用工具')
+  })
+
+  it('已绑定会话在菜单顶部说明当前代理和切换方式', async () => {
+    render(
+      <RuntimePicker
+        agentRuntime={{ ...runtime, externalAgentId: 'cursor' }}
+        onRuntimeChange={() => {}}
+        conversationId="c1"
+        locked
+      />,
+    )
+    await waitFor(() => expect(detectAgents).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Cursor Agent/ }))
+    expect(screen.getByText('当前对话使用 Cursor Agent；新建聊天后可切换')).toBeInTheDocument()
+  })
+
   it('locked 时不展示绑定横幅，非当前项置灰且不可切换', async () => {
     const onRuntimeChange = vi.fn()
     render(
@@ -353,7 +399,7 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
     act(() => {
       fireEvent.click(screen.getAllByRole('button')[0])
     })
-    expect(screen.getByText('已绑定，新建可切换')).toBeInTheDocument()
+    expect(screen.getByText('当前对话使用 Cursor Agent；新建聊天后可切换')).toBeInTheDocument()
     // 非当前代理全部禁用：ABU Agent Agent / Chat 与 claude；当前 agent（cursor）保持可选。
     expect(screen.getByRole('radio', { name: 'ABU Agent' })).toBeDisabled()
     expect(screen.getByRole('radio', { name: 'ABU Agent Chat' })).toBeDisabled()

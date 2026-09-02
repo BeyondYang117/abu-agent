@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Brain, RefreshCw } from 'lucide-react'
 import { AgentIcon } from './AgentIcon'
 import { useT } from '../settings/i18n'
@@ -99,11 +100,24 @@ function stripEffortDescription(id: string, label: string): string {
   return text
 }
 
+function runtimeDescription(kind: AgentRuntimeConfig['kind'], t: ReturnType<typeof useT>): string {
+  if (kind === 'chat') return t.chatRuntimeChatDescription
+  if (kind === 'builtin') return t.chatRuntimeBuiltinDescription
+  return t.chatRuntimeExternalDescription
+}
+
+function runtimeTooltip(kind: AgentRuntimeConfig['kind'], t: ReturnType<typeof useT>): string {
+  if (kind === 'chat') return t.chatRuntimeChatTooltip
+  if (kind === 'builtin') return t.chatRuntimeBuiltinTooltip
+  return t.chatRuntimeExternalTooltip
+}
+
 function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, locked = false }: RuntimePickerProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
   const [agents, setAgents] = useState<DetectedExternalAgent[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [tooltip, setTooltip] = useState<{ text: string; top: number; left: number } | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuMaxH = usePopoverMaxHeight(open, menuRef, 'down', 460)
   // 请求代际：conversationId 切换 / 手动刷新会并发发起检测，只让最新一次的结果落地
@@ -156,6 +170,12 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
     return 'ABU Agent'
   }, [agentRuntime.externalAgentId, currentAgent?.name, t, usesChat, usesExternal])
 
+  const showTooltip = useCallback((event: MouseEvent<HTMLElement>, text: string) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    setTooltip({ text, top: rect.bottom + 8, left: rect.left })
+  }, [])
+  const hideTooltip = useCallback(() => setTooltip(null), [])
+
   const selectBuiltin = () => {
     if (locked) return
     onRuntimeChange(BUILTIN)
@@ -200,6 +220,12 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
         ) : (
           <ABUAgentMark size={18} variant={usesChat ? 'chat' : 'agent'} />
         )}
+        <span className="kv-runtime-picker__chip-label">{label}</span>
+        <ChevronDown
+          size={13}
+          strokeWidth={2}
+          className={`kv-runtime-picker__chip-caret${open ? ' is-open' : ''}`}
+        />
       </button>
 
       {open && (
@@ -215,8 +241,11 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
               <div className="kv-runtime-picker__agents-head">
                 <span className="kv-runtime-picker__label">{t.chatRuntimeAgent}</span>
                 {locked && (
-                  <span className="kv-runtime-picker__bound-note" title={t.chatRuntimeBoundHint}>
-                    {t.chatRuntimeBoundShort}
+                  <span
+                    className="kv-runtime-picker__bound-note"
+                    title={t.chatRuntimeBoundHint.replace('{agent}', label)}
+                  >
+                    {t.chatRuntimeBoundShort.replace('{agent}', label)}
                   </span>
                 )}
                 <IconButton
@@ -237,24 +266,42 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                 <button
                   type="button"
                   role="radio"
+                  aria-label="ABU Agent"
                   aria-checked={usesBuiltinAgent}
                   disabled={locked && !usesBuiltinAgent}
                   onClick={selectBuiltin}
+                  title={runtimeTooltip('builtin', t)}
+                  onMouseEnter={(event) => showTooltip(event, runtimeTooltip('builtin', t))}
+                  onMouseLeave={hideTooltip}
+                  onFocus={(event) => showTooltip(event, runtimeTooltip('builtin', t))}
+                  onBlur={hideTooltip}
                   className={`kv-runtime-picker__agent${usesBuiltinAgent ? ' is-active' : ''}`}
                 >
                   <ABUAgentMark size={20} variant="agent" />
-                  <span className="kv-runtime-picker__agent-name">ABU Agent</span>
+                  <span className="kv-runtime-picker__agent-copy">
+                    <span className="kv-runtime-picker__agent-name">ABU Agent</span>
+                    <span className="kv-runtime-picker__agent-description">{runtimeDescription('builtin', t)}</span>
+                  </span>
                 </button>
                 <button
                   type="button"
                   role="radio"
+                  aria-label="ABU Agent Chat"
                   aria-checked={usesChat}
                   disabled={locked && !usesChat}
                   onClick={selectChat}
+                  title={runtimeTooltip('chat', t)}
+                  onMouseEnter={(event) => showTooltip(event, runtimeTooltip('chat', t))}
+                  onMouseLeave={hideTooltip}
+                  onFocus={(event) => showTooltip(event, runtimeTooltip('chat', t))}
+                  onBlur={hideTooltip}
                   className={`kv-runtime-picker__agent${usesChat ? ' is-active' : ''}`}
                 >
                   <ABUAgentMark size={20} variant="chat" />
-                  <span className="kv-runtime-picker__agent-name">ABU Agent Chat</span>
+                  <span className="kv-runtime-picker__agent-copy">
+                    <span className="kv-runtime-picker__agent-name">ABU Agent Chat</span>
+                    <span className="kv-runtime-picker__agent-description">{runtimeDescription('chat', t)}</span>
+                  </span>
                 </button>
                 {availableAgents.map((agent) => {
                   const active = usesExternal && agentRuntime.externalAgentId === agent.id
@@ -263,14 +310,22 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                       key={agent.id}
                       type="button"
                       role="radio"
+                      aria-label={agent.name}
                       aria-checked={active}
                       disabled={locked && !active}
-                      title={agent.version ?? undefined}
+                      title={runtimeTooltip('external', t)}
+                      onMouseEnter={(event) => showTooltip(event, runtimeTooltip('external', t))}
+                      onMouseLeave={hideTooltip}
+                      onFocus={(event) => showTooltip(event, runtimeTooltip('external', t))}
+                      onBlur={hideTooltip}
                       onClick={() => selectExternal(agent)}
                       className={`kv-runtime-picker__agent${active ? ' is-active' : ''}`}
                     >
                       <AgentIcon id={agent.id} size={20} />
-                      <span className="kv-runtime-picker__agent-name">{agent.name}</span>
+                      <span className="kv-runtime-picker__agent-copy">
+                        <span className="kv-runtime-picker__agent-name">{agent.name}</span>
+                        <span className="kv-runtime-picker__agent-description">{runtimeDescription('external', t)}</span>
+                      </span>
                     </button>
                   )
                 })}
@@ -283,6 +338,16 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
             </div>
           </div>
         </>
+      )}
+      {tooltip && createPortal(
+        <div
+          className="kv-runtime-picker__tooltip-portal"
+          role="tooltip"
+          style={{ top: tooltip.top, left: tooltip.left }}
+        >
+          {tooltip.text}
+        </div>,
+        document.body,
       )}
     </div>
   )
@@ -489,7 +554,7 @@ function ExternalModelSelectorBase({
             className={`shrink-0 transition-transform ${loading ? 'text-neutral-300 dark:text-neutral-600' : 'text-neutral-400'} ${open ? 'rotate-180' : ''}`}
           />
         </button>
-        {open && (
+      {open && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
             <div ref={modelMenuRef} style={{ maxHeight: modelMenuMaxH }} className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[200px] overflow-y-auto kv-menu">

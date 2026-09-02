@@ -33,7 +33,9 @@ pub(super) fn resolve_reply_arms(
         if provider_id.is_empty() || model.is_empty() {
             continue;
         }
-        if settings.get_provider(provider_id).is_none() {
+        let is_cloud_provider =
+            settings.is_cloud_runtime() && provider_id == crate::chat::model::ABU_API_PROVIDER_ID;
+        if settings.get_provider(provider_id).is_none() && !is_cloud_provider {
             continue;
         }
         let key = format!("{provider_id}\u{0}{model}");

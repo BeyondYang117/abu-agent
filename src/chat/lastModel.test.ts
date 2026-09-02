@@ -45,6 +45,17 @@ describe('resolvePreferredChatModel', () => {
       translator,
     })).toEqual(lens)
   })
+
+  it('已保存模型不在供应商可用列表时选择该列表第一个模型', () => {
+    expect(resolvePreferredChatModel({
+      providers: [{ id: 'google', enabledModels: ['gemini-3.1-flash-lite', 'gemini-pro'] }],
+      last: null,
+      storedChat: { providerId: 'google', model: 'gpt-4o' },
+      legacyChat: { providerId: '', model: '' },
+      lens: { providerId: '', model: '' },
+      translator: { providerId: '', model: '' },
+    })).toEqual({ providerId: 'google', model: 'gemini-3.1-flash-lite' })
+  })
 })
 
 describe('loadLastModel / saveLastModel', () => {

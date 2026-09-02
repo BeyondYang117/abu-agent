@@ -65,4 +65,18 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByRole('button'))
     expect(screen.getAllByText('视觉')).toHaveLength(1)
   })
+
+  it('changes an unavailable current model to the first returned model', async () => {
+    listModelsMock.mockResolvedValue({ models: ['gpt-5.6-sol', 'claude-sonnet'], recommended: 'gpt-5.6-sol' })
+    const onModelChange = vi.fn()
+    render(
+      <ModelSelector
+        currentProviderId="abu-api-relay"
+        currentModel="gpt-4o"
+        onModelChange={onModelChange}
+      />,
+    )
+
+    await waitFor(() => expect(onModelChange).toHaveBeenCalledWith('abu-api-relay', 'gpt-5.6-sol'))
+  })
 })

@@ -104,7 +104,7 @@ describe('derivePermissionModes（底栏模式胶囊）', () => {
       agentPlanMode: 'plan',
     })
     expect(options.map((o) => o.value)).toEqual(['act', 'plan', 'orchestrate'])
-    expect(options.map((o) => o.label)).toEqual(['Act', 'Plan', 'Orchestrate'])
+    expect(options.map((o) => o.label)).toEqual(['直接执行', '先做计划', '分派子代理'])
     expect(current).toBe('plan')
   })
 

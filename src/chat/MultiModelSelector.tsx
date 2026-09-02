@@ -9,6 +9,7 @@ import { IconButton } from '../components/Button'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { ModelRef } from './types'
 import { ModelAbilityTags } from './ModelAbilityTags'
+import { ABU_API_PROVIDER_ID, listModels } from '../api/abuApi'
 
 const MAX_REPLY_MODELS = 4
 
@@ -35,6 +36,20 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up' }: MultiMode
   const loadProviders = useCallback(async () => {
     try {
       const settings = await getSettingsCached()
+      if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+        const response = await listModels()
+        setProviders([{
+          id: ABU_API_PROVIDER_ID,
+          name: 'ABU Cloud',
+          apiKeys: [],
+          baseUrl: '',
+          availableModels: response.models,
+          enabledModels: response.models,
+          enabled: true,
+          apiFormat: 'openai_chat',
+        }])
+        return
+      }
       setProviders(settings.providers || [])
     } catch (err) {
       console.error('Failed to load providers:', err)

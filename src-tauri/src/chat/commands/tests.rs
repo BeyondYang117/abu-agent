@@ -2709,6 +2709,24 @@ fn resolve_reply_arms_dedups_filters_and_caps() {
 }
 
 #[test]
+fn resolve_reply_arms_accepts_cloud_virtual_provider() {
+    let mut settings = test_settings_with_providers(&[]);
+    settings.runtime_mode = "cloud".to_string();
+    let models = vec![
+        ModelRef {
+            provider_id: crate::chat::model::ABU_API_PROVIDER_ID.to_string(),
+            model: "gpt-5.6-sol".to_string(),
+        },
+        ModelRef {
+            provider_id: crate::chat::model::ABU_API_PROVIDER_ID.to_string(),
+            model: "claude-haiku-4-5".to_string(),
+        },
+    ];
+
+    assert_eq!(resolve_reply_arms(&settings, &models).unwrap().len(), 2);
+}
+
+#[test]
 fn build_assistant_message_records_group_meta_only_when_provided() {
     let single = build_assistant_message(
         "msg_single".to_string(),
