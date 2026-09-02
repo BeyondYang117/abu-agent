@@ -56,6 +56,20 @@ describe('resolvePreferredChatModel', () => {
       translator: { providerId: '', model: '' },
     })).toEqual({ providerId: 'google', model: 'gemini-3.1-flash-lite' })
   })
+
+  it('云端目录返回后忽略本地供应商中的旧默认模型', () => {
+    expect(resolvePreferredChatModel({
+      providers: [{
+        id: 'abu-api-relay',
+        enabledModels: ['gpt-5.6-sol', 'claude-sonnet'],
+      }],
+      last: { providerId: 'abu-api-relay', model: 'gpt-4o' },
+      storedChat: { providerId: 'local-provider', model: 'gpt-4o' },
+      legacyChat: { providerId: 'local-provider', model: 'gpt-4o' },
+      lens: { providerId: '', model: '' },
+      translator: { providerId: '', model: '' },
+    })).toEqual({ providerId: 'abu-api-relay', model: 'gpt-5.6-sol' })
+  })
 })
 
 describe('loadLastModel / saveLastModel', () => {

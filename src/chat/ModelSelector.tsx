@@ -118,16 +118,6 @@ function ModelSelectorBase({
     }))
     .filter((entry) => entry.models.length > 0)
 
-  // Settings can contain a retired default model. Once the catalog is loaded,
-  // move the draft selection to the first model actually offered by a provider.
-  useEffect(() => {
-    if (!currentProviderId || !currentModel || visibleProviders.length === 0) return
-    const current = visibleProviders.find((entry) => entry.provider.id === currentProviderId)
-    if (current?.models.includes(currentModel)) return
-    const first = visibleProviders[0]
-    const model = first.models[0]
-    if (model) onModelChange(first.provider.id, model)
-  }, [currentModel, currentProviderId, onModelChange, visibleProviders])
   const currentProvider = activeProviders.find((p) => p.id === currentProviderId)
     ?? providers.find((p) => p.id === currentProviderId)
   const displayName = currentModel || currentProvider?.enabledModels[0] || t.chatSelectModel

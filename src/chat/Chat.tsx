@@ -61,6 +61,7 @@ import {
 } from './api'
 import { loadLastAgentRuntime, saveLastAgentRuntime } from './lastAgentRuntime'
 import { loadLastModel, resolvePreferredChatModel, saveLastModel } from './lastModel'
+import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
 import {
   chatTitlebarMacInsetClass,
   chatTitlebarRowClass,
@@ -1471,9 +1472,27 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     try {
       const settings = await getSettingsCached()
       setUiLang((settings.settingsLanguage as Lang) || 'zh')
+      let modelProviders = settings.providers || []
+      if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+        try {
+          const catalog = await listModels()
+          modelProviders = [{
+            id: ABU_API_PROVIDER_ID,
+            name: 'ABU Cloud',
+            apiKeys: [],
+            baseUrl: '',
+            enabledModels: catalog.models,
+            availableModels: catalog.models,
+            enabled: true,
+            apiFormat: 'openai_chat',
+          }]
+        } catch {
+          // Keep the normal settings fallbacks when the cloud catalog is unavailable.
+        }
+      }
       const last = loadLastModel()
       const preferred = resolvePreferredChatModel({
-        providers: settings.providers || [],
+        providers: modelProviders,
         last,
         storedChat: settings.defaultModels?.chat ?? { providerId: '', model: '' },
         legacyChat: {
@@ -1491,6 +1510,9 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       })
       setDraftProviderId(preferred.providerId)
       setDraftModel(preferred.model)
+      if (preferred.model && (!last || last.providerId !== preferred.providerId || last.model !== preferred.model)) {
+        saveLastModel(preferred.providerId, preferred.model)
+      }
       // 聊天里选过的模型才写回 settings，避免把 Lens/翻译回落误当成 Chat 默认。
       const stored = settings.defaultModels?.chat
       if (
