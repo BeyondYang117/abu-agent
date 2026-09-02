@@ -2,7 +2,7 @@
 # exe + sidecar + bundled skills, unzip-and-run, no Start Menu / uninstaller.
 # Output: src-tauri/target/release/bundle/portable/ABU.Agent.Desktop_${Version}_x64-portable.zip
 #
-# Requires a finished `tauri build --bundles nsis` (abu_agent.exe in target/release).
+# Requires a finished `tauri build --bundles nsis` (abu-agent.exe in target/release).
 
 [CmdletBinding()]
 param(
@@ -15,12 +15,12 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $releaseDir = Join-Path $repoRoot 'src-tauri\target\release'
-$exe = Join-Path $releaseDir 'abu_agent.exe'
+$exe = Join-Path $releaseDir 'abu-agent.exe'
 $skillsSrc = Join-Path $repoRoot 'src-tauri\resources\skills'
 $sidecarSrc = Join-Path $repoRoot 'src-tauri\binaries\abu-agent-ocr-helper-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path -LiteralPath $exe)) {
-  throw "abu_agent.exe not found at $exe. Run tauri build first."
+  throw "abu-agent.exe not found at $exe. Run tauri build first."
 }
 if (-not (Test-Path -LiteralPath (Join-Path $skillsSrc 'pdf\SKILL.md'))) {
   throw "Bundled skills missing under $skillsSrc."

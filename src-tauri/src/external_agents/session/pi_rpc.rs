@@ -2968,9 +2968,9 @@ mod tests {
         );
         assert_eq!(
             encode_pi_session_cwd(Path::new(
-                r"C:\Users\11028\AppData\Roaming\com.zmair.abu-agent\chat-workspaces\conv_7a684c05-38f0-484e-9b5c-3a38c2c38289"
+                r"C:\Users\11028\AppData\Roaming\com.abu.agent\chat-workspaces\conv_7a684c05-38f0-484e-9b5c-3a38c2c38289"
             )),
-            "--C--Users-11028-AppData-Roaming-com.zmair.abu-agent-chat-workspaces-conv_7a684c05-38f0-484e-9b5c-3a38c2c38289--"
+            "--C--Users-11028-AppData-Roaming-com.abu.agent-chat-workspaces-conv_7a684c05-38f0-484e-9b5c-3a38c2c38289--"
         );
     }
 

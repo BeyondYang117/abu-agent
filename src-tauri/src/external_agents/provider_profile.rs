@@ -3517,7 +3517,7 @@ max_context_size = 200000
     #[test]
     fn abu_agent_private_codex_home_is_the_materialized_dir() {
         // Join so macOS CI Path semantics match Windows (`\` is not a separator on Unix).
-        let private = Path::new("com.zmair.abu-agent")
+        let private = Path::new("com.abu.agent")
             .join("external-cli-providers")
             .join("codex-relay");
         assert!(is_abu_agent_private_codex_home(&private));

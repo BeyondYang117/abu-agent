@@ -504,7 +504,7 @@ fn inline_code_request_ignores_attachment_safe_copy_paths() {
                 path: "att_1-report.pdf".to_string(),
                 content: None,
             }],
-            Some(Path::new("/Users/test/Library/Application Support/com.zmair.abu-agent/conversations/conv_1_attachments")),
+            Some(Path::new("/Users/test/Library/Application Support/com.abu.agent/conversations/conv_1_attachments")),
         );
 
     assert!(should_answer_inline_without_file_write(Some(&content)));

@@ -1064,7 +1064,7 @@ mod live_probe_hygiene_tests {
 
     /// claude 把会话落在 `~/.claude/projects/<cwd 编码>/<session-id>.jsonl`。
     /// 编码规则：cwd 里每个**非字母数字**字符逐个换成 `-`（不折叠连续分隔符）。
-    /// 本机核验：`C:\Users\11028\AppData\Roaming\com.zmair.abu-agent\chat-workspaces\__global__`
+    /// 本机核验：`C:\Users\11028\AppData\Roaming\com.abu.agent\chat-workspaces\__global__`
     /// → `C--Users-11028-AppData-Roaming-com-zmair-abu-agent-chat-workspaces---global--`。
     fn claude_project_dir_for(cwd: &Path) -> PathBuf {
         let encoded: String = cwd

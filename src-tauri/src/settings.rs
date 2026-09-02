@@ -2878,82 +2878,10 @@ pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), Stri
 }
 
 /**
- * 一次性数据迁移：identifier 变更历史
- * - v2.4.5: com.zmair.abu-agent → com.zmair.abu-agent
- * - v2.9.6: com.zmair.abu-agent → com.abu.agent
- *
- * Tauri 的 app_data_dir 直接由 identifier 派生，改名后新目录是空的，
- * 老用户升级会丢失 settings.json / lens-history。这里在新目录还没数据时，
- * 把同级的旧目录整个递归拷贝过来。
- *
- * 幂等：新目录已存在 settings.json → 跳过；旧目录不存在 → 跳过（全新安装）。
- */
-fn migrate_legacy_app_data(app: &AppHandle) {
-    use tauri::Manager;
-    let new_dir = match app.path().app_data_dir() {
-        Ok(d) => d,
-        Err(err) => {
-            eprintln!("[migrate-app-data] app_data_dir unavailable: {err}");
-            return;
-        }
-    };
-    if new_dir.join(SETTINGS_STORE).exists() {
-        return;
-    }
-
-    let Some(parent) = new_dir.parent() else {
-        return;
-    };
-
-    // 按优先级尝试迁移（最新的旧版本优先）
-    let legacy_identifiers = ["com.zmair.abu-agent", "com.zmair.abu-agent"];
-    let legacy_dir = legacy_identifiers
-        .iter()
-        .map(|id| parent.join(id))
-        .find(|dir| dir.is_dir());
-
-    let Some(legacy_dir) = legacy_dir else {
-        return;
-    };
-
-    if let Err(err) = std::fs::create_dir_all(&new_dir) {
-        eprintln!("[migrate-app-data] mkdir new dir failed: {err}");
-        return;
-    }
-
-    match copy_dir_recursive(&legacy_dir, &new_dir) {
-        Ok(()) => eprintln!(
-            "[migrate-app-data] copied legacy app data: {} → {}",
-            legacy_dir.display(),
-            new_dir.display()
-        ),
-        Err(err) => eprintln!("[migrate-app-data] copy failed: {err}"),
-    }
-}
-
-fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let src = entry.path();
-        let dst = to.join(entry.file_name());
-        if src.is_dir() {
-            copy_dir_recursive(&src, &dst)?;
-        } else if src.is_file() && !dst.exists() {
-            // 不覆盖已有目标文件：避免与用户在新路径下手动建/写过的内容冲突
-            std::fs::copy(&src, &dst)?;
-        }
-    }
-    Ok(())
-}
-
-/**
  * 从存储文件加载设置
- * 执行清理迁移（legacy identifier 目录、sanitize）
+ * 执行设置清理与规范化。
  */
 pub fn load_settings(app: &AppHandle) -> Settings {
-    // 入口先把旧 identifier 目录的数据搬到新目录（幂等）
-    migrate_legacy_app_data(app);
     let store = StoreBuilder::new(app, SETTINGS_STORE).build();
     let settings = match store {
         Ok(store) => store

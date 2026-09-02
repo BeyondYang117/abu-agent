@@ -1115,7 +1115,7 @@ mod tests {
                 path: "att_1-report.PDF".to_string(),
                 content: None,
             }],
-            Some(Path::new("/Users/test/Library/Application Support/com.zmair.abu-agent/conversations/conv_1_attachments")),
+            Some(Path::new("/Users/test/Library/Application Support/com.abu.agent/conversations/conv_1_attachments")),
         );
 
         assert!(content.contains("report.PDF"));

@@ -102,7 +102,7 @@ const ABU_AGENT_SELECTABLE_MIN_HEIGHT: f64 = 360.0;
 fn is_abu_agent_owner(owner: &str) -> bool {
     matches!(
         owner,
-        "ABU Agent" | "ABU Agent Desktop" | "ABU Agent" | "abu_agent" | "ABU Agent" | "abu-agent"
+        "ABU Agent" | "ABU Agent Desktop" | "abu_agent" | "abu-agent"
     )
 }
 
@@ -110,7 +110,7 @@ fn is_abu_agent_owner(owner: &str) -> bool {
 fn is_abu_agent_primary_window(title: &str, width: f64, height: f64) -> bool {
     matches!(
         title.trim(),
-        "ABU Agent" | "ABU Agent Desktop" | "ABU Agent" | "ABU Agent"
+        "ABU Agent" | "ABU Agent Desktop"
     ) && width >= ABU_AGENT_SELECTABLE_MIN_WIDTH
         && height >= ABU_AGENT_SELECTABLE_MIN_HEIGHT
 }

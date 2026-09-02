@@ -535,7 +535,7 @@ description: Test skill.
     }
 
     #[test]
-    fn project_walk_skips_global_home_kivio() {
+    fn project_walk_skips_global_home_abu_agent() {
         let base = std::env::temp_dir().join(format!("abu-agent-home-skip-{}", uuid::Uuid::new_v4()));
         let global = base.join(".abu-agent").join("skills");
         write_skill(&global.join("shared"), "shared");
