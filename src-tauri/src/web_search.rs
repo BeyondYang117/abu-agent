@@ -12,7 +12,7 @@ pub use fetch::{
     fetch_web, format_web_fetch, provider_supports_fetch, resolved_fetch_provider, WebFetchPage,
 };
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebSearchResult {
     pub title: String,

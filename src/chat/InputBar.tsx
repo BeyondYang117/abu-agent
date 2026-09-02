@@ -421,6 +421,7 @@ export interface InputBarProps {
   webSearchMode?: WebSearchMode
   onSetWebSearchMode?: (mode: WebSearchMode) => void | Promise<void>
   builtinWebSearchSupported?: boolean
+  platformWebSearchSupported?: boolean
   /** 多答模型集（会话级 reply_models / replyModels；0/1 个=单模型，≥2=一问多答） */
   replyModels?: ModelRef[]
   onChangeReplyModels?: (models: ModelRef[]) => void | Promise<void>
@@ -496,6 +497,7 @@ export const InputBar = memo(function InputBar({
   webSearchMode = 'off',
   onSetWebSearchMode,
   builtinWebSearchSupported = false,
+  platformWebSearchSupported = false,
   replyModels = [],
   onChangeReplyModels,
   additionalDirectories = [],
@@ -2088,6 +2090,7 @@ export const InputBar = memo(function InputBar({
                 webSearchMode={webSearchMode}
                 onSetWebSearchMode={onSetWebSearchMode}
                 builtinWebSearchSupported={builtinWebSearchSupported}
+                platformWebSearchSupported={platformWebSearchSupported}
                 onOpenSettings={onOpenSettings}
                 disabled={disabled}
                 layout={layout}

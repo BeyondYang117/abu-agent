@@ -244,6 +244,12 @@ pub(super) fn apply_web_search_mode_tool_filter(
                 tools.push(crate::mcp::types::native_web_search_tool());
             }
         }
+        crate::chat::types::WebSearchMode::Platform => {
+            tools.retain(|t| t.id != SEARCH_WEB_ID);
+            if settings.is_cloud_runtime() {
+                tools.push(crate::mcp::types::native_web_search_tool());
+            }
+        }
         crate::chat::types::WebSearchMode::Builtin | crate::chat::types::WebSearchMode::Off => {
             tools.retain(|t| t.id != SEARCH_WEB_ID);
         }
@@ -345,5 +351,20 @@ mod web_search_filter_tests {
         let mut tools = vec![crate::mcp::types::native_web_search_tool()];
         apply_web_search_mode_tool_filter(&mut tools, WebSearchMode::ThirdParty, &settings);
         assert!(tools.iter().any(|t| t.id == "native__web_search"));
+    }
+
+    #[test]
+    fn platform_adds_search_web_only_in_cloud_runtime() {
+        let mut local = crate::settings::Settings::default();
+        local.runtime_mode = "local".to_string();
+        let mut local_tools = Vec::new();
+        apply_web_search_mode_tool_filter(&mut local_tools, WebSearchMode::Platform, &local);
+        assert!(local_tools.is_empty());
+
+        let mut cloud = local;
+        cloud.runtime_mode = "cloud".to_string();
+        let mut cloud_tools = Vec::new();
+        apply_web_search_mode_tool_filter(&mut cloud_tools, WebSearchMode::Platform, &cloud);
+        assert!(cloud_tools.iter().any(|t| t.id == "native__web_search"));
     }
 }

@@ -1040,6 +1040,7 @@ pub(crate) async fn chat_update_conversation(
                     "off" => Some(WebSearchMode::Off),
                     "builtin" => Some(WebSearchMode::Builtin),
                     "third_party" => Some(WebSearchMode::ThirdParty),
+                    "platform" => Some(WebSearchMode::Platform),
                     _ => None,
                 };
             }

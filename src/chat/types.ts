@@ -616,8 +616,8 @@ export interface ModelRef {
 
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
-/** 会话级三态联网搜索模式（任务 07-23）。off=不联网；builtin=模型原生内置搜索；third_party=search_web 工具。 */
-export type WebSearchMode = 'off' | 'builtin' | 'third_party'
+/** 会话级联网搜索模式。platform 通过当前 Cloud task 调用 abu-api 自建搜索。 */
+export type WebSearchMode = 'off' | 'builtin' | 'third_party' | 'platform'
 
 export interface ConversationListItem {
   id: string

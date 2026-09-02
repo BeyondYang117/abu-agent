@@ -39,7 +39,7 @@ import type {
 } from '../types'
 
 const LAST_WEB_SEARCH_MODE_KEY = 'kivio.chat.lastWebSearchMode'
-const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party'])
+const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party', 'platform'])
 
 function loadLastWebSearchMode(): WebSearchMode | undefined {
   try {
@@ -156,6 +156,7 @@ export function usePopoutComposer({
   const [toolsRequested, setToolsRequested] = useState(false)
   const [mcpServers, setMcpServers] = useState<ChatMcpServer[]>([])
   const [webSearchEnabled, setWebSearchEnabled] = useState(true)
+  const [platformWebSearchSupported, setPlatformWebSearchSupported] = useState(false)
   const [providerApiFormats, setProviderApiFormats] = useState<Record<string, string>>({})
   const [providerBaseUrls, setProviderBaseUrls] = useState<Record<string, string>>({})
   const [skills, setSkills] = useState<SkillMeta[]>([])
@@ -236,6 +237,7 @@ export function usePopoutComposer({
       const chatTools = settings.chatTools
       setMcpServers(chatTools?.servers ?? [])
       setWebSearchEnabled(chatTools?.nativeTools?.webSearch !== false)
+      setPlatformWebSearchSupported(settings.runtimeMode === 'cloud')
       setProviderApiFormats(
         Object.fromEntries((settings.providers ?? []).map((provider) => [provider.id, provider.apiFormat ?? ''])),
       )
@@ -574,7 +576,7 @@ export function usePopoutComposer({
   const explicitWebSearch = conversation?.webSearchMode ?? conversation?.web_search_mode
   const webSearchMode: WebSearchMode = explicitWebSearch
     || loadLastWebSearchMode()
-    || (webSearchEnabled ? 'third_party' : 'off')
+    || (webSearchEnabled ? (platformWebSearchSupported ? 'platform' : 'third_party') : 'off')
   const assistantSnapshot = conversation?.assistant_snapshot ?? conversation?.assistantSnapshot ?? null
   const currentAssistant = assistantSnapshot
     ? { id: assistantSnapshot.id, name: assistantSnapshot.name }
@@ -687,6 +689,7 @@ export function usePopoutComposer({
       providerApiFormats[conversation?.provider_id ?? ''],
       providerBaseUrls[conversation?.provider_id ?? ''],
     ),
+    platformWebSearchSupported,
     replyModels: conversation?.reply_models ?? conversation?.replyModels ?? [],
     onChangeReplyModels: handleChangeReplyModels,
     contextSlot,

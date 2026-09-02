@@ -450,6 +450,7 @@ impl AgentRuntimeConfig {
 /// - `Off`：不联网。
 /// - `Builtin`：模型原生内置搜索（仅部分 provider 支持，按 `api_format` 判定）。
 /// - `ThirdParty`：既有 `search_web` 工具（复用 Lens 第三方配置 Tavily/Exa/…）。
+/// - `Platform`：Cloud runtime 通过当前 Agent task 的 relay 凭据调用 abu-api 搜索。
 ///
 /// `Conversation.web_search_mode` 为 `None` 时运行时回退全局 `nativeTools.webSearch`
 /// （on ⇒ ThirdParty，off ⇒ Off），保证旧对话行为逐字节不变。
@@ -459,6 +460,7 @@ pub enum WebSearchMode {
     Off,
     Builtin,
     ThirdParty,
+    Platform,
 }
 
 impl WebSearchMode {
@@ -470,10 +472,12 @@ impl WebSearchMode {
         settings: &crate::settings::Settings,
     ) -> WebSearchMode {
         conv_mode.unwrap_or({
-            if settings.chat_tools.native_tools.web_search {
-                WebSearchMode::ThirdParty
-            } else {
+            if !settings.chat_tools.native_tools.web_search {
                 WebSearchMode::Off
+            } else if settings.is_cloud_runtime() {
+                WebSearchMode::Platform
+            } else {
+                WebSearchMode::ThirdParty
             }
         })
     }
@@ -938,6 +942,22 @@ mod tests {
         assert_eq!(
             WebSearchMode::resolve(Some(WebSearchMode::Off), &settings),
             WebSearchMode::Off
+        );
+
+        settings.runtime_mode = "cloud".to_string();
+        assert_eq!(
+            WebSearchMode::resolve(None, &settings),
+            WebSearchMode::Platform
+        );
+    }
+
+    #[test]
+    fn platform_web_search_mode_roundtrips() {
+        let encoded = serde_json::to_string(&WebSearchMode::Platform).unwrap();
+        assert_eq!(encoded, "\"platform\"");
+        assert_eq!(
+            serde_json::from_str::<WebSearchMode>(&encoded).unwrap(),
+            WebSearchMode::Platform
         );
     }
 

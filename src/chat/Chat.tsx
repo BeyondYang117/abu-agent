@@ -340,7 +340,7 @@ const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set([
 // 网络搜索模式全局默认（任务 07-23，与思考等级同款「记住上次选择」模式）：
 // 选一次即成为新会话/未显式设置会话的默认，免去每个对话重复切换。
 const LAST_WEB_SEARCH_MODE_KEY = 'kivio.chat.lastWebSearchMode'
-const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party'])
+const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party', 'platform'])
 
 function loadLastWebSearchMode(): WebSearchMode | undefined {
   try {
@@ -734,6 +734,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [mcpServers, setMcpServers] = useState<ChatMcpServer[]>([])
   const [webSearchEnabled, setWebSearchEnabled] = useState(true)
+  const [platformWebSearchSupported, setPlatformWebSearchSupported] = useState(false)
   // provider id → apiFormat（任务 07-23）：用于判断当前模型是否支持内置搜索。
   const [providerApiFormats, setProviderApiFormats] = useState<Record<string, string>>({})
   const [providerBaseUrls, setProviderBaseUrls] = useState<Record<string, string>>({})
@@ -1202,8 +1203,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }
     const remembered = loadLastWebSearchMode()
     if (remembered) return remembered
-    return webSearchEnabled ? 'third_party' : 'off'
-  }, [currentConversation, currentConversationIsBlank, draftWebSearchMode, webSearchEnabled])
+    return webSearchEnabled
+      ? (platformWebSearchSupported ? 'platform' : 'third_party')
+      : 'off'
+  }, [currentConversation, currentConversationIsBlank, draftWebSearchMode, platformWebSearchSupported, webSearchEnabled])
   const activeBuiltinWebSearchSupported = useMemo(
     () => builtinWebSearchSupported(
       providerApiFormats[activeProviderId ?? ''],
@@ -1283,6 +1286,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       const chatTools = settings.chatTools
       setMcpServers(chatTools?.servers ?? [])
       setWebSearchEnabled(chatTools?.nativeTools?.webSearch !== false)
+      setPlatformWebSearchSupported(settings.runtimeMode === 'cloud')
       setProviderApiFormats(
         Object.fromEntries((settings.providers ?? []).map((p) => [p.id, p.apiFormat ?? ''])),
       )
@@ -4951,6 +4955,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     webSearchMode: activeWebSearchMode,
     onSetWebSearchMode: handleSetWebSearchMode,
     builtinWebSearchSupported: activeBuiltinWebSearchSupported,
+    platformWebSearchSupported,
     replyModels: activeReplyModels,
     onChangeReplyModels: handleChangeReplyModels,
     contextSlot: composerContextSlot,
@@ -5008,6 +5013,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     mcpServers,
     openAssistantCenter,
     openSkillCenter,
+    platformWebSearchSupported,
     selectedProject,
     selectedSet,
     slashSkills,

@@ -683,6 +683,13 @@ pub(super) async fn complete_assistant_reply_inner(
     let executor = RegistryToolExecutor {
         app: app.clone(),
         state: state.inner(),
+        platform_search: if web_search_mode == crate::chat::types::WebSearchMode::Platform {
+            abu_task_guard
+                .as_ref()
+                .map(|guard| guard.platform_search_credentials())
+        } else {
+            None
+        },
     };
     let max_output_tokens = chat_max_output_tokens_on_wire(
         Some(&provider),
