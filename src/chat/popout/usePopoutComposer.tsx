@@ -574,8 +574,9 @@ export function usePopoutComposer({
 
   const conversationBlank = isBlankConversation(conversation)
   const explicitWebSearch = conversation?.webSearchMode ?? conversation?.web_search_mode
+  const rememberedWebSearch = loadLastWebSearchMode()
   const webSearchMode: WebSearchMode = explicitWebSearch
-    || loadLastWebSearchMode()
+    || (rememberedWebSearch === 'platform' && !platformWebSearchSupported ? undefined : rememberedWebSearch)
     || (webSearchEnabled ? (platformWebSearchSupported ? 'platform' : 'third_party') : 'off')
   const assistantSnapshot = conversation?.assistant_snapshot ?? conversation?.assistantSnapshot ?? null
   const currentAssistant = assistantSnapshot

@@ -1202,7 +1202,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       return draftWebSearchMode
     }
     const remembered = loadLastWebSearchMode()
-    if (remembered) return remembered
+    if (remembered && (remembered !== 'platform' || platformWebSearchSupported)) return remembered
     return webSearchEnabled
       ? (platformWebSearchSupported ? 'platform' : 'third_party')
       : 'off'

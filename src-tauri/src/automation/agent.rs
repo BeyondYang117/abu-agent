@@ -115,6 +115,14 @@ struct WorkflowToolExecutor {
     app: AppHandle,
 }
 
+fn workflow_web_search_mode(settings: &crate::settings::Settings) -> WebSearchMode {
+    if settings.is_cloud_runtime() {
+        WebSearchMode::Off
+    } else {
+        WebSearchMode::resolve(None, settings)
+    }
+}
+
 impl ToolExecutor for WorkflowToolExecutor {
     fn call<'a>(
         &'a self,
@@ -354,7 +362,10 @@ async fn run_builtin_agent_node(
         1
     };
     let max_output_tokens = settings.chat.max_output_tokens;
-    let web_search_mode = WebSearchMode::resolve(None, &settings);
+    // Automation runs do not create an abu-api Agent task/relay session, so a
+    // Cloud-only platform search tool would have no task-bound credentials.
+    // Keep it disabled here until automation gets its own task lifecycle.
+    let web_search_mode = workflow_web_search_mode(&settings);
 
     let config = AgentRunConfig {
         state,
@@ -812,5 +823,19 @@ mod tests {
         let count = tools.len();
         ensure_skill_activate_tool(&mut tools);
         assert_eq!(tools.len(), count);
+    }
+
+    #[test]
+    fn cloud_automation_disables_platform_search_without_task_credentials() {
+        let mut settings = crate::settings::Settings::default();
+        settings.runtime_mode = "cloud".to_string();
+        settings.chat_tools.native_tools.web_search = true;
+        assert_eq!(workflow_web_search_mode(&settings), WebSearchMode::Off);
+
+        settings.runtime_mode = "local".to_string();
+        assert_eq!(
+            workflow_web_search_mode(&settings),
+            WebSearchMode::ThirdParty
+        );
     }
 }
