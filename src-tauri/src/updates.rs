@@ -184,8 +184,9 @@ fn normalize_release_version(version: &str) -> Option<String> {
 /// 根据发布打包契约生成当前平台的远端资产名，不再依赖 GitHub API 列举 assets。
 fn release_asset_name_for(version: &str, os: &str, arch: &str) -> Option<String> {
     match (os, arch) {
-        ("macos", "aarch64") => Some(format!("ABU Agent Desktop_{version}_aarch64.dmg")),
-        ("macos", "x86_64") => Some(format!("ABU Agent Desktop_{version}_x64.dmg")),
+        // Tauri sanitizes the product name in bundle filenames (spaces become dots).
+        ("macos", "aarch64") => Some(format!("ABU.Agent.Desktop_{version}_aarch64.dmg")),
+        ("macos", "x86_64") => Some(format!("ABU.Agent.Desktop_{version}_x64.dmg")),
         ("windows", "x86_64") => Some(format!("ABU.Agent.Desktop_{version}_x64-setup.exe")),
         _ => None,
     }
@@ -529,11 +530,11 @@ mod tests {
     fn release_asset_names_follow_packaging_contract() {
         assert_eq!(
             release_asset_name_for("2.8.1", "macos", "aarch64").as_deref(),
-            Some("ABU Agent Desktop_2.8.1_aarch64.dmg")
+            Some("ABU.Agent.Desktop_2.8.1_aarch64.dmg")
         );
         assert_eq!(
             release_asset_name_for("2.8.1", "macos", "x86_64").as_deref(),
-            Some("ABU Agent Desktop_2.8.1_x64.dmg")
+            Some("ABU.Agent.Desktop_2.8.1_x64.dmg")
         );
         assert_eq!(
             release_asset_name_for("2.8.1", "windows", "x86_64").as_deref(),
@@ -548,9 +549,9 @@ mod tests {
             release_download_url(
                 "BeyondYang117/abu-agent",
                 "2.8.1",
-                "ABU Agent Desktop_2.8.1_aarch64.dmg"
+                "ABU.Agent.Desktop_2.8.1_aarch64.dmg"
             ),
-            "https://github.com/BeyondYang117/abu-agent/releases/download/v2.8.1/ABU Agent Desktop_2.8.1_aarch64.dmg"
+            "https://github.com/BeyondYang117/abu-agent/releases/download/v2.8.1/ABU.Agent.Desktop_2.8.1_aarch64.dmg"
         );
     }
 
