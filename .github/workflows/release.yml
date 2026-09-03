@@ -1,6 +1,5 @@
 name: Release
 
-
 on:
   push:
     tags:
@@ -16,15 +15,12 @@ on:
         required: true
         default: 'main'
 
-
 permissions:
   contents: write
-
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
-
 
 jobs:
   create-release:
@@ -52,7 +48,6 @@ jobs:
             --verify-tag \
             "${extra[@]}"
 
-
   tauri-release:
     needs: create-release
     strategy:
@@ -70,3 +65,71 @@ jobs:
             args: --bundles dmg
           - platform: windows-latest
             name: Windows
+            runner_arch: x86_64
+            args: --bundles nsis,msi
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+
+      - name: Verify runner architecture
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.runner_arch }}
+        run: |
+          set -euo pipefail
+          actual_arch="$(uname -m)"
+          echo "Runner: ${RUNNER_OS} ${actual_arch}; expected: ${EXPECTED_ARCH}"
+          if [[ "${actual_arch}" != "${EXPECTED_ARCH}" ]]; then
+            echo "Unexpected runner architecture; refusing to publish a mislabeled installer."
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Swift sidecar
+        # macOS: real abu-agent-ocr-helper. Windows: empty stub for externalBin.
+        run: npm run build:swift
+
+      - name: Build and publish ${{ matrix.name }} installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ABU Agent Desktop ${{ env.RELEASE_TAG }}
+          releaseBody: |
+            Automated macOS (Apple Silicon + Intel, unsigned) + Windows (x64) build for ${{ env.RELEASE_TAG }}.
+            Built from: ${{ env.BUILD_REF }}
+            - macOS: DMG (unsigned — first launch: right-click → Open, or `xattr -cr "/Applications/ABU Agent Desktop.app"`)
+            - Windows: NSIS installer (.exe), MSI installer, and portable zip (unzip and run)
+          releaseDraft: false
+          prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
+          includeUpdaterJson: false
+          tauriScript: npx tauri
+          args: ${{ matrix.args }}
+
+      - name: Package and upload Windows portable zip
+        if: matrix.platform == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = $env:RELEASE_TAG.TrimStart('v')
+          & ./scripts/package-windows-portable.ps1 -Version $ver
+          $zip = "src-tauri/target/release/bundle/portable/ABU.Agent.Desktop_${ver}_x64-portable.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "portable zip not found: $zip" }
+          gh release upload $env:RELEASE_TAG $zip --clobber --repo $env:GITHUB_REPOSITORY
