@@ -2233,7 +2233,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </button>
                 </div>
                 {usageView === 'stats' ? (
-                  settings.runtimeMode === 'cloud' ? (
+                  settings.runtimeMode?.trim().toLowerCase() === 'cloud' ? (
                     <UsageTab
                       lang={lang}
                       settings={settings}

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, TrendingUp, DollarSign, Clock, Activity } from 'lucide-react'
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import * as abuApi from '../../api/abuApi'
 import type { AgentEntitlement, AgentTask, AgentTaskAttempt } from '../../api/abuApi'
 import { formatAbuQuota } from '../../api/quota'
+import type { Settings } from '../../api/tauri'
 
 interface UsageStats {
   total_tasks: number
@@ -71,26 +72,20 @@ export function UsageTab({
   settings,
 }: {
   lang: 'zh' | 'en'
-  settings: any
+  settings: Pick<Settings, 'runtimeMode'>
 }) {
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [attempts, setAttempts] = useState<Record<string, AgentTaskAttempt[]>>({})
   const isCloudMode = settings.runtimeMode?.trim().toLowerCase() === 'cloud'
   const planNames = new Map(stats?.entitlements.map((item) => [item.id, item.plan_name]) ?? [])
 
-  useEffect(() => {
-    if (isCloudMode) {
-      loadUsageStats()
-    } else {
-      setLoading(false)
-    }
-  }, [isCloudMode])
-
-  const loadUsageStats = async () => {
+  const loadUsageStats = useCallback(async () => {
     try {
       setLoading(true)
+      setError(null)
       const [tasks, entitlements] = await Promise.all([
         abuApi.listTasks({ limit: 100 }),
         abuApi.listEntitlements(),
@@ -108,10 +103,19 @@ export function UsageTab({
     } catch (error) {
       console.error('Failed to load usage stats:', error)
       setStats(null)
+      setError(error instanceof Error ? error.message : (lang === 'zh' ? '无法加载使用统计' : 'Failed to load usage statistics'))
     } finally {
       setLoading(false)
     }
-  }
+  }, [lang])
+
+  useEffect(() => {
+    if (isCloudMode) {
+      void loadUsageStats()
+    } else {
+      setLoading(false)
+    }
+  }, [isCloudMode, loadUsageStats])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -171,6 +175,10 @@ export function UsageTab({
         {loading ? (
           <div className="text-center py-8 text-sm text-neutral-500 dark:text-neutral-400">
             {lang === 'zh' ? '加载中...' : 'Loading...'}
+          </div>
+        ) : error ? (
+          <div className="text-center py-8 text-sm text-red-600 dark:text-red-400">
+            {error}
           </div>
         ) : stats ? (
           <>

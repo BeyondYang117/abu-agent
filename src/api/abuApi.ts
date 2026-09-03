@@ -76,7 +76,8 @@ export interface AgentSession {
 
 export interface AgentTask {
   id: string
-  user_id: number
+  /** The agent endpoint omits the authenticated user's id from task payloads. */
+  user_id?: number
   session_id: string
   device_id: string
   type: string
@@ -247,6 +248,10 @@ export class AbuApiClient {
    * 列出当前用户的所有设备
    */
   async listDevices(): Promise<AgentDevice[]> {
+    if (isTauriRuntime()) {
+      const devices = await api.abuApiListDevices()
+      return devices.map((device) => ({ ...device, revoked_at: device.revoked_at ?? undefined }))
+    }
     return this.request<AgentDevice[]>('/api/agent/devices')
   }
 
@@ -254,6 +259,10 @@ export class AbuApiClient {
    * 吊销设备
    */
   async revokeDevice(deviceId: string): Promise<void> {
+    if (isTauriRuntime()) {
+      await api.abuApiRevokeDevice(deviceId)
+      return
+    }
     await this.request<void>(`/api/agent/devices/${deviceId}`, {
       method: 'DELETE',
     })
@@ -350,6 +359,21 @@ export class AbuApiClient {
     status?: string
     device_id?: string
   }): Promise<AgentTask[]> {
+    if (isTauriRuntime()) {
+      const tasks = await api.abuApiListTasks(params)
+      return tasks.map((task) => ({
+        ...task,
+        user_id: undefined,
+        subscription_id: task.subscription_id ?? undefined,
+        subscription_group_id: task.subscription_group_id ?? undefined,
+        billing_group: task.billing_group ?? undefined,
+        requested_model: task.requested_model ?? undefined,
+        selected_channel_id: task.selected_channel_id ?? undefined,
+        route_version: task.route_version ?? undefined,
+        fail_reason: task.fail_reason ?? undefined,
+        finished_at: task.finished_at ?? undefined,
+      }))
+    }
     const query = new URLSearchParams()
     if (params?.limit) query.set('limit', String(params.limit))
     if (params?.offset) query.set('offset', String(params.offset))
@@ -371,10 +395,28 @@ export class AbuApiClient {
    * 获取 Task 用量
    */
   async getTaskUsage(taskId: string): Promise<AgentTaskUsage> {
+    if (isTauriRuntime()) {
+      const usage = await api.abuApiGetTaskUsage(taskId)
+      return {
+        task_id: usage.task_id,
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        output_tokens: usage.completion_tokens,
+        consumed_quota: usage.consumed_quota,
+        soft_cap: usage.soft_cap,
+        hard_cap: usage.hard_cap,
+        soft_cap_exceeded: usage.soft_cap_exceeded,
+        hard_cap_exceeded: usage.hard_cap_exceeded,
+        status: usage.status ?? undefined,
+      }
+    }
     return this.request<AgentTaskUsage>(`/api/agent/tasks/${taskId}/usage`)
   }
 
   async listTaskAttempts(taskId: string): Promise<AgentTaskAttempt[]> {
+    if (isTauriRuntime()) {
+      return api.abuApiListTaskAttempts(taskId)
+    }
     return this.request<AgentTaskAttempt[]>(`/api/agent/tasks/${taskId}/attempts`)
   }
 

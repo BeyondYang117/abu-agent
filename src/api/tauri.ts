@@ -30,6 +30,78 @@ export interface AbuApiConfig {
   runtime_mode: 'cloud' | 'local'
 }
 
+/** ABU API device/task payloads returned by the native network bridge. */
+export interface AbuApiDevice {
+  id: string
+  platform: string
+  client_version: string
+  device_name: string
+  capabilities: string
+  status: 'active' | 'revoked'
+  last_seen_at: number
+  created_at: number
+  updated_at: number
+  revoked_at?: number | null
+}
+
+export interface AbuApiTask {
+  id: string
+  session_id: string
+  device_id: string
+  type: string
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled'
+  soft_cap: number
+  hard_cap: number
+  consumed_quota: number
+  subscription_id?: number | null
+  subscription_group_id?: number | null
+  billing_group?: string | null
+  requested_model?: string | null
+  selected_channel_id?: number | null
+  route_version?: number | null
+  fail_reason?: string | null
+  created_at: number
+  updated_at: number
+  finished_at?: number | null
+}
+
+export interface AbuApiTaskUsage {
+  task_id: string
+  prompt_tokens: number
+  completion_tokens: number
+  request_count: number
+  consumed_quota: number
+  soft_cap: number
+  hard_cap: number
+  soft_cap_exceeded: boolean
+  hard_cap_exceeded: boolean
+  status?: string | null
+  fail_reason?: string | null
+}
+
+export interface AbuApiTaskAttempt {
+  id: string
+  task_id: string
+  operation_id: string
+  user_id: number
+  model: string
+  billing_group: string
+  channel_id: number
+  subscription_id: number
+  quota: number
+  prompt_tokens: number
+  completion_tokens: number
+  status: string
+  created_at: string
+}
+
+export interface AbuApiTasksQuery {
+  limit?: number
+  offset?: number
+  status?: string
+  device_id?: string
+}
+
 /** 是否运行在 Tauri 运行时(而非纯浏览器/SSR) */
 export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -2030,6 +2102,16 @@ export const api = {
       start_date: string
       end_date: string
     }>>('abu_api_list_entitlements'),
+  abuApiListDevices: () =>
+    invoke<AbuApiDevice[]>('abu_api_list_devices'),
+  abuApiRevokeDevice: (deviceId: string) =>
+    invoke<void>('abu_api_revoke_device', { deviceId }),
+  abuApiListTasks: (query?: AbuApiTasksQuery) =>
+    invoke<AbuApiTask[]>('abu_api_list_tasks', { query }),
+  abuApiGetTaskUsage: (taskId: string) =>
+    invoke<AbuApiTaskUsage>('abu_api_get_task_usage', { taskId }),
+  abuApiListTaskAttempts: (taskId: string) =>
+    invoke<AbuApiTaskAttempt[]>('abu_api_list_task_attempts', { taskId }),
   abuApiGetCliCredentials: (baseUrl: string, sessionToken: string, agent: 'claude' | 'codex') =>
     invoke<{
       agent: string

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Trash2, RefreshCw, CheckCircle } from 'lucide-react'
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import * as abuApi from '../../api/abuApi'
 import type { AgentDevice } from '../../api/abuApi'
+import { useAbuApiAuth } from '../../api/abuApiAuth'
 
 // 使用 API 返回的设备类型
 type Device = AgentDevice
@@ -38,24 +39,29 @@ export function DevicesTab({
 }) {
   const [devices, setDevices] = useState<Device[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [revoking, setRevoking] = useState<string | null>(null)
+  const { deviceId: currentDeviceId } = useAbuApiAuth()
 
-  useEffect(() => {
-    loadDevices()
-  }, [])
-
-  const loadDevices = async () => {
+  const loadDevices = useCallback(async () => {
     try {
       setLoading(true)
+      setError(null)
       const deviceList = await abuApi.listDevices()
       setDevices(deviceList)
     } catch (error) {
       console.error('Failed to load devices:', error)
+      setDevices([])
+      setError(error instanceof Error ? error.message : (lang === 'zh' ? '无法加载设备列表' : 'Failed to load devices'))
     } finally {
       setLoading(false)
     }
-  }
+  }, [lang])
+
+  useEffect(() => {
+    void loadDevices()
+  }, [loadDevices])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -103,6 +109,10 @@ export function DevicesTab({
           <div className="text-center py-8 text-sm text-neutral-500 dark:text-neutral-400">
             {lang === 'zh' ? '加载中...' : 'Loading...'}
           </div>
+        ) : error ? (
+          <div className="text-center py-8 text-sm text-red-600 dark:text-red-400">
+            {error}
+          </div>
         ) : devices.length === 0 ? (
           <div className="text-center py-8 text-sm text-neutral-500 dark:text-neutral-400">
             {lang === 'zh' ? '没有已登录的设备' : 'No devices found'}
@@ -110,7 +120,7 @@ export function DevicesTab({
         ) : (
           <div className="space-y-3">
             {devices.map((device) => {
-              const isCurrent = device.status === 'active'
+              const isCurrent = device.id === currentDeviceId
 
               return (
                 <div
