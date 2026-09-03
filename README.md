@@ -68,7 +68,7 @@
 
 ## 功能
 
-完整记录见 [Releases](https://github.com/BeyondYang117/abu-agent/releases) · 当前版本说明：[v0.1.2](docs/releases/v0.1.2.md)
+完整记录见 [Releases](https://github.com/BeyondYang117/abu-agent/releases) · 当前版本说明：[v0.1.3](docs/releases/v0.1.3.md)
 
 ### 聊天与 Agent
 
