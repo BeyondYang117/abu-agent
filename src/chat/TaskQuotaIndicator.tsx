@@ -1,5 +1,6 @@
 import { AlertCircle, TrendingUp } from 'lucide-react'
 import { useTaskUsage } from './useTaskUsage'
+import { formatAbuQuota } from '../api/quota'
 
 interface TaskQuotaIndicatorProps {
   taskId: string | null
@@ -50,9 +51,8 @@ function getUsageLevel(
 }
 
 function formatQuota(quota: number, lang: 'zh' | 'en'): string {
-  // 假设 quota 单位是分（100分 = 1元）
-  const yuan = (quota / 100).toFixed(2)
-  return lang === 'zh' ? `¥${yuan}` : `$${yuan}`
+  const amount = formatAbuQuota(quota)
+  return lang === 'zh' ? `$${amount}` : `$${amount}`
 }
 
 export function TaskQuotaIndicator({

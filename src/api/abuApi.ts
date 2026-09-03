@@ -84,6 +84,12 @@ export interface AgentTask {
   soft_cap: number
   hard_cap: number
   consumed_quota: number
+  subscription_id?: number
+  subscription_group_id?: number
+  billing_group?: string
+  requested_model?: string
+  selected_channel_id?: number
+  route_version?: number
   fail_reason?: string
   created_at: number
   updated_at: number
@@ -102,6 +108,22 @@ export interface AgentTaskUsage {
   soft_cap_exceeded: boolean
   hard_cap_exceeded: boolean
   status?: string
+}
+
+export interface AgentTaskAttempt {
+  id: string
+  task_id: string
+  operation_id: string
+  user_id: number
+  model: string
+  billing_group: string
+  channel_id: number
+  subscription_id: number
+  quota: number
+  prompt_tokens: number
+  completion_tokens: number
+  status: string
+  created_at: string
 }
 
 export interface RelaySession {
@@ -352,6 +374,10 @@ export class AbuApiClient {
     return this.request<AgentTaskUsage>(`/api/agent/tasks/${taskId}/usage`)
   }
 
+  async listTaskAttempts(taskId: string): Promise<AgentTaskAttempt[]> {
+    return this.request<AgentTaskAttempt[]>(`/api/agent/tasks/${taskId}/attempts`)
+  }
+
   /**
    * 更新 Task 状态
    */
@@ -447,4 +473,8 @@ export async function listTasks(params?: {
 
 export async function getTaskUsage(taskId: string): Promise<AgentTaskUsage> {
   return getAbuApiClient().getTaskUsage(taskId)
+}
+
+export async function listTaskAttempts(taskId: string): Promise<AgentTaskAttempt[]> {
+  return getAbuApiClient().listTaskAttempts(taskId)
 }

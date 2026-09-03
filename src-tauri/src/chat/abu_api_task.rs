@@ -372,6 +372,19 @@ async fn create_relay_session(
     Ok((data.relay_key, data.expires_at))
 }
 
+/// Rotate a task-bound relay credential before a long-running Agent turn.
+pub async fn refresh_relay_session(context: &AbuApiTaskContext) -> Result<(String, i64), String> {
+    let client = reqwest::Client::new();
+    create_relay_session(
+        &client,
+        &context.base_url,
+        &context.session_token,
+        &context.device_id,
+        &context.task_id,
+    )
+    .await
+}
+
 /// 收尾 Task：`POST /api/agent/tasks/{id}/status`，body 是 `{from,to,reason}`。
 ///
 /// 服务端 `AdvanceAgentTaskStatus` 是 CAS：`from` 不匹配时返回 409，
@@ -451,6 +464,14 @@ impl AbuApiTaskGuard {
 
     pub fn task_id(&self) -> &str {
         &self.context.task_id
+    }
+
+    /// Refresh the relay key in place while keeping the same task and billing plan.
+    pub async fn refresh_relay_key(&mut self) -> Result<(), String> {
+        let (relay_key, expires_at) = refresh_relay_session(&self.context).await?;
+        self.context.relay_key = relay_key;
+        self.context.relay_expires_at = expires_at;
+        Ok(())
     }
 
     pub fn platform_search_credentials(&self) -> PlatformSearchCredentials {

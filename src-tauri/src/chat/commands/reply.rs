@@ -159,12 +159,17 @@ pub(super) async fn complete_assistant_reply_inner(
     // Cloud 模式：向 abu-api 申请 Session → Task → Relay Session，用返回的 relay_key
     // 造一个指向中转端点的虚拟供应商，替代本机配置的 provider。守卫在函数退出时
     // 停心跳并收尾 Task（默认终态 Failed，成功/取消路径显式标记）。
-    let abu_task_guard = if settings.is_cloud_runtime() {
+    let mut abu_task_guard = if settings.is_cloud_runtime() {
         let context = crate::chat::abu_api_task::prepare_conversation(&settings).await?;
         Some(crate::chat::abu_api_task::AbuApiTaskGuard::new(context))
     } else {
         None
     };
+    if let Some(guard) = abu_task_guard.as_mut() {
+        // Rotate immediately before generation so resumed/queued turns do not
+        // inherit a nearly expired relay credential.
+        guard.refresh_relay_key().await?;
+    }
     let provider = match abu_task_guard.as_ref() {
         Some(guard) => guard.virtual_provider(),
         None => {

@@ -3,7 +3,8 @@ import { RefreshCw, TrendingUp, DollarSign, Clock, Activity } from 'lucide-react
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import * as abuApi from '../../api/abuApi'
-import type { AgentEntitlement, AgentTask } from '../../api/abuApi'
+import type { AgentEntitlement, AgentTask, AgentTaskAttempt } from '../../api/abuApi'
+import { formatAbuQuota } from '../../api/quota'
 
 interface UsageStats {
   total_tasks: number
@@ -32,9 +33,8 @@ function formatDate(timestamp: number, lang: 'zh' | 'en'): string {
 }
 
 function formatQuota(quota: number, lang: 'zh' | 'en'): string {
-  // Quota is measured in cents (100 quota = ¥1).
-  const yuan = (quota / 100).toFixed(2)
-  return lang === 'zh' ? `¥${yuan}` : `$${yuan}`
+  const amount = formatAbuQuota(quota)
+  return lang === 'zh' ? `$${amount}` : `$${amount}`
 }
 
 function getTaskStatusColor(status: string): string {
@@ -76,7 +76,9 @@ export function UsageTab({
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [attempts, setAttempts] = useState<Record<string, AgentTaskAttempt[]>>({})
   const isCloudMode = settings.runtimeMode?.trim().toLowerCase() === 'cloud'
+  const planNames = new Map(stats?.entitlements.map((item) => [item.id, item.plan_name]) ?? [])
 
   useEffect(() => {
     if (isCloudMode) {
@@ -115,6 +117,17 @@ export function UsageTab({
     setRefreshing(true)
     await loadUsageStats()
     setRefreshing(false)
+  }
+
+  const loadAttempts = async (taskId: string) => {
+    if (attempts[taskId]) return
+    try {
+      const rows = await abuApi.listTaskAttempts(taskId)
+      setAttempts((current) => ({ ...current, [taskId]: rows }))
+    } catch (error) {
+      console.error('Failed to load task attempts:', error)
+      setAttempts((current) => ({ ...current, [taskId]: [] }))
+    }
   }
 
   if (!isCloudMode) {
@@ -246,6 +259,13 @@ export function UsageTab({
                     key={task.id}
                     className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 hover:border-neutral-300 dark:hover:border-neutral-600 transition-colors"
                   >
+                    <button
+                      type="button"
+                      className="float-right text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                      onClick={() => void loadAttempts(task.id)}
+                    >
+                      {lang === 'zh' ? '查看执行轨迹' : 'View execution trace'}
+                    </button>
                     <div className="flex items-start justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <span className={`text-xs px-2 py-0.5 rounded-full ${getTaskStatusColor(task.status)}`}>
@@ -286,6 +306,38 @@ export function UsageTab({
                         </span>
                       </div>
                     </div>
+                    {(task.billing_group || task.requested_model || task.subscription_id) && (
+                      <div className="mt-2 pt-2 border-t border-neutral-100 dark:border-neutral-700 text-xs text-neutral-600 dark:text-neutral-400">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          {task.requested_model && (
+                            <span>
+                              {lang === 'zh' ? '模型：' : 'Model: '}
+                              <strong className="font-medium text-neutral-800 dark:text-neutral-200">{task.requested_model}</strong>
+                            </span>
+                          )}
+                          {task.billing_group && (
+                            <span>
+                              {lang === 'zh' ? '计费分组：' : 'Billing group: '}
+                              <strong className="font-medium text-neutral-800 dark:text-neutral-200">{task.billing_group}</strong>
+                            </span>
+                          )}
+                          {task.subscription_id && (
+                            <span>
+                              {lang === 'zh' ? '套餐：' : 'Plan: '}
+                              <strong className="font-medium text-emerald-700 dark:text-emerald-400">
+                                {planNames.get(task.subscription_id) || `#${task.subscription_id}`}
+                              </strong>
+                            </span>
+                          )}
+                          {task.selected_channel_id ? (
+                            <span>
+                              {lang === 'zh' ? '渠道：' : 'Channel: '}
+                              #{task.selected_channel_id}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    )}
                     <div className="mt-2 pt-2 border-t border-neutral-100 dark:border-neutral-700 text-xs">
                       <span className="text-neutral-500 dark:text-neutral-400">
                         {lang === 'zh' ? '消费：' : 'Cost: '}
@@ -294,6 +346,19 @@ export function UsageTab({
                         {formatQuota(task.consumed_quota, lang)}
                       </span>
                     </div>
+                    {attempts[task.id]?.length ? (
+                      <div className="mt-3 space-y-1.5 rounded bg-neutral-50 dark:bg-neutral-900/40 p-2 text-xs">
+                        {attempts[task.id].map((attempt) => (
+                          <div key={attempt.id} className="flex flex-wrap gap-x-3 gap-y-1 text-neutral-600 dark:text-neutral-400">
+                            <span>{attempt.model || task.requested_model || '-'}</span>
+                            <span>{attempt.billing_group || task.billing_group || '-'}</span>
+                            <span>{attempt.channel_id ? `#${attempt.channel_id}` : '-'}</span>
+                            <span>{formatQuota(attempt.quota, lang)}</span>
+                            <span className="text-neutral-400">{attempt.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}
