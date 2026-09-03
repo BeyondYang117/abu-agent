@@ -28,11 +28,11 @@ const TASK_TYPE_CHAT: &str = "chat";
 
 /// 单条 Task 的客户端配额上限（单位：quota，与服务端 `consumed_quota` 同量纲）。
 ///
-/// 服务端 `AgentTaskDefaultSoftCap` / `AgentTaskDefaultHardCap` 目前都是 `0`
-/// （= 不限），且只有在平台默认 > 0 时才会下调客户端传入的 hard_cap。
-/// 也就是说**这两个常量是当前唯一生效的超支防线**，调整前想清楚。
-const TASK_SOFT_CAP: i64 = 500;
-const TASK_HARD_CAP: i64 = 2000;
+/// 套餐窗口限额由 abu-api 在每次 relay 请求时校验；Task 上限是额外的可选护栏。
+/// 传 0 表示使用服务端 `AgentTaskDefaultSoftCap` / `AgentTaskDefaultHardCap`，
+/// 避免客户端写死的 quota 单位与服务端配置不一致。
+const TASK_SOFT_CAP: i64 = 0;
+const TASK_HARD_CAP: i64 = 0;
 
 /// 一次 Cloud 模式对话所需的全部服务端句柄。
 #[derive(Debug, Clone)]
@@ -652,9 +652,8 @@ mod tests {
     }
 
     #[test]
-    fn soft_cap_stays_below_hard_cap() {
-        // 服务端在 soft > hard 时会把 soft 压到 hard，等于软上限失效。
-        assert!(TASK_SOFT_CAP < TASK_HARD_CAP);
+    fn task_caps_defer_to_server_defaults() {
+        assert_eq!((TASK_SOFT_CAP, TASK_HARD_CAP), (0, 0));
     }
 
     /// 守卫的终态编码：默认必须是 Failed。漏标一处早退分支只会误记失败，

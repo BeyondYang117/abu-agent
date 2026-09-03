@@ -21,16 +21,18 @@ function getUsageLevel(
   softCap: number,
   hardCap: number
 ): UsageLevel {
-  const percentage = (consumedQuota / hardCap) * 100
+  // A zero cap means the server has disabled that guard.
+  const hasHardCap = hardCap > 0
+  const hasSoftCap = softCap > 0
 
-  if (consumedQuota >= hardCap) {
+  if (hasHardCap && consumedQuota >= hardCap) {
     return {
       level: 'danger',
       color: 'text-red-600 dark:text-red-400',
       bgColor: 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700',
       icon: <AlertCircle size={14} />
     }
-  } else if (consumedQuota >= softCap) {
+  } else if (hasSoftCap && consumedQuota >= softCap) {
     return {
       level: 'warning',
       color: 'text-yellow-600 dark:text-yellow-400',
@@ -55,8 +57,8 @@ function formatQuota(quota: number, lang: 'zh' | 'en'): string {
 
 export function TaskQuotaIndicator({
   taskId,
-  softCap = 500,
-  hardCap = 2000,
+  softCap,
+  hardCap,
   lang,
   className = ''
 }: TaskQuotaIndicatorProps) {
@@ -95,12 +97,19 @@ export function TaskQuotaIndicator({
   }
 
   const consumedQuota = usage.consumed_quota || 0
+  // The task endpoint is authoritative. A zero value explicitly means that
+  // the server disabled that guard, so do not fall back to stale UI defaults.
+  const effectiveSoftCap = usage.soft_cap ?? softCap ?? 0
+  const effectiveHardCap = usage.hard_cap ?? hardCap ?? 0
   const totalTokens = usage.total_tokens || 0
-  const usageLevel = getUsageLevel(consumedQuota, softCap, hardCap)
-  const percentage = Math.min((consumedQuota / hardCap) * 100, 100)
+  const usageLevel = getUsageLevel(consumedQuota, effectiveSoftCap, effectiveHardCap)
+  const percentage = effectiveHardCap > 0
+    ? Math.min((consumedQuota / effectiveHardCap) * 100, 100)
+    : 0
 
   // 硬上限已达到
-  const isBlocked = consumedQuota >= hardCap
+  const isBlocked = effectiveHardCap > 0 && (usage.hard_cap_exceeded || consumedQuota >= effectiveHardCap)
+  const hasCap = effectiveHardCap > 0
 
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
@@ -114,30 +123,36 @@ export function TaskQuotaIndicator({
             <span className={`font-medium ${usageLevel.color}`}>
               {formatQuota(consumedQuota, lang)}
             </span>
-            <span className="text-neutral-500 dark:text-neutral-400">/</span>
-            <span className="text-neutral-600 dark:text-neutral-400">
-              {formatQuota(hardCap, lang)}
-            </span>
+            {hasCap && (
+              <>
+                <span className="text-neutral-500 dark:text-neutral-400">/</span>
+                <span className="text-neutral-600 dark:text-neutral-400">
+                  {formatQuota(effectiveHardCap, lang)}
+                </span>
+              </>
+            )}
             <span className="text-neutral-500 dark:text-neutral-400 truncate">
-              ({totalTokens.toLocaleString()} tokens)
+              ({lang === 'zh' ? `处理 ${totalTokens.toLocaleString()} tokens` : `${totalTokens.toLocaleString()} tokens processed`})
             </span>
           </div>
         </div>
       </div>
 
       {/* 进度条 */}
-      <div className="h-1 w-full rounded-full bg-neutral-200 dark:bg-neutral-700 overflow-hidden">
-        <div
-          className={`h-full transition-all duration-300 ${
-            isBlocked
-              ? 'bg-red-500 dark:bg-red-400'
-              : usageLevel.level === 'warning'
-                ? 'bg-yellow-500 dark:bg-yellow-400'
-                : 'bg-blue-500 dark:bg-blue-400'
-          }`}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
+      {hasCap && (
+        <div className="h-1 w-full rounded-full bg-neutral-200 dark:bg-neutral-700 overflow-hidden">
+          <div
+            className={`h-full transition-all duration-300 ${
+              isBlocked
+                ? 'bg-red-500 dark:bg-red-400'
+                : usageLevel.level === 'warning'
+                  ? 'bg-yellow-500 dark:bg-yellow-400'
+                  : 'bg-blue-500 dark:bg-blue-400'
+            }`}
+            style={{ width: `${percentage}%` }}
+          />
+        </div>
+      )}
 
       {/* 警告信息 */}
       {usageLevel.level === 'warning' && !isBlocked && (
@@ -145,8 +160,8 @@ export function TaskQuotaIndicator({
           <AlertCircle size={14} className="text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-yellow-700 dark:text-yellow-300">
             {lang === 'zh'
-              ? `已达到软上限（${formatQuota(softCap, lang)}），建议注意用量。`
-              : `Soft cap reached (${formatQuota(softCap, lang)}). Please monitor usage.`
+              ? `累计额度已达到软上限（${formatQuota(effectiveSoftCap, lang)}），任务仍会继续执行。`
+              : `Soft cap reached (${formatQuota(effectiveSoftCap, lang)}). Please monitor usage.`
             }
           </div>
         </div>
@@ -158,8 +173,8 @@ export function TaskQuotaIndicator({
           <AlertCircle size={14} className="text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-red-700 dark:text-red-300">
             {lang === 'zh'
-              ? `已达到硬上限（${formatQuota(hardCap, lang)}），无法继续发送消息。`
-              : `Hard cap reached (${formatQuota(hardCap, lang)}). Cannot send more messages.`
+              ? `累计额度已达到硬上限（${formatQuota(effectiveHardCap, lang)}），任务将在下一轮请求前停止。`
+              : `Hard cap reached (${formatQuota(effectiveHardCap, lang)}). Cannot send more messages.`
             }
           </div>
         </div>

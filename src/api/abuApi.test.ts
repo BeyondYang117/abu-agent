@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { isTauriRuntimeMock, abuApiListModelsMock } = vi.hoisted(() => ({
+const { isTauriRuntimeMock, abuApiListModelsMock, abuApiListEntitlementsMock } = vi.hoisted(() => ({
   isTauriRuntimeMock: vi.fn(),
   abuApiListModelsMock: vi.fn(),
+  abuApiListEntitlementsMock: vi.fn(),
 }))
 
 vi.mock('./tauri', () => ({
   api: {
     abuApiListModels: abuApiListModelsMock,
+    abuApiListEntitlements: abuApiListEntitlementsMock,
   },
   isTauriRuntime: isTauriRuntimeMock,
 }))
@@ -17,6 +19,7 @@ describe('AbuApiClient.listModels', () => {
     vi.resetModules()
     isTauriRuntimeMock.mockReset()
     abuApiListModelsMock.mockReset()
+    abuApiListEntitlementsMock.mockReset()
     vi.stubGlobal('fetch', vi.fn())
   })
 
@@ -29,6 +32,19 @@ describe('AbuApiClient.listModels', () => {
 
     expect(result).toEqual({ models: ['gpt-4o'], recommended: 'gpt-4o' })
     expect(abuApiListModelsMock).toHaveBeenCalledOnce()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('uses the native Tauri request for subscription entitlements', async () => {
+    isTauriRuntimeMock.mockReturnValue(true)
+    const entitlements = [{ id: 1, plan_name: 'Pro' }]
+    abuApiListEntitlementsMock.mockResolvedValue(entitlements)
+
+    const { AbuApiClient } = await import('./abuApi')
+    const result = await new AbuApiClient('https://api.example.com', 'session-token').listEntitlements()
+
+    expect(result).toEqual(entitlements)
+    expect(abuApiListEntitlementsMock).toHaveBeenCalledOnce()
     expect(fetch).not.toHaveBeenCalled()
   })
 })

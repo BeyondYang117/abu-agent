@@ -4838,6 +4838,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
               currentProviderId={activeProviderId}
               currentModel={activeModel}
               onModelChange={handleModelChange}
+              onOpenLogin={handleSidebarOpenLogin}
             />
           )}
         </div>

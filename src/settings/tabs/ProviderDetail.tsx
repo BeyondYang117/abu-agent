@@ -89,6 +89,7 @@ export function ProviderDetail({
             value={normalizeProviderApiFormat(provider.apiFormat)}
             onChange={(apiFormat) => onUpdateProvider(provider.id, { apiFormat })}
             options={[
+              { value: 'auto', label: lang === 'zh' ? '自动（推荐）' : 'Automatic (recommended)' },
               { value: 'openai_chat', label: 'OpenAI Chat' },
               { value: 'openai_responses', label: 'OpenAI Responses' },
               { value: 'anthropic_messages', label: 'Anthropic' },

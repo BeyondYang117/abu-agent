@@ -24,7 +24,13 @@ const HELPERS = [
 
 function detectRustTriple() {
   try {
-    const out = execSync('rustc -vV', { encoding: 'utf8' })
+    // npm may be launched from a GUI/IDE environment without the shell's PATH.
+    // Resolve rustup's standard install location explicitly in that case.
+    const rustc = process.env.RUSTC ||
+      (existsSync(resolve(process.env.HOME || '', '.cargo/bin/rustc'))
+        ? resolve(process.env.HOME || '', '.cargo/bin/rustc')
+        : 'rustc')
+    const out = execSync(`"${rustc}" -vV`, { encoding: 'utf8' })
     const m = out.match(/host:\s*(\S+)/)
     if (!m) throw new Error('rustc -vV 输出里没找到 host')
     return m[1]

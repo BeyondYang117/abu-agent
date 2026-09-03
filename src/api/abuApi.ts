@@ -48,6 +48,24 @@ export interface AgentModelsResponse {
   recommended: string
 }
 
+export interface AgentEntitlement {
+  id: number
+  plan_id: number
+  plan_name: string
+  group_id: number
+  supported_models: string[]
+  bound_groups: string[]
+  daily_limit_usd?: number | null
+  weekly_limit_usd?: number | null
+  monthly_limit_usd?: number | null
+  daily_usage_usd: number
+  weekly_usage_usd: number
+  monthly_usage_usd: number
+  extra_quota_remaining_usd: number
+  start_date: string
+  end_date: string
+}
+
 export interface AgentSession {
   id: string
   user_id: number
@@ -75,12 +93,15 @@ export interface AgentTask {
 export interface AgentTaskUsage {
   task_id: string
   prompt_tokens: number
-  output_tokens: number
+  completion_tokens: number
+  /** @deprecated Kept for compatibility with older servers. */
+  output_tokens?: number
   consumed_quota: number
   soft_cap: number
   hard_cap: number
   soft_cap_exceeded: boolean
   hard_cap_exceeded: boolean
+  status?: string
 }
 
 export interface RelaySession {
@@ -253,6 +274,14 @@ export class AbuApiClient {
     return this.request<AgentModelsResponse>('/api/agent/models')
   }
 
+  /** 获取当前用户可用于 Agent 的有效套餐权益。 */
+  async listEntitlements(): Promise<AgentEntitlement[]> {
+    if (isTauriRuntime()) {
+      return api.abuApiListEntitlements()
+    }
+    return this.request<AgentEntitlement[]>('/api/agent/entitlements')
+  }
+
   /**
    * 创建 Agent Session
    */
@@ -397,6 +426,10 @@ export async function listModels(): Promise<AgentModelsResponse> {
 
 export async function listDevices(): Promise<AgentDevice[]> {
   return getAbuApiClient().listDevices()
+}
+
+export async function listEntitlements(): Promise<AgentEntitlement[]> {
+  return getAbuApiClient().listEntitlements()
 }
 
 export async function revokeDevice(deviceId: string): Promise<void> {

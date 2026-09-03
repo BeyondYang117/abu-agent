@@ -7,6 +7,8 @@ export interface TaskUsage {
   total_tokens: number
   prompt_tokens: number
   completion_tokens: number
+  soft_cap: number
+  hard_cap: number
   soft_cap_exceeded: boolean
   hard_cap_exceeded: boolean
   status?: string
@@ -121,14 +123,18 @@ export function useTaskUsage(
       if (!isMountedRef.current) return
 
       // 转换 API 响应格式到组件使用的格式
+      const completionTokens = apiData.completion_tokens ?? apiData.output_tokens ?? 0
       const enrichedData: TaskUsage = {
         task_id: apiData.task_id,
         consumed_quota: apiData.consumed_quota,
-        total_tokens: apiData.prompt_tokens + apiData.output_tokens,
+        total_tokens: apiData.prompt_tokens + completionTokens,
         prompt_tokens: apiData.prompt_tokens,
-        completion_tokens: apiData.output_tokens,
+        completion_tokens: completionTokens,
+        soft_cap: apiData.soft_cap,
+        hard_cap: apiData.hard_cap,
         soft_cap_exceeded: apiData.soft_cap_exceeded,
-        hard_cap_exceeded: apiData.hard_cap_exceeded
+        hard_cap_exceeded: apiData.hard_cap_exceeded,
+        status: apiData.status,
       }
 
       setUsage(enrichedData)

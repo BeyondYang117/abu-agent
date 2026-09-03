@@ -1520,6 +1520,7 @@ export function activeKeyIndexAfterRemove(current: number, removedIdx: number, r
 }
 
 export function normalizeProviderApiFormat(apiFormat?: string): string {
+  if (!apiFormat || apiFormat === 'auto' || apiFormat === 'automatic') return 'auto'
   if (apiFormat === 'anthropic' || apiFormat === 'anthropic_messages') return 'anthropic_messages'
   if (apiFormat === 'openai_responses' || apiFormat === 'responses') return 'openai_responses'
   if (apiFormat === 'gemini' || apiFormat === 'google' || apiFormat === 'gemini_generate') return 'gemini'
@@ -1547,6 +1548,10 @@ export function isOfficialDeepSeekApi(baseUrl?: string): boolean {
 
 export function builtinWebSearchSupported(apiFormat?: string, baseUrl?: string): boolean {
   const kind = normalizeProviderApiFormat(apiFormat)
+  if (kind === 'auto') {
+    const url = (baseUrl ?? '').toLowerCase()
+    return url.includes('anthropic') || url.includes('generativelanguage') || url.includes('gemini') || url.includes('api.x.ai') || url.includes('deepseek')
+  }
   if (
     kind === 'openai_responses' ||
     kind === 'xai_responses' ||
@@ -2007,6 +2012,24 @@ export const api = {
     }>('abu_api_get_user_info'),
   abuApiListModels: () =>
     invoke<{ models: string[]; recommended: string }>('abu_api_list_models'),
+  abuApiListEntitlements: () =>
+    invoke<Array<{
+      id: number
+      plan_id: number
+      plan_name: string
+      group_id: number
+      supported_models: string[]
+      bound_groups: string[]
+      daily_limit_usd?: number | null
+      weekly_limit_usd?: number | null
+      monthly_limit_usd?: number | null
+      daily_usage_usd: number
+      weekly_usage_usd: number
+      monthly_usage_usd: number
+      extra_quota_remaining_usd: number
+      start_date: string
+      end_date: string
+    }>>('abu_api_list_entitlements'),
   saveAbuApiConfig: (config: AbuApiConfig) =>
     invoke<void>('save_abu_api_config', { config }),
   /** 清除 session token，保留 device_id 以便下次登录复用同一设备记录。 */

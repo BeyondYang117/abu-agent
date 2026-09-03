@@ -3,21 +3,17 @@ import { RefreshCw, TrendingUp, DollarSign, Clock, Activity } from 'lucide-react
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import * as abuApi from '../../api/abuApi'
-import type { AgentTask } from '../../api/abuApi'
+import type { AgentEntitlement, AgentTask } from '../../api/abuApi'
 
 interface UsageStats {
   total_tasks: number
-  total_tokens: number
   total_quota: number
   tasks: AgentTask[]
+  entitlements: AgentEntitlement[]
 }
 
-interface I18n {
-  [key: string]: string
-}
-
-function formatDate(timestamp: string, lang: 'zh' | 'en'): string {
-  const date = new Date(timestamp)
+function formatDate(timestamp: number, lang: 'zh' | 'en'): string {
+  const date = new Date(timestamp > 10_000_000_000 ? timestamp : timestamp * 1000)
   if (lang === 'zh') {
     return date.toLocaleDateString('zh-CN', {
       month: 'short',
@@ -36,7 +32,7 @@ function formatDate(timestamp: string, lang: 'zh' | 'en'): string {
 }
 
 function formatQuota(quota: number, lang: 'zh' | 'en'): string {
-  // 假设 quota 单位是分（100分 = 1元）
+  // Quota is measured in cents (100 quota = ¥1).
   const yuan = (quota / 100).toFixed(2)
   return lang === 'zh' ? `¥${yuan}` : `$${yuan}`
 }
@@ -71,18 +67,16 @@ function getTaskStatusLabel(status: string, lang: 'zh' | 'en'): string {
 }
 
 export function UsageTab({
-  t,
   lang,
   settings,
 }: {
-  t: I18n
   lang: 'zh' | 'en'
   settings: any
 }) {
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const isCloudMode = settings.runtime_mode === 'cloud'
+  const isCloudMode = settings.runtimeMode?.trim().toLowerCase() === 'cloud'
 
   useEffect(() => {
     if (isCloudMode) {
@@ -95,17 +89,19 @@ export function UsageTab({
   const loadUsageStats = async () => {
     try {
       setLoading(true)
-      const tasks = await abuApi.listTasks()
+      const [tasks, entitlements] = await Promise.all([
+        abuApi.listTasks({ limit: 100 }),
+        abuApi.listEntitlements(),
+      ])
 
       // 计算统计信息
-      const totalTokens = tasks.reduce((sum, t) => sum + (t.total_tokens || 0), 0)
       const totalQuota = tasks.reduce((sum, t) => sum + (t.consumed_quota || 0), 0)
 
       setStats({
         total_tasks: tasks.length,
-        total_tokens: totalTokens,
         total_quota: totalQuota,
-        tasks: tasks
+        tasks,
+        entitlements,
       })
     } catch (error) {
       console.error('Failed to load usage stats:', error)
@@ -145,7 +141,6 @@ export function UsageTab({
     <div className="flex-1 overflow-y-auto">
       <SettingsGroup
         title={lang === 'zh' ? '使用统计' : 'Usage Statistics'}
-        description={lang === 'zh' ? '查看您的任务使用情况' : 'View your task usage'}
       >
         <div className="flex justify-end mb-4">
           <Button
@@ -180,16 +175,6 @@ export function UsageTab({
 
               <div className="p-4 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50">
                 <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400 text-xs mb-2">
-                  <Activity size={14} />
-                  {lang === 'zh' ? '总 Token 数' : 'Total Tokens'}
-                </div>
-                <div className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-                  {stats.total_tokens.toLocaleString()}
-                </div>
-              </div>
-
-              <div className="p-4 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50">
-                <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400 text-xs mb-2">
                   <DollarSign size={14} />
                   {lang === 'zh' ? '总消费' : 'Total Cost'}
                 </div>
@@ -198,6 +183,53 @@ export function UsageTab({
                 </div>
               </div>
             </div>
+
+            {/* 套餐权益 */}
+            {stats.entitlements.length > 0 && (
+              <div className="mb-6">
+                <h3 className="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">
+                  {lang === 'zh' ? '套餐权益' : 'Plan entitlements'}
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {stats.entitlements.map((entitlement) => {
+                    const limit = entitlement.monthly_limit_usd ?? entitlement.weekly_limit_usd ?? entitlement.daily_limit_usd
+                    const usage = entitlement.monthly_limit_usd != null
+                      ? entitlement.monthly_usage_usd
+                      : entitlement.weekly_limit_usd != null
+                        ? entitlement.weekly_usage_usd
+                        : entitlement.daily_usage_usd
+                    const percentage = limit && limit > 0 ? Math.min(usage / limit * 100, 100) : 0
+                    return (
+                      <div key={entitlement.id} className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-sm text-neutral-800 dark:text-neutral-200">
+                            {entitlement.plan_name || `#${entitlement.plan_id}`}
+                          </span>
+                          <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                            {entitlement.bound_groups.join(', ') || (lang === 'zh' ? '默认分组' : 'Default group')}
+                          </span>
+                        </div>
+                        <div className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
+                          {limit && limit > 0
+                            ? `${lang === 'zh' ? '周期用量' : 'Window usage'}: $${usage.toFixed(2)} / $${limit.toFixed(2)}`
+                            : (lang === 'zh' ? '周期额度不限' : 'No window limit')}
+                        </div>
+                        {limit && limit > 0 && (
+                          <div className="mt-2 h-1 rounded-full bg-neutral-200 dark:bg-neutral-700 overflow-hidden">
+                            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${percentage}%` }} />
+                          </div>
+                        )}
+                        {entitlement.extra_quota_remaining_usd > 0 && (
+                          <div className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+                            {lang === 'zh' ? '增量包剩余' : 'Extra quota'}: ${entitlement.extra_quota_remaining_usd.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* 任务列表 */}
             <div className="space-y-2">
@@ -211,7 +243,7 @@ export function UsageTab({
               ) : (
                 stats.tasks.slice(0, 20).map((task) => (
                   <div
-                    key={task.task_id}
+                    key={task.id}
                     className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800/50 hover:border-neutral-300 dark:hover:border-neutral-600 transition-colors"
                   >
                     <div className="flex items-start justify-between mb-2">
@@ -231,26 +263,26 @@ export function UsageTab({
                     <div className="grid grid-cols-3 gap-4 text-xs">
                       <div>
                         <span className="text-neutral-500 dark:text-neutral-400">
-                          {lang === 'zh' ? 'Tokens：' : 'Tokens: '}
+                          {lang === 'zh' ? '累计额度：' : 'Accumulated quota: '}
                         </span>
                         <span className="font-medium text-neutral-700 dark:text-neutral-300">
-                          {task.total_tokens.toLocaleString()}
+                          {formatQuota(task.consumed_quota, lang)}
                         </span>
                       </div>
                       <div>
                         <span className="text-neutral-500 dark:text-neutral-400">
-                          {lang === 'zh' ? '提示：' : 'Prompt: '}
+                          {lang === 'zh' ? '累计软上限：' : 'Soft cap: '}
                         </span>
                         <span className="font-medium text-neutral-700 dark:text-neutral-300">
-                          {task.prompt_tokens.toLocaleString()}
+                          {task.soft_cap > 0 ? formatQuota(task.soft_cap, lang) : (lang === 'zh' ? '不限' : 'Unlimited')}
                         </span>
                       </div>
                       <div>
                         <span className="text-neutral-500 dark:text-neutral-400">
-                          {lang === 'zh' ? '完成：' : 'Completion: '}
+                          {lang === 'zh' ? '累计硬上限：' : 'Hard cap: '}
                         </span>
                         <span className="font-medium text-neutral-700 dark:text-neutral-300">
-                          {task.completion_tokens.toLocaleString()}
+                          {task.hard_cap > 0 ? formatQuota(task.hard_cap, lang) : (lang === 'zh' ? '不限' : 'Unlimited')}
                         </span>
                       </div>
                     </div>

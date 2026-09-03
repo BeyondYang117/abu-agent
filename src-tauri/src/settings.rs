@@ -103,7 +103,7 @@ pub struct ModelProvider {
     /// 关闭后该供应商不会出现在模型选择器中，已引用它的功能会在保存时切到第一个启用的供应商。
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// API 格式：`openai_chat` 或 `anthropic_messages`。
+    /// API 格式：`auto`（推荐）或显式协议。
     /// 旧值 `openai` / `anthropic` 会在 `sanitize_settings` 中归一化。
     #[serde(default = "default_api_format")]
     pub api_format: String,
@@ -167,7 +167,28 @@ impl ProviderApiFormat {
 
 impl ModelProvider {
     pub fn api_format_kind(&self) -> ProviderApiFormat {
-        ProviderApiFormat::from_raw(&self.api_format)
+        let raw = self.api_format.trim();
+        let configured = ProviderApiFormat::from_raw(raw);
+        if !raw.eq_ignore_ascii_case("auto") && !raw.eq_ignore_ascii_case("automatic") && !raw.is_empty() {
+            return configured;
+        }
+        let haystack = format!("{} {}", self.name, self.base_url).to_ascii_lowercase();
+        match self.request.cli_identity.trim().to_ascii_lowercase().as_str() {
+            "claude_code" => ProviderApiFormat::AnthropicMessages,
+            "codex" => ProviderApiFormat::OpenAiResponses,
+            "grok" => ProviderApiFormat::XaiResponses,
+            _ if haystack.contains("anthropic") || haystack.contains("claude") => {
+                ProviderApiFormat::AnthropicMessages
+            }
+            _ if haystack.contains("generativelanguage") || haystack.contains("gemini") => {
+                ProviderApiFormat::Gemini
+            }
+            _ if haystack.contains("api.x.ai") || haystack.contains("grok") => {
+                ProviderApiFormat::XaiResponses
+            }
+            _ if haystack.contains("codex") => ProviderApiFormat::OpenAiResponses,
+            _ => ProviderApiFormat::OpenAiChat,
+        }
     }
 
     /// 夹到现有密钥池范围内；空池为 0。
@@ -2067,7 +2088,14 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     // 1b. 单 key → 多 key 迁移（v2.3.1 → v2.4 升级路径）
     for provider in &mut settings.providers {
-        provider.api_format = provider.api_format_kind().as_str().to_string();
+        // Keep the user-facing automatic mode intact; explicit legacy aliases are
+        // still normalized to their canonical protocol names.
+        let raw_format = provider.api_format.trim().to_ascii_lowercase();
+        if raw_format != "auto" && raw_format != "automatic" && !raw_format.is_empty() {
+            provider.api_format = provider.api_format_kind().as_str().to_string();
+        } else {
+            provider.api_format = "auto".to_string();
+        }
         if let Some(legacy) = provider.api_key_legacy.take() {
             let trimmed = legacy.trim().to_string();
             if !trimmed.is_empty() && !provider.api_keys.contains(&trimmed) {
@@ -3018,7 +3046,7 @@ fn default_false() -> bool {
 }
 
 fn default_api_format() -> String {
-    "openai_chat".to_string()
+    "auto".to_string()
 }
 
 fn default_hotkey() -> String {
@@ -3164,6 +3192,21 @@ mod tests {
         let settings: Settings =
             serde_json::from_str("{}").expect("legacy settings should deserialize");
         assert!(!settings.keep_chat_window_alive);
+    }
+
+    #[test]
+    fn automatic_provider_protocol_uses_identity_and_endpoint_hints() {
+        let mut provider = ModelProvider {
+            id: "p".into(), name: "Claude Code relay".into(), api_keys: vec![],
+            api_key_legacy: None, base_url: "https://relay.example/v1".into(),
+            available_models: vec![], enabled_models: vec![], enabled: true,
+            api_format: "auto".into(), model_overrides: Default::default(),
+            compress_request_body: false, request: Default::default(), active_key_index: 0,
+        };
+        assert_eq!(provider.api_format_kind(), ProviderApiFormat::AnthropicMessages);
+        provider.name = "Codex relay".into();
+        provider.request.cli_identity = "codex".into();
+        assert_eq!(provider.api_format_kind(), ProviderApiFormat::OpenAiResponses);
     }
 
     #[test]

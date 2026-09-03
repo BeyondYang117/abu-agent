@@ -9,11 +9,14 @@ import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import { chatTitlebarPillButtonClass } from './platform'
 import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
 import { ModelAbilityTags } from './ModelAbilityTags'
+import { useAbuApiAuth } from '../api/abuApiAuth'
 
 interface ModelSelectorProps {
   currentProviderId: string
   currentModel: string
   onModelChange: (providerId: string, model: string) => void
+  /** Opens the in-app ABU account login flow. */
+  onOpenLogin?: () => void
 }
 
 /** 收藏键：providerId 无冒号，model 可能含冒号 → 只按首个冒号切分。 */
@@ -28,8 +31,10 @@ function ModelSelectorBase({
   currentProviderId,
   currentModel,
   onModelChange,
+  onOpenLogin,
 }: ModelSelectorProps) {
   const t = useT()
+  const { isAuthenticated } = useAbuApiAuth()
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
@@ -247,7 +252,28 @@ function ModelSelectorBase({
             ))}
             {visibleProviders.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-neutral-500">
-                {cloudError ? (
+                {!isAuthenticated ? (
+                  <>
+                    <div className="font-medium text-neutral-700 dark:text-neutral-300">{t.chatNoModels}</div>
+                    <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
+                      {t.onboardingLoginDesc}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenLogin?.()
+                        if (!onOpenLogin) window.location.hash = '#chat/onboarding?step=login&return=chat'
+                        setOpen(false)
+                      }}
+                      className="mt-4 rounded-md bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+                    >
+                      {t.onboardingStepLogin}
+                    </button>
+                    <p className="mt-3 text-xs text-neutral-500">
+                      登录后仍可在设置中添加模型提供商
+                    </p>
+                  </>
+                ) : cloudError ? (
                   <>
                     <div className="font-medium text-neutral-700 dark:text-neutral-300">{t.chatNoModels}</div>
                     <div className="mt-2 text-xs text-red-500">{cloudError}</div>

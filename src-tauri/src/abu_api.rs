@@ -200,6 +200,27 @@ pub struct AgentModelsResponse {
     pub recommended: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct AgentEntitlementResponse {
+    pub id: i64,
+    pub plan_id: i64,
+    pub plan_name: String,
+    pub group_id: i64,
+    #[serde(default)]
+    pub supported_models: Vec<String>,
+    #[serde(default)]
+    pub bound_groups: Vec<String>,
+    pub daily_limit_usd: Option<f64>,
+    pub weekly_limit_usd: Option<f64>,
+    pub monthly_limit_usd: Option<f64>,
+    pub daily_usage_usd: f64,
+    pub weekly_usage_usd: f64,
+    pub monthly_usage_usd: f64,
+    pub extra_quota_remaining_usd: f64,
+    pub start_date: String,
+    pub end_date: String,
+}
+
 fn agent_user_info_url(base_url: &str) -> String {
     format!(
         "{}/api/agent/devices?include_account=1",
@@ -300,6 +321,47 @@ pub async fn abu_api_list_models(
     }
     serde_json::from_value(body.get("data").cloned().unwrap_or_default())
         .map_err(|e| format!("ABU API 模型列表格式错误：{e}"))
+}
+
+/// 通过 Rust 网络层获取有效套餐权益，避免 WebView 跨域请求失败。
+#[command]
+pub async fn abu_api_list_entitlements(
+    state: State<'_, AppState>,
+) -> Result<Vec<AgentEntitlementResponse>, String> {
+    let (base_url, session_token) = {
+        let settings = state.settings_read();
+        let base_url = settings
+            .abu_api_base_url
+            .clone()
+            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
+        let session_token = settings
+            .abu_api_session_token
+            .clone()
+            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
+        (base_url, session_token)
+    };
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/agent/entitlements", base_url.trim_end_matches('/')))
+        .header("X-Abu-Session-Token", &session_token)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            body.get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("获取用户权益失败")
+        ));
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 用户权益格式错误：{e}"))
 }
 
 /// 获取设备指纹（稳定唯一标识符）。

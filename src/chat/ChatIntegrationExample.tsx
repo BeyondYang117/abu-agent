@@ -103,8 +103,8 @@ export function ChatIntegrationExample({
           <div className="px-4 pt-3">
             <TaskQuotaIndicator
               taskId={currentTaskId}
-              softCap={500}
-              hardCap={2000}
+              softCap={5000000}
+              hardCap={20000000}
               lang={lang}
             />
           </div>
@@ -170,8 +170,8 @@ export function ChatIntegrationExample({
  *    {isCloudMode && currentTaskId && (
  *      <TaskQuotaIndicator
  *        taskId={currentTaskId}
- *        softCap={500}
- *        hardCap={2000}
+ *        softCap={5000000}
+ *        hardCap={20000000}
  *        lang={lang}
  *      />
  *    )}
