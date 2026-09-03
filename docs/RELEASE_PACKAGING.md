@@ -43,7 +43,7 @@ GitHub release packaging (this is the official path — do not build installers 
    ```
 5. `.github/workflows/release.yml` builds all configured installers on GitHub Actions and uploads them to the tag's release:
    - `macos-latest` (Apple Silicon / aarch64) with `--bundles dmg` → `ABU Agent Desktop_X.Y.Z_aarch64.dmg`
-   - `macos-13` (Intel / x86_64) with `--bundles dmg` → `ABU Agent Desktop_X.Y.Z_x64.dmg`
+   - `macos-15-intel` (Intel / x86_64) with `--bundles dmg` → `ABU Agent Desktop_X.Y.Z_x64.dmg`
    - `windows-latest` (x64) with `--bundles nsis,msi` → `ABU.Agent.Desktop_X.Y.Z_x64-setup.exe` and `ABU.Agent.Desktop_X.Y.Z_x64_en-US.msi`
    - After the Windows build, `scripts/package-windows-portable.ps1` creates `ABU.Agent.Desktop_X.Y.Z_x64-portable.zip` (unzip and run `ABU Agent Desktop.exe`; no Start Menu). In-app update downloads the NSIS installer.
    - Tauri preserves spaces in macOS DMG names and normalizes spaces to dots in Windows installer names.
