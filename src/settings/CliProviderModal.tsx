@@ -1,5 +1,6 @@
 import { useMemo, useState, type ComponentType, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
+import { filterCliModels } from './cliModelFilter'
 import {
   Eye,
   EyeOff,
@@ -531,7 +532,7 @@ export function CliProviderModal({
     setFetching(true)
     setFetchNote('')
     try {
-      const models = await chatApi.externalCliFetchRelayModels(url, key)
+      const models = filterCliModels(agentId, await chatApi.externalCliFetchRelayModels(url, key))
       setFetchedModels(models)
       if (isNative && models.length > 0 && normalizeNativeModels(nativeForm.models).length === 0) {
         setNativeForm((prev) => ({
