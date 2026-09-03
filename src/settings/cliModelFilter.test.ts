@@ -8,7 +8,28 @@ describe('filterCliModels', () => {
   ]
 
   it('keeps Codex/GPT reasoning models only for Codex', () => {
-    expect(filterCliModels('codex', catalog)).toEqual(['gpt-5.5', 'codex-mini-latest', 'o3-mini'])
+    expect(filterCliModels('codex', catalog)).toEqual(['gpt-5.5', 'codex-mini-latest'])
+  })
+
+  it('removes unsupported generic GPT and chat snapshot models from Codex', () => {
+    expect(filterCliModels('codex', [
+      'gpt-4o',
+      'gpt-4o-2024-05-13',
+      'gpt-4o-mini',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5-nano',
+      'gpt-5.1',
+      'gpt-5.2',
+      'gpt-5.3-chat-latest',
+      'gpt-5.5',
+      'gpt-5.6-sol',
+      'o1-mini',
+      'o3-mini',
+      'o3-deep-research',
+      'o4-mini',
+      'o4-mini-deep-research',
+    ])).toEqual(['gpt-5.5', 'gpt-5.6-sol'])
   })
 
   it('keeps the CLI family for Claude and Gemini', () => {

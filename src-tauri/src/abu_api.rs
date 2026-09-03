@@ -43,8 +43,12 @@ pub struct AbuApiConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AgentCliCredentialsResponse {
-    pub claude_api_key: String,
-    pub codex_api_key: String,
+    pub agent: String,
+    pub api_key: String,
+    pub group: String,
+    pub groups: Vec<String>,
+    pub models: Vec<String>,
+    pub recommended_model: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -187,11 +191,13 @@ pub async fn abu_api_register_device(
 pub async fn abu_api_get_cli_credentials(
     base_url: String,
     session_token: String,
+    agent: String,
 ) -> Result<AgentCliCredentialsResponse, String> {
     let url = format!("{}/api/agent/cli-credentials", base_url.trim_end_matches('/'));
     let response = reqwest::Client::new()
         .post(url)
         .header("X-Abu-Session-Token", session_token)
+        .json(&serde_json::json!({ "agent": agent }))
         .send()
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;

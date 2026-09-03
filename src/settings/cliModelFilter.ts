@@ -5,7 +5,10 @@
 const NON_CHAT_MODEL = /(?:embedding|embed|rerank|moderation|moderations|whisper|tts|speech|audio|image|vision-only|dall-e|sora|video|realtime|search-preview)/i
 
 const CLI_PATTERNS: Record<string, RegExp> = {
-  codex: /^(?:(?:openai|azure)[/:])?(?:codex(?:[-_].*)?|gpt(?:[-_./].*)?|o[1-9](?:[-_].*)?)/i,
+  // Codex app-server currently recommends only the Codex family and the
+  // GPT-5.5/5.6 coding models. Generic GPT-4o/5, mini/nano, chat snapshots,
+  // and the o1/o3/o4 families are deliberately left out of suggestions.
+  codex: /^(?:(?:openai|azure)[/:])?(?:codex(?:[-_./].*)?|gpt-5\.(?:5|6)(?:[-_./].*)?)/i,
   claude: /^(?:(?:anthropic)[/:])?(?:claude(?:[-_./].*)?|anthropic(?:[-_./].*)?)/i,
   gemini: /^(?:(?:google)[/:])?(?:gemini(?:[-_./].*)?|gemma(?:[-_./].*)?)/i,
   kimi: /^(?:(?:moonshot)[/:])?(?:kimi(?:[-_./].*)?|moonshot(?:[-_./].*)?)/i,

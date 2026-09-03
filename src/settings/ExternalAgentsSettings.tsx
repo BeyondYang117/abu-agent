@@ -460,9 +460,19 @@ function AgentDetail({
     setAbuSetupError('')
     try {
       const base = (auth.baseUrl || DEFAULT_ABU_API_BASE_URL).replace(/\/+$/, '')
-      const credentials = await chatApi.abuApiGetCliCredentials(base, auth.sessionToken)
+      const credentials = await chatApi.abuApiGetCliCredentials(
+        base,
+        auth.sessionToken,
+        agent.id,
+      )
       const existing = (config.providers ?? []).find((provider) => provider.id === `abu-api-${agent.id}`)
-      const model = existing?.defaultModel || (agent.id === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6')
+      const model = credentials.recommended_model
+        || credentials.models[0]
+        || existing?.defaultModel
+        || ''
+      if (!model) {
+        throw new Error(lang === 'zh' ? '该 CLI 分组暂未返回可用模型' : 'No usable model was returned for this CLI group')
+      }
       const provider: ExternalCliProvider = agent.id === 'claude'
         ? {
           ...(existing ?? {}),
@@ -472,7 +482,14 @@ function AgentDetail({
           env: [
             // Standard relay route authenticated by the generated user token.
             { key: 'ANTHROPIC_BASE_URL', value: base },
-            { key: 'ANTHROPIC_AUTH_TOKEN', value: credentials.claude_api_key },
+            { key: 'ANTHROPIC_AUTH_TOKEN', value: credentials.api_key },
+            // The server-selected group owns this model list; use the same
+            // model for every Claude Code tier so the CLI cannot drift to a
+            // model from another provider's catalog.
+            { key: 'ANTHROPIC_DEFAULT_FABLE_MODEL', value: model },
+            { key: 'ANTHROPIC_DEFAULT_HAIKU_MODEL', value: model },
+            { key: 'ANTHROPIC_DEFAULT_SONNET_MODEL', value: model },
+            { key: 'ANTHROPIC_DEFAULT_OPUS_MODEL', value: model },
           ],
           disabled: false,
           defaultModel: model,
@@ -483,7 +500,7 @@ function AgentDetail({
           name: 'ABU API',
           remark: lang === 'zh' ? '由 ABU Agent 一键配置' : 'Configured by ABU Agent',
           configToml: buildCodexProviderConfigToml('ABU API', `${base}/v1`, model, 'responses', 'abu_api'),
-          authJson: JSON.stringify({ OPENAI_API_KEY: credentials.codex_api_key }, null, 2),
+          authJson: JSON.stringify({ OPENAI_API_KEY: credentials.api_key }, null, 2),
           disabled: false,
           defaultModel: model,
         }

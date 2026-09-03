@@ -532,7 +532,13 @@ export function CliProviderModal({
     setFetching(true)
     setFetchNote('')
     try {
-      const models = filterCliModels(agentId, await chatApi.externalCliFetchRelayModels(url, key))
+      const relayModels = await chatApi.externalCliFetchRelayModels(url, key)
+      // ABU API CLI tokens are already scoped to a server-owned channel group;
+      // preserve that authoritative model list. Other providers still get the
+      // client-side convenience filter for mixed `/v1/models` catalogs.
+      const models = initial?.id?.startsWith('abu-api-')
+        ? relayModels
+        : filterCliModels(agentId, relayModels)
       setFetchedModels(models)
       if (isNative && models.length > 0 && normalizeNativeModels(nativeForm.models).length === 0) {
         setNativeForm((prev) => ({

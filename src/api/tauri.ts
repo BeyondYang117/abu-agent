@@ -2030,10 +2030,18 @@ export const api = {
       start_date: string
       end_date: string
     }>>('abu_api_list_entitlements'),
-  abuApiGetCliCredentials: (baseUrl: string, sessionToken: string) =>
-    invoke<{ claude_api_key: string; codex_api_key: string }>('abu_api_get_cli_credentials', {
+  abuApiGetCliCredentials: (baseUrl: string, sessionToken: string, agent: 'claude' | 'codex') =>
+    invoke<{
+      agent: string
+      api_key: string
+      group: string
+      groups: string[]
+      models: string[]
+      recommended_model: string
+    }>('abu_api_get_cli_credentials', {
       baseUrl,
       sessionToken,
+      agent,
     }),
   saveAbuApiConfig: (config: AbuApiConfig) =>
     invoke<void>('save_abu_api_config', { config }),

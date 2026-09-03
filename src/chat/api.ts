@@ -2251,14 +2251,26 @@ export const chatApi = {
   },
 
   /** 为 Claude/Codex 创建或复用 ABU API 用户级 CLI 凭证。 */
-  async abuApiGetCliCredentials(baseUrl: string, sessionToken: string): Promise<{
-    claude_api_key: string
-    codex_api_key: string
+  async abuApiGetCliCredentials(baseUrl: string, sessionToken: string, agent: 'claude' | 'codex'): Promise<{
+    agent: string
+    api_key: string
+    group: string
+    groups: string[]
+    models: string[]
+    recommended_model: string
   }> {
     if (!isTauriRuntime()) throw new Error('CLI 配置仅支持桌面端')
-    return await invoke<{ claude_api_key: string; codex_api_key: string }>('abu_api_get_cli_credentials', {
+    return await invoke<{
+      agent: string
+      api_key: string
+      group: string
+      groups: string[]
+      models: string[]
+      recommended_model: string
+    }>('abu_api_get_cli_credentials', {
       baseUrl,
       sessionToken,
+      agent,
     })
   },
 
