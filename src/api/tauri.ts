@@ -2030,6 +2030,11 @@ export const api = {
       start_date: string
       end_date: string
     }>>('abu_api_list_entitlements'),
+  abuApiGetCliCredentials: (baseUrl: string, sessionToken: string) =>
+    invoke<{ claude_api_key: string; codex_api_key: string }>('abu_api_get_cli_credentials', {
+      baseUrl,
+      sessionToken,
+    }),
   saveAbuApiConfig: (config: AbuApiConfig) =>
     invoke<void>('save_abu_api_config', { config }),
   /** 清除 session token，保留 device_id 以便下次登录复用同一设备记录。 */

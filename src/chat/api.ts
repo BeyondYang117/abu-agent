@@ -2250,6 +2250,18 @@ export const chatApi = {
     return await invoke<string[]>('chat_external_cli_fetch_relay_models', { baseUrl, apiKey })
   },
 
+  /** 为 Claude/Codex 创建或复用 ABU API 用户级 CLI 凭证。 */
+  async abuApiGetCliCredentials(baseUrl: string, sessionToken: string): Promise<{
+    claude_api_key: string
+    codex_api_key: string
+  }> {
+    if (!isTauriRuntime()) throw new Error('CLI 配置仅支持桌面端')
+    return await invoke<{ claude_api_key: string; codex_api_key: string }>('abu_api_get_cli_credentials', {
+      baseUrl,
+      sessionToken,
+    })
+  },
+
   /** 扫描本机 cc-switch 的库，列出可导入的供应商（只读）。 */
   async externalCliScanCcSwitch(): Promise<CcSwitchScan> {
     if (!isTauriRuntime()) return { providers: [], skipped: 0 }

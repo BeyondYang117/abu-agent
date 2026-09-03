@@ -793,6 +793,7 @@ pub fn run() {
             abu_api::abu_api_list_entitlements,
             abu_api::load_abu_api_config,
             abu_api::save_abu_api_config,
+            abu_api::abu_api_get_cli_credentials,
             abu_api::clear_abu_api_session,
         ])
         .build(tauri::generate_context!())

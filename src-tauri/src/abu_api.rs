@@ -42,6 +42,12 @@ pub struct AbuApiConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct AgentCliCredentialsResponse {
+    pub claude_api_key: String,
+    pub codex_api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceRegistration {
     pub fingerprint: String,
     pub platform: String,
@@ -172,6 +178,37 @@ pub async fn abu_api_register_device(
     }
     serde_json::from_value(body.get("data").cloned().unwrap_or_default())
         .map_err(|e| format!("ABU API 设备响应格式错误：{e}"))
+}
+
+/// 获取用于本机 Claude/Codex CLI 的用户级 relay token。该请求只使用桌面
+/// session token，返回的 token 不与某个 Agent Task 绑定，可直接用于标准
+/// `/v1/messages` 与 `/v1/responses` 端点。
+#[command]
+pub async fn abu_api_get_cli_credentials(
+    base_url: String,
+    session_token: String,
+) -> Result<AgentCliCredentialsResponse, String> {
+    let url = format!("{}/api/agent/cli-credentials", base_url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .post(url)
+        .header("X-Abu-Session-Token", session_token)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("获取 CLI 凭证失败")
+            .to_string());
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API CLI 凭证响应格式错误：{e}"))
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

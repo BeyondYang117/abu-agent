@@ -30,6 +30,7 @@ import { Input, Toggle } from './components'
 import { i18n, type Lang } from './i18n'
 import { Button, IconButton } from '../components/Button'
 import { dshNativeDetailToProvider } from './cliNativeProviderConfigs'
+import { buildCodexProviderConfigToml } from './cliCodexPresets'
 import { CliProviderModal } from './CliProviderModal'
 import { DshPluginsSettings } from './DshPluginsSettings'
 import { PiExtensionsSettings } from './PiExtensionsSettings'
@@ -46,6 +47,8 @@ import type {
   ExternalCliProvider,
   Settings as SettingsData,
 } from '../api/tauri'
+import { abuApiAuthStore } from '../api/abuApiAuth'
+import { DEFAULT_ABU_API_BASE_URL } from '../api/abuApi'
 
 const EMPTY_CONFIG: ExternalCliAgentConfig = {}
 const DSH_OFFICIAL_PROVIDER_ID = 'deepseek-official'
@@ -387,6 +390,8 @@ function AgentDetail({
 
   const [probedModels, setProbedModels] = useState<DetectedExternalAgent['models']>([])
   const [showPlugins, setShowPlugins] = useState(false)
+  const [abuSetupState, setAbuSetupState] = useState<'idle' | 'running' | 'ok' | 'error'>('idle')
+  const [abuSetupError, setAbuSetupError] = useState('')
   useEffect(() => {
     setShowPlugins(false)
   }, [agent.id])
@@ -443,6 +448,56 @@ function AgentDetail({
     running ||
       (info?.command && !checking && (!agent.available || updateAvailable || needsRepair)),
   )
+
+  const setupAbuApi = async () => {
+    const auth = abuApiAuthStore.getState()
+    if (!auth.sessionToken) {
+      setAbuSetupState('error')
+      setAbuSetupError(lang === 'zh' ? '请先登录 ABU API 账户' : 'Please sign in to ABU API first')
+      return
+    }
+    setAbuSetupState('running')
+    setAbuSetupError('')
+    try {
+      const base = (auth.baseUrl || DEFAULT_ABU_API_BASE_URL).replace(/\/+$/, '')
+      const credentials = await chatApi.abuApiGetCliCredentials(base, auth.sessionToken)
+      const existing = (config.providers ?? []).find((provider) => provider.id === `abu-api-${agent.id}`)
+      const model = existing?.defaultModel || (agent.id === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6')
+      const provider: ExternalCliProvider = agent.id === 'claude'
+        ? {
+          ...(existing ?? {}),
+          id: 'abu-api-claude',
+          name: 'ABU API',
+          remark: lang === 'zh' ? '由 ABU Agent 一键配置' : 'Configured by ABU Agent',
+          env: [
+            // Standard relay route authenticated by the generated user token.
+            { key: 'ANTHROPIC_BASE_URL', value: base },
+            { key: 'ANTHROPIC_AUTH_TOKEN', value: credentials.claude_api_key },
+          ],
+          disabled: false,
+          defaultModel: model,
+        }
+        : {
+          ...(existing ?? {}),
+          id: 'abu-api-codex',
+          name: 'ABU API',
+          remark: lang === 'zh' ? '由 ABU Agent 一键配置' : 'Configured by ABU Agent',
+          configToml: buildCodexProviderConfigToml('ABU API', `${base}/v1`, model, 'responses', 'abu_api'),
+          authJson: JSON.stringify({ OPENAI_API_KEY: credentials.codex_api_key }, null, 2),
+          disabled: false,
+          defaultModel: model,
+        }
+      const providers = [...(config.providers ?? [])]
+      const index = providers.findIndex((item) => item.id === provider.id)
+      if (index >= 0) providers[index] = provider
+      else providers.push(provider)
+      onPatch({ providers, currentProvider: provider.id })
+      setAbuSetupState('ok')
+    } catch (err) {
+      setAbuSetupState('error')
+      setAbuSetupError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   if (showPlugins && agent.id === 'dsh') {
     return <DshPluginsSettings lang={lang} onBack={() => setShowPlugins(false)} />
@@ -685,6 +740,28 @@ function AgentDetail({
         onPatch={onPatch}
         reloadAgents={reloadAgents}
       />
+      {(agent.id === 'claude' || agent.id === 'codex') && (
+        <div className="kv-cli-abu-setup">
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => void setupAbuApi()}
+            disabled={abuSetupState === 'running'}
+          >
+            {abuSetupState === 'running'
+              ? (lang === 'zh' ? '配置中…' : 'Configuring…')
+              : (lang === 'zh' ? '一键配置 ABU API' : 'Configure ABU API')}
+          </Button>
+          {abuSetupState === 'ok' && (
+            <span className="kv-tag ok">{lang === 'zh' ? '已配置' : 'Configured'}</span>
+          )}
+          {abuSetupState === 'error' && (
+            <span className="kv-tag warn" title={abuSetupError}>
+              {abuSetupError || (lang === 'zh' ? '配置失败' : 'Configuration failed')}
+            </span>
+          )}
+        </div>
+      )}
     </>
   )
 }
