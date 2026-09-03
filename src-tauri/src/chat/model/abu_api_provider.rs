@@ -1,18 +1,13 @@
 //! Cloud 模式的「虚拟供应商」：把 abu-api 的 relay 端点包装成一个普通
-//! `ModelProvider`，复用现成的 OpenAI Chat 适配器，不新写一套流解析。
+//! `ModelProvider`，复用现成的 Anthropic Messages 适配器，不新写一套流解析。
 //!
-//! ## 为什么统一用 openai_chat
+//! 云端 Agent 使用 Anthropic 原生协议，直接命中
+//! `/api/agent/relay/v1/messages`。relay 会按**模型名**选择上游渠道
+//!（`middleware.Distribute()`），再由对应渠道适配器转发，因此这里无需把 Claude
+//! 请求伪装成 OpenAI Chat Completions。
 //!
-//! abu-api 的 relay 按**模型名**选渠道（`middleware.Distribute()`），请求格式与上游
-//! 渠道类型解耦：Claude / Gemini 渠道各自实现了 `ConvertOpenAIRequest`
-//! （`RequestOpenAI2ClaudeMessage` / `CovertOpenAI2Gemini`），网关会把 OpenAI 格式的
-//! 请求体翻成上游原生协议。所以云端模型不管上游是谁，一律走
-//! `/api/agent/relay/v1/chat/completions` 即可。
-//!
-//! 这条选择顺带绕开了一个死结：relay 鉴权只认 `Authorization: Bearer` 或
-//! `x-api-key`（`middleware.AgentRelayAuth`），而本地 Gemini 适配器发的是
-//! `x-goog-api-key`——它在 `provider_request::RESERVED_HEADER_KEYS` 里，
-//! 用户级自定义头覆盖不了。走 openai_chat 就不会有 Gemini 适配器参与。
+//! Anthropic 适配器发送 `x-api-key`，正是 `middleware.AgentRelayAuth` 支持的凭证头，
+//! 同时会带上 `anthropic-version` 和 Agent 任务头，和 relay 的鉴权/请求校验保持一致。
 
 use crate::settings::{ModelProvider, ProviderApiFormat, ProviderCustomHeader};
 
@@ -27,8 +22,8 @@ const TASK_ID_HEADER: &str = "X-Abu-Agent-Task-ID";
 /// 构造指向 relay 的虚拟供应商。
 ///
 /// `base_url` 传 abu-api 根地址（如 `https://api.abuai.chat`），这里补上
-/// `/api/agent/relay/v1`——OpenAI 适配器会拼成 `{base}/chat/completions`，
-/// 正好命中 `agentRelay.POST("/v1/chat/completions")`。
+/// `/api/agent/relay/v1`——Anthropic 适配器会拼成 `{base}/messages`，
+/// 正好命中 `agentRelay.POST("/v1/messages")`。
 pub fn create_abu_api_virtual_provider(
     base_url: &str,
     relay_key: &str,
@@ -44,7 +39,7 @@ pub fn create_abu_api_virtual_provider(
         available_models: Vec::new(),
         enabled_models: Vec::new(),
         enabled: true,
-        api_format: ProviderApiFormat::OpenAiChat.as_str().to_string(),
+        api_format: ProviderApiFormat::AnthropicMessages.as_str().to_string(),
         model_overrides: Default::default(),
         // relay 前面挂着 WAF/限流中间件，压缩体反而多一层不确定性，保持明文。
         compress_request_body: false,
@@ -163,12 +158,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base_url_lands_on_relay_chat_completions() {
+    fn base_url_lands_on_relay_messages() {
         let provider = create_abu_api_virtual_provider("https://api.abuai.chat", "rk", "task-1");
-        // OpenAI 适配器拼的是 `{base_url}/chat/completions`。
+        // Anthropic 适配器拼的是 `{base_url}/messages`。
         assert_eq!(
-            format!("{}/chat/completions", provider.base_url),
-            "https://api.abuai.chat/api/agent/relay/v1/chat/completions"
+            format!("{}/messages", provider.base_url),
+            "https://api.abuai.chat/api/agent/relay/v1/messages"
         );
     }
 
@@ -189,9 +184,12 @@ mod tests {
     }
 
     #[test]
-    fn forces_openai_chat_format() {
+    fn forces_anthropic_messages_format() {
         let provider = create_abu_api_virtual_provider("https://x", "rk", "task-1");
-        assert_eq!(provider.api_format_kind(), ProviderApiFormat::OpenAiChat);
+        assert_eq!(
+            provider.api_format_kind(),
+            ProviderApiFormat::AnthropicMessages
+        );
     }
 
     /// 任务头必须能真的发出去：不在保留名单里、且键值合法。
