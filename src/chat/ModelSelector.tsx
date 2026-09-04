@@ -184,10 +184,11 @@ function ModelSelectorBase({
       const visibleModels = models.slice(0, 4)
       return [tier, visibleModels]
     })) as Record<SmartModelQuality, string[]>
-  }, [providers, routingPolicy])
+  }, [routingPolicy])
   const hasCloudTierMap = Boolean(routingPolicy && (
     Object.values(routingPolicy.recommended).some(Boolean)
     || Object.values(routingPolicy.fallbacks).some((models) => Array.isArray(models) && models.length > 0)
+    || routingPolicy.rules.some((rule) => rule.tiers.length > 0)
   ))
 
   // 收藏置顶组：按存储顺序，过滤掉失效的（provider 已删/禁用/模型已不在列表）。
@@ -372,7 +373,9 @@ function ModelSelectorBase({
                         >
                           <div className="text-[10px] font-medium text-neutral-400">{label}{lang === 'zh' ? '档位' : ' tier'}</div>
                           <div className="mt-0.5 truncate text-[10px] text-neutral-700 dark:text-neutral-300">
-                            {models.length > 0 ? models[0] : (lang === 'zh' ? '暂无' : 'None')}
+                            {models.length > 0
+                              ? `${lang === 'zh' ? '模型：' : 'Model: '}${models[0]}`
+                              : (lang === 'zh' ? '暂无' : 'None')}
                           </div>
                           {models.length > 1 && <div className="text-[9px] text-neutral-400">+{models.length - 1}</div>}
                         </div>
