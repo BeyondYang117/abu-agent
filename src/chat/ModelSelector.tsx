@@ -56,7 +56,6 @@ function ModelSelectorBase({
   const [favorites, setFavorites] = useState<string[]>([])
   const [cloudError, setCloudError] = useState<string | null>(null)
   const [cloudMode, setCloudMode] = useState(false)
-  const [cloudRecommendedModel, setCloudRecommendedModel] = useState<string | null>(null)
   const [smartEnabled, setSmartEnabled] = useState(loadSmartModelEnabled)
   const [smartQuality, setSmartQuality] = useState<SmartModelQuality>(loadSmartModelQuality)
   const [advancedOpen, setAdvancedOpen] = useState(() => !loadSmartModelEnabled())
@@ -77,7 +76,6 @@ function ModelSelectorBase({
         setCloudError(null)
         try {
           const response = await listModels()
-          setCloudRecommendedModel(response.recommended?.trim() || null)
           // 构造虚拟 Provider（用于 UI 渲染，实际调用时 Rust 侧会替换）
           const catalogModels = [...new Set([
             ...response.models,
@@ -104,7 +102,6 @@ function ModelSelectorBase({
         // Local 模式：使用本地配置的 providers
         setCloudError(null)
         setCloudModelAccess({})
-        setCloudRecommendedModel(null)
         setProviders(settings.providers || [])
       }
 
@@ -124,7 +121,6 @@ function ModelSelectorBase({
         },
       ])
       setCloudMode(false)
-      setCloudRecommendedModel(null)
     }
   }, [currentModel, currentProviderId])
 
@@ -214,12 +210,11 @@ function ModelSelectorBase({
     .filter((rule) => rule.enabled && rule.healthy && rule.tiers.includes(smartQuality))
     .sort((a, b) => (b.task_scores.creative + b.priority) - (a.task_scores.creative + a.priority))[0]
 
-  // Show the server's tier recommendation when present; otherwise expose the
-  // best eligible rule (or the catalog fallback) so Smart Select is not opaque.
-  const preferredSmartModel = routingPolicy?.recommended[smartQuality]
-    ?? preferredRule?.model
-    ?? cloudRecommendedModel
-    ?? null
+  // In Cloud mode, only the routing policy's tier recommendation is authoritative.
+  // The model catalog's generic `recommended` value is unrelated to Smart Select.
+  const preferredSmartModel = cloudMode
+    ? routingPolicy?.recommended[smartQuality] ?? null
+    : preferredRule?.model ?? null
   const smartModelTooltip = preferredSmartModel
     ? `${t.chatSmartModelDescription} ${t.chatSmartModelHover
       .replace('{tier}', smartQuality === 'fast' ? t.chatSmartModelFast : smartQuality === 'balanced' ? t.chatSmartModelBalanced : t.chatSmartModelQuality)
@@ -389,11 +384,11 @@ function ModelSelectorBase({
                   <span className="mt-0.5 block text-[11px] leading-4 text-neutral-500 dark:text-neutral-400">
                     {t.chatSmartModelDescription}
                   </span>
-                  {preferredRule && (
+                  {preferredSmartModel && (
                     <span className="mt-1 block text-[11px] leading-4 text-amber-700 dark:text-amber-300">
                       {t.chatSmartModelPreferenceResult
                         .replace('{tier}', smartQuality === 'fast' ? t.chatSmartModelFast : smartQuality === 'balanced' ? t.chatSmartModelBalanced : t.chatSmartModelQuality)
-                        .replace('{model}', policyModelDisplayName(preferredRule.model))}
+                        .replace('{model}', policyModelDisplayName(preferredSmartModel))}
                     </span>
                   )}
                 </span>

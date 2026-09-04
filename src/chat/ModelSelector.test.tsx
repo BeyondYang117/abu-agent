@@ -99,6 +99,24 @@ describe('ModelSelector', () => {
     expect(screen.getByText('高质量')).toBeInTheDocument()
   })
 
+  it('shows the cloud routing policy recommendation instead of the catalog recommendation', async () => {
+    const policy = {
+      version: 5, updated_at: 1,
+      recommended: { fast: 'gpt-5.6-terra', balanced: 'gpt-5.6-terra', quality: 'gpt-5.6-sol' },
+      fallbacks: {},
+      rules: [],
+    }
+    listModelsMock.mockResolvedValue({ models: ['gpt-4o-mini', 'gpt-5.6-terra'], recommended: 'gpt-4o-mini' })
+    getCachedPolicyMock.mockResolvedValue(policy)
+    syncPolicyMock.mockResolvedValue(policy)
+
+    render(<ModelSelector currentProviderId="abu-api-relay" currentModel="gpt-4o-mini" onModelChange={() => {}} />)
+
+    const selector = screen.getByRole('button')
+    await waitFor(() => expect(selector).toHaveAttribute('title', expect.stringContaining('GPT 5 6 Terra')))
+    expect(selector).not.toHaveAttribute('title', expect.stringContaining('GPT 4o Mini'))
+  })
+
   it('filters the advanced list by quality tier and can show all models', async () => {
     const policy = {
       version: 3, updated_at: 1, recommended: {}, fallbacks: {},
