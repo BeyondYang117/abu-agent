@@ -156,13 +156,13 @@ pub(super) async fn complete_assistant_reply_inner(
     if resolved_model.trim().is_empty() {
         return Err(chat_missing_model_error());
     }
-    // Cloud 模式：向 abu-api 申请 Session → Task → Relay Session，用返回的 relay_key
-    // 造一个指向中转端点的虚拟供应商，替代本机配置的 provider。守卫在函数退出时
-    // 停心跳并收尾 Task（默认终态 Failed，成功/取消路径显式标记）。
+    // Cloud 模式：申请普通用户级 relay token，造一个指向标准 /v1 端点的
+    // 虚拟供应商，替代本机配置的 provider。凭证接口在滚动升级期间会自动
+    // 回退到旧版 CLI 凭证接口，避免服务端实例短暂不一致导致整轮不可用。
     let provider = if settings.is_cloud_runtime() {
         let base_url = settings.abu_api_base_url_or_default();
         let session_token = settings.abu_api_session_token.as_deref().ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-        let credentials = crate::abu_api::fetch_agent_relay_credentials(&base_url, session_token).await?;
+        let credentials = crate::abu_api::fetch_agent_relay_credentials(&base_url, session_token, &resolved_model).await?;
         crate::chat::model::create_abu_api_virtual_provider(&base_url, &credentials.api_key, &resolved_model)
     } else {
         {

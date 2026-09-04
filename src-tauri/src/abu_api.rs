@@ -237,10 +237,57 @@ pub async fn abu_api_get_cli_credentials(
 pub async fn fetch_agent_relay_credentials(
     base_url: &str,
     session_token: &str,
+    model: &str,
 ) -> Result<AgentRelayCredentialsResponse, String> {
-    let response = reqwest::Client::new()
+    let client = reqwest::Client::new();
+    let response = client
         .post(format!("{}/api/agent/relay-credentials", base_url.trim_end_matches('/')))
         .header("X-Abu-Session-Token", session_token)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body_text = response
+        .text()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if matches!(status, reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::METHOD_NOT_ALLOWED) {
+        return fetch_agent_cli_credentials(&client, base_url, session_token, model).await;
+    }
+    let body: serde_json::Value = serde_json::from_str(&body_text)
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    // During a rolling deployment the session endpoint can be live on one
+    // instance while the new relay-credentials route is still absent on
+    // another. The legacy CLI credential endpoint returns the same ordinary
+    // user token and is safe to use as a compatibility fallback.
+    if !body.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("获取云端凭证失败")
+            .to_string());
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 云端凭证响应格式错误：{e}"))
+}
+
+async fn fetch_agent_cli_credentials(
+    client: &reqwest::Client,
+    base_url: &str,
+    session_token: &str,
+    model: &str,
+) -> Result<AgentRelayCredentialsResponse, String> {
+    let agent = if model.trim().to_ascii_lowercase().contains("claude")
+        || model.trim().to_ascii_lowercase().contains("anthropic")
+    {
+        "claude"
+    } else {
+        "codex"
+    };
+    let response = client
+        .post(format!("{}/api/agent/cli-credentials", base_url.trim_end_matches('/')))
+        .header("X-Abu-Session-Token", session_token)
+        .json(&serde_json::json!({ "agent": agent }))
         .send()
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;
@@ -253,19 +300,27 @@ pub async fn fetch_agent_relay_credentials(
         return Err(body
             .get("message")
             .and_then(|v| v.as_str())
-            .unwrap_or("获取云端凭证失败")
-            .to_string());
+            .map(|message| format!("获取云端凭证失败（兼容接口）：{message}"))
+            .unwrap_or_else(|| format!("获取云端凭证失败（兼容接口，HTTP {status}）")));
     }
-    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
-        .map_err(|e| format!("ABU API 云端凭证响应格式错误：{e}"))
+    let data = body.get("data").cloned().unwrap_or_default();
+    let credentials: AgentCliCredentialsResponse = serde_json::from_value(data)
+        .map_err(|e| format!("ABU API CLI 凭证响应格式错误：{e}"))?;
+    Ok(AgentRelayCredentialsResponse {
+        api_key: credentials.api_key,
+        groups: credentials.groups,
+        models: credentials.models,
+        recommended_model: credentials.recommended_model,
+    })
 }
 
 #[command]
 pub async fn abu_api_get_relay_credentials(
     base_url: String,
     session_token: String,
+    model: String,
 ) -> Result<AgentRelayCredentialsResponse, String> {
-    fetch_agent_relay_credentials(&base_url, &session_token).await
+    fetch_agent_relay_credentials(&base_url, &session_token, &model).await
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

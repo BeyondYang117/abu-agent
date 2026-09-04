@@ -2049,13 +2049,13 @@ export const api = {
     invoke<AbuApiDevice[]>('abu_api_list_devices'),
   abuApiRevokeDevice: (deviceId: string) =>
     invoke<void>('abu_api_revoke_device', { deviceId }),
-  abuApiGetRelayCredentials: (baseUrl: string, sessionToken: string) =>
+  abuApiGetRelayCredentials: (baseUrl: string, sessionToken: string, model: string) =>
     invoke<{
       api_key: string
       groups: string[]
       models: string[]
       recommended_model: string
-    }>('abu_api_get_relay_credentials', { baseUrl, sessionToken }),
+    }>('abu_api_get_relay_credentials', { baseUrl, sessionToken, model }),
   abuApiGetCliCredentials: (baseUrl: string, sessionToken: string, agent: 'claude' | 'codex') =>
     invoke<{
       agent: string

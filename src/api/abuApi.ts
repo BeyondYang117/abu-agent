@@ -252,10 +252,10 @@ export class AbuApiClient {
     return this.request<AgentEntitlement[]>('/api/agent/entitlements')
   }
 
-  async getRelayCredentials(): Promise<AgentRelayCredentials> {
+  async getRelayCredentials(model = ''): Promise<AgentRelayCredentials> {
     if (isTauriRuntime()) {
       if (!this.sessionToken) throw new Error('Not signed in')
-      return api.abuApiGetRelayCredentials(this.baseUrl, this.sessionToken)
+      return api.abuApiGetRelayCredentials(this.baseUrl, this.sessionToken, model)
     }
     return this.request<AgentRelayCredentials>('/api/agent/relay-credentials', {
       method: 'POST',
