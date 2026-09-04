@@ -102,7 +102,6 @@ pub(crate) async fn run_chat_probe(
             "off" => WebSearchMode::Off,
             "builtin" => WebSearchMode::Builtin,
             "third_party" => WebSearchMode::ThirdParty,
-            "platform" => WebSearchMode::Platform,
             other => return Err(fail(format!("invalid webSearchMode: {other}"))),
         });
     }

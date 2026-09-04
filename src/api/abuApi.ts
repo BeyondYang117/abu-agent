@@ -66,72 +66,11 @@ export interface AgentEntitlement {
   end_date: string
 }
 
-export interface AgentSession {
-  id: string
-  user_id: number
-  device_id: string
-  created_at: number
-  updated_at: number
-}
-
-export interface AgentTask {
-  id: string
-  /** The agent endpoint omits the authenticated user's id from task payloads. */
-  user_id?: number
-  session_id: string
-  device_id: string
-  type: string
-  status: 'running' | 'succeeded' | 'failed' | 'cancelled'
-  soft_cap: number
-  hard_cap: number
-  consumed_quota: number
-  subscription_id?: number
-  subscription_group_id?: number
-  billing_group?: string
-  requested_model?: string
-  selected_channel_id?: number
-  route_version?: number
-  fail_reason?: string
-  created_at: number
-  updated_at: number
-  finished_at?: number
-}
-
-export interface AgentTaskUsage {
-  task_id: string
-  prompt_tokens: number
-  completion_tokens: number
-  /** @deprecated Kept for compatibility with older servers. */
-  output_tokens?: number
-  consumed_quota: number
-  soft_cap: number
-  hard_cap: number
-  soft_cap_exceeded: boolean
-  hard_cap_exceeded: boolean
-  status?: string
-}
-
-export interface AgentTaskAttempt {
-  id: string
-  task_id: string
-  operation_id: string
-  user_id: number
-  model: string
-  billing_group: string
-  channel_id: number
-  subscription_id: number
-  quota: number
-  prompt_tokens: number
-  completion_tokens: number
-  status: string
-  created_at: string
-}
-
-export interface RelaySession {
-  relay_key: string
-  expires_at: number
-  device_id: string
-  task_id: string
+export interface AgentRelayCredentials {
+  api_key: string
+  groups: string[]
+  models: string[]
+  recommended_model: string
 }
 
 export interface AbuApiError {
@@ -313,152 +252,13 @@ export class AbuApiClient {
     return this.request<AgentEntitlement[]>('/api/agent/entitlements')
   }
 
-  /**
-   * 创建 Agent Session
-   */
-  async createSession(deviceId: string): Promise<AgentSession> {
-    return this.request<AgentSession>(`/api/agent/sessions?device_id=${deviceId}`, {
-      method: 'POST',
-    })
-  }
-
-  /**
-   * 创建中转 Session（用于调用 /api/agent/relay/* 端点）
-   */
-  async createRelaySession(deviceId: string, taskId: string): Promise<RelaySession> {
-    return this.request<RelaySession>(
-      `/api/agent/relay-session?device_id=${deviceId}&task_id=${taskId}`,
-      { method: 'POST' },
-    )
-  }
-
-  // ==================== Task 管理 ====================
-
-  /**
-   * 创建 Agent Task
-   */
-  async createTask(params: {
-    session_id: string
-    device_id: string
-    type: string
-    soft_cap?: number
-    hard_cap?: number
-  }): Promise<AgentTask> {
-    return this.request<AgentTask>('/api/agent/tasks', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    })
-  }
-
-  /**
-   * 列出 Tasks
-   */
-  async listTasks(params?: {
-    limit?: number
-    offset?: number
-    status?: string
-    device_id?: string
-  }): Promise<AgentTask[]> {
+  async getRelayCredentials(): Promise<AgentRelayCredentials> {
     if (isTauriRuntime()) {
-      const tasks = await api.abuApiListTasks(params)
-      return tasks.map((task) => ({
-        ...task,
-        user_id: undefined,
-        subscription_id: task.subscription_id ?? undefined,
-        subscription_group_id: task.subscription_group_id ?? undefined,
-        billing_group: task.billing_group ?? undefined,
-        requested_model: task.requested_model ?? undefined,
-        selected_channel_id: task.selected_channel_id ?? undefined,
-        route_version: task.route_version ?? undefined,
-        fail_reason: task.fail_reason ?? undefined,
-        finished_at: task.finished_at ?? undefined,
-      }))
+      if (!this.sessionToken) throw new Error('Not signed in')
+      return api.abuApiGetRelayCredentials(this.baseUrl, this.sessionToken)
     }
-    const query = new URLSearchParams()
-    if (params?.limit) query.set('limit', String(params.limit))
-    if (params?.offset) query.set('offset', String(params.offset))
-    if (params?.status) query.set('status', params.status)
-    if (params?.device_id) query.set('device_id', params.device_id)
-
-    const path = `/api/agent/tasks${query.toString() ? `?${query}` : ''}`
-    return this.request<AgentTask[]>(path)
-  }
-
-  /**
-   * 获取 Task 详情
-   */
-  async getTask(taskId: string): Promise<AgentTask> {
-    return this.request<AgentTask>(`/api/agent/tasks/${taskId}`)
-  }
-
-  /**
-   * 获取 Task 用量
-   */
-  async getTaskUsage(taskId: string): Promise<AgentTaskUsage> {
-    if (isTauriRuntime()) {
-      const usage = await api.abuApiGetTaskUsage(taskId)
-      return {
-        task_id: usage.task_id,
-        prompt_tokens: usage.prompt_tokens,
-        completion_tokens: usage.completion_tokens,
-        output_tokens: usage.completion_tokens,
-        consumed_quota: usage.consumed_quota,
-        soft_cap: usage.soft_cap,
-        hard_cap: usage.hard_cap,
-        soft_cap_exceeded: usage.soft_cap_exceeded,
-        hard_cap_exceeded: usage.hard_cap_exceeded,
-        status: usage.status ?? undefined,
-      }
-    }
-    return this.request<AgentTaskUsage>(`/api/agent/tasks/${taskId}/usage`)
-  }
-
-  async listTaskAttempts(taskId: string): Promise<AgentTaskAttempt[]> {
-    if (isTauriRuntime()) {
-      return api.abuApiListTaskAttempts(taskId)
-    }
-    return this.request<AgentTaskAttempt[]>(`/api/agent/tasks/${taskId}/attempts`)
-  }
-
-  /**
-   * 更新 Task 状态
-   */
-  async updateTaskStatus(
-    taskId: string,
-    from: string,
-    to: string,
-    reason?: string,
-  ): Promise<void> {
-    await this.request<void>(`/api/agent/tasks/${taskId}/status`, {
+    return this.request<AgentRelayCredentials>('/api/agent/relay-credentials', {
       method: 'POST',
-      body: JSON.stringify({ from, to, reason }),
-    })
-  }
-
-  /**
-   * 心跳（防止 Task 被判定为僵尸任务）
-   */
-  async heartbeatTask(taskId: string): Promise<void> {
-    await this.request<void>(`/api/agent/tasks/${taskId}/heartbeat`, {
-      method: 'POST',
-    })
-  }
-
-  /**
-   * 取消 Task
-   */
-  async cancelTask(taskId: string): Promise<void> {
-    await this.request<void>(`/api/agent/tasks/${taskId}/cancel`, {
-      method: 'POST',
-    })
-  }
-
-  /**
-   * 删除 Task
-   */
-  async deleteTask(taskId: string): Promise<void> {
-    await this.request<void>(`/api/agent/tasks/${taskId}`, {
-      method: 'DELETE',
     })
   }
 }
@@ -502,21 +302,4 @@ export async function listEntitlements(): Promise<AgentEntitlement[]> {
 
 export async function revokeDevice(deviceId: string): Promise<void> {
   return getAbuApiClient().revokeDevice(deviceId)
-}
-
-export async function listTasks(params?: {
-  limit?: number
-  offset?: number
-  status?: string
-  device_id?: string
-}): Promise<AgentTask[]> {
-  return getAbuApiClient().listTasks(params)
-}
-
-export async function getTaskUsage(taskId: string): Promise<AgentTaskUsage> {
-  return getAbuApiClient().getTaskUsage(taskId)
-}
-
-export async function listTaskAttempts(taskId: string): Promise<AgentTaskAttempt[]> {
-  return getAbuApiClient().listTaskAttempts(taskId)
 }

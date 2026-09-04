@@ -225,7 +225,7 @@ fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
     tool.source == "skill" && tool.name == "skill"
 }
 
-/// 会话级三态联网搜索（任务 07-23）：按有效模式收敛第三方 `search_web` 工具的暴露。
+/// 会话级联网搜索：按有效模式收敛第三方 `search_web` 工具的暴露。
 /// - `ThirdParty`：保证 `search_web` 存在（列表因全局开关缺席时，若已配置搜索 key 则补回）。
 /// - `Builtin` / `Off`：移除 `search_web`（内置走请求体注入，Off 完全不联网）。
 ///
@@ -244,13 +244,9 @@ pub(super) fn apply_web_search_mode_tool_filter(
                 tools.push(crate::mcp::types::native_web_search_tool());
             }
         }
-        crate::chat::types::WebSearchMode::Platform => {
-            tools.retain(|t| t.id != SEARCH_WEB_ID);
-            if settings.is_cloud_runtime() {
-                tools.push(crate::mcp::types::native_web_search_tool());
-            }
-        }
-        crate::chat::types::WebSearchMode::Builtin | crate::chat::types::WebSearchMode::Off => {
+        crate::chat::types::WebSearchMode::Builtin
+        | crate::chat::types::WebSearchMode::Off
+        | crate::chat::types::WebSearchMode::LegacyPlatform => {
             tools.retain(|t| t.id != SEARCH_WEB_ID);
         }
     }
@@ -353,18 +349,4 @@ mod web_search_filter_tests {
         assert!(tools.iter().any(|t| t.id == "native__web_search"));
     }
 
-    #[test]
-    fn platform_adds_search_web_only_in_cloud_runtime() {
-        let mut local = crate::settings::Settings::default();
-        local.runtime_mode = "local".to_string();
-        let mut local_tools = Vec::new();
-        apply_web_search_mode_tool_filter(&mut local_tools, WebSearchMode::Platform, &local);
-        assert!(local_tools.is_empty());
-
-        let mut cloud = local;
-        cloud.runtime_mode = "cloud".to_string();
-        let mut cloud_tools = Vec::new();
-        apply_web_search_mode_tool_filter(&mut cloud_tools, WebSearchMode::Platform, &cloud);
-        assert!(cloud_tools.iter().any(|t| t.id == "native__web_search"));
-    }
 }

@@ -10,10 +10,7 @@ pub mod openai;
 pub mod responses;
 pub mod types;
 
-pub use abu_api_provider::{
-    check_task_quota, create_abu_api_virtual_provider, send_task_heartbeat, TaskQuotaStatus,
-    ABU_API_PROVIDER_ID,
-};
+pub use abu_api_provider::{create_abu_api_virtual_provider, ABU_API_PROVIDER_ID};
 pub use anthropic::AnthropicMessagesProvider;
 pub use gemini::GeminiProvider;
 pub use openai::OpenAiChatProvider;

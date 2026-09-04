@@ -54,6 +54,14 @@ pub struct AgentCliCredentialsResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct AgentRelayCredentialsResponse {
+    pub api_key: String,
+    pub groups: Vec<String>,
+    pub models: Vec<String>,
+    pub recommended_model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceRegistration {
     pub fingerprint: String,
     pub platform: String,
@@ -226,6 +234,40 @@ pub async fn abu_api_get_cli_credentials(
         .map_err(|e| format!("ABU API CLI 凭证响应格式错误：{e}"))
 }
 
+pub async fn fetch_agent_relay_credentials(
+    base_url: &str,
+    session_token: &str,
+) -> Result<AgentRelayCredentialsResponse, String> {
+    let response = reqwest::Client::new()
+        .post(format!("{}/api/agent/relay-credentials", base_url.trim_end_matches('/')))
+        .header("X-Abu-Session-Token", session_token)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("ABU API 返回内容无效（HTTP {status}）：{e}"))?;
+    if !body.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(body
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("获取云端凭证失败")
+            .to_string());
+    }
+    serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| format!("ABU API 云端凭证响应格式错误：{e}"))
+}
+
+#[command]
+pub async fn abu_api_get_relay_credentials(
+    base_url: String,
+    session_token: String,
+) -> Result<AgentRelayCredentialsResponse, String> {
+    fetch_agent_relay_credentials(&base_url, &session_token).await
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UserInfoResponse {
     #[serde(default)]
@@ -271,80 +313,6 @@ pub struct AgentEntitlementResponse {
     pub extra_quota_remaining_usd: f64,
     pub start_date: String,
     pub end_date: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct AgentTaskResponse {
-    pub id: String,
-    pub session_id: String,
-    pub device_id: String,
-    #[serde(rename = "type")]
-    pub task_type: String,
-    pub status: String,
-    pub soft_cap: i64,
-    pub hard_cap: i64,
-    pub consumed_quota: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subscription_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subscription_group_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub billing_group: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_channel_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route_version: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_reason: Option<String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<i64>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct AgentTaskUsageResponse {
-    pub task_id: String,
-    pub prompt_tokens: i64,
-    pub completion_tokens: i64,
-    #[serde(default)]
-    pub request_count: i64,
-    pub consumed_quota: i64,
-    pub soft_cap: i64,
-    pub hard_cap: i64,
-    pub soft_cap_exceeded: bool,
-    pub hard_cap_exceeded: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct AgentTaskAttemptResponse {
-    pub id: String,
-    pub task_id: String,
-    pub operation_id: String,
-    pub user_id: i64,
-    pub model: String,
-    pub billing_group: String,
-    pub channel_id: i64,
-    pub subscription_id: i64,
-    pub quota: i64,
-    pub prompt_tokens: i64,
-    pub completion_tokens: i64,
-    pub status: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct AgentTasksQuery {
-    pub limit: Option<u32>,
-    pub offset: Option<u32>,
-    pub status: Option<String>,
-    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -591,74 +559,6 @@ pub async fn abu_api_revoke_device(
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;
     parse_agent_success(response, "注销设备").await
-}
-
-/// 通过 Rust 网络层列出账户的 Agent 任务。
-#[command]
-pub async fn abu_api_list_tasks(
-    state: State<'_, AppState>,
-    query: Option<AgentTasksQuery>,
-) -> Result<Vec<AgentTaskResponse>, String> {
-    let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let mut params = Vec::<(String, String)>::new();
-    if let Some(query) = query {
-        if let Some(limit) = query.limit {
-            params.push(("limit".to_string(), limit.to_string()));
-        }
-        if let Some(offset) = query.offset {
-            params.push(("offset".to_string(), offset.to_string()));
-        }
-        if let Some(status) = query.status.filter(|value| !value.trim().is_empty()) {
-            params.push(("status".to_string(), status));
-        }
-        if let Some(device_id) = query.device_id.filter(|value| !value.trim().is_empty()) {
-            params.push(("device_id".to_string(), device_id));
-        }
-    }
-    let request = reqwest::Client::new()
-        .get(format!("{base_url}/api/agent/tasks"))
-        .header("X-Abu-Session-Token", session_token);
-    let response = if params.is_empty() {
-        request.send().await
-    } else {
-        request.query(&params).send().await
-    }
-    .map_err(|e| format!("无法连接 ABU API：{e}"))?;
-    parse_agent_data(response, "获取任务列表").await
-}
-
-/// 通过 Rust 网络层读取单个任务的用量明细。
-#[command]
-pub async fn abu_api_get_task_usage(
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<AgentTaskUsageResponse, String> {
-    let task_id = agent_path_id(&task_id, "任务 ID")?;
-    let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
-        .get(format!("{base_url}/api/agent/tasks/{task_id}/usage"))
-        .header("X-Abu-Session-Token", session_token)
-        .send()
-        .await
-        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
-    parse_agent_data(response, "获取任务用量").await
-}
-
-/// 通过 Rust 网络层读取任务的执行/计费轨迹。
-#[command]
-pub async fn abu_api_list_task_attempts(
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<Vec<AgentTaskAttemptResponse>, String> {
-    let task_id = agent_path_id(&task_id, "任务 ID")?;
-    let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
-        .get(format!("{base_url}/api/agent/tasks/{task_id}/attempts"))
-        .header("X-Abu-Session-Token", session_token)
-        .send()
-        .await
-        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
-    parse_agent_data(response, "获取任务执行轨迹").await
 }
 
 /// 获取设备指纹（稳定唯一标识符）。

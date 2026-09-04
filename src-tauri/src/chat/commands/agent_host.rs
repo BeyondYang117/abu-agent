@@ -304,7 +304,6 @@ impl crate::chat::agent::AgentHost for ProbeAgentHost<'_> {
 pub(super) struct RegistryToolExecutor<'a> {
     pub(super) app: AppHandle,
     pub(super) state: &'a AppState,
-    pub(super) platform_search: Option<crate::chat::abu_api_task::PlatformSearchCredentials>,
 }
 impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
     fn call<'a>(
@@ -315,31 +314,6 @@ impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
         skill_cache: Option<&'a mut skills::SkillRunCache>,
     ) -> crate::chat::agent::ToolExecutorFuture<'a> {
         Box::pin(async move {
-            if tool.source == "native" && tool.name == "web_search" {
-                if let Some(credentials) = self.platform_search.as_ref() {
-                    let query = arguments
-                        .get("query")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .trim();
-                    if query.is_empty() {
-                        return Err("web_search query is empty".to_string());
-                    }
-                    let max_results = self.state.settings_read().lens.web_search.max_results;
-                    let results = crate::chat::abu_api_task::search_platform_web(
-                        &self.state.http,
-                        credentials,
-                        query,
-                        max_results,
-                    )
-                    .await?;
-                    return Ok(crate::mcp::native_registry::web_search_tool_result(
-                        query,
-                        "ABU 平台搜索",
-                        &results,
-                    ));
-                }
-            }
             let native_ctx = mcp::registry::NativeToolContext {
                 // Conversation-scoped tools (todo / native workspace) target the
                 // tool conversation, which equals the run conversation for a
