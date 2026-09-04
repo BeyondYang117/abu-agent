@@ -2032,7 +2032,7 @@ export const api = {
       group: string
     }>('abu_api_get_user_info'),
   abuApiListModels: () =>
-    invoke<{ models: string[]; recommended: string }>('abu_api_list_models'),
+    invoke<{ models: string[]; recommended: string; model_access?: Array<{ model: string; status: 'available' | 'subscription_required' | 'quota_exhausted' | 'unavailable'; recommended_plan_ids?: number[] }> }>('abu_api_list_models'),
   abuApiGetCachedModelRoutingPolicy: () =>
     invoke<ModelRoutingPolicyCache | null>('abu_api_get_cached_model_routing_policy'),
   abuApiSyncModelRoutingPolicy: () =>

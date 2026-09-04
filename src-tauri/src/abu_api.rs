@@ -721,6 +721,16 @@ pub struct AgentModelsResponse {
     pub models: Vec<String>,
     #[serde(default)]
     pub recommended: String,
+    #[serde(default)]
+    pub model_access: Vec<AgentModelAccessResponse>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct AgentModelAccessResponse {
+    pub model: String,
+    pub status: String,
+    #[serde(default)]
+    pub recommended_plan_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

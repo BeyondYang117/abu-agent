@@ -1,13 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Sparkles, Star } from 'lucide-react'
-import { type ModelProvider } from '../api/tauri'
+import { Check, ChevronDown, ExternalLink, LockKeyhole, Sparkles, Star } from 'lucide-react'
+import { api, type ModelProvider } from '../api/tauri'
 import { getSettingsCached, setFavoriteModelsCached, subscribeSettings } from '../api/settingsCache'
 import { useLang, useT } from '../settings/i18n'
 import { isProviderEnabled } from '../settings/utils'
 import { ModelIcon } from './ModelIcon'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import { chatTitlebarPillButtonClass } from './platform'
-import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
+import { listModels, ABU_API_PROVIDER_ID, type AgentModelAccess } from '../api/abuApi'
 import { ModelAbilityTags } from './ModelAbilityTags'
 import { useAbuApiAuth } from '../api/abuApiAuth'
 import {
@@ -50,16 +50,18 @@ function ModelSelectorBase({
 }: ModelSelectorProps) {
   const t = useT()
   const lang = useLang()
-  const { isAuthenticated } = useAbuApiAuth()
+  const { isAuthenticated, baseUrl: abuBaseUrl } = useAbuApiAuth()
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [cloudError, setCloudError] = useState<string | null>(null)
   const [cloudMode, setCloudMode] = useState(false)
+  const [cloudRecommendedModel, setCloudRecommendedModel] = useState<string | null>(null)
   const [smartEnabled, setSmartEnabled] = useState(loadSmartModelEnabled)
   const [smartQuality, setSmartQuality] = useState<SmartModelQuality>(loadSmartModelQuality)
   const [advancedOpen, setAdvancedOpen] = useState(() => !loadSmartModelEnabled())
   const [showAllModels, setShowAllModels] = useState(false)
+  const [cloudModelAccess, setCloudModelAccess] = useState<Record<string, AgentModelAccess>>({})
   const [routingPolicy, setRoutingPolicy] = useState<ModelRoutingPolicy | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const maxH = usePopoverMaxHeight(open, menuRef, 'down', 400)
@@ -75,17 +77,23 @@ function ModelSelectorBase({
         setCloudError(null)
         try {
           const response = await listModels()
+          setCloudRecommendedModel(response.recommended?.trim() || null)
           // 构造虚拟 Provider（用于 UI 渲染，实际调用时 Rust 侧会替换）
+          const catalogModels = [...new Set([
+            ...response.models,
+            ...(response.model_access ?? []).map((item) => item.model),
+          ])]
           const virtualProvider: ModelProvider = {
             id: ABU_API_PROVIDER_ID,
             name: 'ABU Cloud',
             apiKeys: [],
             baseUrl: '',
-            availableModels: response.models,
-            enabledModels: response.models,
+            availableModels: catalogModels,
+            enabledModels: catalogModels,
             enabled: true,
             apiFormat: 'openai_chat',
           }
+          setCloudModelAccess(Object.fromEntries((response.model_access ?? []).map((item) => [item.model, item])))
           setProviders([virtualProvider])
         } catch (err) {
           console.error('Failed to load cloud models:', err)
@@ -95,6 +103,8 @@ function ModelSelectorBase({
       } else {
         // Local 模式：使用本地配置的 providers
         setCloudError(null)
+        setCloudModelAccess({})
+        setCloudRecommendedModel(null)
         setProviders(settings.providers || [])
       }
 
@@ -114,6 +124,7 @@ function ModelSelectorBase({
         },
       ])
       setCloudMode(false)
+      setCloudRecommendedModel(null)
     }
   }, [currentModel, currentProviderId])
 
@@ -141,6 +152,18 @@ function ModelSelectorBase({
   }, [loadSettings])
 
   useEffect(() => {
+    const refreshOnReturn = () => {
+      if (document.visibilityState === 'visible' && cloudMode) void loadSettings()
+    }
+    document.addEventListener('visibilitychange', refreshOnReturn)
+    window.addEventListener('focus', refreshOnReturn)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshOnReturn)
+      window.removeEventListener('focus', refreshOnReturn)
+    }
+  }, [cloudMode, loadSettings])
+
+  useEffect(() => {
     let active = true
     void getModelRoutingPolicy(false).then((policy) => { if (active) setRoutingPolicy(policy) })
     void syncModelRoutingPolicy().then((policy) => { if (active && policy) setRoutingPolicy(policy) })
@@ -153,9 +176,32 @@ function ModelSelectorBase({
     .map((provider) => ({
       provider,
       models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels)
+        .filter((model) => !cloudMode || !cloudModelAccess[model] || cloudModelAccess[model].status === 'available')
         .filter((model) => showAllModels || !routingPolicy || findModelRoutingRule(routingPolicy, provider.id, model)?.tiers.includes(smartQuality)),
     }))
     .filter((entry) => entry.models.length > 0)
+
+  const lockedCloudModels = useMemo(() => {
+    if (!cloudMode) return []
+    const provider = providers.find((item) => item.id === ABU_API_PROVIDER_ID)
+    if (!provider) return []
+    const all = provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels
+    return all.filter((model) => !!cloudModelAccess[model] && cloudModelAccess[model].status !== 'available')
+  }, [cloudMode, cloudModelAccess, providers, showAllModels])
+
+  const openCloudPurchase = useCallback((model: string) => {
+    const access = cloudModelAccess[model]
+    const baseUrl = (abuBaseUrl || 'https://api.abuai.chat').replace(/\/+$/, '')
+    const planIds = access?.recommended_plan_ids?.join(',')
+    const query = new URLSearchParams({
+      model,
+      source: 'desktop_model_selector',
+      ...(access?.status === 'quota_exhausted' ? { reason: 'quota_exhausted' } : {}),
+      ...(planIds ? { plan_ids: planIds } : {}),
+    }).toString()
+    const path = access?.status === 'quota_exhausted' ? '/console/topup' : '/console/subscription'
+    void api.openExternal(`${baseUrl}${path}?${query}`).catch((error) => console.error('Failed to open purchase page:', error))
+  }, [abuBaseUrl, cloudModelAccess])
 
   const currentProvider = activeProviders.find((p) => p.id === currentProviderId)
     ?? providers.find((p) => p.id === currentProviderId)
@@ -167,6 +213,18 @@ function ModelSelectorBase({
   const preferredRule = routingPolicy?.rules
     .filter((rule) => rule.enabled && rule.healthy && rule.tiers.includes(smartQuality))
     .sort((a, b) => (b.task_scores.creative + b.priority) - (a.task_scores.creative + a.priority))[0]
+
+  // Show the server's tier recommendation when present; otherwise expose the
+  // best eligible rule (or the catalog fallback) so Smart Select is not opaque.
+  const preferredSmartModel = routingPolicy?.recommended[smartQuality]
+    ?? preferredRule?.model
+    ?? cloudRecommendedModel
+    ?? null
+  const smartModelTooltip = preferredSmartModel
+    ? `${t.chatSmartModelDescription} ${t.chatSmartModelHover
+      .replace('{tier}', smartQuality === 'fast' ? t.chatSmartModelFast : smartQuality === 'balanced' ? t.chatSmartModelBalanced : t.chatSmartModelQuality)
+      .replace('{model}', policyModelDisplayName(preferredSmartModel))}`
+    : t.chatSmartModelDescription
 
   // Keep the server-side tier mapping visible so Smart Select does not feel like a black box.
   const cloudTierModels = useMemo(() => {
@@ -224,6 +282,8 @@ function ModelSelectorBase({
     const selected = !smartEnabled && currentProviderId === providerId && currentModel === model
     const isFav = favorites.includes(favKey(providerId, model))
     const policyRule = findModelRoutingRule(routingPolicy, providerId, model)
+    const access = providerId === ABU_API_PROVIDER_ID ? cloudModelAccess[model] : undefined
+    const locked = !!access && access.status !== 'available'
     return (
       <div
         key={`${providerId}:${model}:${keySuffix}`}
@@ -236,26 +296,34 @@ function ModelSelectorBase({
         <button
           type="button"
           onClick={() => {
+            if (locked) {
+              openCloudPurchase(model)
+              setOpen(false)
+              return
+            }
             setSmartEnabled(false)
             saveSmartModelEnabled(false)
             onModelChange(providerId, model)
             setOpen(false)
           }}
           className={`kv-menu-row min-w-0 flex-1 ${
+            locked ? 'text-neutral-400 dark:text-neutral-500' : ''
+          } ${
             selected
               ? 'font-medium text-neutral-900 dark:text-neutral-100'
               : 'text-neutral-700 dark:text-neutral-300'
           }`}
         >
-          <ModelIcon model={model} size={16} />
+          {locked ? <LockKeyhole size={15} className="shrink-0 text-amber-500" /> : <ModelIcon model={model} size={16} />}
           <span className="min-w-0 truncate">{model}</span>
+          {locked && <span className="ml-auto shrink-0 text-[10px] text-amber-600 dark:text-amber-400">{access?.status === 'quota_exhausted' ? (lang === 'zh' ? '额度已用尽，去充值' : 'Quota exhausted · Recharge') : (lang === 'zh' ? '需购买套餐' : 'Plan required')}</span>}
           {policyRule ? (
             <span className="flex shrink-0 gap-1">
               {policyModelLabels(policyRule, lang).map((label) => <span key={label} className="kv-tag">{label}</span>)}
             </span>
           ) : <ModelAbilityTags model={model} modelOverrides={providers.find((provider) => provider.id === providerId)?.modelOverrides} />}
         </button>
-        <button
+        {!locked && <button
           type="button"
           aria-label={isFav ? t.chatUnfavorite : t.chatFavorite}
           title={isFav ? t.chatUnfavorite : t.chatFavorite}
@@ -271,7 +339,7 @@ function ModelSelectorBase({
           data-tauri-drag-region="false"
         >
           <Star size={14} fill={isFav ? 'currentColor' : 'none'} />
-        </button>
+        </button>}
       </div>
     )
   }
@@ -281,7 +349,7 @@ function ModelSelectorBase({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        title={smartEnabled ? t.chatSmartModelDescription : (tooltipText || undefined)}
+        title={smartEnabled ? smartModelTooltip : (tooltipText || undefined)}
         className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
       >
         {smartEnabled ? <Sparkles size={16} className="text-amber-500" /> : currentModel && <ModelIcon model={currentModel} size={16} />}
@@ -305,6 +373,7 @@ function ModelSelectorBase({
                   setSmartEnabled(true)
                   saveSmartModelEnabled(true)
                 }}
+                title={smartModelTooltip}
                 className={`flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors ${
                   smartEnabled
                     ? 'bg-amber-50 text-neutral-900 dark:bg-amber-400/10 dark:text-neutral-100'
@@ -419,7 +488,19 @@ function ModelSelectorBase({
                 {models.map((model) => renderModelRow(provider.id, model, 'grp'))}
               </div>
             ))}
-            {visibleProviders.length === 0 && (
+            {lockedCloudModels.length > 0 && (
+              <div className="px-1 py-1">
+                <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-500">
+                  {lang === 'zh' ? '需要开通权益' : 'Requires access'}
+                </div>
+                {lockedCloudModels.map((model) => renderModelRow(ABU_API_PROVIDER_ID, model, 'locked'))}
+                <div className="flex items-center gap-1 px-3 pt-1 text-[10px] text-neutral-400">
+                  <ExternalLink size={11} />
+                  {lang === 'zh' ? '点击模型即可打开购买页面' : 'Click a model to open the purchase page'}
+                </div>
+              </div>
+            )}
+            {visibleProviders.length === 0 && lockedCloudModels.length === 0 && (
               <div className="px-4 py-6 text-center text-sm text-neutral-500">
                 {!isAuthenticated ? (
                   <>

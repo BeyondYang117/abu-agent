@@ -46,6 +46,15 @@ export interface AgentDevice {
 export interface AgentModelsResponse {
   models: string[]
   recommended: string
+  model_access?: AgentModelAccess[]
+}
+
+export type AgentModelAccessStatus = 'available' | 'subscription_required' | 'quota_exhausted' | 'unavailable'
+
+export interface AgentModelAccess {
+  model: string
+  status: AgentModelAccessStatus
+  recommended_plan_ids?: number[]
 }
 
 export interface ModelRoutingPolicyCache {
