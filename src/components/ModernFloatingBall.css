@@ -1,0 +1,262 @@
+/* 现代悬浮球 - 全新设计 */
+
+.floating-ball-modern {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 68px;
+  height: 68px;
+  cursor: move;
+  user-select: none;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.floating-ball-modern.expanded {
+  width: 300px;
+  height: 90px;
+  padding: 12px;
+  gap: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.floating-ball-modern.theme-dark.expanded {
+  background: rgba(30, 32, 38, 0.95);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 球体 */
+.ball-orb {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #ffffff 0%, #f5f5f7 100%);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2);
+  transition: all 0.3s ease;
+}
+
+.theme-dark .ball-orb {
+  background: linear-gradient(135deg, #2a2d35 0%, #1f2229 100%);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.3);
+}
+
+.floating-ball-modern:not(.expanded):hover .ball-orb {
+  transform: scale(1.06) rotate(-3deg);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
+}
+
+.floating-ball-modern.expanded .ball-orb {
+  width: 60px;
+  height: 60px;
+}
+
+.ball-orb.status-working {
+  animation: orb-pulse 2s ease-in-out infinite;
+}
+
+@keyframes orb-pulse {
+  0%, 100% {
+    box-shadow: 0 4px 16px rgba(245, 158, 11, 0.3);
+  }
+  50% {
+    box-shadow: 0 6px 24px rgba(245, 158, 11, 0.5);
+  }
+}
+
+.ball-orb.status-error {
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+}
+
+/* 展开内容 */
+.ball-expanded {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ball-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ball-brand {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+  letter-spacing: -0.01em;
+  flex: 1;
+}
+
+.theme-dark .ball-brand {
+  color: #f3f4f6;
+}
+
+.ball-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.ball-badge.badge-idle {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.theme-dark .ball-badge.badge-idle {
+  background: rgba(34, 197, 94, 0.25);
+  color: #4ade80;
+}
+
+.ball-badge.badge-working {
+  background: rgba(245, 158, 11, 0.15);
+  color: #d97706;
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+
+.theme-dark .ball-badge.badge-working {
+  background: rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+}
+
+.ball-badge.badge-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.theme-dark .ball-badge.badge-error {
+  background: rgba(239, 68, 68, 0.25);
+  color: #f87171;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* 表单 */
+.ball-form {
+  display: flex;
+}
+
+.ball-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.02);
+  font-size: 13px;
+  color: #1f2937;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.theme-dark .ball-input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f3f4f6;
+}
+
+.ball-input::placeholder {
+  color: #9ca3af;
+}
+
+.theme-dark .ball-input::placeholder {
+  color: #6b7280;
+}
+
+.ball-input:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.theme-dark .ball-input:focus {
+  border-color: rgba(59, 130, 246, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+/* 菜单 */
+.ball-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+  min-width: 130px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.15),
+    0 4px 12px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: menu-slide-up 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.theme-dark .ball-menu {
+  background: #28292e;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.4),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+@keyframes menu-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ball-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #374151;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.ball-menu button:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #1f2937;
+}
+
+.theme-dark .ball-menu button {
+  color: #d1d5db;
+}
+
+.theme-dark .ball-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3f4f6;
+}

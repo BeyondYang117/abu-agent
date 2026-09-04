@@ -25,6 +25,8 @@ import { normalizeThemeColorId } from './themeColors'
 import { nextThemeMode, type ThemeMode } from './chat/themeMode'
 import { FloatingBall } from './components/FloatingBall'
 import './components/FloatingBall.css'
+import { ModernFloatingBall } from './components/ModernFloatingBall'
+import './components/ModernFloatingBall.css'
 import './index.css'
 
 const Lens = lazy(() => import('./Lens'))
@@ -560,7 +562,7 @@ function App() {
     )
   }
   if (mode === 'status') {
-    return <FloatingBall themeMode={themeMode} />
+    return <ModernFloatingBall themeMode={themeMode} />
   }
   const chatSuspenseFallback = (
     <div className="flex h-full w-full items-center justify-center bg-transparent">

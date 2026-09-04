@@ -335,7 +335,6 @@ pub async fn run_agent_loop(
                 }
                 PlanningStepOutcome::ToolsUnsupported => break,
                 PlanningStepOutcome::RetryWithSkillTools => continue,
-                PlanningStepOutcome::RetryEmptyResponse => continue,
                 PlanningStepOutcome::DraftFailed(result) => {
                     return Ok(attach_usage(result, &mut state))
                 }
