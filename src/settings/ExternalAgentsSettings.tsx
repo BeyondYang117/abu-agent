@@ -463,7 +463,7 @@ function AgentDetail({
       const credentials = await chatApi.abuApiGetCliCredentials(
         base,
         auth.sessionToken,
-        agent.id,
+        agent.id as 'claude' | 'codex',
       )
       const existing = (config.providers ?? []).find((provider) => provider.id === `abu-api-${agent.id}`)
       const model = credentials.recommended_model

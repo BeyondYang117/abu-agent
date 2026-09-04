@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { LogOut, User, Mail, Coins, Crown, Calendar, Settings, Gift, TrendingUp } from 'lucide-react'
+import { LogOut, Coins, Crown, Calendar, Settings, Gift, TrendingUp } from 'lucide-react'
 import { useCloseAnimation } from './useCloseAnimation'
-import { i18n, type Lang } from '../settings/i18n'
+import { type Lang } from '../settings/i18n'
 import { formatAbuQuota } from '../api/quota'
 
 interface AccountInfo {
@@ -33,7 +33,6 @@ export function UserAccountMenu({
   onLogout,
   onClose: onCloseProp,
 }: UserAccountMenuProps) {
-  const t = i18n[lang]
   const menuRef = useRef<HTMLDivElement>(null)
   const { closing, startClose, onAnimationEnd } = useCloseAnimation(onCloseProp)
   const onClose = startClose

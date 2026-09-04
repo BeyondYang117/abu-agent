@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { X, EyeOff, RotateCcw } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { api, isTauriRuntime } from '../api/tauri'
@@ -11,7 +11,7 @@ interface FloatingBallProps {
 
 export function FloatingBall({ themeMode = 'system' }: FloatingBallProps) {
   const [status, setStatus] = useState<'working' | 'done' | 'error'>('done')
-  const [detail, setDetail] = useState('已完成')
+  const [, setDetail] = useState('已完成')
   const [question, setQuestion] = useState('')
   const [expanded, setExpanded] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)

@@ -11,7 +11,6 @@ import {
   NotebookPen,
   Plus,
   Search,
-  Settings,
   SquarePen,
   Workflow,
 } from 'lucide-react'
@@ -25,7 +24,6 @@ import { ProjectDialog } from './ProjectDialog'
 import { CliImportDialog } from './CliImportDialog'
 import { SetContextMenu } from './SetContextMenu'
 import { SetDialog } from './SetDialog'
-import { SidebarAccountMenu } from './SidebarAccountMenu'
 import { UserAccountButton } from './UserAccountButton'
 import { getSettingsCached } from '../api/settingsCache'
 import { IconButton } from '../components/Button'
@@ -39,7 +37,6 @@ import { clampSidebarWidth, SIDEBAR_DEFAULT_WIDTH } from './persistence'
 import { useChatPerfRenderProbe } from './chatPerformanceProbe'
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
 import type { ChatUserProfile } from './types'
-import { UserAvatar } from './UserAvatar'
 import { i18n, useT, type I18n, type Lang } from '../settings/i18n'
 import { conversationMarkdownFilename } from './conversationExport'
 import { displayConversationTitle, isPlaceholderTitle, isProvisionalTitle } from './conversationTitle'
@@ -223,88 +220,6 @@ export interface SidebarProps {
   profileRefreshKey?: number
   searchOpen: boolean
   onSearchOpenChange: (open: boolean) => void
-}
-
-function SidebarUserFooter({
-  profile,
-  lang,
-  settingsActive,
-  onOpenSettings,
-  onSelectLang,
-  onOpenUsage,
-}: {
-  profile: ChatUserProfile
-  lang: Lang
-  settingsActive: boolean
-  onOpenSettings: () => void
-  onSelectLang: (lang: Lang) => void
-  onOpenUsage: () => void
-}) {
-  const [menuRect, setMenuRect] = useState<{ left: number; top: number; width: number } | null>(null)
-  const rowRef = useRef<HTMLDivElement>(null)
-  const t = i18n[lang]
-
-  const toggleMenu = () => {
-    if (menuRect) {
-      setMenuRect(null)
-      return
-    }
-    const rect = rowRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setMenuRect({ left: rect.left, top: rect.top, width: rect.width })
-  }
-
-  return (
-    <div
-      className="shrink-0 border-t border-neutral-200/60 p-1.5 dark:border-neutral-800/80"
-      data-tauri-drag-region="false"
-    >
-      <div
-        ref={rowRef}
-        className={`flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors ${
-          menuRect || settingsActive
-            ? 'bg-black/[0.06] dark:bg-white/[0.1]'
-            : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
-        }`}
-      >
-        <button
-          type="button"
-          onClick={toggleMenu}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          aria-haspopup="menu"
-          aria-expanded={menuRect !== null}
-        >
-          <UserAvatar profile={profile} size={22} />
-          <span
-            className="min-w-0 flex-1 truncate text-[12.5px] text-neutral-700 dark:text-neutral-300"
-            title={profile.displayName || undefined}
-          >
-            {profile.displayName || 'ABU Agent'}
-          </span>
-        </button>
-        <IconButton
-          size="xs"
-          label={`${t.settings} (${isMac ? '⌘,' : 'Ctrl+,'})`}
-          onClick={() => {
-            setMenuRect(null)
-            onOpenSettings()
-          }}
-        >
-          <Settings strokeWidth={1.75} />
-        </IconButton>
-      </div>
-
-      {menuRect && (
-        <SidebarAccountMenu
-          triggerRect={menuRect}
-          lang={lang}
-          onSelectLang={onSelectLang}
-          onOpenUsage={onOpenUsage}
-          onClose={() => setMenuRect(null)}
-        />
-      )}
-    </div>
-  )
 }
 
 interface NavRowProps {
@@ -621,8 +536,6 @@ export const Sidebar = memo(function Sidebar({
   onOpenSettings,
   onOpenLogin,
   onOpenExtensionsItem,
-  onSelectLang,
-  onOpenUsage,
   settingsActive = false,
   extensionsActive = null,
   collapsed,

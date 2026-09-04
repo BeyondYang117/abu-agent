@@ -756,7 +756,7 @@ export function WebSearchPanel({ t, lang, webSearch, onChange }: WebSearchPanelP
                         {t.webSearchGetKey}
                       </button>
                       <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                        {t.webSearchApiKeyHint || '请先访问上方链接获取 API Key，填写后即可在下方测试搜索功能'}
+                        {'请先访问上方链接获取 API Key，填写后即可在下方测试搜索功能'}
                       </p>
                     </div>
                   )}
