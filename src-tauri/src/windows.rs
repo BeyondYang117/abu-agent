@@ -793,7 +793,11 @@ pub fn refocus_overlay_after_frontmost_reassert(window: &WebviewWindow) {
     let window = window.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        focus_overlay_webview(&window);
+        // 用户可能在等待期间已经关掉浮窗。不要让迟到任务重新建立 WKWebView/IME
+        // first-responder 会话，否则紧随其后的销毁仍会留下失效的 IMK Mach port。
+        if window.is_visible().ok().unwrap_or(false) {
+            focus_overlay_webview(&window);
+        }
     });
 }
 
@@ -938,6 +942,15 @@ pub fn destroy_overlay_window(window: &WebviewWindow) {
         // 理论不会发生（destroy 前必经 configure_overlay_panel 设过原类）；真走到这里说明
         // 假设被打破，退回旧的 hide 复用（不回收内存但不崩），留日志便于诊断。
         eprintln!("[overlay] destroy_overlay_window: 原类未记录，退回 hide");
+        // 即使只能降级隐藏，也必须先结束 IME 编辑会话，避免隐藏后的 WKWebView
+        // 继续持有 first responder 和输入法 Mach port。
+        let _ = run_overlay_on_main(window, |ptr| unsafe {
+            use cocoa::base::nil;
+            use objc::{msg_send, sel, sel_impl};
+            let _: () = msg_send![ptr, endEditingFor: nil];
+            let _: bool = msg_send![ptr, makeFirstResponder: nil];
+            let _: () = msg_send![ptr, orderOut: nil];
+        });
         let _ = window.hide();
         return;
     };
@@ -947,6 +960,16 @@ pub fn destroy_overlay_window(window: &WebviewWindow) {
     // 仍会严格按“换类 → 销毁”的顺序运行。
     let window_for_destroy = window.clone();
     if !run_overlay_on_main(window, move |ptr| unsafe {
+        // 先结束 WebKit/输入法的编辑会话，再拆掉 NSPanel。若 WKWebView 仍是
+        // first responder，TSM/IMK 可能在销毁过程中继续向已失效的 Mach port 发消息，
+        // 产生 "IMKCFRunLoopWakeUpReliable" 错误，某些系统版本还会直接触发 ObjC 异常。
+        use cocoa::base::nil;
+        use objc::{msg_send, sel, sel_impl};
+        let _: () = msg_send![ptr, endEditingFor: nil];
+        let _: bool = msg_send![ptr, makeFirstResponder: nil];
+
+        // 输入法解绑后再从 WindowServer 的可见窗口列表摘掉它，阻止关闭期间继续分发事件。
+        let _: () = msg_send![ptr, orderOut: nil];
         object_setClass(ptr, orig as *const objc::runtime::Class);
         let _ = window_for_destroy.destroy();
     }) {

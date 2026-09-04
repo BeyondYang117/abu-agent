@@ -2241,7 +2241,8 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
         {
             // macOS：换回原窗口类后 destroy，终结 WebContent 进程回收内存（about:blank 实测
             // 不回收，只有销毁进程才行）。下次触发由 ensure_lens/translate_window 冷重建。
-            let _ = window.hide();
+            // 不要在这里先 hide：macOS 必须先在主线程结束 WKWebView 的 IME 编辑会话，
+            // 再 orderOut + destroy。完整顺序统一由 destroy_overlay_window 保证。
             windows::destroy_overlay_window(&window);
         }
     }
