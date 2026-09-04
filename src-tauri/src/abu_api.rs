@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use tauri::{command, AppHandle, State};
 
 const MODEL_ROUTING_CACHE_FILE: &str = "model-routing-policy-cache.json";
+// The API gateway rejects requests with a missing/browser-like signature.
+// Keep native desktop requests identifiable as the reqwest client used by the app.
+const AGENT_API_USER_AGENT: &str = "reqwest/0.12";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelRoutingPolicyCache {
@@ -258,19 +261,13 @@ pub async fn abu_api_sync_model_routing_policy(
         Some(token) if !token.trim().is_empty() => token,
         _ => return cached.ok_or_else(|| "尚未登录且没有可用的路由策略缓存".to_string()),
     };
-    let last_version = cached.as_ref().map(|item| item.version).unwrap_or_default();
-    let health_version = cached
-        .as_ref()
-        .and_then(|item| item.payload.get("health_version"))
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
     let response = reqwest::Client::new()
         .get(format!(
             "{}/api/agent/model-routing-policy",
             base_url.trim_end_matches('/'),
         ))
-        .query(&[("version", last_version.to_string()), ("health_version", health_version.to_string())])
         .header("X-Abu-Session-Token", session_token)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .timeout(std::time::Duration::from_secs(12))
         .send()
         .await
@@ -895,6 +892,7 @@ pub async fn abu_api_list_models(
     let response = reqwest::Client::new()
         .get(agent_models_url(&base_url))
         .header("X-Abu-Session-Token", &session_token)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .send()
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;
