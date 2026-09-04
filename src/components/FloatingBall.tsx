@@ -1,6 +1,7 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import { X, EyeOff, RotateCcw } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { PhysicalPosition } from '@tauri-apps/api/dpi'
 import { api, isTauriRuntime } from '../api/tauri'
 import { ABUAgentBlob } from '../chat/AbuAgentBlob'
 import './FloatingBall.css'
@@ -135,7 +136,7 @@ export function FloatingBall({ themeMode = 'system' }: FloatingBallProps) {
     try {
       const saved = JSON.parse(window.localStorage.getItem('abu-status-position') || 'null')
       if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-        void getCurrentWindow().setPosition({ x: saved.x, y: saved.y } as any).catch(() => {})
+        void getCurrentWindow().setPosition(new PhysicalPosition(saved.x, saved.y)).catch(() => {})
       }
     } catch {
       // Ignore malformed local preferences.

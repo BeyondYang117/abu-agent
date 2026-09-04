@@ -4929,6 +4929,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     handleModelChange,
     handleOpenConversationPopout,
     handleOpenDockTasks,
+    handleSidebarOpenLogin,
     handleRuntimeChange,
     handleThinkingLevelChange,
     handleToggleDock,

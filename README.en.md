@@ -67,7 +67,7 @@ Text on screen, a captured region, and coding CLIs you already installed do not 
 
 ## Features
 
-Full history: [Releases](https://github.com/BeyondYang117/abu-agent/releases) · current notes: [v0.1.3](docs/releases/v0.1.3.md)
+Full history: [Releases](https://github.com/BeyondYang117/abu-agent/releases) · current notes: [v0.1.4](docs/releases/v0.1.4.md)
 
 ### Chat & agent
 

@@ -83,7 +83,9 @@ export function ModernFloatingBall({ themeMode = 'system' }: ModernFloatingBallP
       try {
         const position = await getCurrentWindow().outerPosition()
         localStorage.setItem('floating-ball-position', JSON.stringify(position))
-      } catch {}
+      } catch {
+        // The window may be closing while its final move event is delivered.
+      }
     }
 
     getCurrentWindow().onMoved(rememberPosition).then((dispose) => {
@@ -97,7 +99,9 @@ export function ModernFloatingBall({ themeMode = 'system' }: ModernFloatingBallP
         const position = JSON.parse(saved)
         getCurrentWindow().setPosition(position).catch(() => {})
       }
-    } catch {}
+    } catch {
+      // Ignore malformed or stale saved positions.
+    }
 
     return () => unlisten?.()
   }, [])
@@ -106,7 +110,9 @@ export function ModernFloatingBall({ themeMode = 'system' }: ModernFloatingBallP
     if (e.button !== 0 || (e.target as HTMLElement).closest('button, input')) return
     try {
       await getCurrentWindow().startDragging()
-    } catch {}
+    } catch {
+      // Dragging is unavailable in browser previews.
+    }
   }
 
   const handleDoubleClick = async () => {

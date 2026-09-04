@@ -53,7 +53,8 @@ export function canCompleteOnboarding(settings: Settings): boolean {
   if (isCloud) {
     // abu_api_session_token 的 TS 命名与 Rust camelCase 序列化不一致——
     // 这里两种都检查，避免因为命名 bug 误判未登录。
-    const token = (settings.abu_api_session_token ?? (settings as any).abuApiSessionToken ?? '').trim()
+    const legacySettings = settings as Settings & { abuApiSessionToken?: string }
+    const token = (settings.abu_api_session_token ?? legacySettings.abuApiSessionToken ?? '').trim()
     return token.length > 0
   }
   return validateProviderStep(settings).ok
