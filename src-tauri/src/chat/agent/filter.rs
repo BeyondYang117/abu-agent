@@ -169,6 +169,8 @@ mod tests {
             description: String::new(),
             system_prompt: String::new(),
             model: None,
+            model_policy: "smart".to_string(),
+            provider: None,
             tools: tools.into_iter().map(String::from).collect(),
             disallowed_tools: Vec::new(),
             skills: Vec::new(),

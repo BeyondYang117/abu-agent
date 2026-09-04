@@ -32,6 +32,8 @@ pub(crate) async fn chat_send_message(
     attachments: Vec<String>,
     text_attachments: Option<Vec<TextAttachmentInput>>,
     active_skill_id: Option<String>,
+    routing_fallbacks: Option<Vec<crate::chat::ModelRef>>,
+    routing_policy_version: Option<i64>,
 ) -> Result<serde_json::Value, String> {
     // 内存文本附件（粘贴长文本虚拟 txt）：前端总传；缺省为空数组以兼容旧调用。
     let text_attachments = text_attachments.unwrap_or_default();
@@ -324,17 +326,49 @@ pub(crate) async fn chat_send_message(
         };
     }
 
-    let reply_outcome = complete_assistant_reply(
-        &app,
-        &state,
-        &mut conversation,
-        Some(title_source.as_str()),
-        Some(api_content.as_str()),
-        &last_user_image_paths,
-        forced_skill_id.as_deref(),
+    let mut reply_outcome = complete_assistant_reply(
+        &app, &state, &mut conversation, Some(title_source.as_str()),
+        Some(api_content.as_str()), &last_user_image_paths, forced_skill_id.as_deref(),
         crate::chat::agent::AgentRunEntry::Send,
-    )
-    .await;
+    ).await;
+    if let Some(fallbacks) = routing_fallbacks {
+        for fallback in fallbacks {
+            let should_fallback = reply_outcome
+                .as_ref()
+                .err()
+                .is_some_and(|error| model_routing_fallback_error(error));
+            if !should_fallback {
+                break;
+            }
+            if fallback.provider_id.trim().is_empty() || fallback.model.trim().is_empty() {
+                continue;
+            }
+            let failed = format!("{}/{}", conversation.provider_id, conversation.model);
+            conversation = crate::chat::repository::repository(&app)
+                .update_metadata(
+                    &app,
+                    &conversation_id,
+                    crate::chat::repository::ConversationMetadataMutation::Model {
+                        provider_id: fallback.provider_id,
+                        model: fallback.model,
+                    },
+                )
+                .await
+                .map_err(crate::chat::repository::repository_error)?;
+            eprintln!(
+                "[model-routing] policy={} fallback {} -> {}/{}",
+                routing_policy_version.unwrap_or_default(),
+                failed,
+                conversation.provider_id,
+                conversation.model,
+            );
+            reply_outcome = complete_assistant_reply(
+                &app, &state, &mut conversation, Some(title_source.as_str()),
+                Some(api_content.as_str()), &last_user_image_paths, forced_skill_id.as_deref(),
+                crate::chat::agent::AgentRunEntry::Send,
+            ).await;
+        }
+    }
     // 剥离按臂做、且在各臂最后一次写盘之后。发送前超上下文那条提前返回的分支会先 rollback
     // 再持久化，若在 match 前统一剥，就会把剥光的对话写回磁盘、永久丢掉盘上转录。
     match reply_outcome {
@@ -364,5 +398,32 @@ pub(crate) async fn chat_send_message(
                 "error": err,
             }))
         }
+    }
+}
+
+fn model_routing_fallback_error(error: &str) -> bool {
+    if error == "cancelled" {
+        return false;
+    }
+    let error = error.to_ascii_lowercase();
+    [
+        "http 401", "http 402", "http 403", "http 404", "http 408", "http 429",
+        "http 500", "http 502", "http 503", "http 504", "timed out", "timeout",
+        "connection", "error sending request", "service unavailable", "model unavailable",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
+#[cfg(test)]
+mod model_routing_tests {
+    use super::model_routing_fallback_error;
+
+    #[test]
+    fn only_transient_or_availability_errors_trigger_model_fallback() {
+        assert!(model_routing_fallback_error("Stream HTTP 503: unavailable"));
+        assert!(model_routing_fallback_error("request timed out"));
+        assert!(!model_routing_fallback_error("HTTP 400: invalid prompt"));
+        assert!(!model_routing_fallback_error("cancelled"));
     }
 }

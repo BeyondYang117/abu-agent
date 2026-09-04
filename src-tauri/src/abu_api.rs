@@ -3,7 +3,329 @@
 use crate::state::AppState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::{command, AppHandle, State};
+
+const MODEL_ROUTING_CACHE_FILE: &str = "model-routing-policy-cache.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ModelRoutingPolicyCache {
+    pub version: i64,
+    pub fetched_at: i64,
+    pub payload: serde_json::Value,
+}
+
+fn model_routing_cache_path() -> Result<std::path::PathBuf, String> {
+    crate::app_data::app_data_dir()
+        .map(|dir| dir.join(MODEL_ROUTING_CACHE_FILE))
+        .ok_or_else(|| "无法确定应用数据目录".to_string())
+}
+
+fn read_model_routing_cache() -> Option<ModelRoutingPolicyCache> {
+    let raw = std::fs::read_to_string(model_routing_cache_path().ok()?).ok()?;
+    let cache: ModelRoutingPolicyCache = serde_json::from_str(&raw).ok()?;
+    (cache.version > 0 && cache.payload.get("rules").is_some()).then_some(cache)
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct CachedRoutingCapabilities {
+    #[serde(default)]
+    vision: bool,
+    #[serde(default)]
+    embedding: bool,
+    #[serde(default)]
+    image_generation: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CachedRoutingRule {
+    model: String,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    healthy: bool,
+    #[serde(default)]
+    tiers: Vec<String>,
+    #[serde(default)]
+    task_scores: HashMap<String, i64>,
+    #[serde(default)]
+    capabilities: CachedRoutingCapabilities,
+    #[serde(default)]
+    priority: i64,
+    #[serde(default)]
+    fallback_priority: i64,
+    #[serde(default = "default_rollout_percent")]
+    rollout_percent: u8,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct CachedTaskMapping {
+    task: String,
+    #[serde(default)]
+    keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct CachedRoutingPayload {
+    #[serde(default)]
+    rules: Vec<CachedRoutingRule>,
+    #[serde(default)]
+    fallbacks: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    task_mappings: Vec<CachedTaskMapping>,
+}
+
+fn default_rollout_percent() -> u8 {
+    100
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedModelRoute {
+    pub provider_id: String,
+    pub model: String,
+    pub version: i64,
+    pub fallbacks: Vec<(String, String)>,
+}
+
+fn rollout_eligible(key: &str, model_id: &str, percent: u8) -> bool {
+    if percent >= 100 {
+        return true;
+    }
+    if percent == 0 {
+        return false;
+    }
+    let mut hash = 0x811c9dc5_u32;
+    for byte in format!("{key}\0{model_id}").as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash % 100 < u32::from(percent)
+}
+
+fn cached_subtask_kind(prompt: &str, mappings: &[CachedTaskMapping]) -> &'static str {
+    let lower = prompt.to_lowercase();
+    for mapping in mappings {
+        if mapping.keywords.iter().any(|keyword| {
+            let keyword = keyword.trim().to_lowercase();
+            !keyword.is_empty() && lower.contains(&keyword)
+        }) {
+            return match mapping.task.as_str() {
+                "coding" => "coding",
+                "creative" => "creative",
+                "reasoning" => "reasoning",
+                "vision" => "vision",
+                _ => "general",
+            };
+        }
+    }
+    if ["代码", "编程", "调试", "bug", "code", "typescript", "rust", "python"]
+        .iter()
+        .any(|keyword| lower.contains(keyword))
+    {
+        "coding"
+    } else if ["小说", "故事", "文案", "写作", "润色", "story", "creative"]
+        .iter()
+        .any(|keyword| lower.contains(keyword))
+    {
+        "creative"
+    } else if ["分析", "推理", "证明", "研究", "reason", "prove", "research"]
+        .iter()
+        .any(|keyword| lower.contains(keyword))
+    {
+        "reasoning"
+    } else {
+        "general"
+    }
+}
+
+pub fn select_cached_model_for_subtask(
+    settings: &crate::settings::Settings,
+    prompt: &str,
+    parent_provider_id: &str,
+    parent_model: &str,
+    rollout_key: &str,
+) -> Option<CachedModelRoute> {
+    let cache = read_model_routing_cache()?;
+    let payload: CachedRoutingPayload = serde_json::from_value(cache.payload.clone()).ok()?;
+    let task = cached_subtask_kind(prompt, &payload.task_mappings);
+    let tier = "balanced";
+    let mut candidates: Vec<(String, String, i64, i64)> = Vec::new();
+    for rule in &payload.rules {
+        if rule.model.trim().is_empty()
+            || !rule.enabled
+            || !rule.healthy
+            || !rule.tiers.iter().any(|item| item == tier)
+            || rule.capabilities.embedding
+            || rule.capabilities.image_generation
+            || (task == "vision" && !rule.capabilities.vision)
+        {
+            continue;
+        }
+        if settings.is_cloud_runtime() {
+            let route_id = format!("{}:{}", rule.provider, rule.model);
+            if rollout_eligible(rollout_key, &route_id, rule.rollout_percent) {
+                let score = rule.task_scores.get(task).copied().unwrap_or_default()
+                    + rule.priority
+                    + i64::from(parent_model == rule.model) * 3;
+                candidates.push((
+                    crate::chat::model::ABU_API_PROVIDER_ID.to_string(),
+                    rule.model.clone(),
+                    score,
+                    rule.fallback_priority,
+                ));
+            }
+            continue;
+        }
+        for provider in settings.providers.iter().filter(|provider| {
+            provider.enabled && (rule.provider.is_empty() || rule.provider == provider.id)
+        }) {
+            let configured = if provider.enabled_models.is_empty() {
+                &provider.available_models
+            } else {
+                &provider.enabled_models
+            };
+            if !configured.iter().any(|item| item == &rule.model) {
+                continue;
+            }
+            let route_id = format!("{}:{}", provider.id, rule.model);
+            if !rollout_eligible(rollout_key, &route_id, rule.rollout_percent) {
+                continue;
+            }
+            let score = rule.task_scores.get(task).copied().unwrap_or_default()
+                + rule.priority
+                + i64::from(provider.id == parent_provider_id && rule.model == parent_model) * 3;
+            candidates.push((
+                provider.id.clone(),
+                rule.model.clone(),
+                score,
+                rule.fallback_priority,
+            ));
+        }
+    }
+    candidates.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| b.3.cmp(&a.3)));
+    let selected = candidates.first()?.clone();
+    let configured_fallbacks = payload.fallbacks.get(tier).cloned().unwrap_or_default();
+    candidates.sort_by(|a, b| {
+        let a_index = configured_fallbacks.iter().position(|model| model == &a.1);
+        let b_index = configured_fallbacks.iter().position(|model| model == &b.1);
+        a_index
+            .unwrap_or(usize::MAX)
+            .cmp(&b_index.unwrap_or(usize::MAX))
+            .then_with(|| b.3.cmp(&a.3))
+    });
+    Some(CachedModelRoute {
+        provider_id: selected.0.clone(),
+        model: selected.1.clone(),
+        version: cache.version,
+        fallbacks: candidates
+            .into_iter()
+            .filter(|candidate| candidate.0 != selected.0 || candidate.1 != selected.1)
+            .map(|candidate| (candidate.0, candidate.1))
+            .collect(),
+    })
+}
+
+fn write_model_routing_cache(cache: &ModelRoutingPolicyCache) -> Result<(), String> {
+    let path = model_routing_cache_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建策略缓存目录失败：{e}"))?;
+    }
+    let raw = serde_json::to_string(cache).map_err(|e| format!("序列化策略缓存失败：{e}"))?;
+    crate::chat::storage::atomic_write(&path, &raw, "model routing policy cache")
+}
+
+#[command]
+pub fn abu_api_get_cached_model_routing_policy() -> Option<ModelRoutingPolicyCache> {
+    read_model_routing_cache()
+}
+
+#[command]
+pub async fn abu_api_sync_model_routing_policy(
+    state: State<'_, AppState>,
+) -> Result<ModelRoutingPolicyCache, String> {
+    let cached = read_model_routing_cache();
+    let (base_url, session_token) = {
+        let settings = state.settings_read();
+        let base_url = settings
+            .abu_api_base_url
+            .clone()
+            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
+        (base_url, settings.abu_api_session_token.clone())
+    };
+    let session_token = match session_token {
+        Some(token) if !token.trim().is_empty() => token,
+        _ => return cached.ok_or_else(|| "尚未登录且没有可用的路由策略缓存".to_string()),
+    };
+    let last_version = cached.as_ref().map(|item| item.version).unwrap_or_default();
+    let health_version = cached
+        .as_ref()
+        .and_then(|item| item.payload.get("health_version"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/api/agent/model-routing-policy",
+            base_url.trim_end_matches('/'),
+        ))
+        .query(&[("version", last_version.to_string()), ("health_version", health_version.to_string())])
+        .header("X-Abu-Session-Token", session_token)
+        .timeout(std::time::Duration::from_secs(12))
+        .send()
+        .await
+        .map_err(|e| format!("路由策略同步失败：{e}"));
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => return cached.ok_or(error),
+    };
+    let data: serde_json::Value = match parse_agent_data(response, "同步路由策略").await {
+        Ok(data) => data,
+        Err(error) => return cached.ok_or(error),
+    };
+    if data.get("changed").and_then(|value| value.as_bool()) == Some(false) {
+        let mut cache = cached.ok_or_else(|| "服务端返回未变化，但本地没有策略缓存".to_string())?;
+        cache.fetched_at = chrono::Utc::now().timestamp();
+        write_model_routing_cache(&cache)?;
+        return Ok(cache);
+    }
+    let version = data.get("version").and_then(|value| value.as_i64()).unwrap_or_default();
+    if version <= 0 || !data.get("rules").is_some_and(|value| value.is_array()) {
+        return cached.ok_or_else(|| "服务端路由策略不完整".to_string());
+    }
+    let cache = ModelRoutingPolicyCache {
+        version,
+        fetched_at: chrono::Utc::now().timestamp(),
+        payload: data,
+    };
+    write_model_routing_cache(&cache)?;
+    Ok(cache)
+}
+
+#[cfg(test)]
+mod model_routing_tests {
+    use super::{cached_subtask_kind, rollout_eligible, CachedTaskMapping};
+
+    #[test]
+    fn rollout_hash_is_stable_for_utf8_identifiers() {
+        let first = rollout_eligible("设备-a", "渠道:模型", 37);
+        for _ in 0..10 {
+            assert_eq!(first, rollout_eligible("设备-a", "渠道:模型", 37));
+        }
+        assert!(rollout_eligible("设备-a", "渠道:模型", 100));
+        assert!(!rollout_eligible("设备-a", "渠道:模型", 0));
+    }
+
+    #[test]
+    fn server_task_mapping_precedes_local_keywords() {
+        let mappings = vec![CachedTaskMapping {
+            task: "creative".to_string(),
+            keywords: vec!["产品代码".to_string()],
+        }];
+        assert_eq!(cached_subtask_kind("请写产品代码介绍", &mappings), "creative");
+        assert_eq!(cached_subtask_kind("修复 Rust bug", &[]), "coding");
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceAuthResponse {

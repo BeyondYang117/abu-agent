@@ -48,6 +48,12 @@ export interface AgentModelsResponse {
   recommended: string
 }
 
+export interface ModelRoutingPolicyCache {
+  version: number
+  fetched_at: number
+  payload: unknown
+}
+
 export interface AgentEntitlement {
   id: number
   plan_id: number
@@ -242,6 +248,16 @@ export class AbuApiClient {
       return api.abuApiListModels()
     }
     return this.request<AgentModelsResponse>('/api/agent/models')
+  }
+
+  async getCachedModelRoutingPolicy(): Promise<ModelRoutingPolicyCache | null> {
+    if (isTauriRuntime()) return api.abuApiGetCachedModelRoutingPolicy()
+    return null
+  }
+
+  async syncModelRoutingPolicy(): Promise<ModelRoutingPolicyCache> {
+    if (isTauriRuntime()) return api.abuApiSyncModelRoutingPolicy()
+    return this.request<ModelRoutingPolicyCache>('/api/agent/model-routing-policy')
   }
 
   /** 获取当前用户可用于 Agent 的有效套餐权益。 */

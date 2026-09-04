@@ -64,6 +64,7 @@ import {
 import { loadLastAgentRuntime, saveLastAgentRuntime } from './lastAgentRuntime'
 import { loadLastModel, resolvePreferredChatModel, saveLastModel } from './lastModel'
 import { loadSmartModelEnabled, loadSmartModelQuality, selectSmartModel } from './smartModelRouting'
+import { getModelRoutingPolicy, policyModelDisplayName, syncModelRoutingPolicy } from './modelRoutingPolicy'
 import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
 import {
   chatTitlebarMacInsetClass,
@@ -1732,6 +1733,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     void loadSkills()
     void refreshToolIndicator()
     setSidebarProfileRefreshKey((key) => key + 1)
+    void syncModelRoutingPolicy()
   }, [loadDefaultModel, loadSkills, onSettingsChange, refreshToolIndicator])
 
   const reloadConversation = useCallback(async (
@@ -3106,6 +3108,8 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       ?? (options.forceNewConversation ? null : currentConversation)
     let sendProviderId = activeProviderId
     let sendModel = activeModel
+    let routingFallbacks: Array<{ provider_id: string; model: string }> = []
+    let routingPolicyVersion: number | null = null
     if (!usesExternalRuntime && loadSmartModelEnabled()) {
       try {
         const settings = await getSettingsCached()
@@ -3125,6 +3129,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
             apiFormat: 'openai_chat',
           }]
         }
+        const routingPolicy = await getModelRoutingPolicy()
         const route = selectSmartModel({
           providers: modelProviders,
           content: trimmed,
@@ -3132,10 +3137,49 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
           quality: loadSmartModelQuality(),
           recommended,
           current: { providerId: activeProviderId, model: activeModel },
+          policy: routingPolicy,
+          rolloutKey: settings.abu_api_device_id || startingConversationId || 'desktop',
         })
+        if (!route && routingPolicy) {
+          const hasImage = attachments.some((attachment) => attachment.type === 'image')
+          const message = uiLang === 'zh'
+            ? `当前策略没有可用的${hasImage ? '视觉' : ''}模型，请切换档位、稍后重试，或在高级设置中手动选择模型。`
+            : `No ${hasImage ? 'vision-capable ' : ''}model is currently available for this policy. Change tier, retry later, or choose a model manually.`
+          setStreamError(message)
+          return false
+        }
         if (route) {
           sendProviderId = route.providerId
           sendModel = route.model
+          routingFallbacks = (route.fallbacks ?? []).map((fallback) => ({
+            provider_id: fallback.providerId,
+            model: fallback.model,
+          }))
+          routingPolicyVersion = route.policyVersion ?? null
+          const routeTaskLabel = {
+            general: i18n[uiLang].chatSmartModelTaskGeneral,
+            creative: i18n[uiLang].chatSmartModelTaskCreative,
+            coding: i18n[uiLang].chatSmartModelTaskCoding,
+            reasoning: i18n[uiLang].chatSmartModelTaskReasoning,
+            vision: i18n[uiLang].chatSmartModelTaskVision,
+          }[route.task]
+          const routeTier = loadSmartModelQuality() === 'fast'
+            ? i18n[uiLang].chatSmartModelFast
+            : loadSmartModelQuality() === 'balanced'
+              ? i18n[uiLang].chatSmartModelBalanced
+              : i18n[uiLang].chatSmartModelQuality
+          setPopoutNotice(i18n[uiLang].chatSmartModelSelected
+            .replace('{task}', routeTaskLabel)
+            .replace('{model}', policyModelDisplayName(route.model))
+            .replace('{tier}', routeTier))
+          console.debug('[model-routing]', {
+            task: route.task,
+            quality: loadSmartModelQuality(),
+            candidates: route.candidates,
+            policyVersion: route.policyVersion ?? 'local-fallback',
+            selected: { providerId: route.providerId, model: route.model },
+            reason: route.reason,
+          })
         }
       } catch (error) {
         console.warn('Smart model routing failed; using the current model:', error)
@@ -3185,6 +3229,8 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
         applyConversationIfCurrent(conversation.id, conversation)
       } catch (error) {
         console.warn('Failed to apply the smart-selected model:', error)
+        setStreamError(typeof error === 'string' ? error : (error as Error).message || '模型切换失败')
+        return false
       }
     }
 
@@ -3405,6 +3451,8 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
         trimmed,
         attachments,
         attachmentSkillId,
+        routingFallbacks,
+        routingPolicyVersion,
       )
       persistedConversation = updatedConv
       sendAccepted = true

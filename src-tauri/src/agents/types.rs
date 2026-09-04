@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 /// A sub-agent persona. `system_prompt` is prepended to the base chat system
-/// prompt; `model` empty means inherit the parent's model; `tools` empty means
+/// prompt; `model_policy` controls smart/inherit/manual selection; `tools` empty means
 /// "all tools available to the parent except the `agent` tool" (the allow-list
 /// is enforced at spawn time, see `chat::agent::filter::filter_tools_for_agent`).
 ///
@@ -22,6 +22,10 @@ pub struct AgentDefinition {
     pub system_prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// inherit | smart | manual. Missing defaults to smart for sub-task specialization.
+    pub model_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub tools: Vec<String>,
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
@@ -42,6 +46,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             description: "General-purpose agent for researching complex questions and executing multi-step tasks.".to_string(),
             system_prompt: String::new(),
             model: None,
+            model_policy: "smart".to_string(),
+            provider: None,
             tools: Vec::new(),
             disallowed_tools: Vec::new(),
             skills: Vec::new(),
@@ -53,6 +59,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             description: "Read-only research agent: searches the web and reads files to gather and synthesize information. Cannot modify files.".to_string(),
             system_prompt: "You are a research sub-agent. Investigate thoroughly using read-only tools, then return a concise, well-organized synthesis of your findings with concrete references. Do not attempt to modify files or run commands.".to_string(),
             model: None,
+            model_policy: "smart".to_string(),
+            provider: None,
             tools: vec![
                 "read".to_string(),
                 "grep".to_string(),
@@ -70,6 +78,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             description: "Implementation agent: reads, edits, and writes code to complete a focused engineering task.".to_string(),
             system_prompt: "You are a coding sub-agent. Implement the requested change precisely. Read the relevant files first, make targeted edits, and report exactly what you changed. Keep the change scoped to the task you were given.".to_string(),
             model: None,
+            model_policy: "smart".to_string(),
+            provider: None,
             tools: vec![
                 "read".to_string(),
                 "grep".to_string(),
@@ -87,6 +97,8 @@ pub fn builtin_agent_definitions() -> Vec<AgentDefinition> {
             description: "Read-only review agent: inspects code for correctness, clarity, and risk, then reports findings. Cannot modify files.".to_string(),
             system_prompt: "You are a code-review sub-agent. Inspect the relevant code using read-only tools and report concrete findings: bugs, risks, and concise improvement suggestions with file references. Do not modify files.".to_string(),
             model: None,
+            model_policy: "smart".to_string(),
+            provider: None,
             tools: vec![
                 "read".to_string(),
                 "grep".to_string(),

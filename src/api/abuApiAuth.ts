@@ -168,6 +168,8 @@ export async function completeLogin(sessionToken: string): Promise<void> {
 
   // 更新内存状态
   abuApiAuthStore.login(sessionToken, deviceId, baseUrl)
+  const { syncModelRoutingPolicy } = await import('../chat/modelRoutingPolicy')
+  void syncModelRoutingPolicy()
 }
 
 // 退出登录

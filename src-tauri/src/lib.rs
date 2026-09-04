@@ -520,6 +520,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
+            abu_api::abu_api_get_cached_model_routing_policy,
+            abu_api::abu_api_sync_model_routing_policy,
             windows::chat_window_apply_mica,
             windows::chat_window_set_opaque,
             windows::chat_traffic_light_center_y,

@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Sparkles, Star } from 'lucide-react'
 import { type ModelProvider } from '../api/tauri'
 import { getSettingsCached, setFavoriteModelsCached, subscribeSettings } from '../api/settingsCache'
-import { useT } from '../settings/i18n'
+import { useLang, useT } from '../settings/i18n'
 import { isProviderEnabled } from '../settings/utils'
 import { ModelIcon } from './ModelIcon'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
@@ -17,6 +17,14 @@ import {
   saveSmartModelQuality,
   type SmartModelQuality,
 } from './smartModelRouting'
+import {
+  findModelRoutingRule,
+  getModelRoutingPolicy,
+  policyModelLabels,
+  policyModelDisplayName,
+  syncModelRoutingPolicy,
+  type ModelRoutingPolicy,
+} from './modelRoutingPolicy'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -41,6 +49,7 @@ function ModelSelectorBase({
   onOpenLogin,
 }: ModelSelectorProps) {
   const t = useT()
+  const lang = useLang()
   const { isAuthenticated } = useAbuApiAuth()
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
@@ -49,6 +58,8 @@ function ModelSelectorBase({
   const [smartEnabled, setSmartEnabled] = useState(loadSmartModelEnabled)
   const [smartQuality, setSmartQuality] = useState<SmartModelQuality>(loadSmartModelQuality)
   const [advancedOpen, setAdvancedOpen] = useState(() => !loadSmartModelEnabled())
+  const [showAllModels, setShowAllModels] = useState(false)
+  const [routingPolicy, setRoutingPolicy] = useState<ModelRoutingPolicy | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const maxH = usePopoverMaxHeight(open, menuRef, 'down', 400)
 
@@ -124,12 +135,20 @@ function ModelSelectorBase({
     })
   }, [loadSettings])
 
+  useEffect(() => {
+    let active = true
+    void getModelRoutingPolicy(false).then((policy) => { if (active) setRoutingPolicy(policy) })
+    void syncModelRoutingPolicy().then((policy) => { if (active && policy) setRoutingPolicy(policy) })
+    return () => { active = false }
+  }, [])
+
   const activeProviders = providers.filter(isProviderEnabled)
   // 只显示有可选模型的服务商，避免没配置模型的服务商变成空的分组标题。
   const visibleProviders = activeProviders
     .map((provider) => ({
       provider,
-      models: provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels,
+      models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels)
+        .filter((model) => showAllModels || !routingPolicy || findModelRoutingRule(routingPolicy, provider.id, model)?.tiers.includes(smartQuality)),
     }))
     .filter((entry) => entry.models.length > 0)
 
@@ -140,6 +159,9 @@ function ModelSelectorBase({
   const tooltipText = currentProvider && currentModel
     ? `${currentProvider.name}：${currentModel}`
     : (currentModel || '')
+  const preferredRule = routingPolicy?.rules
+    .filter((rule) => rule.enabled && rule.healthy && rule.tiers.includes(smartQuality))
+    .sort((a, b) => (b.task_scores.creative + b.priority) - (a.task_scores.creative + a.priority))[0]
 
   // 收藏置顶组：按存储顺序，过滤掉失效的（provider 已删/禁用/模型已不在列表）。
   const favoriteEntries = useMemo(() => {
@@ -173,6 +195,7 @@ function ModelSelectorBase({
   const renderModelRow = (providerId: string, model: string, keySuffix: string) => {
     const selected = !smartEnabled && currentProviderId === providerId && currentModel === model
     const isFav = favorites.includes(favKey(providerId, model))
+    const policyRule = findModelRoutingRule(routingPolicy, providerId, model)
     return (
       <div
         key={`${providerId}:${model}:${keySuffix}`}
@@ -198,7 +221,11 @@ function ModelSelectorBase({
         >
           <ModelIcon model={model} size={16} />
           <span className="min-w-0 truncate">{model}</span>
-          <ModelAbilityTags model={model} modelOverrides={providers.find((provider) => provider.id === providerId)?.modelOverrides} />
+          {policyRule ? (
+            <span className="flex shrink-0 gap-1">
+              {policyModelLabels(policyRule, lang).map((label) => <span key={label} className="kv-tag">{label}</span>)}
+            </span>
+          ) : <ModelAbilityTags model={model} modelOverrides={providers.find((provider) => provider.id === providerId)?.modelOverrides} />}
         </button>
         <button
           type="button"
@@ -265,6 +292,13 @@ function ModelSelectorBase({
                   <span className="mt-0.5 block text-[11px] leading-4 text-neutral-500 dark:text-neutral-400">
                     {t.chatSmartModelDescription}
                   </span>
+                  {preferredRule && (
+                    <span className="mt-1 block text-[11px] leading-4 text-amber-700 dark:text-amber-300">
+                      {t.chatSmartModelPreferenceResult
+                        .replace('{tier}', smartQuality === 'fast' ? t.chatSmartModelFast : smartQuality === 'balanced' ? t.chatSmartModelBalanced : t.chatSmartModelQuality)
+                        .replace('{model}', policyModelDisplayName(preferredRule.model))}
+                    </span>
+                  )}
                 </span>
               </button>
               <div className="px-3 pb-2 pt-2">
@@ -307,6 +341,10 @@ function ModelSelectorBase({
             </div>
             {advancedOpen && (
               <div className="border-t border-neutral-100 pt-1 dark:border-neutral-800">
+                <label className="flex items-center justify-between gap-3 px-4 py-2 text-[11px] text-neutral-600 dark:text-neutral-400">
+                  <span>{t.chatSmartModelShowAll}</span>
+                  <input type="checkbox" checked={showAllModels} onChange={(event) => setShowAllModels(event.target.checked)} />
+                </label>
             {favoriteEntries.length > 0 && (
               <div className="px-1 py-1">
                 <div className="flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-500">

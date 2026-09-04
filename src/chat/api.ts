@@ -705,6 +705,8 @@ const mockChatApi = {
     content: string,
     attachments: PendingAttachment[] = [],
     activeSkillId?: string | null,
+    _routingFallbacks?: ModelRef[],
+    _routingPolicyVersion?: number | null,
   ): Promise<Conversation> {
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
@@ -1650,6 +1652,8 @@ export const chatApi = {
     content: string,
     attachments: PendingAttachment[] = [],
     activeSkillId?: string | null,
+    routingFallbacks: ModelRef[] = [],
+    routingPolicyVersion?: number | null,
   ): Promise<Conversation> {
     if (!isTauriRuntime()) {
       return mockChatApi.sendMessage(conversationId, content, attachments, activeSkillId)
@@ -1667,6 +1671,8 @@ export const chatApi = {
         attachments: diskPaths,
         textAttachments,
         activeSkillId,
+        routingFallbacks,
+        routingPolicyVersion: routingPolicyVersion ?? null,
       }
     )
     if (!result.success || !result.conversation) {

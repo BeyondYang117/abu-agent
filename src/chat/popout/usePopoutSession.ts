@@ -52,6 +52,7 @@ import type {
 } from '../../api/tauri'
 import type { Lang } from '../../settings/i18n'
 import { loadSmartModelEnabled, loadSmartModelQuality, selectSmartModel } from '../smartModelRouting'
+import { getModelRoutingPolicy } from '../modelRoutingPolicy'
 
 export function usePopoutSession(conversationId: string, lang: Lang) {
   const [conversation, setConversation] = useState<Conversation | null>(null)
@@ -347,6 +348,8 @@ export function usePopoutSession(conversationId: string, lang: Lang) {
     const trimmed = content.trim()
     if (!trimmed && attachments.length === 0) return false
     let conv = conversation
+    let routingFallbacks: Array<{ provider_id: string; model: string }> = []
+    let routingPolicyVersion: number | null = null
     if (!conv) return false
     if (normalizeAgentRuntime(conv).kind !== 'external' && loadSmartModelEnabled()) {
       try {
@@ -367,6 +370,7 @@ export function usePopoutSession(conversationId: string, lang: Lang) {
             apiFormat: 'openai_chat',
           }]
         }
+        const routingPolicy = await getModelRoutingPolicy()
         const route = selectSmartModel({
           providers: modelProviders,
           content: trimmed,
@@ -374,13 +378,38 @@ export function usePopoutSession(conversationId: string, lang: Lang) {
           quality: loadSmartModelQuality(),
           recommended,
           current: { providerId: conv.provider_id, model: conv.model },
+          policy: routingPolicy,
+          rolloutKey: settings.abu_api_device_id || conv.id,
         })
-        if (route && (route.providerId !== conv.provider_id || route.model !== conv.model)) {
-          conv = await chatApi.updateConversation(conversationId, {
-            providerId: route.providerId,
-            model: route.model,
+        if (!route && routingPolicy) {
+          const hasImage = attachments.some((attachment) => attachment.type === 'image')
+          setStreamCoarse({
+            streamError: lang === 'zh'
+              ? `当前策略没有可用的${hasImage ? '视觉' : ''}模型，请切换档位、稍后重试，或在高级设置中手动选择模型。`
+              : `No ${hasImage ? 'vision-capable ' : ''}model is currently available for this policy. Change tier, retry later, or choose a model manually.`,
           })
-          setConversation(conv)
+          return false
+        }
+        if (route && (route.providerId !== conv.provider_id || route.model !== conv.model)) {
+          try {
+            conv = await chatApi.updateConversation(conversationId, {
+              providerId: route.providerId,
+              model: route.model,
+            })
+            setConversation(conv)
+          } catch (error) {
+            setStreamCoarse({
+              streamError: typeof error === 'string' ? error : (error as Error).message || '模型切换失败',
+            })
+            return false
+          }
+        }
+        if (route) {
+          routingFallbacks = (route.fallbacks ?? []).map((fallback) => ({
+            provider_id: fallback.providerId,
+            model: fallback.model,
+          }))
+          routingPolicyVersion = route.policyVersion ?? null
         }
       } catch (error) {
         console.warn('Smart model routing failed; using the current model:', error)
@@ -419,6 +448,8 @@ export function usePopoutSession(conversationId: string, lang: Lang) {
         trimmed,
         attachments,
         conv.active_skill_id ?? conv.activeSkillId,
+        routingFallbacks,
+        routingPolicyVersion,
       )
       setConversation(persisted)
       setPendingUserMessage(null)

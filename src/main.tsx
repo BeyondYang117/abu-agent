@@ -6,6 +6,7 @@ import 'streamdown/styles.css'
 import { abuApiAuthStore } from './api/abuApiAuth'
 import { api } from './api/tauri'
 import { initAbuApiClient, DEFAULT_ABU_API_BASE_URL } from './api/abuApi'
+import { syncModelRoutingPolicy } from './chat/modelRoutingPolicy'
 
 // 屏蔽 WebView 原生右键菜单（Back/Reload/Inspect）
 document.addEventListener('contextmenu', (e) => e.preventDefault())
@@ -23,6 +24,7 @@ api
     // 如果已登录，初始化 ABU API 客户端
     if (config.session_token) {
       initAbuApiClient(config.base_url || DEFAULT_ABU_API_BASE_URL, config.session_token)
+      void syncModelRoutingPolicy()
     }
   })
   .catch((err: unknown) => {

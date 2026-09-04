@@ -952,6 +952,12 @@ export type ModelProvider = {
   request?: ProviderRequestConfig
 }
 
+export type ModelRoutingPolicyCache = {
+  version: number
+  fetched_at: number
+  payload: unknown
+}
+
 // 提供商连接测试输入（支持使用未保存的配置进行测试）
 export type ProviderConnectionInput = {
   id?: string
@@ -2027,6 +2033,10 @@ export const api = {
     }>('abu_api_get_user_info'),
   abuApiListModels: () =>
     invoke<{ models: string[]; recommended: string }>('abu_api_list_models'),
+  abuApiGetCachedModelRoutingPolicy: () =>
+    invoke<ModelRoutingPolicyCache | null>('abu_api_get_cached_model_routing_policy'),
+  abuApiSyncModelRoutingPolicy: () =>
+    invoke<ModelRoutingPolicyCache>('abu_api_sync_model_routing_policy'),
   abuApiListEntitlements: () =>
     invoke<Array<{
       id: number

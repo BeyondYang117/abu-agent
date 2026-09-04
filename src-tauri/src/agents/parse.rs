@@ -47,6 +47,16 @@ pub fn parse_agent_markdown(
         .get("model")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let model_policy = frontmatter
+        .get("modelPolicy")
+        .or_else(|| frontmatter.get("model_policy"))
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| matches!(s.as_str(), "inherit" | "smart" | "manual"))
+        .unwrap_or_else(|| if model.is_some() { "manual".to_string() } else { "smart".to_string() });
+    let provider = frontmatter
+        .get("provider")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let tools = parse_list_value(frontmatter.get("tools"));
     // Industry convention spells the denylist `disallowedTools` (camelCase);
     // ABU Agent's own frontmatter style is snake_case, so accept both (camelCase wins).
@@ -64,6 +74,8 @@ pub fn parse_agent_markdown(
         description,
         system_prompt,
         model,
+        model_policy,
+        provider,
         tools,
         disallowed_tools,
         skills,
@@ -146,5 +158,16 @@ mod tests {
         let def = parse_agent_markdown("x", raw, "user", None).unwrap();
         assert!(def.disallowed_tools.is_empty());
         assert!(def.skills.is_empty());
+        assert_eq!(def.model_policy, "smart");
+    }
+
+    #[test]
+    fn parses_all_model_policies_and_manual_provider() {
+        let inherit = parse_agent_markdown("x", "---\nname: x\nmodelPolicy: inherit\n---\nbody", "user", None).unwrap();
+        assert_eq!(inherit.model_policy, "inherit");
+        let manual = parse_agent_markdown("x", "---\nname: x\nmodelPolicy: manual\nprovider: p\nmodel: m\n---\nbody", "user", None).unwrap();
+        assert_eq!(manual.model_policy, "manual");
+        assert_eq!(manual.provider.as_deref(), Some("p"));
+        assert_eq!(manual.model.as_deref(), Some("m"));
     }
 }

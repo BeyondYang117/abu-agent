@@ -163,6 +163,13 @@ pub struct SubAgentTaskRecord {
     /// surfaced on the parent tool card. None until the run completes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<SubAgentUsage>,
+    pub model_policy: String,
+    pub provider_id: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_policy_version: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
 }
 
 /// Compact token usage for a finished sub-agent run, derived from the run's
@@ -618,6 +625,8 @@ fn resolve_sub_agent_provider_model(
     parent_provider_id: &str,
     parent_model: &str,
     def_model: Option<&str>,
+    model_policy: &str,
+    def_provider: Option<&str>,
 ) -> Result<(ModelProvider, String), String> {
     let parent_provider = || {
         settings
@@ -626,8 +635,19 @@ fn resolve_sub_agent_provider_model(
             .ok_or_else(|| "Parent chat provider not found".to_string())
     };
 
-    // Tier 1: definition override — parent provider, definition's model.
-    if let Some(m) = def_model.map(str::trim).filter(|m| !m.is_empty()) {
+    if model_policy == "inherit" {
+        return Ok((parent_provider()?, parent_model.to_string()));
+    }
+
+    // Manual definitions may bind both provider and model.
+    if model_policy == "manual" {
+        let m = def_model.map(str::trim).filter(|m| !m.is_empty())
+            .ok_or_else(|| "Manual sub-agent model policy requires model".to_string())?;
+        if let Some(provider_id) = def_provider.map(str::trim).filter(|id| !id.is_empty()) {
+            let provider = settings.get_provider(provider_id).cloned()
+                .ok_or_else(|| "Manual sub-agent provider not found".to_string())?;
+            return Ok((provider, m.to_string()));
+        }
         return Ok((parent_provider()?, m.to_string()));
     }
 
@@ -1053,20 +1073,76 @@ pub fn handle_agent_spawn<'a>(
         let mut def = def.clone();
         apply_inline_overrides(&mut def, ctx.arguments);
 
-        // Provider/model resolution, three tiers:
-        //   1. agent definition `model` field — highest, resolved against the
-        //      PARENT provider (pre-existing semantics, ignores the global override)
-        //   2. global sub-agent override (settings.chat_tools.sub_agent_*) —
-        //      switches provider AND model, allowing a cheap cross-provider model
-        //   3. parent conversation provider+model — the default (follow)
-        // Runtime defense: an unusable override provider falls back to the parent
-        // rather than failing the spawn (sanitize_settings normally prevents this).
-        let (provider, model) = resolve_sub_agent_provider_model(
-            &settings,
-            &parent_conversation.provider_id,
-            &parent_conversation.model,
-            def.model.as_deref(),
-        )?;
+        // Resolve inherit/manual directly; smart uses the published cached policy
+        // and falls back to the legacy global/parent selection when unavailable.
+        let mut routing_policy_version = None;
+        let (provider, model) = if settings.is_cloud_runtime() {
+            let mut model = match def.model_policy.as_str() {
+                "manual" => def
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                    .ok_or_else(|| "Manual sub-agent model policy requires model".to_string())?
+                    .to_string(),
+                _ => parent_conversation.model.clone(),
+            };
+            if def.model_policy == "smart" {
+                if let Some(route) = crate::abu_api::select_cached_model_for_subtask(
+                    &settings,
+                    &prompt,
+                    &parent_conversation.provider_id,
+                    &parent_conversation.model,
+                    &parent_conversation.id,
+                ) {
+                    model = route.model;
+                    routing_policy_version = Some(route.version);
+                }
+            }
+            let session_token = settings
+                .abu_api_session_token
+                .as_deref()
+                .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
+            let credentials = crate::abu_api::fetch_agent_relay_credentials(
+                settings.abu_api_base_url_or_default(),
+                session_token,
+                &model,
+            )
+            .await?;
+            (
+                crate::chat::model::create_abu_api_virtual_provider(
+                    settings.abu_api_base_url_or_default(),
+                    &credentials.api_key,
+                    &model,
+                ),
+                model,
+            )
+        } else {
+            let (mut provider, mut model) = resolve_sub_agent_provider_model(
+                &settings,
+                &parent_conversation.provider_id,
+                &parent_conversation.model,
+                def.model.as_deref(),
+                &def.model_policy,
+                def.provider.as_deref(),
+            )?;
+            if def.model_policy == "smart" {
+                if let Some(route) = crate::abu_api::select_cached_model_for_subtask(
+                    &settings,
+                    &prompt,
+                    &parent_conversation.provider_id,
+                    &parent_conversation.model,
+                    &parent_conversation.id,
+                ) {
+                    if let Some(routed_provider) = settings.get_provider(&route.provider_id) {
+                        provider = routed_provider.clone();
+                        model = route.model;
+                        routing_policy_version = Some(route.version);
+                    }
+                }
+            }
+            (provider, model)
+        };
         if provider.api_keys.is_empty() {
             return Ok(err_result(
                 "Sub-agent provider has no API key configured.".to_string(),
@@ -1200,6 +1276,11 @@ pub fn handle_agent_spawn<'a>(
             created_at: chrono::Local::now().timestamp(),
             completed_at: None,
             usage: None,
+            model_policy: def.model_policy.clone(),
+            provider_id: provider.id.clone(),
+            model: model.clone(),
+            routing_policy_version,
+            fallback_reason: None,
         });
 
         // Arm the drop backstop as soon as the record exists: a drop while
@@ -1364,6 +1445,24 @@ fn compute_sub_agent_finalization(
         agent_type,
         model,
     } = *params;
+    let routing_metadata = manager.get(task_id);
+
+    let attach_routing_metadata = |structured: &mut Value| {
+        let Some(metadata) = routing_metadata.as_ref() else {
+            return;
+        };
+        let Some(object) = structured.as_object_mut() else {
+            return;
+        };
+        object.insert("providerId".to_string(), Value::String(metadata.provider_id.clone()));
+        object.insert("modelPolicy".to_string(), Value::String(metadata.model_policy.clone()));
+        if let Some(version) = metadata.routing_policy_version {
+            object.insert("routingPolicyVersion".to_string(), Value::Number(version.into()));
+        }
+        if let Some(reason) = metadata.fallback_reason.as_ref() {
+            object.insert("fallbackReason".to_string(), Value::String(reason.clone()));
+        }
+    };
 
     match outcome {
         // A cancelled run (own stop or parent cascade) now returns
@@ -1374,7 +1473,7 @@ fn compute_sub_agent_finalization(
         // "content" is just the stopped-generation placeholder.
         Ok(run) if run.stream_outcome == "cancelled" => {
             manager.finish(task_id, SubAgentStatus::Cancelled, None, None, None);
-            let structured = serde_json::json!({
+            let mut structured = serde_json::json!({
                 "type": "subagent",
                 "taskId": task_id,
                 "name": name,
@@ -1383,6 +1482,7 @@ fn compute_sub_agent_finalization(
                 "status": "cancelled",
                 "error": "cancelled",
             });
+            attach_routing_metadata(&mut structured);
             McpToolCallResult {
                 content: format!("[Sub-agent: {} ({})] cancelled", name, agent_type),
                 is_error: false,
@@ -1423,6 +1523,7 @@ fn compute_sub_agent_finalization(
                     );
                 }
             }
+            attach_routing_metadata(&mut structured);
             McpToolCallResult {
                 content: format!("[Sub-agent: {} ({})]\n\n{}", name, agent_type, content),
                 is_error: false,
@@ -1449,7 +1550,7 @@ fn compute_sub_agent_finalization(
                 err.clone()
             };
             manager.finish(task_id, status, None, Some(display_err.clone()), None);
-            let structured = serde_json::json!({
+            let mut structured = serde_json::json!({
                 "type": "subagent",
                 "taskId": task_id,
                 "name": name,
@@ -1458,6 +1559,7 @@ fn compute_sub_agent_finalization(
                 "status": if cancelled { "cancelled" } else { "failed" },
                 "error": display_err,
             });
+            attach_routing_metadata(&mut structured);
             McpToolCallResult {
                 content: format!(
                     "[Sub-agent: {} ({})] failed: {}",
@@ -1614,6 +1716,8 @@ mod tests {
             description: description.to_string(),
             system_prompt: "base persona".to_string(),
             model: None,
+            model_policy: "smart".to_string(),
+            provider: None,
             tools: vec!["read".to_string()],
             disallowed_tools: Vec::new(),
             skills: Vec::new(),
@@ -1886,6 +1990,7 @@ mod tests {
             created_at: 100,
             completed_at: None,
             usage: None,
+            model_policy: "smart".to_string(), provider_id: "p".to_string(), model: "m".to_string(), routing_policy_version: None, fallback_reason: None,
         });
         assert_eq!(manager.get("agent-1").unwrap().name, "researcher");
         assert_eq!(manager.get("researcher").unwrap().id, "agent-1");
@@ -1914,6 +2019,7 @@ mod tests {
             created_at: 0,
             completed_at: None,
             usage: None,
+            model_policy: "smart".to_string(), provider_id: "p".to_string(), model: "m".to_string(), routing_policy_version: None, fallback_reason: None,
         }
     }
 
@@ -1951,6 +2057,7 @@ mod tests {
             created_at: 0,
             completed_at: None,
             usage: None,
+            model_policy: "smart".to_string(), provider_id: "p".to_string(), model: "m".to_string(), routing_policy_version: None, fallback_reason: None,
         });
         // MAX + 50 completed tasks, ascending completed_at so we know the order.
         for i in 0..(MAX_SUB_AGENT_TASKS + 50) {
@@ -1965,6 +2072,7 @@ mod tests {
                 created_at: i as i64 + 1,
                 completed_at: Some(i as i64 + 1),
                 usage: None,
+                model_policy: "smart".to_string(), provider_id: "p".to_string(), model: "m".to_string(), routing_policy_version: None, fallback_reason: None,
             });
         }
         // Capped.
@@ -2269,7 +2377,7 @@ mod tests {
     fn sub_agent_model_follows_parent_by_default() {
         let settings = settings_with_providers(vec![named_provider("parent-p")]);
         let (provider, model) =
-            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None, "smart", None)
                 .expect("resolves");
         assert_eq!(provider.id, "parent-p");
         assert_eq!(model, "parent-model");
@@ -2282,7 +2390,7 @@ mod tests {
         settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
         settings.chat_tools.sub_agent_model = "cheap-model".to_string();
         let (provider, model) =
-            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None, "smart", None)
                 .expect("resolves");
         assert_eq!(provider.id, "cheap-p");
         assert_eq!(model, "cheap-model");
@@ -2300,10 +2408,48 @@ mod tests {
             "parent-p",
             "parent-model",
             Some("def-model"),
+            "manual",
+            None,
         )
         .expect("resolves");
         assert_eq!(provider.id, "parent-p");
         assert_eq!(model, "def-model");
+    }
+
+    #[test]
+    fn inherit_ignores_manual_and_global_overrides() {
+        let mut settings =
+            settings_with_providers(vec![named_provider("parent-p"), named_provider("cheap-p")]);
+        settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
+        settings.chat_tools.sub_agent_model = "cheap-model".to_string();
+        let (provider, model) = resolve_sub_agent_provider_model(
+            &settings,
+            "parent-p",
+            "parent-model",
+            Some("definition-model"),
+            "inherit",
+            Some("cheap-p"),
+        )
+        .expect("resolves");
+        assert_eq!(provider.id, "parent-p");
+        assert_eq!(model, "parent-model");
+    }
+
+    #[test]
+    fn manual_can_select_an_explicit_provider() {
+        let settings =
+            settings_with_providers(vec![named_provider("parent-p"), named_provider("manual-p")]);
+        let (provider, model) = resolve_sub_agent_provider_model(
+            &settings,
+            "parent-p",
+            "parent-model",
+            Some("manual-model"),
+            "manual",
+            Some("manual-p"),
+        )
+        .expect("resolves");
+        assert_eq!(provider.id, "manual-p");
+        assert_eq!(model, "manual-model");
     }
 
     #[test]
@@ -2316,14 +2462,14 @@ mod tests {
         settings.chat_tools.sub_agent_provider_id = "cheap-p".to_string();
         settings.chat_tools.sub_agent_model = "cheap-model".to_string();
         let (provider, model) =
-            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None, "smart", None)
                 .expect("resolves");
         assert_eq!(provider.id, "parent-p");
         assert_eq!(model, "parent-model");
 
         settings.chat_tools.sub_agent_provider_id = "missing-p".to_string();
         let (provider, model) =
-            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None)
+            resolve_sub_agent_provider_model(&settings, "parent-p", "parent-model", None, "smart", None)
                 .expect("resolves");
         assert_eq!(provider.id, "parent-p");
         assert_eq!(model, "parent-model");
