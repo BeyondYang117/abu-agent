@@ -3439,6 +3439,62 @@ button.chat-composer-status-item:hover {
   background: #28c840;
 }
 
+/* Floating status pill shown while the Chat window is minimized. */
+.status-indicator {
+  width: 64px;
+  height: 64px;
+  min-height: 64px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--theme-text, #171717);
+  box-shadow: none;
+  text-align: left;
+  cursor: pointer;
+  transition: width .22s ease, transform .18s ease, box-shadow .18s ease;
+  overflow: visible;
+  position: relative;
+  user-select: none;
+}
+.status-indicator:not(.is-expanded) { filter: drop-shadow(0 5px 10px rgba(20, 46, 105, .18)); }
+.status-indicator::before { content: none; }
+.status-indicator.is-expanded { width: 286px; height: 72px; min-height: 72px; padding: 8px; border-radius: 22px; border: 1px solid rgba(157, 180, 224, .24); background: linear-gradient(135deg, rgba(22, 30, 49, .97), rgba(13, 19, 34, .94)); color: #f8fafc; box-shadow: 0 14px 34px rgba(0, 0, 0, .32), inset 0 1px 0 rgba(255,255,255,.07); }
+.status-indicator:hover { transform: translateY(-1px); }
+.status-indicator.is-dragging { cursor: grabbing; transform: scale(1.02); }
+.status-indicator__pet { position: relative; width: 64px; height: 64px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: rgba(248, 250, 252, .92); box-shadow: 0 4px 12px rgba(15, 23, 42, .16); transition: transform .2s ease; z-index: 1; }
+.status-indicator__pet .kv-stream-logo { display: block; }
+.status-indicator:hover .status-indicator__pet { transform: rotate(-7deg) scale(1.04); }
+.status-indicator__dot {
+  width: 11px;
+  height: 11px;
+  margin-top: 3px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, .16);
+}
+.status-indicator--working .status-indicator__dot { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245, 158, 11, .16); animation: status-pulse 1.2s ease-in-out infinite; }
+.status-indicator--error .status-indicator__dot { background: #ef4444; box-shadow: 0 0 0 4px rgba(239, 68, 68, .16); }
+.status-indicator--working .status-indicator__pet { background: rgba(255, 248, 230, .94); }
+.status-indicator--error .status-indicator__pet { background: rgba(255, 241, 242, .94); }
+.status-indicator__copy { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.status-indicator:not(.is-expanded) .status-indicator__copy { opacity: 0; width: 0; overflow: hidden; }
+.status-indicator__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.status-indicator__menu-button { border: 0; background: transparent; color: var(--theme-muted, #737373); padding: 2px; border-radius: 5px; cursor: pointer; }
+.status-indicator__menu-button:hover { background: rgba(127,127,127,.14); color: inherit; }
+.status-indicator__copy strong { font-size: 12px; line-height: 1.1; }
+.status-indicator__copy small { color: rgba(226, 232, 240, .7); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-indicator form { margin-top: 3px; }
+.status-indicator input { width: 100%; border: 1px solid rgba(148, 163, 184, .2); outline: 0; border-radius: 7px; padding: 4px 7px; background: rgba(255, 255, 255, .08); color: inherit; font-size: 11px; }
+.status-indicator__menu { position: absolute; right: 10px; top: calc(100% + 7px); z-index: 4; display: grid; gap: 2px; min-width: 132px; padding: 5px; border: 1px solid rgba(157, 180, 224, .24); border-radius: 10px; background: #151e32; color: #f8fafc; box-shadow: 0 8px 24px rgba(0,0,0,.28); }
+.status-indicator__menu button { display: flex; align-items: center; gap: 7px; border: 0; border-radius: 6px; padding: 6px 8px; background: transparent; color: inherit; font-size: 11px; text-align: left; cursor: pointer; }
+.status-indicator__menu button:hover { background: rgba(127,127,127,.12); }
+@keyframes status-pulse { 50% { transform: scale(.72); opacity: .6; } }
+
 /* Windows / Linux 全宽标题栏带：无独立底色（透出窗口底色）、无底边框，整条可拖拽。
    会话页的业务控件也在这一条里 —— 非 mac 没有主区 52px 顶栏，chrome 只此一行，
    所以高度按 32px 胶囊控件取 44（38 只够放三键，装不下控件）。

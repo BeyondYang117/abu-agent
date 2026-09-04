@@ -479,6 +479,57 @@ pub fn ensure_chat_window_with_hash(app: &AppHandle, hash: &str) -> Result<Webvi
     builder.build().map_err(|e| e.to_string())
 }
 
+/// 显示或隐藏最小化后的任务状态指示灯。
+/// The status window is deliberately tiny and independent from the Chat webview so it remains
+/// visible while Chat is minimized.
+#[tauri::command]
+pub fn set_chat_status_indicator(app: AppHandle, visible: bool) -> Result<(), String> {
+    let window = if let Some(window) = app.get_webview_window("status") {
+        window
+    } else {
+        WebviewWindowBuilder::new(
+            &app,
+            "status",
+            WebviewUrl::App("index.html#status".into()),
+        )
+        .title("ABU Agent status")
+        .inner_size(320.0, 100.0)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        // The status control draws its own compact shadow. A native shadow on a transparent
+        // window creates the uneven halo visible around the ball on macOS.
+        .shadow(false)
+        .focused(false)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?
+    };
+
+    if visible {
+        let _ = window.show();
+        let _ = window.set_always_on_top(true);
+    } else {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
+/// Bring Chat back when the user clicks the floating status indicator.
+#[tauri::command]
+pub fn show_chat_window(app: AppHandle) -> Result<(), String> {
+    crate::shortcuts::open_chat_window(&app)
+}
+
+#[tauri::command]
+pub fn show_system_notification(title: String, body: String) {
+    crate::automation::notify::show(&title, &body);
+}
+
 const POPOUT_DEFAULT_INNER_WIDTH: f64 = 720.0;
 const POPOUT_DEFAULT_INNER_HEIGHT: f64 = 800.0;
 const POPOUT_MIN_INNER_WIDTH: f64 = 480.0;

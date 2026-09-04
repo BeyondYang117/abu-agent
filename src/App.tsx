@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
-import { Settings as SettingsIcon, Cpu } from 'lucide-react'
+import { Cpu } from 'lucide-react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { api, isTauriRuntime } from './api/tauri'
@@ -22,11 +23,14 @@ import { isChatPopoutPath } from './chat/popout/popoutRoutes'
 import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import { normalizeThemeColorId } from './themeColors'
 import { nextThemeMode, type ThemeMode } from './chat/themeMode'
+import { FloatingBall } from './components/FloatingBall'
+import './components/FloatingBall.css'
 import './index.css'
 
 const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
 const ChatPopout = lazy(() => import('./chat/popout/ChatPopout'))
+
 
 /**
  * 翻译器主组件
@@ -502,6 +506,31 @@ function App() {
     }
   }, [mode, persistChatWindowGeometry])
 
+  // Keep the tiny status window in sync with Chat minimization. It is independent from the
+  // Chat webview, so it can stay above other apps while the main window is minimized.
+  useEffect(() => {
+    if (mode !== 'chat' || !isTauriRuntime()) return
+    let cancelled = false
+    const sync = async () => {
+      try {
+        const win = (await import('@tauri-apps/api/window')).getCurrentWindow()
+        const minimized = await win.isMinimized()
+        const suppressed = window.localStorage.getItem('abu-status-dismissed') === '1'
+          || window.localStorage.getItem('abu-status-hidden') === '1'
+        if (!cancelled) await api.setChatStatusIndicator(minimized && !suppressed)
+      } catch {
+        // Browser preview and early window teardown are both harmless here.
+      }
+    }
+    void sync()
+    const timer = window.setInterval(() => void sync(), 500)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      void api.setChatStatusIndicator(false)
+    }
+  }, [mode])
+
   // 根据当前模式调整窗口大小
   useEffect(() => {
     const resize = async () => {
@@ -529,6 +558,9 @@ function App() {
         <Lens />
       </Suspense>
     )
+  }
+  if (mode === 'status') {
+    return <FloatingBall themeMode={themeMode} />
   }
   const chatSuspenseFallback = (
     <div className="flex h-full w-full items-center justify-center bg-transparent">

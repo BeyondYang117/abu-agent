@@ -58,10 +58,9 @@ pub(crate) struct RunState {
     pub(crate) tried_skill_only_tools: bool,
     pub(crate) planning_final_message: Option<Value>,
     pub(crate) planning_final_streamed: bool,
-    /// 空响应重试守门（一次）：抽风网关会间歇性返回 200 + 空正文（无文本无工具调用）。
-    /// 第一次遇到时 planning 返回 `RetryEmptyResponse` 原地重试；已重试过则照旧走
-    /// FinalAnswer → finalize 报 "empty assistant response"。
-    pub(crate) planning_empty_retried: bool,
+    /// 空响应重试次数：抽风网关会间歇性返回 200 + 空正文（无文本无工具调用）。
+    /// 由 planning 阶段按 `config.retry_attempts` 有界重试，避免把空回复直接当成成功。
+    pub(crate) planning_empty_attempts: usize,
     /// 待注入的用户插话本地队列（对齐 pi `PendingMessageQueue`）：信箱一次取空后暂存在
     /// 这里，`inject_steering_messages` 每个轮次边界只弹一条（one-at-a-time），剩余的由
     /// 后续边界与 FinalAnswer 边界的 `steering_pending` 检查保证送达。
@@ -243,7 +242,7 @@ pub async fn run_agent_loop(
         tried_skill_only_tools: false,
         planning_final_message: None,
         planning_final_streamed: false,
-        planning_empty_retried: false,
+        planning_empty_attempts: 0,
         pending_steering: std::collections::VecDeque::new(),
         pending_follow_up: std::collections::VecDeque::new(),
         skill_cache: skills::SkillRunCache::default(),

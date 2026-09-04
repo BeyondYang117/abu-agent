@@ -242,6 +242,28 @@ pub(crate) fn classify(message: &str) -> FailureKind {
     }
 }
 
+/// Whether repeating the same model request can reasonably recover.
+///
+/// Transport retries already happen below this layer, but an exhausted 5xx /
+/// timeout or a successful empty response may still be transient. Deterministic
+/// failures (auth, billing, moderation, malformed requests, context overflow)
+/// must surface immediately or use their dedicated recovery path.
+pub(crate) fn is_retryable_agent_failure(message: &str) -> bool {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let kind = classify(trimmed);
+    match kind {
+        FailureKind::Timeout => true,
+        FailureKind::Exhausted => matches!(crate::api::extract_status_code(trimmed), Some(429) | Some(500..=599)),
+        FailureKind::Empty
+        | FailureKind::ContentModeration
+        | FailureKind::ContextOverflow
+        | FailureKind::Other => false,
+    }
+}
+
 /// 策略:给定失败类型 + 上下文,决定动作。集中表达,取代各阶段散落判断。
 ///
 /// `has_tool_results`:本轮是否已产生工具结果(决定能否兜底)。

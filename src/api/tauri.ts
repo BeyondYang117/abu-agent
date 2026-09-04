@@ -2,7 +2,7 @@
 // 所有 invoke 调用和事件监听都集中在这里，作为前后端的统一接口层
 
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { listen, emit } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { normalizeThemeColorId } from '../themeColors'
@@ -2232,6 +2232,14 @@ export const api = {
     const win = getCurrentWindow()
     await win.setFocus()
   },
+  setChatStatusIndicator: (visible: boolean) =>
+    invoke<void>('set_chat_status_indicator', { visible }),
+  showChatWindow: () => invoke<void>('show_chat_window'),
+  showSystemNotification: (title: string, body: string) =>
+    invoke<void>('show_system_notification', { title, body }),
+  sendChatQuickQuestion: (content: string) => emit('chat-quick-question', { content }),
+  onChatQuickQuestion: (listener: (payload: { content: string }) => void) =>
+    on<{ content: string }>('chat-quick-question', listener),
   startDragging: async () => {
     const win = getCurrentWindow()
     await win.startDragging()

@@ -2663,6 +2663,22 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     }
   }, [openEmbeddedSettings])
 
+  // The minimized status pill can send a quick question without owning a second composer.
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    api.onChatQuickQuestion((payload) => {
+      if (!cancelled && payload.content?.trim()) insertTextIntoComposer(payload.content.trim())
+    }).then((dispose) => {
+      if (cancelled) dispose()
+      else unlisten = dispose
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
 
   useEffect(() => {
     if (!isTauriRuntime()) return

@@ -385,9 +385,9 @@ pub(crate) async fn planning_step(
         // 时正文本就是空串——图即答案，重试只会再生成一张，必须放行。
         if response.trim().is_empty()
             && state.generated_images.is_empty()
-            && !state.planning_empty_retried
+            && !state.planning_empty_attempts
         {
-            state.planning_empty_retried = true;
+            state.planning_empty_attempts = true;
             eprintln!("Chat tools planning returned an empty response; retrying once");
             return Ok(PlanningStepOutcome::RetryEmptyResponse);
         }

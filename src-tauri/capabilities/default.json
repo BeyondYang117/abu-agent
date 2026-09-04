@@ -6,7 +6,8 @@
       "chat",
       "chat-popout-*",
       "lens",
-      "translate"
+      "translate",
+      "status"
   ],
   "permissions": [
     "core:default",
