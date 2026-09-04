@@ -55,6 +55,7 @@ function ModelSelectorBase({
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [cloudError, setCloudError] = useState<string | null>(null)
+  const [cloudMode, setCloudMode] = useState(false)
   const [smartEnabled, setSmartEnabled] = useState(loadSmartModelEnabled)
   const [smartQuality, setSmartQuality] = useState<SmartModelQuality>(loadSmartModelQuality)
   const [advancedOpen, setAdvancedOpen] = useState(() => !loadSmartModelEnabled())
@@ -67,6 +68,7 @@ function ModelSelectorBase({
     try {
       const settings = await getSettingsCached()
       const isCloud = settings.runtimeMode?.trim().toLowerCase() === 'cloud'
+      setCloudMode(isCloud)
 
       if (isCloud) {
         // Cloud 模式：从 listModels() 获取模型列表
@@ -111,6 +113,7 @@ function ModelSelectorBase({
           apiFormat: 'openai_chat',
         },
       ])
+      setCloudMode(false)
     }
   }, [currentModel, currentProviderId])
 
@@ -123,11 +126,13 @@ function ModelSelectorBase({
       // contain the local provider list and must not overwrite the virtual cloud
       // provider after its model request completes.
       if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+        setCloudMode(true)
         // Login/settings refresh can switch an already-mounted chat into Cloud
         // mode; reload the server-backed virtual provider instead of using the
         // local provider array from the settings snapshot.
         void loadSettings()
       } else {
+        setCloudMode(false)
         setProviders(settings.providers || [])
         setCloudError(null)
       }
@@ -162,6 +167,28 @@ function ModelSelectorBase({
   const preferredRule = routingPolicy?.rules
     .filter((rule) => rule.enabled && rule.healthy && rule.tiers.includes(smartQuality))
     .sort((a, b) => (b.task_scores.creative + b.priority) - (a.task_scores.creative + a.priority))[0]
+
+  // Keep the server-side tier mapping visible so Smart Select does not feel like a black box.
+  const cloudTierModels = useMemo(() => {
+    const tiers: SmartModelQuality[] = ['fast', 'balanced', 'quality']
+    return Object.fromEntries(tiers.map((tier) => {
+      const recommended = routingPolicy?.recommended[tier]
+      const fallbacks = routingPolicy?.fallbacks[tier] ?? []
+      const policyModels = routingPolicy?.rules
+        .filter((rule) => rule.enabled && rule.healthy && rule.tiers.includes(tier))
+        .sort((a, b) => b.priority - a.priority || b.fallback_priority - a.fallback_priority)
+        .map((rule) => rule.model) ?? []
+      // The policy is the source of truth for smart routing. Keep its model IDs
+      // visible even when the catalog request is briefly behind the policy sync.
+      const models = [...new Set([recommended, ...fallbacks, ...policyModels].filter((model): model is string => Boolean(model)))]
+      const visibleModels = models.slice(0, 4)
+      return [tier, visibleModels]
+    })) as Record<SmartModelQuality, string[]>
+  }, [providers, routingPolicy])
+  const hasCloudTierMap = Boolean(routingPolicy && (
+    Object.values(routingPolicy.recommended).some(Boolean)
+    || Object.values(routingPolicy.fallbacks).some((models) => Array.isArray(models) && models.length > 0)
+  ))
 
   // 收藏置顶组：按存储顺序，过滤掉失效的（provider 已删/禁用/模型已不在列表）。
   const favoriteEntries = useMemo(() => {
@@ -328,6 +355,31 @@ function ModelSelectorBase({
                     </button>
                   ))}
                 </div>
+                {cloudMode && hasCloudTierMap && (
+                  <div className="mt-2 grid grid-cols-3 gap-1.5" aria-label={lang === 'zh' ? '云端档位模型' : 'Cloud tier models'}>
+                    {(['fast', 'balanced', 'quality'] as const).map((tier) => {
+                      const models = cloudTierModels[tier]
+                      const label = tier === 'fast'
+                        ? t.chatSmartModelFast
+                        : tier === 'balanced'
+                          ? t.chatSmartModelBalanced
+                          : t.chatSmartModelQuality
+                      return (
+                        <div
+                          key={tier}
+                          className={`min-w-0 rounded-md border px-2 py-1.5 ${smartQuality === tier ? 'border-amber-200 bg-amber-50/70 dark:border-amber-500/30 dark:bg-amber-400/10' : 'border-neutral-100 bg-white/70 dark:border-neutral-700 dark:bg-neutral-900/40'}`}
+                          title={models.join(', ') || (lang === 'zh' ? '暂无可用模型' : 'No models available')}
+                        >
+                          <div className="text-[10px] font-medium text-neutral-400">{label}{lang === 'zh' ? '档位' : ' tier'}</div>
+                          <div className="mt-0.5 truncate text-[10px] text-neutral-700 dark:text-neutral-300">
+                            {models.length > 0 ? models[0] : (lang === 'zh' ? '暂无' : 'None')}
+                          </div>
+                          {models.length > 1 && <div className="text-[9px] text-neutral-400">+{models.length - 1}</div>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
               <button
                 type="button"
