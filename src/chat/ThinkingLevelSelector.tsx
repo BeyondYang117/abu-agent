@@ -3,33 +3,19 @@ import { Brain, Check, ChevronDown } from 'lucide-react'
 import { api } from '../api/tauri'
 import { useT } from '../settings/i18n'
 import { chatTitlebarPillButtonClass } from './platform'
+import { thinkingLevelDescription, thinkingLevelLabel } from './thinkingLevelLabels'
 import type { ThinkingLevel } from './types'
 
 interface ThinkingLevelSelectorProps {
-  /** 当前等级；null = 未显式设置，按默认档 DEFAULT_LEVEL 处理。 */
+  /** 当前等级；null = 自动，由当前模型采用推荐默认值。 */
   value: ThinkingLevel | null
   currentProviderId: string
   currentModel: string
-  onChange: (level: ThinkingLevel) => void
+  onChange: (level: ThinkingLevel | null) => void
 }
 
-// 固定项 + 各等级标签（英文，跨语言更通用）。具体显示哪些等级由后端按模型库决定。
-const LABELS: Record<string, string> = {
-  off: 'Off',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'XHigh',
-  max: 'Max',
-}
-// 未显式选等级时的默认档（与后端 resolve_thinking 保持一致）。
-const DEFAULT_LEVEL: ThinkingLevel = 'high'
 // 未取到模型能力时的安全兜底（全模型通用子集）。
 const FALLBACK_LEVELS = ['low', 'medium', 'high']
-
-function labelFor(value: ThinkingLevel): string {
-  return LABELS[value] ?? value
-}
 
 function ThinkingLevelSelectorBase({
   value,
@@ -73,26 +59,36 @@ function ThinkingLevelSelectorBase({
     }
   }, [currentProviderId, currentModel])
 
-  // null（未显式设置）按默认档处理；存的档若不在当前模型的支持列表里（换模型最常见：
-  // 在 gpt-5.6 选了 xhigh 再切回 gpt-5）就地收敛，UI 永远高亮一个真实存在的等级。
-  const effective = useMemo<ThinkingLevel>(() => {
-    const current = value ?? DEFAULT_LEVEL
-    if (current === 'off' || levels.length === 0 || levels.includes(current)) return current
-    const fixed = levels.includes(DEFAULT_LEVEL) ? DEFAULT_LEVEL : levels[levels.length - 1]
-    return fixed as ThinkingLevel
+  // 存的手动档若不被新模型支持，收敛回自动，避免向 provider 下发非法值。
+  const effective = useMemo<ThinkingLevel | null>(() => {
+    if (value === null || value === 'off' || levels.length === 0 || levels.includes(value)) return value
+    return null
   }, [value, levels])
 
-  // 收敛结果要落盘，否则按钮显示 High、请求却仍按存着的 xhigh 发出去，直接吃 provider 的 400。
+  // 收敛结果要落盘，否则按钮显示自动、请求却仍按旧档位发出去。
   useEffect(() => {
-    if (levelsLoaded && levels.length > 0 && effective !== (value ?? DEFAULT_LEVEL)) onChange(effective)
+    if (levelsLoaded && levels.length > 0 && effective !== value) onChange(effective)
   }, [effective, levelsLoaded, value, levels, onChange])
 
-  const options = useMemo<Array<{ value: ThinkingLevel; label: string }>>(
+  const options = useMemo<Array<{ value: ThinkingLevel | null; label: string; description: string }>>(
     () => [
-      { value: 'off', label: LABELS.off },
-      ...levels.map((l) => ({ value: l as ThinkingLevel, label: LABELS[l] ?? l })),
+      {
+        value: null,
+        label: thinkingLevelLabel(null, t),
+        description: thinkingLevelDescription(null, t),
+      },
+      {
+        value: 'off',
+        label: thinkingLevelLabel('off', t),
+        description: thinkingLevelDescription('off', t),
+      },
+      ...levels.map((level) => ({
+        value: level as ThinkingLevel,
+        label: thinkingLevelLabel(level, t),
+        description: thinkingLevelDescription(level as ThinkingLevel, t),
+      })),
     ],
-    [levels],
+    [levels, t],
   )
 
   // 该模型没有思考等级可调（Claude 3.5 / GLM-4.7 / Kimi K2.x…）→ 不显示这个旋钮。
@@ -104,12 +100,12 @@ function ThinkingLevelSelectorBase({
         type="button"
         onClick={() => setOpen(!open)}
         className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
-        title={t.chatThinkingLevel.replace('{level}', labelFor(effective))}
-        aria-label={t.chatThinkingLevel.replace('{level}', labelFor(effective))}
+        title={t.chatThinkingLevel.replace('{level}', thinkingLevelLabel(effective, t))}
+        aria-label={t.chatThinkingLevel.replace('{level}', thinkingLevelLabel(effective, t))}
       >
         <Brain size={15} className="shrink-0 text-neutral-500 dark:text-neutral-400" />
-        <span className="chat-thinking-level-label max-w-[64px] truncate font-medium text-neutral-800 dark:text-neutral-200">
-          {labelFor(effective)}
+        <span className="chat-thinking-level-label max-w-[88px] truncate font-medium text-neutral-800 dark:text-neutral-200">
+          {thinkingLevelLabel(effective, t)}
         </span>
         <ChevronDown
           size={15}
@@ -120,25 +116,30 @@ function ThinkingLevelSelectorBase({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
-          <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[160px] overflow-y-auto kv-menu">
+          <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[240px] overflow-y-auto kv-menu">
             {options.map((opt) => {
               const active = opt.value === effective
               return (
                 <button
-                  key={opt.value}
+                  key={opt.value ?? 'auto'}
                   type="button"
                   onClick={() => {
                     onChange(opt.value)
                     setOpen(false)
                   }}
-                  className={`kv-menu-row justify-between transition-colors ${
+                  className={`kv-menu-row items-start justify-between py-2 transition-colors ${
                     active
                       ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
                       : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/80'
                   }`}
                 >
-                  <span className="min-w-0 truncate">{opt.label}</span>
-                  {active && <Check size={15} className="shrink-0 text-neutral-500" />}
+                  <span className="min-w-0">
+                    <span className="block truncate">{opt.label}</span>
+                    <span className="mt-0.5 block text-[11px] font-normal leading-4 text-neutral-400">
+                      {opt.description}
+                    </span>
+                  </span>
+                  {active && <Check size={15} className="mt-0.5 shrink-0 text-neutral-500" />}
                 </button>
               )
             })}

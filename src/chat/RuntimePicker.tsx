@@ -9,6 +9,7 @@ import { IconButton } from '../components/Button'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { AgentRuntimeConfig } from './types'
 import { rememberedExternalRuntime } from './lastAgentRuntime'
+import { thinkingLevelDescription, thinkingLevelLabel } from './thinkingLevelLabels'
 import './runtimePicker.css'
 
 const ABU_AGENT_LOGO_SRC = '/logo-mark.png'
@@ -81,17 +82,6 @@ function stripProviderPrefix(label: string): string {
 // 胶囊隐藏模型名里的括号补充（"kimi (kimi-for-coding)" → "kimi"），下拉列表仍保留完整名。
 function stripParenthetical(label: string): string {
   return label.replace(/\s*\([^)]*\)\s*$/, '').trim() || label
-}
-
-/** Codex `model/list` used to label efforts `high — Greater reasoning depth…`. Keep the name. */
-function stripEffortDescription(id: string, label: string): string {
-  const text = (label || id).trim()
-  const sep = ' — '
-  const cut = text.indexOf(sep)
-  if (cut <= 0) return text
-  const head = text.slice(0, cut)
-  if (head === id || head.toLowerCase() === id.toLowerCase()) return id
-  return text
 }
 
 function runtimeDescription(kind: AgentRuntimeConfig['kind'], t: ReturnType<typeof useT>): string {
@@ -497,7 +487,13 @@ function ExternalModelSelectorBase({
   }, [agentRuntime.externalModel, currentModel, reasoningByModel, reasoningOptions])
 
   const reasoningPillValue = agentRuntime.externalReasoning ?? 'default'
-  const currentReasoningLabel = useMemo(() => {
+  const displayReasoningOptions = useMemo(
+    () => activeReasoningOptions.some((option) => option.id === 'default')
+      ? activeReasoningOptions
+      : [{ id: 'default', label: 'Default' }, ...activeReasoningOptions],
+    [activeReasoningOptions],
+  )
+  const currentReasoningId = useMemo(() => {
     const explicit =
       !!agentRuntime.externalReasoning && agentRuntime.externalReasoning !== 'default'
     // 未显式选择时跟模型胶囊同一口径：优先展示 CLI 实际在用的档位，而不是「Auto」。
@@ -508,7 +504,7 @@ function ExternalModelSelectorBase({
         : reasoningPillValue
     const opt = activeReasoningOptions.find((o) => o.id === displayId)
     if (opt) {
-      return mapDefaultLabel(stripEffortDescription(opt.id, opt.label || displayId))
+      return opt.id
     }
     const raw = displayId
     // 未显式选择且探测也没有档位时显示「自动」，不再暴露裸 "Default"。
@@ -518,10 +514,11 @@ function ExternalModelSelectorBase({
       displayId === 'default' ||
       isAcpSwitchId(String(displayId))
     ) {
-      return 'Auto'
+      return 'default'
     }
     return raw
   }, [activeReasoningOptions, agentRuntime.externalReasoning, currentReasoning, reasoningPillValue])
+  const currentReasoningLabel = thinkingLevelLabel(currentReasoningId, t)
   const displayName = useMemo(() => {
     const currentId = agentRuntime.externalModel
     const explicit = !!currentId && currentId !== 'default'
@@ -651,9 +648,14 @@ function ExternalModelSelectorBase({
                 onClick={() => setReasoningOpen(false)}
                 aria-hidden
               />
-              <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[160px] overflow-y-auto kv-menu">
-                {activeReasoningOptions.map((option) => {
+              <div className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[240px] overflow-y-auto kv-menu">
+                {displayReasoningOptions.map((option) => {
                   const active = option.id === reasoningPillValue
+                  const label = thinkingLevelLabel(option.id, t)
+                  const description = thinkingLevelDescription(
+                    option.id === 'default' ? null : option.id,
+                    t,
+                  )
                   return (
                     <button
                       key={option.id}
@@ -662,18 +664,19 @@ function ExternalModelSelectorBase({
                         onModelChange(agentRuntime.externalModel ?? 'default', option.id)
                         setReasoningOpen(false)
                       }}
-                      className={`kv-menu-row justify-between transition-colors ${
+                      className={`kv-menu-row items-start justify-between py-2 transition-colors ${
                         active
                           ? 'bg-neutral-100 font-medium text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
                           : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/80'
                       }`}
                     >
-                      <span className="min-w-0 truncate">
-                        {option.id === 'default'
-                          ? t.chatRuntimeAutoCliDefault
-                          : stripEffortDescription(option.id, option.label)}
+                      <span className="min-w-0">
+                        <span className="block truncate">{label}</span>
+                        <span className="mt-0.5 block text-[11px] font-normal leading-4 text-neutral-400">
+                          {description}
+                        </span>
                       </span>
-                      {active && <Check size={15} className="shrink-0 text-neutral-500" />}
+                      {active && <Check size={15} className="mt-0.5 shrink-0 text-neutral-500" />}
                     </button>
                   )
                 })}

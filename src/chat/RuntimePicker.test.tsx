@@ -138,7 +138,7 @@ describe('ExternalModelSelector', () => {
     expect(onModelChange).not.toHaveBeenCalled()
   })
 
-  it('dsh 的 off 是真档位：胶囊显示 Off，菜单里保留 Off', async () => {
+  it('dsh 的 off 是真档位：胶囊和菜单显示关闭思考', async () => {
     detectModels.mockResolvedValue({
       models: [
         { id: 'default', label: 'Default' },
@@ -163,13 +163,13 @@ describe('ExternalModelSelector', () => {
       />,
     )
     await waitFor(() =>
-      expect(screen.getByLabelText('思考等级：Off')).toBeInTheDocument(),
+      expect(screen.getByLabelText('思考等级：关闭思考')).toBeInTheDocument(),
     )
     act(() => {
-      fireEvent.click(screen.getByLabelText('思考等级：Off'))
+      fireEvent.click(screen.getByLabelText('思考等级：关闭思考'))
     })
-    expect(screen.getByRole('button', { name: 'Off' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('思考等级：Auto')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /关闭思考/ })).toHaveLength(2)
+    expect(screen.queryByLabelText('思考等级：自动（推荐）')).not.toBeInTheDocument()
   })
 
   it('ACP 只报 on/off 开关时不显示思考档位胶囊', async () => {
@@ -222,11 +222,11 @@ describe('ExternalModelSelector', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /DeepSeek-V4-Flash/ })).toBeInTheDocument(),
     )
-    expect(screen.getByLabelText('思考等级：High')).toBeInTheDocument()
+    expect(screen.getByLabelText('思考等级：深入')).toBeInTheDocument()
     expect(screen.queryByText('Auto')).not.toBeInTheDocument()
   })
 
-  it('Codex effort 营销文案只保留档位名', async () => {
+  it('Codex effort 营销文案替换为易懂的中文档位', async () => {
     detectModels.mockResolvedValue({
       models: [
         { id: 'default', label: 'Default' },
@@ -258,11 +258,12 @@ describe('ExternalModelSelector', () => {
         conversationId={null}
       />,
     )
-    const pill = await screen.findByLabelText('思考等级：high')
+    const pill = await screen.findByLabelText('思考等级：深入')
     expect(pill).toBeInTheDocument()
     expect(pill).not.toHaveTextContent('Greater')
     fireEvent.click(pill)
-    expect(screen.getByText('ultra')).toBeInTheDocument()
+    expect(screen.getByText('自动（推荐）')).toBeInTheDocument()
+    expect(screen.getByText('超强')).toBeInTheDocument()
     expect(screen.queryByText(/Greater reasoning/)).not.toBeInTheDocument()
     expect(screen.queryByText(/automatic task delegation/)).not.toBeInTheDocument()
   })

@@ -42,13 +42,13 @@ use super::tooling::{
 use super::*;
 
 #[test]
-fn resolve_thinking_maps_levels_and_defaults_to_high() {
+fn resolve_thinking_maps_levels_and_defaults_to_auto() {
     // 有 effort 旋钮的模型（gpt-5.6 支持 low/medium/high/xhigh/max）。模型库里查得到，
     // 不需要 provider（provider 只用于读 model_overrides + Anthropic 家族兜底）。
     let r = |level: Option<&str>, global: bool| resolve_thinking(level, global, None, "gpt-5.6");
-    // 未设置 → 默认档 high，不再跟随全局（全局只服务 lens / 翻译）。
-    assert_eq!(r(None, true), (true, Some("high".to_string())));
-    assert_eq!(r(None, false), (true, Some("high".to_string())));
+    // 未设置 → 开思考但不指定 effort，由模型采用推荐默认值。
+    assert_eq!(r(None, true), (true, None));
+    assert_eq!(r(None, false), (true, None));
     // off → 强制关。
     assert_eq!(r(Some("off"), true), (false, None));
     // 具体等级 → 开 + 带等级。
@@ -57,8 +57,8 @@ fn resolve_thinking_maps_levels_and_defaults_to_high() {
     // xhigh / max 原样放行（该模型认不认由模型库门控，不在这里收敛）。
     assert_eq!(r(Some("xhigh"), false), (true, Some("xhigh".to_string())));
     assert_eq!(r(Some("max"), false), (true, Some("max".to_string())));
-    // 未知值 → 当作未设置，落默认档 high。
-    assert_eq!(r(Some("ultra"), true), (true, Some("high".to_string())));
+    // 未知值 → 当作自动，不向 provider 下发未知档位。
+    assert_eq!(r(Some("ultra"), true), (true, None));
 }
 
 #[test]

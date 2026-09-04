@@ -20,7 +20,7 @@ describe('ThinkingLevelSelector', () => {
     reasoningEffortsForModel.mockResolvedValue(['low', 'medium', 'high'])
   })
 
-  it('value=null 时按默认档显示 High（不再有「跟随全局」）', () => {
+  it('value=null 时默认显示自动推荐', () => {
     render(
       <ThinkingLevelSelector
         value={null}
@@ -29,10 +29,10 @@ describe('ThinkingLevelSelector', () => {
         onChange={() => {}}
       />,
     )
-    expect(screen.getByRole('button')).toHaveTextContent('High')
+    expect(screen.getByRole('button')).toHaveTextContent('自动（推荐）')
   })
 
-  it('下拉项为英文标签且不含「跟随全局」', () => {
+  it('下拉项使用面向用户的中文名称和用途说明', () => {
     render(
       <ThinkingLevelSelector
         value="high"
@@ -44,10 +44,10 @@ describe('ThinkingLevelSelector', () => {
     act(() => {
       fireEvent.click(screen.getByRole('button'))
     })
-    expect(screen.queryByText('跟随全局')).not.toBeInTheDocument()
-    // 英文标签存在（Off + 兜底 low/medium/high）。
-    expect(screen.getByText('Off')).toBeInTheDocument()
-    expect(screen.getByText('Medium')).toBeInTheDocument()
+    expect(screen.getByText('自动（推荐）')).toBeInTheDocument()
+    expect(screen.getByText('关闭思考')).toBeInTheDocument()
+    expect(screen.getByText('均衡')).toBeInTheDocument()
+    expect(screen.getByText('兼顾速度与效果，适合日常任务')).toBeInTheDocument()
   })
 
   it('选择某一档回调原始等级值', () => {
@@ -64,12 +64,27 @@ describe('ThinkingLevelSelector', () => {
       fireEvent.click(screen.getByRole('button'))
     })
     act(() => {
-      fireEvent.click(screen.getByText('Off'))
+      fireEvent.click(screen.getByText('关闭思考'))
     })
     expect(onChange).toHaveBeenCalledWith('off')
   })
 
-  it('能力列表加载完成前不会把 xhigh 回写成 high', async () => {
+  it('选择自动推荐时回调 null', () => {
+    const onChange = vi.fn()
+    render(
+      <ThinkingLevelSelector
+        value="high"
+        currentProviderId="p1"
+        currentModel="m1"
+        onChange={onChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button'))
+    fireEvent.click(screen.getByText('自动（推荐）'))
+    expect(onChange).toHaveBeenCalledWith(null)
+  })
+
+  it('能力列表加载完成前不会把 xhigh 回写成自动', async () => {
     let resolveLevels!: (levels: string[]) => void
     reasoningEffortsForModel.mockImplementationOnce(() => new Promise((resolve) => {
       resolveLevels = resolve
@@ -90,7 +105,7 @@ describe('ThinkingLevelSelector', () => {
     await act(async () => {
       resolveLevels(['low', 'medium', 'high', 'xhigh'])
     })
-    expect(screen.getByRole('button')).toHaveTextContent('XHigh')
+    expect(screen.getByRole('button')).toHaveTextContent('深度')
     expect(onChange).not.toHaveBeenCalled()
   })
 

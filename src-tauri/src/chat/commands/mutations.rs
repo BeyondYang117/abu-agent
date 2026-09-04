@@ -1025,7 +1025,7 @@ pub(crate) async fn chat_update_conversation(
                     normalize_additional_directories(entries, primary.as_deref())?;
             }
             if let Some(level) = thinking_level {
-                // 仅接受已知值；空串/未知 → 清除（回到「跟随全局」）。
+                // 仅接受已知值；空串/未知 → 清除（自动采用模型推荐值）。
                 conversation.thinking_level = match level.trim() {
                     "off" | "low" | "medium" | "high" | "xhigh" | "max" => {
                         Some(level.trim().to_string())

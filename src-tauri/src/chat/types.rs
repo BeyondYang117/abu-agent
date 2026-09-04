@@ -540,7 +540,7 @@ pub struct Conversation {
     /// does not change the working directory used to import/resume a native session.
     #[serde(default)]
     pub additional_directories: Vec<AdditionalDirectory>,
-    /// 每对话「思考等级」：`"off"|"low"|"medium"|"high"`，`None` = 跟随全局思考开关。
+    /// 每对话「思考等级」；`None` = 自动，采用当前模型的推荐默认值。
     #[serde(default)]
     pub thinking_level: Option<String>,
     /// 会话级联网搜索模式（任务 07-23）。`None` = 未设置，运行时回退全局 `nativeTools.webSearch`。

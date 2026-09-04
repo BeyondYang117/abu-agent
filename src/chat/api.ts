@@ -1795,7 +1795,7 @@ export const chatApi = {
         knowledgeBaseIds: updates.knowledgeBaseIds,
         forceKnowledgeSearch: updates.forceKnowledgeSearch,
         additionalDirectories: updates.additionalDirectories,
-        // null/未知 → 空串，后端解析为 None（回到「跟随全局」）。
+        // null/未知 → 空串，后端解析为 None（自动采用模型推荐值）。
         thinkingLevel: hasThinkingUpdate ? updates.thinkingLevel ?? '' : undefined,
         // 会话级三态联网搜索（任务 07-23）：null/未知 → 空串，后端回退全局开关。
         webSearchMode: hasWebSearchUpdate ? updates.webSearchMode ?? '' : undefined,

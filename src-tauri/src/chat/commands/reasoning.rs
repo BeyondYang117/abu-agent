@@ -5,14 +5,15 @@ use crate::settings::ModelProvider;
 use crate::state::AppState;
 
 /// 由「每对话思考等级」解析出实际下发给模型的 `(thinking_enabled, thinking_level)`。
-/// chat 不再跟随全局思考开关（全局开关只服务 lens / 快速翻译），未显式选档时落到默认档「high」。
+/// chat 不再跟随全局思考开关（全局开关只服务 lens / 快速翻译），未显式选档时不下发
+/// effort，让当前模型采用自己的推荐默认值（前端显示「自动（推荐）」）。
 /// - `"off"` → 强制关思考，`thinking_level=None`。适配器看到 `thinking_enabled=false` 后
 ///   **显式**发关闭信号（OpenAI Chat → `reasoning_effort:"none"`；DeepSeek/Kimi →
 ///   `thinking.type=disabled`；Responses → `reasoning.effort:"none"`），不能省略字段——
 ///   DeepSeek / 部分代理省略时默认 effort=high，等于白关。
 /// - `"low"|"medium"|"high"|"xhigh"|"max"` → 开思考并带等级（适配器原样映射为
 ///   reasoning_effort / reasoning.effort / output_config.effort / thinkingLevel）。
-/// - `None` 或其它未知值 → 默认档「high」（与前端 `ThinkingLevelSelector` 的 DEFAULT_LEVEL 一致）。
+/// - `None` 或其它未知值 → 开思考但不带等级，由模型采用推荐默认值。
 ///
 /// **这里是「模型有没有思考深度旋钮」的唯一门控**：`reasoning_efforts_for_model` 解析出空列表时
 /// （用户在模型详情里清空，或模型库标了空数组：Claude 3.x / GLM-4.7 / Kimi K2.x /
@@ -33,10 +34,10 @@ pub(crate) fn resolve_thinking(
         return (true, None);
     }
     let level = match conv_level {
-        Some(level @ ("low" | "medium" | "high" | "xhigh" | "max")) => level,
-        _ => "high",
+        Some(level @ ("low" | "medium" | "high" | "xhigh" | "max")) => Some(level.to_string()),
+        _ => None,
     };
-    (true, Some(level.to_string()))
+    (true, level)
 }
 
 /// 返回某模型支持的思考等级列表（用户覆盖 → 模型库 → 家族兜底）。供前端等级选择器决定显示哪些档。
