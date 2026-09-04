@@ -819,6 +819,10 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   const locallyCancelledConversationIdRef = useRef<string | null>(null)
   const locallyCancelledRunIdRef = useRef<string | null>(null)
   const inFlightConversationsRef = useRef<Set<string>>(new Set())
+  // 首次发送在创建会话/同步草稿配置时可能有多个异步前置步骤。
+  // 这段时间输入框已经可以继续编辑，但不能让同一条会话并发启动第二个发送。
+  const sendPreflightInFlightRef = useRef(false)
+  const preflightPendingMessageRef = useRef<{ conversationId: string; messageId: string } | null>(null)
   const restoredRunIdsRef = useRef<Set<string>>(new Set())
   const pendingStreamDoneRef = useRef<Record<string, () => Promise<void>>>({})
   /** run 结束但落库 twin 尚未随 startTransition 提交时，冻结的预览等它落地再清（防收尾闪帧）。 */
@@ -3104,6 +3108,43 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       return false
     }
 
+    if (sendPreflightInFlightRef.current) return false
+    sendPreflightInFlightRef.current = true
+    // 先反馈“消息已接收”，不要让模型路由、创建会话或配置同步阻塞输入框。
+    options.onAccepted?.()
+
+    // 已有会话可以在前置异步步骤完成前立刻显示用户消息，避免点击发送后出现数秒空窗。
+    // 新会话尚无可挂载的消息列表，等 createConversation 返回后由下方逻辑迁移显示。
+    const preflightConversationId = options.conversationOverride?.id ?? currentConversation?.id ?? null
+    if (preflightConversationId && currentConversationIdRef.current === preflightConversationId) {
+      const messageId = `pending-user-${Date.now()}`
+      preflightPendingMessageRef.current = { conversationId: preflightConversationId, messageId }
+      setPendingUserMessage({
+        id: messageId,
+        role: 'user',
+        content: trimmed,
+        attachments: attachments.map((attachment) => ({
+          id: attachment.id,
+          type: attachment.type,
+          name: attachment.name,
+          path: attachment.path,
+        })),
+        timestamp: Math.floor(Date.now() / 1000),
+      })
+      setPendingUserMessageConversationId(preflightConversationId)
+    }
+
+    const abortPreflight = () => {
+      sendPreflightInFlightRef.current = false
+      const pending = preflightPendingMessageRef.current
+      if (pending && currentConversationIdRef.current === pending.conversationId) {
+        setPendingUserMessage(null)
+        setPendingUserMessageConversationId(null)
+      }
+      preflightPendingMessageRef.current = null
+      return false
+    }
+
     let conversation = options.conversationOverride
       ?? (options.forceNewConversation ? null : currentConversation)
     let sendProviderId = activeProviderId
@@ -3146,7 +3187,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
             ? `当前策略没有可用的${hasImage ? '视觉' : ''}模型，请切换档位、稍后重试，或在高级设置中手动选择模型。`
             : `No ${hasImage ? 'vision-capable ' : ''}model is currently available for this policy. Change tier, retry later, or choose a model manually.`
           setStreamError(message)
-          return false
+          return abortPreflight()
         }
         if (route) {
           sendProviderId = route.providerId
@@ -3213,7 +3254,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
         if (currentConversationIdRef.current === startingConversationId) {
           setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
         }
-        return false
+        return abortPreflight()
       }
     }
 
@@ -3230,7 +3271,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       } catch (error) {
         console.warn('Failed to apply the smart-selected model:', error)
         setStreamError(typeof error === 'string' ? error : (error as Error).message || '模型切换失败')
-        return false
+        return abortPreflight()
       }
     }
 
@@ -3251,7 +3292,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
           conversation.id,
           typeof err === 'string' ? err : (err as Error).message || 'Agent 切换失败',
         )
-        return false
+        return abortPreflight()
       }
     }
 
@@ -3357,7 +3398,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     const conversationId = conversation.id
     if (isConversationInFlight(inFlightConversationsRef.current, conversationId)) {
       setStreamErrorForConversation(conversationId, '该对话正在生成中，请稍后再试')
-      return false
+      return abortPreflight()
     }
     setOptimisticSidebarConversations((items) => [
       optimisticConversationListItem(
@@ -3368,7 +3409,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       ...items.filter((item) => item.id !== conversationId),
     ])
 
-    const pendingUserId = `pending-user-${Date.now()}`
+    const pendingUserId = preflightPendingMessageRef.current?.messageId ?? `pending-user-${Date.now()}`
     const optimisticUserMessage: ChatMessage = {
       id: pendingUserId,
       role: 'user',
@@ -3414,9 +3455,10 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       setPendingUserMessage(optimisticUserMessage)
       setPendingUserMessageConversationId(conversationId)
     }
+    preflightPendingMessageRef.current = null
 
     markConversationInFlight(conversationId)
-    options.onAccepted?.()
+    sendPreflightInFlightRef.current = false
     // 多模型一问多答（任务 06-30）：reply_models ≥2 且非 plan/orchestrate 模式时，后端会 fan-out
     // 出 N 条并发流。前端据此建多答组（占位 N 列），流事件按 messageId 路由到对应列。
     // 与后端 resolve_reply_arms 的判定保持一致（≤1 个臂 = 单模型路径，零回归）。
