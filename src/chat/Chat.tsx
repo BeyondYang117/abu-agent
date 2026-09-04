@@ -618,7 +618,7 @@ function settleOptimisticConversationListItem(
 type SendMessageOptions = {
   forceNewConversation?: boolean
   conversationOverride?: Conversation | null
-  /** 前置校验完成、消息正式进入本地发送流程；输入框可立即清空。 */
+  /** 用户提交已被前端接收；输入框可立即清空，后台前置步骤继续异步执行。 */
   onAccepted?: () => void
 }
 
@@ -822,7 +822,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   // 首次发送在创建会话/同步草稿配置时可能有多个异步前置步骤。
   // 这段时间输入框已经可以继续编辑，但不能让同一条会话并发启动第二个发送。
   const sendPreflightInFlightRef = useRef(false)
-  const preflightPendingMessageRef = useRef<{ conversationId: string; messageId: string } | null>(null)
+  const preflightPendingMessageRef = useRef<{ conversationId: string | null; messageId: string } | null>(null)
   const restoredRunIdsRef = useRef<Set<string>>(new Set())
   const pendingStreamDoneRef = useRef<Record<string, () => Promise<void>>>({})
   /** run 结束但落库 twin 尚未随 startTransition 提交时，冻结的预览等它落地再清（防收尾闪帧）。 */
@@ -3113,10 +3113,12 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     // 先反馈“消息已接收”，不要让模型路由、创建会话或配置同步阻塞输入框。
     options.onAccepted?.()
 
-    // 已有会话可以在前置异步步骤完成前立刻显示用户消息，避免点击发送后出现数秒空窗。
-    // 新会话尚无可挂载的消息列表，等 createConversation 返回后由下方逻辑迁移显示。
-    const preflightConversationId = options.conversationOverride?.id ?? currentConversation?.id ?? null
-    if (preflightConversationId && currentConversationIdRef.current === preflightConversationId) {
+    // 在前置异步步骤完成前立刻显示用户消息，避免点击发送后出现数秒空窗。
+    // 尚无会话 ID 时也挂到空态列表，待 createConversation 返回后迁移到真实会话。
+    const preflightConversationId = options.forceNewConversation
+      ? null
+      : options.conversationOverride?.id ?? currentConversation?.id ?? null
+    if (currentConversationIdRef.current === preflightConversationId) {
       const messageId = `pending-user-${Date.now()}`
       preflightPendingMessageRef.current = { conversationId: preflightConversationId, messageId }
       setPendingUserMessage({

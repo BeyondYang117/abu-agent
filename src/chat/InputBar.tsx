@@ -353,7 +353,7 @@ function readFileAsBase64(file: File, readError: string): Promise<string> {
 export interface InputBarProps {
   /**
    * 返回 false 表示发送未被接受；此时保留输入草稿和附件。
-   * 长任务应在消息正式进入发送流程时调用 onAccepted，让输入框立即清空，无需等待整轮生成完成。
+   * 长任务应在用户提交被接收时调用 onAccepted，让输入框立即清空，无需等待前置步骤或整轮生成完成。
    */
   onSend: (
     content: string,
