@@ -708,6 +708,8 @@ const mockChatApi = {
     _routingFallbacks?: ModelRef[],
     _routingPolicyVersion?: number | null,
   ): Promise<Conversation> {
+    void _routingFallbacks
+    void _routingPolicyVersion
     const conversations = loadMockConversations()
     const index = conversations.findIndex((item) => item.id === conversationId)
     if (index < 0) throw new Error('Conversation not found')

@@ -183,7 +183,7 @@ function ModelSelectorBase({
     if (!provider) return []
     const all = provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels
     return all.filter((model) => !!cloudModelAccess[model] && cloudModelAccess[model].status !== 'available')
-  }, [cloudMode, cloudModelAccess, providers, showAllModels])
+  }, [cloudMode, cloudModelAccess, providers])
 
   const openCloudPurchase = useCallback((model: string) => {
     const access = cloudModelAccess[model]

@@ -469,7 +469,7 @@ export function usePopoutSession(conversationId: string, lang: Lang) {
       else await delayed()
     }
     return true
-  }, [conversation, conversationId, settlePreview])
+  }, [conversation, conversationId, lang, settlePreview])
 
   const handleCancel = useCallback(async () => {
     setStreamCoarse({ cancelling: true })

@@ -3596,6 +3596,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     setStreamErrorForConversation,
     syncConversationRoute,
     syncGeneratingConversationIds,
+    uiLang,
   ])
 
   // 用 ref 持有最新 handleSendMessage，使下方的 drainExternalSends 保持稳定身份，
