@@ -235,6 +235,7 @@ pub(super) fn apply_web_search_mode_tool_filter(
     tools: &mut Vec<ChatToolDefinition>,
     mode: crate::chat::types::WebSearchMode,
     settings: &crate::settings::Settings,
+    chat_mode: bool,
 ) {
     const SEARCH_WEB_ID: &str = "native__web_search";
     match mode {
@@ -244,9 +245,13 @@ pub(super) fn apply_web_search_mode_tool_filter(
                 tools.push(crate::mcp::types::native_web_search_tool());
             }
         }
-        crate::chat::types::WebSearchMode::Builtin
-        | crate::chat::types::WebSearchMode::Off
-        | crate::chat::types::WebSearchMode::LegacyPlatform => {
+        crate::chat::types::WebSearchMode::Platform => {
+            tools.retain(|t| t.id != SEARCH_WEB_ID);
+            if settings.is_cloud_runtime() && (!chat_mode || settings.chat.chat_mode.web_search) {
+                tools.push(crate::mcp::types::native_web_search_tool());
+            }
+        }
+        crate::chat::types::WebSearchMode::Builtin | crate::chat::types::WebSearchMode::Off => {
             tools.retain(|t| t.id != SEARCH_WEB_ID);
         }
     }
@@ -329,7 +334,7 @@ mod web_search_filter_tests {
                 crate::mcp::types::native_web_search_tool(),
                 crate::mcp::types::native_web_fetch_tool(),
             ];
-            apply_web_search_mode_tool_filter(&mut tools, mode, &settings);
+            apply_web_search_mode_tool_filter(&mut tools, mode, &settings, false);
             assert!(
                 !tools.iter().any(|t| t.id == "native__web_search"),
                 "search_web should be stripped in {mode:?}"
@@ -345,8 +350,20 @@ mod web_search_filter_tests {
     fn third_party_keeps_existing_search_web() {
         let settings = crate::settings::Settings::default();
         let mut tools = vec![crate::mcp::types::native_web_search_tool()];
-        apply_web_search_mode_tool_filter(&mut tools, WebSearchMode::ThirdParty, &settings);
+        apply_web_search_mode_tool_filter(&mut tools, WebSearchMode::ThirdParty, &settings, false);
         assert!(tools.iter().any(|t| t.id == "native__web_search"));
     }
 
+    #[test]
+    fn platform_exposes_search_only_in_cloud_runtime() {
+        let mut settings = crate::settings::Settings::default();
+        settings.runtime_mode = "local".to_string();
+        let mut tools = Vec::new();
+        apply_web_search_mode_tool_filter(&mut tools, WebSearchMode::Platform, &settings, false);
+        assert!(tools.is_empty());
+
+        settings.runtime_mode = "cloud".to_string();
+        apply_web_search_mode_tool_filter(&mut tools, WebSearchMode::Platform, &settings, false);
+        assert!(tools.iter().any(|t| t.id == "native__web_search"));
+    }
 }

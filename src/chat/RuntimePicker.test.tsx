@@ -360,7 +360,7 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
     expect(screen.getByText('完整工具、文件和子代理')).toBeInTheDocument()
-    expect(screen.getByText('搜索、网页和知识库')).toBeInTheDocument()
+    expect(screen.queryByText('搜索、网页和知识库')).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getAllByText('本机 CLI').length).toBeGreaterThan(0))
     expect(screen.getByRole('radio', { name: 'ABU Agent' })).toHaveAttribute(
       'title',
@@ -441,9 +441,9 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
       fireEvent.click(screen.getAllByRole('button')[0])
     })
     expect(screen.getByText('当前对话使用 Cursor Agent；新建聊天后可切换')).toBeInTheDocument()
-    // 非当前代理全部禁用：ABU Agent Agent / Chat 与 claude；当前 agent（cursor）保持可选。
+    // Chat 已从新选择隐藏；其余非当前代理禁用，当前 agent（cursor）保持可选。
     expect(screen.getByRole('radio', { name: 'ABU Agent' })).toBeDisabled()
-    expect(screen.getByRole('radio', { name: 'ABU Agent Chat' })).toBeDisabled()
+    expect(screen.queryByRole('radio', { name: 'ABU Agent Chat' })).not.toBeInTheDocument()
     act(() => {
       fireEvent.click(screen.getByRole('radio', { name: 'ABU Agent' }))
     })

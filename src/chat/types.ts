@@ -617,7 +617,7 @@ export interface ModelRef {
 export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** 会话级联网搜索模式。 */
-export type WebSearchMode = 'off' | 'builtin' | 'third_party'
+export type WebSearchMode = 'off' | 'builtin' | 'third_party' | 'platform'
 
 export interface ConversationListItem {
   id: string

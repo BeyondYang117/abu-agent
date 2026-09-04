@@ -61,6 +61,58 @@ pub struct AgentRelayCredentialsResponse {
     pub recommended_model: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlatformSearchCredentials {
+    pub base_url: String,
+    pub relay_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlatformSearchEnvelope {
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    data: Vec<crate::web_search::WebSearchResult>,
+}
+
+pub async fn search_platform_web(
+    client: &reqwest::Client,
+    credentials: &PlatformSearchCredentials,
+    query: &str,
+    max_results: u8,
+) -> Result<Vec<crate::web_search::WebSearchResult>, String> {
+    let response = client
+        .post(format!(
+            "{}/v1/web-search",
+            credentials.base_url.trim_end_matches('/')
+        ))
+        .bearer_auth(&credentials.relay_key)
+        .timeout(std::time::Duration::from_secs(15))
+        .json(&serde_json::json!({
+            "query": query,
+            "max_results": max_results.clamp(1, 12),
+        }))
+        .send()
+        .await
+        .map_err(|err| format!("平台搜索请求失败：{err}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| format!("平台搜索响应读取失败（HTTP {status}）：{err}"))?;
+    let envelope: PlatformSearchEnvelope = serde_json::from_str(&body)
+        .map_err(|_| format!("平台搜索响应无法解析（HTTP {status}）"))?;
+    if !status.is_success() || !envelope.success {
+        return Err(envelope
+            .message
+            .filter(|message| !message.trim().is_empty())
+            .unwrap_or_else(|| format!("平台搜索失败（HTTP {status}）")));
+    }
+    Ok(envelope.data)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceRegistration {
     pub fingerprint: String,
@@ -812,6 +864,59 @@ pub async fn clear_abu_api_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn platform_search_uses_standard_relay_token() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 2048];
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n")
+                    && request
+                        .windows(15)
+                        .any(|window| window == b"\"max_results\":4")
+                {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            assert!(request.starts_with("POST /v1/web-search HTTP/1.1"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer relay-secret"));
+            assert!(!request.to_ascii_lowercase().contains("x-abu-agent-task-id"));
+            let body = r#"{"success":true,"data":[{"title":"Release","url":"https://example.com/release","content":"Current","publishedDate":null,"score":null}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let credentials = PlatformSearchCredentials {
+            base_url,
+            relay_key: "relay-secret".to_string(),
+        };
+        let results =
+            search_platform_web(&reqwest::Client::new(), &credentials, "current release", 4)
+                .await
+                .unwrap();
+        server.join().unwrap();
+        assert_eq!(results[0].title, "Release");
+    }
 
     #[test]
     fn user_info_request_uses_agent_endpoint() {

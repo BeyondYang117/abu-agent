@@ -1,6 +1,5 @@
 import {
   BUILTIN_AGENT_RUNTIME,
-  CHAT_AGENT_RUNTIME,
   type AgentRuntimeConfig,
 } from './api'
 
@@ -49,7 +48,8 @@ export function parseLastAgentRuntime(raw: unknown): AgentRuntimeConfig | null {
   if (!raw || typeof raw !== 'object') return null
   const value = raw as Record<string, unknown>
   if (value.kind === 'builtin') return { ...BUILTIN_AGENT_RUNTIME }
-  if (value.kind === 'chat') return { ...CHAT_AGENT_RUNTIME }
+  // Chat remains readable on persisted conversations but no longer seeds new chats.
+  if (value.kind === 'chat') return { ...BUILTIN_AGENT_RUNTIME }
   if (value.kind !== 'external') return null
   const agentId = asNonEmptyString(value.externalAgentId)
   if (!agentId) return null

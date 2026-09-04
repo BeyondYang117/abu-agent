@@ -14,6 +14,7 @@ const WEB_SEARCH_OPTIONS: { value: WebSearchMode; label: string; hint?: string }
   { value: 'off', label: '关闭' },
   { value: 'builtin', label: '内置', hint: '使用模型自带的联网搜索' },
   { value: 'third_party', label: '第三方', hint: '使用已配置的搜索服务（Tavily / Exa 等）' },
+  { value: 'platform', label: '平台', hint: '使用 ABU 平台搜索，无需单独配置' },
 ]
 
 function Switch({ checked }: { checked: boolean }) {
@@ -67,6 +68,7 @@ export function SourcesButton({
   webSearchMode,
   onSetWebSearchMode,
   builtinWebSearchSupported = false,
+  platformWebSearchSupported = false,
   onOpenSettings,
   disabled,
   layout = 'footer',
@@ -81,6 +83,8 @@ export function SourcesButton({
   onSetWebSearchMode: (mode: WebSearchMode) => void | Promise<void>
   /** 当前模型是否支持内置搜索（否则「内置」置灰）。 */
   builtinWebSearchSupported?: boolean
+  /** 云端模式使用 ABU API 管理的搜索服务。 */
+  platformWebSearchSupported?: boolean
   onOpenSettings?: () => void
   disabled?: boolean
   layout?: 'footer' | 'inline'
@@ -185,8 +189,11 @@ export function SourcesButton({
             <div className="flex shrink-0 gap-1">
               {WEB_SEARCH_OPTIONS.map((opt) => {
                 const active = webSearchMode === opt.value
-                const dim = opt.value === 'builtin' && !builtinWebSearchSupported
-                const unavailableTitle = '当前模型不支持内置搜索'
+                const dim = (opt.value === 'builtin' && !builtinWebSearchSupported)
+                  || (opt.value === 'platform' && !platformWebSearchSupported)
+                const unavailableTitle = opt.value === 'builtin'
+                  ? '当前模型不支持内置搜索'
+                  : '平台搜索仅在云端模式可用'
                 return (
                   <button
                     key={opt.value}

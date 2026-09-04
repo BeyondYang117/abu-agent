@@ -159,22 +159,39 @@ pub(super) async fn complete_assistant_reply_inner(
     // Cloud 模式：申请普通用户级 relay token，造一个指向标准 /v1 端点的
     // 虚拟供应商，替代本机配置的 provider。凭证接口在滚动升级期间会自动
     // 回退到旧版 CLI 凭证接口，避免服务端实例短暂不一致导致整轮不可用。
-    let provider = if settings.is_cloud_runtime() {
+    let (provider, platform_search) = if settings.is_cloud_runtime() {
         let base_url = settings.abu_api_base_url_or_default();
-        let session_token = settings.abu_api_session_token.as_deref().ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-        let credentials = crate::abu_api::fetch_agent_relay_credentials(&base_url, session_token, &resolved_model).await?;
-        crate::chat::model::create_abu_api_virtual_provider(&base_url, &credentials.api_key, &resolved_model)
+        let session_token = settings
+            .abu_api_session_token
+            .as_deref()
+            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
+        let credentials = crate::abu_api::fetch_agent_relay_credentials(
+            &base_url,
+            session_token,
+            &resolved_model,
+        )
+        .await?;
+        let platform_search = crate::abu_api::PlatformSearchCredentials {
+            base_url: base_url.to_string(),
+            relay_key: credentials.api_key.clone(),
+        };
+        (
+            crate::chat::model::create_abu_api_virtual_provider(
+                &base_url,
+                &credentials.api_key,
+                &resolved_model,
+            ),
+            Some(platform_search),
+        )
     } else {
-        {
-            let provider = settings
-                .get_provider(&resolved_provider_id)
-                .ok_or_else(|| "Chat provider not found".to_string())?
-                .clone();
-            if provider.api_keys.is_empty() {
-                return Err(format_chat_missing_api_key_error(&provider.name));
-            }
-            provider
+        let provider = settings
+            .get_provider(&resolved_provider_id)
+            .ok_or_else(|| "Chat provider not found".to_string())?
+            .clone();
+        if provider.api_keys.is_empty() {
+            return Err(format_chat_missing_api_key_error(&provider.name));
         }
+        (provider, None)
     };
 
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
@@ -449,13 +466,13 @@ pub(super) async fn complete_assistant_reply_inner(
     } else {
         apply_agent_plan_tool_filter(&mut tools, plan_mode)
     };
-    // 会话级三态联网搜索（任务 07-23）：按有效模式收敛第三方 `search_web` 的暴露；
+    // 会话级联网搜索：按有效模式收敛客户端 `search_web` 的暴露；
     // 内置搜索走 `config.web_search_mode` → 各适配器请求体注入，不在工具列表里。
     // builder 会话已清空工具（只留 save_assistant），不参与搜索门控。
     let web_search_mode =
         crate::chat::types::WebSearchMode::resolve(conversation.web_search_mode, &settings);
     if !builder_mode {
-        apply_web_search_mode_tool_filter(&mut tools, web_search_mode, &settings);
+        apply_web_search_mode_tool_filter(&mut tools, web_search_mode, &settings, chat_mode);
     }
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
@@ -672,6 +689,9 @@ pub(super) async fn complete_assistant_reply_inner(
     let executor = RegistryToolExecutor {
         app: app.clone(),
         state: state.inner(),
+        platform_search: (web_search_mode == crate::chat::types::WebSearchMode::Platform)
+            .then_some(platform_search)
+            .flatten(),
     };
     let max_output_tokens = chat_max_output_tokens_on_wire(
         Some(&provider),

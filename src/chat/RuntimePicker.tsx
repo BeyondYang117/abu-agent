@@ -54,13 +54,6 @@ const BUILTIN: AgentRuntimeConfig = {
   externalReasoning: null,
 }
 
-const CHAT: AgentRuntimeConfig = {
-  kind: 'chat',
-  externalAgentId: null,
-  externalModel: null,
-  externalReasoning: null,
-}
-
 // 胶囊显示：把裸 "Default" 映射为「自动」（不再向用户暴露内部占位名）。
 function mapDefaultLabel(label: string): string {
   return label === 'Default' ? 'Auto' : label
@@ -205,12 +198,6 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
     setOpen(false)
   }
 
-  const selectChat = () => {
-    if (locked) return
-    onRuntimeChange(CHAT)
-    setOpen(false)
-  }
-
   const selectExternal = (agent: DetectedExternalAgent) => {
     if (locked) return
     if (!agent.available) return
@@ -306,26 +293,24 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                     <span className="kv-runtime-picker__agent-description">{runtimeDescription('builtin', t)}</span>
                   </span>
                 </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-label="ABU Agent Chat"
-                  aria-checked={usesChat}
-                  disabled={locked && !usesChat}
-                  onClick={selectChat}
-                  title={runtimeTooltip('chat', t)}
-                  onMouseEnter={(event) => showTooltip(event, runtimeTooltip('chat', t))}
-                  onMouseLeave={hideTooltip}
-                  onFocus={(event) => showTooltip(event, runtimeTooltip('chat', t))}
-                  onBlur={hideTooltip}
-                  className={`kv-runtime-picker__agent${usesChat ? ' is-active' : ''}`}
-                >
-                  <ABUAgentMark size={20} variant="chat" />
-                  <span className="kv-runtime-picker__agent-copy">
-                    <span className="kv-runtime-picker__agent-name">ABU Agent Chat</span>
-                    <span className="kv-runtime-picker__agent-description">{runtimeDescription('chat', t)}</span>
-                  </span>
-                </button>
+                {/* Existing Chat-runtime conversations remain usable, but Chat is hidden from new selections. */}
+                {usesChat && (
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-label="ABU Agent Chat"
+                    aria-checked
+                    disabled={locked}
+                    title={runtimeTooltip('chat', t)}
+                    className="kv-runtime-picker__agent is-active"
+                  >
+                    <ABUAgentMark size={20} variant="chat" />
+                    <span className="kv-runtime-picker__agent-copy">
+                      <span className="kv-runtime-picker__agent-name">ABU Agent Chat</span>
+                      <span className="kv-runtime-picker__agent-description">{runtimeDescription('chat', t)}</span>
+                    </span>
+                  </button>
+                )}
                 {availableAgents.map((agent) => {
                   const active = usesExternal && agentRuntime.externalAgentId === agent.id
                   return (

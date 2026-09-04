@@ -446,43 +446,45 @@ impl AgentRuntimeConfig {
     }
 }
 
-/// 会话级联网搜索模式（任务 07-23）。
+/// 会话级联网搜索模式。
 /// - `Off`：不联网。
 /// - `Builtin`：模型原生内置搜索（仅部分 provider 支持，按 `api_format` 判定）。
 /// - `ThirdParty`：既有 `search_web` 工具（复用 Lens 第三方配置 Tavily/Exa/…）。
+/// - `Platform`：云端模式调用 ABU API 管理的 SearXNG 搜索。
 ///
-/// `Conversation.web_search_mode` 为 `None` 时运行时回退全局 `nativeTools.webSearch`
-/// （on ⇒ ThirdParty，off ⇒ Off），保证旧对话行为逐字节不变。
+/// `Conversation.web_search_mode` 为 `None` 时回退全局 `nativeTools.webSearch`：
+/// 关闭 ⇒ Off；开启 ⇒ Cloud 使用 Platform，本地使用 ThirdParty。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchMode {
     Off,
     Builtin,
     ThirdParty,
-    /// Legacy persisted value. The task-bound platform endpoint was removed;
-    /// retain decoding support but never expose or execute this mode.
-    #[serde(rename = "platform")]
-    LegacyPlatform,
+    /// ABU cloud's administrator-managed SearXNG service.
+    Platform,
 }
 
 impl WebSearchMode {
-    /// 解析会话的**有效**联网搜索模式（任务 07-23）。
-    /// 会话未显式设置（`None`）时回退全局 `native_tools.web_search`：
-    /// on ⇒ `ThirdParty`，off ⇒ `Off`，保证旧对话行为逐字节不变。
+    /// 解析会话的**有效**联网搜索模式。
+    /// 会话未显式设置（`None`）时回退全局 `native_tools.web_search`；
+    /// Cloud 默认 `Platform`，本地默认 `ThirdParty`。
     pub fn resolve(
         conv_mode: Option<WebSearchMode>,
         settings: &crate::settings::Settings,
     ) -> WebSearchMode {
-        match conv_mode {
-            Some(WebSearchMode::LegacyPlatform) => WebSearchMode::Off,
-            Some(mode) => mode,
-            None => {
+        let fallback = || {
             if !settings.chat_tools.native_tools.web_search {
                 WebSearchMode::Off
+            } else if settings.is_cloud_runtime() {
+                WebSearchMode::Platform
             } else {
                 WebSearchMode::ThirdParty
             }
-            }
+        };
+        match conv_mode {
+            Some(WebSearchMode::Platform) if !settings.is_cloud_runtime() => fallback(),
+            Some(mode) => mode,
+            None => fallback(),
         }
     }
 }
@@ -942,14 +944,21 @@ mod tests {
             WebSearchMode::resolve(Some(WebSearchMode::Off), &settings),
             WebSearchMode::Off
         );
+
+        settings.chat_tools.native_tools.web_search = true;
+        settings.runtime_mode = "cloud".to_string();
+        assert_eq!(WebSearchMode::resolve(None, &settings), WebSearchMode::Platform);
+        settings.runtime_mode = "local".to_string();
+        assert_eq!(
+            WebSearchMode::resolve(Some(WebSearchMode::Platform), &settings),
+            WebSearchMode::ThirdParty
+        );
         settings.chat_tools.native_tools.web_search = true;
         assert_eq!(
             WebSearchMode::resolve(Some(WebSearchMode::Off), &settings),
             WebSearchMode::Off
         );
-
     }
-
 
     #[test]
     fn chat_message_roundtrips_multi_model_fields() {

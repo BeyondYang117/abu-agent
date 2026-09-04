@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { SourcesButton } from './SourcesButton'
 
 describe('SourcesButton search modes', () => {
-  it('does not expose the retired platform search mode', () => {
+  it('exposes platform search in cloud mode', () => {
     render(
       <SourcesButton
         knowledgeBaseIds={[]}
@@ -13,9 +13,10 @@ describe('SourcesButton search modes', () => {
         webSearchMode="off"
         onSetWebSearchMode={vi.fn()}
         builtinWebSearchSupported={false}
+        platformWebSearchSupported
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: /信息来源/ }))
-    expect(screen.queryByRole('button', { name: '平台' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '平台' })).toBeEnabled()
   })
 })

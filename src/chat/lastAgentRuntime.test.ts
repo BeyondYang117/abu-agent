@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { lastRuntimeForAgentFromStore, parseLastAgentRuntime } from './lastAgentRuntime'
-import { BUILTIN_AGENT_RUNTIME, CHAT_AGENT_RUNTIME } from './api'
+import { BUILTIN_AGENT_RUNTIME } from './api'
 
 describe('parseLastAgentRuntime', () => {
-  it('认 builtin / chat', () => {
+  it('认 builtin，并把已隐藏的 chat 偏好迁回 builtin', () => {
     expect(parseLastAgentRuntime({ kind: 'builtin' })).toEqual(BUILTIN_AGENT_RUNTIME)
-    expect(parseLastAgentRuntime({ kind: 'chat' })).toEqual(CHAT_AGENT_RUNTIME)
+    expect(parseLastAgentRuntime({ kind: 'chat' })).toEqual(BUILTIN_AGENT_RUNTIME)
   })
 
   it('认外部 CLI 并补 default 模型', () => {

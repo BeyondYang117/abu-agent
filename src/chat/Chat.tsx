@@ -345,7 +345,7 @@ const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set([
 // 网络搜索模式全局默认（任务 07-23，与思考等级同款「记住上次选择」模式）：
 // 选一次即成为新会话/未显式设置会话的默认，免去每个对话重复切换。
 const LAST_WEB_SEARCH_MODE_KEY = 'abu_agent.chat.lastWebSearchMode'
-const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party'])
+const VALID_WEB_SEARCH_MODES: ReadonlySet<string> = new Set(['off', 'builtin', 'third_party', 'platform'])
 
 function loadLastWebSearchMode(): WebSearchMode | undefined {
   try {
@@ -739,6 +739,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [mcpServers, setMcpServers] = useState<ChatMcpServer[]>([])
   const [webSearchEnabled, setWebSearchEnabled] = useState(true)
+  const [platformWebSearchSupported, setPlatformWebSearchSupported] = useState(false)
   // provider id → apiFormat（任务 07-23）：用于判断当前模型是否支持内置搜索。
   const [providerApiFormats, setProviderApiFormats] = useState<Record<string, string>>({})
   const [providerBaseUrls, setProviderBaseUrls] = useState<Record<string, string>>({})
@@ -1196,19 +1197,26 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   const activeModel = currentConversation && !currentConversationIsBlank
     ? currentConversation.model
     : draftModel
-  // 会话级三态联网搜索（任务 07-23）：会话显式模式优先 → 记住的全局默认（上次选择）
+  // 会话级联网搜索：会话显式模式优先 → 记住的全局默认（上次选择）
   // → 全局 nativeTools.webSearch 开关。这样选一次内置即成为所有新对话的默认。
   const activeWebSearchMode = useMemo<WebSearchMode>(() => {
     if (currentConversation && !currentConversationIsBlank) {
       const explicit = currentConversation.webSearchMode ?? currentConversation.web_search_mode
-      if (explicit) return explicit
+      if (explicit) {
+        if (explicit === 'platform' && !platformWebSearchSupported) {
+          return webSearchEnabled ? 'third_party' : 'off'
+        }
+        return explicit
+      }
     } else if (draftWebSearchMode) {
       return draftWebSearchMode
     }
     const remembered = loadLastWebSearchMode()
-    if (remembered) return remembered
-    return webSearchEnabled ? 'third_party' : 'off'
-  }, [currentConversation, currentConversationIsBlank, draftWebSearchMode, webSearchEnabled])
+    if (remembered && (remembered !== 'platform' || platformWebSearchSupported)) return remembered
+    return webSearchEnabled
+      ? (platformWebSearchSupported ? 'platform' : 'third_party')
+      : 'off'
+  }, [currentConversation, currentConversationIsBlank, draftWebSearchMode, platformWebSearchSupported, webSearchEnabled])
   const activeBuiltinWebSearchSupported = useMemo(
     () => builtinWebSearchSupported(
       providerApiFormats[activeProviderId ?? ''],
@@ -1288,6 +1296,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       const chatTools = settings.chatTools
       setMcpServers(chatTools?.servers ?? [])
       setWebSearchEnabled(chatTools?.nativeTools?.webSearch !== false)
+      setPlatformWebSearchSupported(settings.runtimeMode === 'cloud')
       setProviderApiFormats(
         Object.fromEntries((settings.providers ?? []).map((p) => [p.id, p.apiFormat ?? ''])),
       )
@@ -3209,7 +3218,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       }
     }
 
-    // 会话级三态联网搜索（任务 07-23）：把欢迎页草稿或记住的全局默认落到新会话上
+    // 会话级联网搜索：把欢迎页草稿或记住的全局默认落到新会话上
     // （仅当会话尚未显式设过模式时），后端 Builtin 注入依赖会话字段而非前端展示值。
     {
       const desiredMode = draftWebSearchMode ?? loadLastWebSearchMode()
@@ -4183,9 +4192,10 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     }
   }, [applyConversationMeta, currentConversation, setStreamErrorForConversation])
 
-  // 会话级三态联网搜索（任务 07-23）：设置模式,持久化到会话(欢迎页先存草稿),
+  // 会话级联网搜索：设置模式,持久化到会话(欢迎页先存草稿),
   // 并记住为全局默认——之后所有新会话/未显式设置的会话自动沿用(与思考等级同款)。
   const handleSetWebSearchMode = useCallback(async (mode: WebSearchMode) => {
+    if (mode === 'platform' && !platformWebSearchSupported) return
     setDraftWebSearchMode(mode)
     saveLastWebSearchMode(mode)
     if (!currentConversation) return
@@ -4202,7 +4212,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
         typeof err === 'string' ? err : (err as Error).message || '联网搜索模式切换失败',
       )
     }
-  }, [applyConversationMeta, currentConversation, setStreamErrorForConversation])
+  }, [applyConversationMeta, currentConversation, platformWebSearchSupported, setStreamErrorForConversation])
 
   // 多模型一问多答（任务 06-30 / D2）：变更多答模型集，持久化到会话（欢迎页先存草稿）。
   // 上限 4 由 UI 侧约束；这里直落 chatApi.updateConversation({ replyModels })。
@@ -4998,6 +5008,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     webSearchMode: activeWebSearchMode,
     onSetWebSearchMode: handleSetWebSearchMode,
     builtinWebSearchSupported: activeBuiltinWebSearchSupported,
+    platformWebSearchSupported,
     replyModels: activeReplyModels,
     onChangeReplyModels: handleChangeReplyModels,
     contextSlot: composerContextSlot,
@@ -5055,6 +5066,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     mcpServers,
     openAssistantCenter,
     openSkillCenter,
+    platformWebSearchSupported,
     selectedProject,
     selectedSet,
     slashSkills,

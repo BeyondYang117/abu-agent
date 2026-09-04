@@ -2019,6 +2019,11 @@ fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
 }
 
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
+    // Chat remains decodable for existing conversations, but it is no longer
+    // a selectable/default runtime for newly created conversations.
+    if settings.chat.default_agent_runtime.is_chat() {
+        settings.chat.default_agent_runtime = crate::chat::AgentRuntimeConfig::default();
+    }
     // RapidOCR 档位归一:非法值回落到各自默认(截图=standard,文档处理=high)。
     if settings.screenshot_translation.rapid_ocr_tier != "standard"
         && settings.screenshot_translation.rapid_ocr_tier != "high"
@@ -3274,6 +3279,17 @@ mod tests {
         s.retry_attempts = 99;
         let s = sanitize_settings(s);
         assert!((1..=8).contains(&s.retry_attempts));
+    }
+
+    #[test]
+    fn sanitize_settings_migrates_hidden_chat_runtime_default() {
+        let mut settings = Settings::default();
+        settings.chat.default_agent_runtime.kind = crate::chat::types::AgentRuntimeKind::Chat;
+        let settings = sanitize_settings(settings);
+        assert_eq!(
+            settings.chat.default_agent_runtime.kind,
+            crate::chat::types::AgentRuntimeKind::Builtin
+        );
     }
 
     #[test]

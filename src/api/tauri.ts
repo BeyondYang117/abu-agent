@@ -488,7 +488,7 @@ export type SkillFileEntry = {
 }
 
 export type AgentRuntimeConfig = {
-  kind: 'builtin' | 'external'
+  kind: 'builtin' | 'chat' | 'external'
   externalAgentId?: string | null
   external_agent_id?: string | null
   externalModel?: string | null

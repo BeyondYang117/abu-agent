@@ -1612,7 +1612,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const lensDefaults = defaultPrompts?.lensPrompts?.[settings?.lens?.defaultLanguage === 'en' ? 'en' : 'zh']
   const chatLangKey = settings?.chat?.defaultLanguage === 'en' ? 'en' : 'zh'
   const chatDefaults = defaultPrompts?.chatPrompts?.[chatLangKey]
-  const chatRuntimeDefaults = defaultPrompts?.chatRuntimePrompt
   const chatConfig = settings?.chat || defaultChatConfig()
   const chatMemory = settings?.chatMemory || defaultChatMemory()
   const chatFallbackMaxOutputTokens = chatConfig.maxOutputTokens ?? 16384
@@ -2086,7 +2085,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 chatTools={chatTools}
                 chatMemory={chatMemory}
                 chatDefaults={chatDefaults}
-                chatRuntimeDefaults={chatRuntimeDefaults}
                 effectiveChatMaxOutput={effectiveChatMaxOutput}
                 chatMaxOutputSourceLabel={chatMaxOutputSourceLabel}
                 chatMaxOutputModelLabel={chatMaxOutputModelLabel}
