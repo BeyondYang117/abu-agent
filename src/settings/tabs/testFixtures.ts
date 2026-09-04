@@ -25,7 +25,7 @@ export function makeSettings(overrides: Partial<SettingsData> = {}): SettingsDat
     chatProviderId: 'p1',
     chatModel: 'gpt-4o',
     retryEnabled: true,
-    retryAttempts: 3,
+    retryAttempts: 5,
     providers: [],
     defaultModels: {
       chat: { providerId: '', model: '' },

@@ -46,7 +46,7 @@ function baseSettings(overrides: Partial<Settings> = {}): Settings {
     providers: [],
     chatTools: defaultChatTools(),
     retryEnabled: true,
-    retryAttempts: 3,
+    retryAttempts: 5,
     screenshotTranslation: {
       enabled: true,
       hotkey: 'CommandOrControl+Shift+A',

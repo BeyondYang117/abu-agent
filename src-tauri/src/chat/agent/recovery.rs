@@ -210,6 +210,10 @@ pub(crate) fn classify(message: &str) -> FailureKind {
     let lower = trimmed.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| lower.contains(n));
 
+    if has(&["empty assistant response", "empty response"]) {
+        return FailureKind::Empty;
+    }
+
     // 内容审核:供应商措辞不一,关键词覆盖中英常见形态。
     if has(&[
         "content exists risk",
@@ -244,24 +248,27 @@ pub(crate) fn classify(message: &str) -> FailureKind {
 
 /// Whether repeating the same model request can reasonably recover.
 ///
-/// Transport retries already happen below this layer, but an exhausted 5xx /
-/// timeout or a successful empty response may still be transient. Deterministic
-/// failures (auth, billing, moderation, malformed requests, context overflow)
-/// must surface immediately or use their dedicated recovery path.
+/// Transport retries already happen below this layer. This is deliberately
+/// limited to stream failures that occur *after* a response begins and empty
+/// successful responses, so it cannot multiply the HTTP retry budget.
 pub(crate) fn is_retryable_agent_failure(message: &str) -> bool {
     let trimmed = message.trim();
     if trimmed.is_empty() {
         return true;
     }
-    let kind = classify(trimmed);
-    match kind {
-        FailureKind::Timeout => true,
-        FailureKind::Exhausted => matches!(crate::api::extract_status_code(trimmed), Some(429) | Some(500..=599)),
-        FailureKind::Empty
-        | FailureKind::ContentModeration
-        | FailureKind::ContextOverflow
-        | FailureKind::Other => false,
+    // A provider HTTP response is already fully classified by the transport
+    // layer; do not replay deterministic 4xx bodies that happen to mention
+    // "empty response".
+    if crate::api::extract_status_code(trimmed).is_some() {
+        return false;
     }
+    let lower = trimmed.to_ascii_lowercase();
+    classify(trimmed) == FailureKind::Empty
+        || lower.contains("流式响应读取中断")
+        || lower.contains("provider stream ended unexpectedly")
+        || lower.contains("provider stream timed out")
+        || lower.contains("provider connection was interrupted")
+        || lower.contains("incomplete or invalid encoded stream chunk")
 }
 
 /// 策略:给定失败类型 + 上下文,决定动作。集中表达,取代各阶段散落判断。
@@ -567,6 +574,12 @@ mod tests {
             FailureKind::ContextOverflow
         );
         assert_eq!(classify(""), FailureKind::Empty);
+        assert!(!is_retryable_agent_failure(
+            "Chat stream Error: 400 Bad Request - empty response"
+        ));
+        assert!(is_retryable_agent_failure(
+            "Chat stream returned an empty assistant response"
+        ));
         assert_eq!(
             classify("Chat stream Error: 429 Too Many Requests"),
             FailureKind::Exhausted

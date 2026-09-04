@@ -30,23 +30,9 @@ pub(crate) struct ChatPlanningStep {
     pub(crate) streamed: bool,
 }
 
-/// 流式响应中途断包后，重连**同一条流式请求**的次数上限。
-///
-/// 为什么不是降级到非流式（这是本常量取代的旧行为）：
-/// - 非流式意味着彻底丢掉已经流出来的部分，还要从头重新生成完整回答；
-/// - 非流式带总超时，长思考模型（high reasoning + 大 max_output_tokens）结构性跑不完
-///   —— 实测流式跑 135s 断包后回落非流式，3 次 60s 全超，白等 195s（现已放宽到
-///   `api::CHAT_COMPLETION_REQUEST_TIMEOUT`，但方向仍然是错的）；
-/// - 官方客户端的做法就是重连流式：Codex CLI 断流后重连最多 5 次，且在 0.130.0
-///   直接删掉了非流式（`wire_api = "chat"`）这条回退路径。
-///
-/// SSE 没有续传能力（无 offset / sequence），所以"重连"必然等于"重跑"——业界共识是
-/// 对话客户端做有界重试 + 退避就够，不值得为此上 Redis buffer / Last-Event-ID 那套。
-/// 取 2 次而非 Codex 的 5 次：每次重试都要重传整个请求体，2 次已覆盖偶发断包。
-const STREAM_INTERRUPT_RETRIES: u32 = 2;
-
-/// 断流重连前的退避基数（第 n 次重试等 n × 该值）。
-const STREAM_INTERRUPT_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
+/// 语义层重试的线性退避基数。HTTP 建连失败/5xx/429 仍由 `api.rs` 重试；
+/// 这里仅处理建连后断流和 HTTP 200 空回复。
+pub(crate) const AGENT_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub(crate) struct PlannedToolRound {
     pub(crate) message: Value,
@@ -61,11 +47,6 @@ pub(crate) enum PlanningStepOutcome {
     ToolCalls(PlannedToolRound),
     /// `state.tools` was narrowed to skill-native tools; the skeleton retries.
     RetryWithSkillTools,
-    /// Planning returned an empty assistant response (no text, no tool calls) —
-    /// flaky gateways do this intermittently. Retried once via the skeleton's
-    /// `continue`; a second empty lands in FinalAnswer and fails at finalize
-    /// with the existing "empty assistant response" error.
-    RetryEmptyResponse,
     /// Provider rejected tools; `state.provider_tools_unsupported` was set and a
     /// step was pushed. The skeleton breaks out of the tool loop.
     ToolsUnsupported,
@@ -172,8 +153,10 @@ pub(crate) async fn planning_step(
         None
     };
     // 内置搜索由实时卡追踪器边流边合成（take_card 落 Success 终态卡）。
-    let mut interrupt_attempt = 0u32;
+    let max_attempts = config.retry_attempts.max(1);
+    let mut attempt = 0usize;
     let planning_result = loop {
+        attempt += 1;
         match stream_scoped_chat_completion_inner(
             config.state,
             host,
@@ -256,7 +239,29 @@ pub(crate) async fn planning_step(
                             ),
                     ));
                 }
+                let empty = stream.content.trim().is_empty()
+                    && stream.tool_calls.is_empty()
+                    && stream.images.is_empty();
                 state.merge_usage(stream.usage.clone());
+                if empty && attempt < max_attempts {
+                    let retry_note = format!("retry {}/{}", attempt + 1, max_attempts);
+                    eprintln!(
+                        "Chat tools planning returned an empty response; retrying ({}/{})",
+                        attempt + 1,
+                        max_attempts
+                    );
+                    host.emit_status_note(&config.run_id, Some(&retry_note));
+                    tokio::select! {
+                        _ = tokio::time::sleep(AGENT_RETRY_BACKOFF * u32::try_from(attempt).unwrap_or(u32::MAX)) => {}
+                        _ = host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
+                            return Ok(PlanningStepOutcome::Cancelled(
+                                cancelled_run_result_from_state(env, state),
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                host.emit_status_note(&config.run_id, None);
                 state.generated_images.append(&mut stream.images);
                 break Ok(ChatPlanningStep {
                     message: stream.to_openai_compatible_message(),
@@ -282,16 +287,18 @@ pub(crate) async fn planning_step(
                 ));
             }
             Err(err)
-                if err.is_stream_read_interrupted()
-                    && interrupt_attempt < STREAM_INTERRUPT_RETRIES =>
+                if super::recovery::is_retryable_agent_failure(&err.to_string())
+                    && attempt < max_attempts =>
             {
-                interrupt_attempt += 1;
                 eprintln!(
-                    "Chat tools planning stream interrupted; reconnecting the stream ({interrupt_attempt}/{STREAM_INTERRUPT_RETRIES}): {err}"
+                    "Chat tools planning failed; retrying ({}/{}): {err}",
+                    attempt + 1,
+                    max_attempts
                 );
-                // 退避必须接取消：否则用户点停止后要等满退避 + 下一次完整流。
+                let retry_note = format!("retry {}/{}", attempt + 1, max_attempts);
+                host.emit_status_note(&config.run_id, Some(&retry_note));
                 tokio::select! {
-                    _ = tokio::time::sleep(STREAM_INTERRUPT_BACKOFF * interrupt_attempt) => {}
+                    _ = tokio::time::sleep(AGENT_RETRY_BACKOFF * u32::try_from(attempt).unwrap_or(u32::MAX)) => {}
                     _ = host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
                         return Ok(PlanningStepOutcome::Cancelled(
                             cancelled_run_result_from_state(env, state),
@@ -378,19 +385,6 @@ pub(crate) async fn planning_step(
     if tool_calls.is_empty() {
         let response =
             sanitize_assistant_text_response(&assistant_content_from_api_message(&message));
-        // 空响应重试（一次）：正文空 + 无工具调用 = 抽风网关的典型症状（HTTP 200 但
-        // 正文什么都没给，可能残留一段 reasoning）。这种消息走到 finalize 必报
-        // "empty assistant response"——与其断轮不如原地重试一次；再空则照旧报错。
-        // 例外：本轮出了图（hosted image generation，如 Responses 的 image_generation_call）
-        // 时正文本就是空串——图即答案，重试只会再生成一张，必须放行。
-        if response.trim().is_empty()
-            && state.generated_images.is_empty()
-            && !state.planning_empty_attempts
-        {
-            state.planning_empty_attempts = true;
-            eprintln!("Chat tools planning returned an empty response; retrying once");
-            return Ok(PlanningStepOutcome::RetryEmptyResponse);
-        }
         if !response.trim().is_empty() {
             let mut segment = planning_text_segment.clone();
             segment.phase = ChatMessageSegmentPhase::Plain;

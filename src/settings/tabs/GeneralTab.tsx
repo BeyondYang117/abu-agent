@@ -267,7 +267,7 @@ export function BehaviorGroup({
             value={retryAttemptsInput}
             onChange={onRetryAttemptsChange}
             onBlur={onRetryAttemptsBlur}
-            placeholder="3"
+            placeholder="5"
             min={1}
             max={5}
             className="!w-20 text-center"

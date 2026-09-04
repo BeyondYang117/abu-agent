@@ -9,6 +9,7 @@ use super::finalize::{
 use super::loop_::{LoopEnv, RunState};
 use super::planning::{
     call_chat_completion_message_with_usage, stream_scoped_chat_completion_inner,
+    AGENT_RETRY_BACKOFF,
 };
 use super::recovery::{self, RecoveryAction};
 use super::stop::{
@@ -80,31 +81,15 @@ pub(crate) async fn synthesis_step(
         None
     };
 
-    let stream = stream_scoped_chat_completion_inner(
-        config.state,
-        host,
-        &config.provider,
-        &config.model,
+    let stream = retry_synthesis_stream(
+        env,
         send_messages,
-        None,
-        config.retry_attempts,
-        config.thinking_enabled,
-        config.thinking_level.clone(),
-        config.builtin_web_search_active(),
-        config.max_output_tokens,
-        &config.conversation_id,
-        &config.run_id,
-        &config.message_id,
-        config.generation,
-        "Chat stream",
         synthesis_stream_policy,
-        Some(response_segment.clone()),
-        Some(response_reasoning_segment.clone()),
-        None,
+        response_segment.clone(),
+        response_reasoning_segment.clone(),
         synth_web_search_tracker.clone(),
     )
-    .await
-    .map_err(|err| err.to_string());
+    .await;
     let mut stream = match stream {
         Ok(stream) => stream,
         Err(err) if !state.tool_records.is_empty() => {
@@ -225,6 +210,62 @@ pub(crate) async fn synthesis_step(
         response_segment,
         response_reasoning_segment,
     }))
+}
+
+async fn retry_synthesis_stream(
+    env: &LoopEnv<'_>,
+    send_messages: Vec<Value>,
+    policy: AgentStreamPolicy,
+    response_segment: crate::chat::types::ChatMessageSegment,
+    reasoning_segment: crate::chat::types::ChatMessageSegment,
+    web_search_tracker: Option<WebSearchCardTracker>,
+) -> Result<ChatStreamOutput, String> {
+    let config = env.config;
+    let max_attempts = config.retry_attempts.max(1);
+    for attempt in 1..=max_attempts {
+        let result = stream_scoped_chat_completion_inner(
+            config.state,
+            env.host,
+            &config.provider,
+            &config.model,
+            send_messages.clone(),
+            None,
+            config.retry_attempts,
+            config.thinking_enabled,
+            config.thinking_level.clone(),
+            config.builtin_web_search_active(),
+            config.max_output_tokens,
+            &config.conversation_id,
+            &config.run_id,
+            &config.message_id,
+            config.generation,
+            "Chat stream",
+            policy,
+            Some(response_segment.clone()),
+            Some(reasoning_segment.clone()),
+            None,
+            web_search_tracker.clone(),
+        )
+        .await
+        .map_err(|err| err.to_string());
+        let retryable_empty = matches!(&result, Ok(output) if output.content.trim().is_empty() && output.images.is_empty() && output.tool_calls.is_empty());
+        let retryable_error =
+            matches!(&result, Err(error) if super::recovery::is_retryable_agent_failure(error));
+        if attempt == max_attempts || (!retryable_empty && !retryable_error) {
+            env.host.emit_status_note(&config.run_id, None);
+            return result;
+        }
+        let retry_note = format!("retry {}/{}", attempt + 1, max_attempts);
+        env.host.emit_status_note(&config.run_id, Some(&retry_note));
+        let delay = AGENT_RETRY_BACKOFF * u32::try_from(attempt).unwrap_or(u32::MAX);
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = env.host.wait_for_generation_inactive(&config.conversation_id, config.generation) => {
+                return Err("cancelled".to_string());
+            }
+        }
+    }
+    unreachable!("retry loop always returns")
 }
 
 fn last_user_text(messages: &[Value]) -> Option<String> {

@@ -36,7 +36,7 @@ function baseSettings(overrides: Partial<Settings> = {}): Settings {
       approvalPolicy: 'auto',
     },
     retryEnabled: true,
-    retryAttempts: 3,
+    retryAttempts: 5,
     screenshotTranslation: {
       enabled: true,
       hotkey: 'CommandOrControl+Shift+A',

@@ -79,7 +79,7 @@ describe('BehaviorGroup', () => {
       settings: makeSettings(),
       t,
       lang: 'zh' as const,
-      retryAttemptsInput: '3',
+      retryAttemptsInput: '5',
       onUpdateSettings: vi.fn(),
       onRetryAttemptsChange: vi.fn(),
       onRetryAttemptsBlur: vi.fn(),

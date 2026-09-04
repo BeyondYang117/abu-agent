@@ -1839,7 +1839,7 @@ export function normalizeSettings(settings: Settings): Settings {
     providers: Array.isArray(current.providers) ? current.providers.map(normalizeProvider) : [],
     chatTools: normalizeChatTools(current.chatTools),
     retryEnabled: current.retryEnabled ?? true,
-    retryAttempts: current.retryAttempts ?? 3,
+    retryAttempts: current.retryAttempts ?? 5,
     screenshotTranslation: {
       enabled: current.screenshotTranslation?.enabled ?? true,
       hotkey: current.screenshotTranslation?.hotkey ?? 'CommandOrControl+Shift+A',

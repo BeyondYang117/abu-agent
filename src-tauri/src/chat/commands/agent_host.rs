@@ -45,6 +45,16 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         emit_chat_tool_record(&self.app, run_id, record);
     }
 
+    fn emit_status_note(&self, run_id: &str, note: Option<&str>) {
+        crate::chat::protocol::emit_run_event(
+            &self.app,
+            run_id,
+            crate::chat::protocol::ChatRunEvent::StatusNoteUpdated {
+                note: note.map(str::to_string),
+            },
+        );
+    }
+
     fn emit_compaction_status(
         &self,
         conversation_id: &str,

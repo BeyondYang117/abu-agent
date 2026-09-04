@@ -27,6 +27,10 @@ pub trait AgentHost: Send + Sync {
         record: &ToolCallRecord,
     );
 
+    /// Transient one-line status shown while a retry is waiting or running.
+    /// `None` clears the note. Hosts without a live UI keep the default no-op.
+    fn emit_status_note(&self, _run_id: &str, _note: Option<&str>) {}
+
     /// Live compaction progress for chat timeline UI. Default no-op.
     fn emit_compaction_status(
         &self,

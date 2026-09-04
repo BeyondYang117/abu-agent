@@ -730,7 +730,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
   useEffect(() => {
     if (retryAttempts === undefined) return
-    setRetryAttemptsInput(String(retryAttempts ?? 3))
+    setRetryAttemptsInput(String(retryAttempts ?? 5))
   }, [retryAttempts])
 
   const uiFontScale = settings?.uiFontScale
@@ -973,12 +973,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const handleRetryAttemptsBlur = () => {
     if (!settings) return
     if (retryAttemptsInput.trim() === '') {
-      setRetryAttemptsInput(String(settings.retryAttempts ?? 3))
+      setRetryAttemptsInput(String(settings.retryAttempts ?? 5))
       return
     }
     const parsed = Number.parseInt(retryAttemptsInput, 10)
     if (Number.isNaN(parsed)) {
-      setRetryAttemptsInput(String(settings.retryAttempts ?? 3))
+      setRetryAttemptsInput(String(settings.retryAttempts ?? 5))
       return
     }
     const clamped = Math.min(5, Math.max(1, parsed))
