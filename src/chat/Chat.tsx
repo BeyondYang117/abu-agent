@@ -4940,6 +4940,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
             agentRuntime={activeAgentRuntime}
             onRuntimeChange={handleRuntimeChange}
             conversationId={currentConversation?.id}
+            onOpenCliSettings={() => openEmbeddedSettings('externalAgents')}
             locked={
               // 一 agent 一对话：有消息后锁死 kind/agent（内置 ABU Agent 与本地 CLI 一律）。
               // 拉出独立窗口后主窗卸掉了消息，仍按「已有对话」锁死。
@@ -5040,6 +5041,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     handleExternalModelChange,
     handleModelChange,
     handleOpenConversationPopout,
+    openEmbeddedSettings,
     handleOpenDockTasks,
     handleSidebarOpenLogin,
     handleRuntimeChange,

@@ -216,6 +216,46 @@
   gap: 6px;
 }
 
+.kv-runtime-picker__programmer-mode {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgb(191 219 254);
+  border-radius: 10px;
+  background: rgb(239 246 255);
+  color: rgb(30 64 175);
+  cursor: pointer;
+  text-align: left;
+}
+
+.kv-runtime-picker__programmer-mode:hover:not(:disabled) {
+  background: rgb(219 234 254);
+}
+
+.kv-runtime-picker__programmer-mode:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.dark .kv-runtime-picker__programmer-mode {
+  border-color: rgb(59 130 246 / 0.45);
+  background: rgb(30 58 138 / 0.3);
+  color: rgb(191 219 254);
+}
+
+.dark .kv-runtime-picker__programmer-mode:hover:not(:disabled) {
+  background: rgb(30 64 175 / 0.45);
+}
+
+.kv-runtime-picker__programmer-mode-settings {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
 .kv-runtime-picker__agent {
   position: relative;
   appearance: none;

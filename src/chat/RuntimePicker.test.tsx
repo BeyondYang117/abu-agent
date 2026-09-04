@@ -351,6 +351,47 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
     expect(trigger).toHaveTextContent('ABU Agent')
   })
 
+  it('程序员模式优先切换到已安装且已登录的 Codex', async () => {
+    detectAgents.mockResolvedValue([
+      { id: 'claude', name: 'Claude Code', available: true, authStatus: 'ok', models: [] },
+      { id: 'codex', name: 'Codex CLI', available: true, authStatus: 'ok', models: [] },
+    ])
+    const onRuntimeChange = vi.fn()
+    render(
+      <RuntimePicker
+        agentRuntime={{ kind: 'builtin' }}
+        onRuntimeChange={onRuntimeChange}
+        conversationId={null}
+      />,
+    )
+    await waitFor(() => expect(detectAgents).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
+    fireEvent.click(screen.getByRole('button', { name: /程序员模式/ }))
+    expect(onRuntimeChange).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'external',
+      externalAgentId: 'codex',
+    }))
+  })
+
+  it('程序员模式在没有可用 CLI 时打开本地 CLI 设置', async () => {
+    detectAgents.mockResolvedValue([
+      { id: 'codex', name: 'Codex CLI', available: true, authStatus: 'auth_required', models: [] },
+    ])
+    const onOpenCliSettings = vi.fn()
+    render(
+      <RuntimePicker
+        agentRuntime={{ kind: 'builtin' }}
+        onRuntimeChange={() => {}}
+        onOpenCliSettings={onOpenCliSettings}
+        conversationId={null}
+      />,
+    )
+    await waitFor(() => expect(detectAgents).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
+    fireEvent.click(screen.getByRole('button', { name: /程序员模式/ }))
+    expect(onOpenCliSettings).toHaveBeenCalledTimes(1)
+  })
+
   it('代理菜单显示不同运行时的能力说明', async () => {
     render(
       <RuntimePicker

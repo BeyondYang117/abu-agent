@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, Check, Brain, RefreshCw } from 'lucide-react'
+import { ChevronDown, Check, Brain, RefreshCw, Code2, Settings2 } from 'lucide-react'
 import { AgentIcon } from './AgentIcon'
 import { useT } from '../settings/i18n'
 import { chatApi, type DetectedExternalAgent } from './api'
@@ -46,6 +46,8 @@ interface RuntimePickerProps {
   // 一 agent 一对话：已有消息的会话锁定运行时来源（内置 / 本地 CLI 均不可换）。
   // 锁定时 popover 仍可展开查看，但所有切换项 disabled 并显示提示行。
   locked?: boolean
+  /** Open the existing Local CLI settings when programmer mode needs setup. */
+  onOpenCliSettings?: () => void
 }
 
 const BUILTIN: AgentRuntimeConfig = {
@@ -96,7 +98,7 @@ function runtimeTooltip(kind: AgentRuntimeConfig['kind'], t: ReturnType<typeof u
   return t.chatRuntimeExternalTooltip
 }
 
-function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, locked = false }: RuntimePickerProps) {
+function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, locked = false, onOpenCliSettings }: RuntimePickerProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
   const [agents, setAgents] = useState<DetectedExternalAgent[]>([])
@@ -201,6 +203,20 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
     setOpen(false)
   }
 
+  const selectProgrammerMode = () => {
+    if (locked) return
+    // Codex is the default for repository work; Claude Code remains the fallback.
+    const configured = ['codex', 'claude']
+      .map((id) => agents.find((agent) => agent.id === id))
+      .find((agent) => agent && agent.available && !agent.disabled && agent.authStatus !== 'auth_required' && agent.auth_status !== 'auth_required')
+    if (configured) {
+      selectExternal(configured)
+      return
+    }
+    setOpen(false)
+    onOpenCliSettings?.()
+  }
+
   return (
     <div className="kv-runtime-picker" data-tauri-drag-region="false">
       <button
@@ -260,6 +276,21 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} />
                 </IconButton>
               </div>
+              <button
+                type="button"
+                className="kv-runtime-picker__programmer-mode"
+                onClick={selectProgrammerMode}
+                disabled={locked}
+                title={t.chatRuntimeProgrammerModeTooltip}
+                data-tauri-drag-region="false"
+              >
+                <Code2 size={16} aria-hidden="true" />
+                <span className="kv-runtime-picker__agent-copy">
+                  <span className="kv-runtime-picker__agent-name">{t.chatRuntimeProgrammerMode}</span>
+                  <span className="kv-runtime-picker__agent-description">{t.chatRuntimeProgrammerModeDescription}</span>
+                </span>
+                <Settings2 size={14} aria-hidden="true" className="kv-runtime-picker__programmer-mode-settings" />
+              </button>
               {/* ABU Agent 自己就是一个代理，和本机 CLI 同列平铺（原先上面还有一行「模式」分段器，
                   内置/本地 CLI 二选一 —— 两级选择表达的是同一件事，去掉一级）。 */}
               <div className="kv-runtime-picker__agent-grid" role="radiogroup">
