@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessageSegment, ToolCallRecord } from './types'
 import {
   compareTimelineSegments,
+  filterSupersededToolRetries,
   formatWorkDuration,
   groupTimelineSegments,
   groupWorkDurationMs,
@@ -29,6 +30,48 @@ describe('segmentToolCallId', () => {
 
   it('falls back to camelCase toolCallId', () => {
     expect(segmentToolCallId({ toolCallId: 'b' } as ChatMessageSegment)).toBe('b')
+  })
+})
+
+describe('filterSupersededToolRetries', () => {
+  it('keeps only the latest native retry after missing required arguments', () => {
+    const calls = [
+      tool({ id: 'bad-1', name: 'web_search', source: 'native', status: 'error', error: 'arguments.query is required' }),
+      tool({ id: 'bad-2', name: 'web_search', source: 'native', status: 'error', error: 'arguments.query is required' }),
+      tool({ id: 'ok', name: 'web_search', source: 'native', status: 'completed', arguments: '{"query":"刘德华"}' }),
+    ]
+
+    expect(filterSupersededToolRetries(calls).map((call) => call.id)).toEqual(['ok'])
+  })
+
+  it('preserves the latest validation error and real execution failures', () => {
+    const calls = [
+      tool({ id: 'service-error', name: 'web_search', source: 'native', status: 'error', error: 'Search service unavailable' }),
+      tool({ id: 'missing-query', name: 'web_search', source: 'native', status: 'error', error: 'arguments.query is required' }),
+    ]
+
+    expect(filterSupersededToolRetries(calls).map((call) => call.id)).toEqual([
+      'service-error',
+      'missing-query',
+    ])
+  })
+
+  it('does not suppress MCP validation errors', () => {
+    const calls = [
+      tool({ id: 'mcp-error', name: 'search', source: 'mcp', status: 'error', error: 'arguments.query is required' }),
+      tool({ id: 'mcp-retry', name: 'search', source: 'mcp', status: 'completed' }),
+    ]
+
+    expect(filterSupersededToolRetries(calls).map((call) => call.id)).toEqual(['mcp-error', 'mcp-retry'])
+  })
+
+  it('does not merge retries from different runs', () => {
+    const calls = [
+      tool({ id: 'old-run', name: 'web_search', source: 'native', status: 'error', error: 'arguments.query is required', trace_id: 'run-1' }),
+      tool({ id: 'new-run', name: 'web_search', source: 'native', status: 'completed', trace_id: 'run-2' }),
+    ]
+
+    expect(filterSupersededToolRetries(calls).map((call) => call.id)).toEqual(['old-run', 'new-run'])
   })
 })
 

@@ -63,6 +63,7 @@ import {
 } from './api'
 import { loadLastAgentRuntime, saveLastAgentRuntime } from './lastAgentRuntime'
 import { loadLastModel, resolvePreferredChatModel, saveLastModel } from './lastModel'
+import { loadSmartModelEnabled, loadSmartModelQuality, selectSmartModel } from './smartModelRouting'
 import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
 import {
   chatTitlebarMacInsetClass,
@@ -3103,19 +3104,56 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
 
     let conversation = options.conversationOverride
       ?? (options.forceNewConversation ? null : currentConversation)
+    let sendProviderId = activeProviderId
+    let sendModel = activeModel
+    if (!usesExternalRuntime && loadSmartModelEnabled()) {
+      try {
+        const settings = await getSettingsCached()
+        let modelProviders = settings.providers || []
+        let recommended: string | undefined
+        if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+          const catalog = await listModels()
+          recommended = catalog.recommended
+          modelProviders = [{
+            id: ABU_API_PROVIDER_ID,
+            name: 'ABU Cloud',
+            apiKeys: [],
+            baseUrl: '',
+            enabledModels: catalog.models,
+            availableModels: catalog.models,
+            enabled: true,
+            apiFormat: 'openai_chat',
+          }]
+        }
+        const route = selectSmartModel({
+          providers: modelProviders,
+          content: trimmed,
+          hasImage: attachments.some((attachment) => attachment.type === 'image'),
+          quality: loadSmartModelQuality(),
+          recommended,
+          current: { providerId: activeProviderId, model: activeModel },
+        })
+        if (route) {
+          sendProviderId = route.providerId
+          sendModel = route.model
+        }
+      } catch (error) {
+        console.warn('Smart model routing failed; using the current model:', error)
+      }
+    }
     if (
       conversation
       && !options.conversationOverride
       && isPlainBlankConversation(conversation)
-      && !conversationUsesModel(conversation, activeProviderId, activeModel)
+      && !conversationUsesModel(conversation, sendProviderId, sendModel)
     ) {
       conversation = null
     }
     if (!conversation) {
       try {
         conversation = await chatApi.createConversation(
-          activeProviderId || undefined,
-          activeModel || undefined,
+          sendProviderId || undefined,
+          sendModel || undefined,
           selectedProject?.name,
           selectedProject?.id ?? null,
           undefined,
@@ -3132,6 +3170,21 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
           setStreamError(typeof err === 'string' ? err : (err as Error).message || '创建对话失败')
         }
         return false
+      }
+    }
+
+    if (
+      conversation
+      && !conversationUsesModel(conversation, sendProviderId, sendModel)
+    ) {
+      try {
+        conversation = await chatApi.updateConversation(conversation.id, {
+          providerId: sendProviderId,
+          model: sendModel,
+        })
+        applyConversationIfCurrent(conversation.id, conversation)
+      } catch (error) {
+        console.warn('Failed to apply the smart-selected model:', error)
       }
     }
 
@@ -3436,6 +3489,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     effectiveSkillId,
     enabledSkills,
     usesChatRuntime,
+    usesExternalRuntime,
     ensureStreamSnapshot,
     finishStreamingRunWithConversation,
     flushPendingStreamDone,

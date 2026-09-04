@@ -211,6 +211,32 @@ describe('MessageBubble agent plan action', () => {
 })
 
 describe('MessageBubble timeline orphan tools', () => {
+  it('hides superseded missing-argument retries and their timeline segments', () => {
+    const message: ChatMessage = {
+      id: 'msg-search-retries',
+      role: 'assistant',
+      content: '刘德华简介',
+      segments: [
+        { id: 'seg-bad-1', kind: 'tool', phase: 'tool_loop', order: 1, tool_call_id: 'bad-1' },
+        { id: 'seg-bad-2', kind: 'tool', phase: 'tool_loop', order: 2, tool_call_id: 'bad-2' },
+        { id: 'seg-ok', kind: 'tool', phase: 'tool_loop', order: 3, tool_call_id: 'ok' },
+        { id: 'seg-answer', kind: 'text', phase: 'plain', order: 4, text: '刘德华简介' },
+      ],
+      tool_calls: [
+        { id: 'bad-1', name: 'web_search', source: 'native', status: 'error', arguments: '{}', error: 'arguments.query is required' },
+        { id: 'bad-2', name: 'web_search', source: 'native', status: 'error', arguments: '{}', error: 'arguments.query is required' },
+        { id: 'ok', name: 'web_search', source: 'native', status: 'completed', arguments: '{"query":"刘德华"}' },
+      ],
+      timestamp: 1,
+    }
+
+    render(<MessageBubble message={message} messageStreaming />)
+
+    expect(screen.getAllByText('WEB SEARCH')).toHaveLength(1)
+    expect(screen.queryByText('arguments.query is required')).not.toBeInTheDocument()
+    expect(screen.queryByText(/工具记录缺失/)).not.toBeInTheDocument()
+  })
+
   it('renders tool calls that are missing tool segments', () => {
     const message: ChatMessage = {
       id: 'msg-1',

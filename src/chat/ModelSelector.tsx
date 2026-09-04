@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Star } from 'lucide-react'
+import { Check, ChevronDown, Sparkles, Star } from 'lucide-react'
 import { type ModelProvider } from '../api/tauri'
 import { getSettingsCached, setFavoriteModelsCached, subscribeSettings } from '../api/settingsCache'
 import { useT } from '../settings/i18n'
@@ -10,6 +10,13 @@ import { chatTitlebarPillButtonClass } from './platform'
 import { listModels, ABU_API_PROVIDER_ID } from '../api/abuApi'
 import { ModelAbilityTags } from './ModelAbilityTags'
 import { useAbuApiAuth } from '../api/abuApiAuth'
+import {
+  loadSmartModelEnabled,
+  loadSmartModelQuality,
+  saveSmartModelEnabled,
+  saveSmartModelQuality,
+  type SmartModelQuality,
+} from './smartModelRouting'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -39,6 +46,9 @@ function ModelSelectorBase({
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [cloudError, setCloudError] = useState<string | null>(null)
+  const [smartEnabled, setSmartEnabled] = useState(loadSmartModelEnabled)
+  const [smartQuality, setSmartQuality] = useState<SmartModelQuality>(loadSmartModelQuality)
+  const [advancedOpen, setAdvancedOpen] = useState(() => !loadSmartModelEnabled())
   const menuRef = useRef<HTMLDivElement>(null)
   const maxH = usePopoverMaxHeight(open, menuRef, 'down', 400)
 
@@ -161,7 +171,7 @@ function ModelSelectorBase({
   )
 
   const renderModelRow = (providerId: string, model: string, keySuffix: string) => {
-    const selected = currentProviderId === providerId && currentModel === model
+    const selected = !smartEnabled && currentProviderId === providerId && currentModel === model
     const isFav = favorites.includes(favKey(providerId, model))
     return (
       <div
@@ -175,6 +185,8 @@ function ModelSelectorBase({
         <button
           type="button"
           onClick={() => {
+            setSmartEnabled(false)
+            saveSmartModelEnabled(false)
             onModelChange(providerId, model)
             setOpen(false)
           }}
@@ -214,12 +226,12 @@ function ModelSelectorBase({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        title={tooltipText || undefined}
+        title={smartEnabled ? t.chatSmartModelDescription : (tooltipText || undefined)}
         className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
       >
-        {currentModel && <ModelIcon model={currentModel} size={16} />}
+        {smartEnabled ? <Sparkles size={16} className="text-amber-500" /> : currentModel && <ModelIcon model={currentModel} size={16} />}
         <span className="chat-model-selector-label max-w-[200px] truncate font-medium text-neutral-800 dark:text-neutral-200">
-          {displayName}
+          {smartEnabled ? t.chatSmartModel : displayName}
         </span>
         <ChevronDown
           size={15}
@@ -231,6 +243,70 @@ function ModelSelectorBase({
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden />
           <div ref={menuRef} style={{ maxHeight: maxH }} className="chat-model-selector-menu chat-motion-popover absolute left-0 top-full z-20 mt-2 min-w-[240px] overflow-y-auto kv-menu">
+            <div className="px-1 py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setSmartEnabled(true)
+                  saveSmartModelEnabled(true)
+                }}
+                className={`flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                  smartEnabled
+                    ? 'bg-amber-50 text-neutral-900 dark:bg-amber-400/10 dark:text-neutral-100'
+                    : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-300 dark:hover:bg-neutral-800/80'
+                }`}
+              >
+                <Sparkles size={17} className="mt-0.5 shrink-0 text-amber-500" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center justify-between gap-3 text-[13px] font-semibold">
+                    {t.chatSmartModel}
+                    {smartEnabled && <Check size={15} className="text-amber-500" />}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-4 text-neutral-500 dark:text-neutral-400">
+                    {t.chatSmartModelDescription}
+                  </span>
+                </span>
+              </button>
+              <div className="px-3 pb-2 pt-2">
+                <div className="mb-1.5 text-[10px] font-medium text-neutral-400">{t.chatSmartModelPreference}</div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-neutral-100 p-1 dark:bg-neutral-800">
+                  {(['fast', 'balanced', 'quality'] as const).map((quality) => (
+                    <button
+                      key={quality}
+                      type="button"
+                      onClick={() => {
+                        setSmartEnabled(true)
+                        setSmartQuality(quality)
+                        saveSmartModelEnabled(true)
+                        saveSmartModelQuality(quality)
+                      }}
+                      className={`rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                        smartQuality === quality
+                          ? 'bg-white text-neutral-900 shadow-sm dark:bg-neutral-700 dark:text-neutral-100'
+                          : 'text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200'
+                      }`}
+                    >
+                      {quality === 'fast'
+                        ? t.chatSmartModelFast
+                        : quality === 'balanced'
+                          ? t.chatSmartModelBalanced
+                          : t.chatSmartModelQuality}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((value) => !value)}
+                className="flex w-full items-center justify-center gap-1 border-t border-neutral-100 px-3 py-2 text-[11px] text-neutral-500 hover:text-neutral-800 dark:border-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200"
+                aria-expanded={advancedOpen}
+              >
+                {t.chatSmartModelAdvanced}
+                <ChevronDown size={12} className={`transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+            {advancedOpen && (
+              <div className="border-t border-neutral-100 pt-1 dark:border-neutral-800">
             {favoriteEntries.length > 0 && (
               <div className="px-1 py-1">
                 <div className="flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-500">
@@ -302,6 +378,8 @@ function ModelSelectorBase({
                     </div>
                   </>
                 )}
+              </div>
+            )}
               </div>
             )}
           </div>

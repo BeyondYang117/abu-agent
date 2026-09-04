@@ -33,6 +33,7 @@ import type { AgentPlanState, ChatMessage, ChatMessageSegment, ChatToolArtifact,
 import { buildCitationMap, type CitationView } from './citations'
 import {
   compareTimelineSegments,
+  filterSupersededToolRetries,
   formatWorkDuration,
   groupTimelineSegments,
   groupWorkDurationMs,
@@ -862,16 +863,23 @@ function MessageBubbleComponent({
   const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
   const prepared = useMemo(() => {
     const attachments = message.attachments ?? []
-    const toolCalls = message.tool_calls ?? message.toolCalls ?? []
+    const allToolCalls = message.tool_calls ?? message.toolCalls ?? []
+    const toolCalls = filterSupersededToolRetries(allToolCalls)
+    const visibleToolIds = new Set(toolCalls.map(toolRecordId).filter(Boolean))
+    const supersededToolIds = new Set(
+      allToolCalls
+        .map(toolRecordId)
+        .filter((id) => id && !visibleToolIds.has(id)),
+    )
     // 后端 recovery.rs 产出的降级描述；旧会话无此字段 → null → 不渲染卡片。
     const degraded = message.degraded ?? null
     // 降级文案同时走三条路：content、时间线 text 分段、以及这张卡片。卡片已完整表达，
     // 另外两条都要按文本相等剔掉，否则同一段话在气泡里出现两遍（正是用户看到的样子）。
     const degradedText = degraded?.text.trim() ?? ''
-    const timelineSegments = orderedSegments(message.segments).filter(
-      (segment) =>
-        !degradedText || segment.kind !== 'text' || segmentText(segment).trim() !== degradedText,
-    )
+    const timelineSegments = orderedSegments(message.segments).filter((segment) => {
+      if (segment.kind === 'tool') return !supersededToolIds.has(segmentToolCallId(segment))
+      return !degradedText || segment.kind !== 'text' || segmentText(segment).trim() !== degradedText
+    })
     const hasTimelineSegments = timelineSegments.length > 0
     const messageArtifacts = message.artifacts ?? []
     const toolArtifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? [])

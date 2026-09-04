@@ -12,6 +12,34 @@ export function toolRecordRawName(toolCall: ToolCallRecord): string {
 }
 
 /**
+ * Hide model self-correction noise without discarding the underlying records.
+ * A missing-required-argument failure happens before a native tool executes; once
+ * the model retries that same tool, only the newest attempt is useful in the UI.
+ */
+export function filterSupersededToolRetries(toolCalls: ToolCallRecord[]): ToolCallRecord[] {
+  const seenTools = new Set<string>()
+  const visible: ToolCallRecord[] = []
+
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const toolCall = toolCalls[index]
+    const name = canonicalToolName(toolCall)
+    const trace = toolCall.trace_id ?? toolCall.traceId ?? ''
+    const retryKey = `${trace}:${name}`
+    const error = toolCall.error?.trim() ?? ''
+    const isSupersededArgumentRetry =
+      toolCall.source === 'native' &&
+      normalizeToolCallStatus(toolCall.status) === 'error' &&
+      /^arguments(?:\.[A-Za-z0-9_-]+)+ is required$/.test(error) &&
+      seenTools.has(retryKey)
+
+    if (!isSupersededArgumentRetry) visible.push(toolCall)
+    if (name) seenTools.add(retryKey)
+  }
+
+  return visible.reverse()
+}
+
+/**
  * 展示/分类用的规范工具名：小写 + 去分隔符后查别名。
  * dsh 在 Windows 上把 bash 报成 `pwsh`；claude 是 PascalCase 的 `Bash` / `Read`。
  */

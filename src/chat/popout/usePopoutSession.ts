@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/tauri'
 import { syncChatProtocol } from '../../api/chatProtocol'
 import { getSettingsCached, refreshSettings, saveSettingsCached } from '../../api/settingsCache'
+import { ABU_API_PROVIDER_ID, listModels } from '../../api/abuApi'
 import {
   agentRuntimesEqual,
   chatApi,
@@ -50,6 +51,7 @@ import type {
   ChatHookPayload,
 } from '../../api/tauri'
 import type { Lang } from '../../settings/i18n'
+import { loadSmartModelEnabled, loadSmartModelQuality, selectSmartModel } from '../smartModelRouting'
 
 export function usePopoutSession(conversationId: string, lang: Lang) {
   const [conversation, setConversation] = useState<Conversation | null>(null)
@@ -344,8 +346,46 @@ export function usePopoutSession(conversationId: string, lang: Lang) {
   ) => {
     const trimmed = content.trim()
     if (!trimmed && attachments.length === 0) return false
-    const conv = conversation
+    let conv = conversation
     if (!conv) return false
+    if (normalizeAgentRuntime(conv).kind !== 'external' && loadSmartModelEnabled()) {
+      try {
+        const settings = await getSettingsCached()
+        let modelProviders = settings.providers || []
+        let recommended: string | undefined
+        if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+          const catalog = await listModels()
+          recommended = catalog.recommended
+          modelProviders = [{
+            id: ABU_API_PROVIDER_ID,
+            name: 'ABU Cloud',
+            apiKeys: [],
+            baseUrl: '',
+            availableModels: catalog.models,
+            enabledModels: catalog.models,
+            enabled: true,
+            apiFormat: 'openai_chat',
+          }]
+        }
+        const route = selectSmartModel({
+          providers: modelProviders,
+          content: trimmed,
+          hasImage: attachments.some((attachment) => attachment.type === 'image'),
+          quality: loadSmartModelQuality(),
+          recommended,
+          current: { providerId: conv.provider_id, model: conv.model },
+        })
+        if (route && (route.providerId !== conv.provider_id || route.model !== conv.model)) {
+          conv = await chatApi.updateConversation(conversationId, {
+            providerId: route.providerId,
+            model: route.model,
+          })
+          setConversation(conv)
+        }
+      } catch (error) {
+        console.warn('Smart model routing failed; using the current model:', error)
+      }
+    }
     inFlightRef.current = true
     setHookWarning(null)
     const replyArms = conv.reply_models ?? conv.replyModels ?? []
