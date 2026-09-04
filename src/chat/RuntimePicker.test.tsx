@@ -370,6 +370,47 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
     expect(screen.getByRole('tooltip')).toHaveTextContent('可读写项目文件、运行命令、使用工具')
   })
 
+  it('关闭运行时菜单时立即清理能力提示框', async () => {
+    render(
+      <RuntimePicker
+        agentRuntime={{ kind: 'builtin' }}
+        onRuntimeChange={() => {}}
+        conversationId={null}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
+    const agentOption = screen.getByRole('radio', { name: 'ABU Agent' })
+    fireEvent.mouseEnter(agentOption)
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+    // Toggling the trigger closes the popover without dispatching mouseleave.
+    fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+  })
+
+  it('能力提示框在缺少离开事件时也会自动消失', async () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <RuntimePicker
+          agentRuntime={{ kind: 'builtin' }}
+          onRuntimeChange={() => {}}
+          conversationId={null}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'ABU Agent' }))
+      fireEvent.mouseEnter(screen.getByRole('radio', { name: 'ABU Agent' }))
+      expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(4000)
+      })
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('已绑定会话在菜单顶部说明当前代理和切换方式', async () => {
     render(
       <RuntimePicker

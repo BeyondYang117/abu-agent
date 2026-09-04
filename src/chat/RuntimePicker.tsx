@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check, Brain, RefreshCw } from 'lucide-react'
 import { AgentIcon } from './AgentIcon'
@@ -68,6 +68,7 @@ function mapDefaultLabel(label: string): string {
 
 /** ACP 探测常把思考开关报成 on/off，那不是档位。dsh 的 `off` 是真档位，会跟 high/max 一起出现。 */
 const ACP_SWITCH_IDS = ['on', 'off', 'true', 'false', 'enabled', 'disabled']
+const RUNTIME_TOOLTIP_TIMEOUT_MS = 4000
 
 function isAcpSwitchId(id: string): boolean {
   return ACP_SWITCH_IDS.includes(id.toLowerCase())
@@ -118,6 +119,7 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
   const [agents, setAgents] = useState<DetectedExternalAgent[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [tooltip, setTooltip] = useState<{ text: string; top: number; left: number } | null>(null)
+  const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuMaxH = usePopoverMaxHeight(open, menuRef, 'down', 460)
   // 请求代际：conversationId 切换 / 手动刷新会并发发起检测，只让最新一次的结果落地
@@ -170,11 +172,32 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
     return 'ABU Agent'
   }, [agentRuntime.externalAgentId, currentAgent?.name, t, usesChat, usesExternal])
 
-  const showTooltip = useCallback((event: MouseEvent<HTMLElement>, text: string) => {
+  const showTooltip = useCallback((event: MouseEvent<HTMLElement> | FocusEvent<HTMLElement>, text: string) => {
     const rect = event.currentTarget.getBoundingClientRect()
     setTooltip({ text, top: rect.bottom + 8, left: rect.left })
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
+    // Keep the hint self-cleaning even when the browser skips mouseleave/blur
+    // while the popover is removed or focus moves to another window.
+    tooltipTimerRef.current = setTimeout(() => {
+      tooltipTimerRef.current = null
+      setTooltip(null)
+    }, RUNTIME_TOOLTIP_TIMEOUT_MS)
   }, [])
-  const hideTooltip = useCallback(() => setTooltip(null), [])
+  const hideTooltip = useCallback(() => {
+    if (tooltipTimerRef.current) {
+      clearTimeout(tooltipTimerRef.current)
+      tooltipTimerRef.current = null
+    }
+    setTooltip(null)
+  }, [])
+
+  useEffect(() => {
+    if (!open) hideTooltip()
+  }, [hideTooltip, open])
+
+  useEffect(() => () => {
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current)
+  }, [])
 
   const selectBuiltin = () => {
     if (locked) return
