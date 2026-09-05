@@ -587,7 +587,9 @@ fn create_directory_link(link: &Path, target: &Path) -> Result<(), String> {
     }
 }
 
-/// 整份覆盖 `config.toml` 之后，把聊天里选过的顶层 `model` / `model_reasoning_effort` 写回去。
+/// 整份覆盖 `config.toml` 之后，把聊天里选过的顶层模型字段，以及用户已有的
+/// Codex 上下文/自动压缩覆盖写回去。压缩设置属于用户的运行策略，不能因供应商
+/// 重物化而丢失。
 fn write_codex_config_preserving_chat_model(path: &Path, config_toml: &str) -> Result<(), String> {
     let previous = if path.is_file() {
         std::fs::read_to_string(path).map_err(|e| format!("读取 {} 失败：{e}", path.display()))?
@@ -596,12 +598,28 @@ fn write_codex_config_preserving_chat_model(path: &Path, config_toml: &str) -> R
     };
     let previous_model = read_toml_toplevel_string(&previous, "model");
     let previous_effort = read_toml_toplevel_string(&previous, "model_reasoning_effort");
+    let previous_context_window = read_toml_toplevel_raw(&previous, "model_context_window");
+    let previous_auto_compact_limit = read_toml_toplevel_raw(&previous, "model_auto_compact_token_limit");
+    let previous_auto_compact_scope = read_toml_toplevel_raw(&previous, "model_auto_compact_token_limit_scope");
     write_private(path, config_toml)?;
     if let Some(model) = previous_model {
         upsert_toml_toplevel_string_file(path, "model", &model)?;
     }
     if let Some(effort) = previous_effort {
         upsert_toml_toplevel_string_file(path, "model_reasoning_effort", &effort)?;
+    }
+    for (key, value) in [
+        ("model_context_window", previous_context_window),
+        ("model_auto_compact_token_limit", previous_auto_compact_limit),
+        ("model_auto_compact_token_limit_scope", previous_auto_compact_scope),
+    ] {
+        // Explicit values in the provider record are authoritative; only carry forward
+        // settings from an older private home when the new config leaves them unspecified.
+        if read_toml_toplevel_raw(config_toml, key).is_none() {
+            if let Some(value) = value {
+                upsert_toml_toplevel_raw_file(path, key, &value)?;
+            }
+        }
     }
     Ok(())
 }
@@ -807,6 +825,45 @@ fn upsert_toml_toplevel_string_file(path: &Path, key: &str, value: &str) -> Resu
     write_private_atomic(path, &next)
 }
 
+fn upsert_toml_toplevel_raw_file(path: &Path, key: &str, value: &str) -> Result<(), String> {
+    let existing = if path.is_file() {
+        std::fs::read_to_string(path).map_err(|e| format!("读取 {} 失败：{e}", path.display()))?
+    } else {
+        String::new()
+    };
+    let next = upsert_toml_toplevel_raw(&existing, key, value);
+    if next == existing {
+        return Ok(());
+    }
+    write_private_atomic(path, &next)
+}
+
+fn upsert_toml_toplevel_raw(text: &str, key: &str, value: &str) -> String {
+    let replacement = format!("{key} = {}", value.trim());
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut section_at = lines.len();
+    let mut replaced = false;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            section_at = index;
+            break;
+        }
+        let Some((found_key, _)) = trimmed.split_once('=') else { continue };
+        if found_key.trim() == key {
+            lines[index] = replacement.clone();
+            replaced = true;
+            break;
+        }
+    }
+    if !replaced {
+        lines.insert(section_at, replacement);
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') { out.push('\n'); }
+    out
+}
+
 /// 替换或插入顶层 `key = "value"`，第一个 `[section]` 之前。其它行原样保留。
 fn upsert_toml_toplevel_string(text: &str, key: &str, value: &str) -> String {
     let quoted = serde_json::to_string(value).unwrap_or_else(|_| format!("\"{value}\""));
@@ -867,6 +924,19 @@ fn read_toml_toplevel_string(text: &str, key: &str) -> Option<String> {
             return None;
         }
         return Some(unquoted.to_string());
+    }
+    None
+}
+
+fn read_toml_toplevel_raw(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') { break; }
+        let Some((found_key, raw)) = trimmed.split_once('=') else { continue };
+        if found_key.trim() == key {
+            let value = raw.trim();
+            if !value.is_empty() { return Some(value.to_string()); }
+        }
     }
     None
 }

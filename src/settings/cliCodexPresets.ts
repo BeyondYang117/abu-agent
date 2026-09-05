@@ -47,6 +47,14 @@ export interface CodexProviderPreset {
   authJson: string
 }
 
+export type CodexCompactionScope = 'total' | 'body_after_prefix'
+
+export interface CodexCompactionFields {
+  contextWindow: string
+  autoCompactLimit: string
+  autoCompactScope: CodexCompactionScope
+}
+
 const tomlString = (value: string): string => JSON.stringify(value)
 
 /** 生成一份合法的 codex config.toml（必须带 model_providers.*.name，否则 CLI 起不来）。 */
@@ -67,6 +75,72 @@ base_url = ${tomlString(baseUrl)}
 name = ${tomlString(providerName)}
 requires_openai_auth = true
 wire_api = ${tomlString(wireApi)}`
+}
+
+function readCodexTopLevelRaw(text: string, key: string): string | undefined {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('[')) break
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const separator = trimmed.indexOf('=')
+    if (separator < 0 || trimmed.slice(0, separator).trim() !== key) continue
+    const value = trimmed.slice(separator + 1).trim()
+    if (value) return value
+  }
+  return undefined
+}
+
+function upsertCodexTopLevelRaw(text: string, key: string, value: string | undefined): string {
+  const lines = text.split(/\r?\n/)
+  const sectionAt = lines.findIndex((line) => line.trim().startsWith('['))
+  const insertAt = sectionAt < 0 ? lines.length : sectionAt
+  const index = lines.findIndex((line, lineIndex) => {
+    if (lineIndex >= insertAt) return false
+    const separator = line.indexOf('=')
+    return separator >= 0 && line.slice(0, separator).trim() === key
+  })
+  if (!value?.trim()) {
+    if (index >= 0) lines.splice(index, 1)
+  } else if (index >= 0) {
+    lines[index] = `${key} = ${value.trim()}`
+  } else {
+    lines.splice(insertAt, 0, `${key} = ${value.trim()}`)
+  }
+  return lines.join('\n').replace(/\n*$/, '\n')
+}
+
+export function readCodexCompactionFields(configToml: string): CodexCompactionFields {
+  const contextWindow = readCodexTopLevelRaw(configToml, 'model_context_window') ?? ''
+  const autoCompactLimit = readCodexTopLevelRaw(configToml, 'model_auto_compact_token_limit') ?? ''
+  const scope = readCodexTopLevelRaw(configToml, 'model_auto_compact_token_limit_scope')
+    ?.replace(/^['"]|['"]$/g, '')
+  return {
+    contextWindow: /^\d+$/.test(contextWindow) ? contextWindow : '',
+    autoCompactLimit: /^\d+$/.test(autoCompactLimit) ? autoCompactLimit : '',
+    autoCompactScope: scope === 'body_after_prefix' ? 'body_after_prefix' : 'total',
+  }
+}
+
+export function setCodexCompactionFields(
+  configToml: string,
+  fields: Partial<CodexCompactionFields>,
+): string {
+  const current = readCodexCompactionFields(configToml)
+  const contextWindow = fields.contextWindow ?? current.contextWindow
+  const autoCompactLimit = fields.autoCompactLimit ?? current.autoCompactLimit
+  const scope = fields.autoCompactScope ?? current.autoCompactScope
+  let next = upsertCodexTopLevelRaw(configToml, 'model_context_window', contextWindow)
+  next = upsertCodexTopLevelRaw(next, 'model_auto_compact_token_limit', autoCompactLimit)
+  next = upsertCodexTopLevelRaw(
+    next,
+    'model_auto_compact_token_limit_scope',
+    autoCompactLimit && scope === 'body_after_prefix' ? JSON.stringify(scope) : undefined,
+  )
+  return next
+}
+
+function preserveCodexCompactionFields(currentToml: string, nextToml: string): string {
+  return setCodexCompactionFields(nextToml, readCodexCompactionFields(currentToml))
 }
 
 export const DEFAULT_CODEX_AUTH_JSON = `{
@@ -317,12 +391,15 @@ export function setCodexStructuredFields(
   const meta = extractCodexMeta(currentToml || DEFAULT_CODEX_CONFIG_TOML)
   const baseUrl = patch.baseUrl ?? extractCodexBaseUrl(currentToml)
   const model = ((patch.model ?? extractCodexModel(currentToml)) || 'gpt-5.5').trim() || 'gpt-5.5'
-  const configToml = buildCodexProviderConfigToml(
-    meta.providerName,
-    baseUrl.trim(),
-    model,
-    meta.wireApi,
-    meta.providerId,
+  const configToml = preserveCodexCompactionFields(
+    currentToml,
+    buildCodexProviderConfigToml(
+      meta.providerName,
+      baseUrl.trim(),
+      model,
+      meta.wireApi,
+      meta.providerId,
+    ),
   )
   let authJson = currentAuth.trim() ? currentAuth : DEFAULT_CODEX_AUTH_JSON
   if (patch.apiKey !== undefined) {
@@ -339,6 +416,7 @@ export function setCodexStructuredFields(
 export function applyCodexPreset(
   presetId: CodexPresetId,
   currentAuthJson: string,
+  currentToml = '',
 ): { configToml: string; authJson: string; name?: string } {
   const preset =
     presetId === CODEX_CUSTOM_PRESET_ID
@@ -352,7 +430,7 @@ export function applyCodexPreset(
   }
 
   return {
-    configToml: preset.configToml,
+    configToml: preserveCodexCompactionFields(currentToml, preset.configToml),
     authJson,
     name: preset.id === CODEX_CUSTOM_PRESET_ID ? undefined : preset.name,
   }
@@ -447,6 +525,20 @@ export function validateCodexConfigToml(raw: string): string | null {
   // codex 校验每一张 model_providers 表必须有 name
   if (!/^name\s*=/m.test(text)) return 'missing_name'
   if (!/\[model_providers\./.test(text)) return 'missing_model_providers_table'
+
+  const contextWindow = readCodexTopLevelRaw(text, 'model_context_window')
+  const autoCompactLimit = readCodexTopLevelRaw(text, 'model_auto_compact_token_limit')
+  const autoCompactScope = readCodexTopLevelRaw(text, 'model_auto_compact_token_limit_scope')
+    ?.replace(/^['"]|['"]$/g, '')
+  if (contextWindow !== undefined && !/^\d+$/.test(contextWindow)) return 'invalid_context_window'
+  if (autoCompactLimit !== undefined && !/^\d+$/.test(autoCompactLimit)) return 'invalid_auto_compact_limit'
+  if (contextWindow !== undefined && autoCompactLimit !== undefined
+    && Number(autoCompactLimit) >= Number(contextWindow)) {
+    return 'invalid_auto_compact_range'
+  }
+  if (autoCompactScope !== undefined && !['total', 'body_after_prefix'].includes(autoCompactScope)) {
+    return 'invalid_auto_compact_scope'
+  }
 
   return null
 }

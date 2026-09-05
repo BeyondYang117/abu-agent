@@ -10,8 +10,11 @@ import {
   extractCodexModel,
   extractOpenAiApiKey,
   initialCodexTomlAuth,
+  readCodexCompactionFields,
+  setCodexCompactionFields,
   setCodexStructuredFields,
   validateCodexConfigToml,
+  DEFAULT_CODEX_AUTH_JSON,
   DEFAULT_CODEX_CONFIG_TOML,
 } from './cliCodexPresets'
 
@@ -76,6 +79,62 @@ describe('cliCodexPresets', () => {
     expect(extractCodexModel(next.configToml)).toBe('gpt-5.5')
     expect(next.configToml).toContain('wire_api = "chat"')
     expect(extractOpenAiApiKey(next.authJson)).toBe('sk-test')
+  })
+
+  it('preserves compaction overrides when structured fields or presets change', () => {
+    const configured = setCodexCompactionFields(DEFAULT_CODEX_CONFIG_TOML, {
+      contextWindow: '272000',
+      autoCompactLimit: '217000',
+      autoCompactScope: 'body_after_prefix',
+    })
+    const patched = setCodexStructuredFields(configured, DEFAULT_CODEX_AUTH_JSON, {
+      model: 'gpt-5.4',
+    })
+    expect(readCodexCompactionFields(patched.configToml)).toEqual({
+      contextWindow: '272000',
+      autoCompactLimit: '217000',
+      autoCompactScope: 'body_after_prefix',
+    })
+
+    const switched = applyCodexPreset('deepseek', DEFAULT_CODEX_AUTH_JSON, patched.configToml)
+    expect(readCodexCompactionFields(switched.configToml)).toEqual({
+      contextWindow: '272000',
+      autoCompactLimit: '217000',
+      autoCompactScope: 'body_after_prefix',
+    })
+  })
+
+  it('omits compaction keys by default and removes scope when the limit is cleared', () => {
+    expect(DEFAULT_CODEX_CONFIG_TOML).not.toContain('model_context_window')
+    expect(DEFAULT_CODEX_CONFIG_TOML).not.toContain('model_auto_compact_token_limit')
+
+    const configured = setCodexCompactionFields(DEFAULT_CODEX_CONFIG_TOML, {
+      autoCompactLimit: '210000',
+      autoCompactScope: 'body_after_prefix',
+    })
+    const cleared = setCodexCompactionFields(configured, { autoCompactLimit: '' })
+    expect(cleared).not.toContain('model_auto_compact_token_limit')
+    expect(cleared).not.toContain('model_auto_compact_token_limit_scope')
+  })
+
+  it('does not write the default total scope for older Codex versions', () => {
+    const configured = setCodexCompactionFields(DEFAULT_CODEX_CONFIG_TOML, {
+      contextWindow: '272000',
+      autoCompactLimit: '217000',
+      autoCompactScope: 'total',
+    })
+    expect(configured).toContain('model_auto_compact_token_limit = 217000')
+    expect(configured).not.toContain('model_auto_compact_token_limit_scope')
+  })
+
+  it('validates compaction overrides in raw TOML', () => {
+    const valid = setCodexCompactionFields(DEFAULT_CODEX_CONFIG_TOML, {
+      contextWindow: '272000',
+      autoCompactLimit: '217000',
+    })
+    expect(validateCodexConfigToml(valid)).toBeNull()
+    expect(validateCodexConfigToml(valid.replace('217000', '272000'))).toBe('invalid_auto_compact_range')
+    expect(validateCodexConfigToml(valid.replace('272000', 'oops'))).toBe('invalid_context_window')
   })
 
   it('validateCodexConfigToml accepts defaults and rejects missing keys', () => {

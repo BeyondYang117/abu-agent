@@ -53,10 +53,13 @@ import {
   extractCodexModel,
   extractOpenAiApiKey,
   initialCodexTomlAuth,
+  readCodexCompactionFields,
+  setCodexCompactionFields,
   setCodexStructuredFields,
   validateCodexConfigToml,
   type CodexPresetBrand,
   type CodexPresetId,
+  type CodexCompactionScope,
 } from './cliCodexPresets'
 import {
   buildNativeCliProvider,
@@ -204,6 +207,16 @@ function PresetIcon({ brand }: { brand: PresetBrand }) {
 }
 
 type I18nDict = (typeof i18n)[Lang]
+type CodexCompactionMode = 'default' | '80' | '90' | 'custom'
+
+function codexCompactionMode(contextWindow: string, limit: string): CodexCompactionMode {
+  if (!limit) return 'default'
+  const window = Number(contextWindow)
+  const threshold = Number(limit)
+  if (window > 0 && threshold === Math.floor(window * 0.8)) return '80'
+  if (window > 0 && threshold === Math.floor(window * 0.9)) return '90'
+  return 'custom'
+}
 
 function presetLabel(t: I18nDict, nameKey: string): string {
   const map: Record<string, string> = {
@@ -303,6 +316,10 @@ export function CliProviderModal({
   const [codexPreset, setCodexPreset] = useState<CodexPresetId>(() =>
     isCodex ? detectCodexPresetId(codexInitial?.configToml ?? initial?.configToml ?? '') : CODEX_CUSTOM_PRESET_ID,
   )
+  const [codexCompactionSelection, setCodexCompactionSelection] = useState<CodexCompactionMode>(() => {
+    const fields = readCodexCompactionFields(codexInitial?.configToml ?? initial?.configToml ?? '')
+    return codexCompactionMode(fields.contextWindow, fields.autoCompactLimit)
+  })
   // Codex 高级区：默认收起，日常只改 URL / Key / 模型
   const [showCodexAdvanced, setShowCodexAdvanced] = useState(false)
   const [showOpenCodeAdvanced, setShowOpenCodeAdvanced] = useState(false)
@@ -460,8 +477,10 @@ export function CliProviderModal({
     setError('')
     setFetchedModels([])
     setFetchNote('')
-    const applied = applyCodexPreset(presetId, authJson)
+    const applied = applyCodexPreset(presetId, authJson, configToml)
     setConfigToml(applied.configToml)
+    const appliedCompaction = readCodexCompactionFields(applied.configToml)
+    setCodexCompactionSelection(codexCompactionMode(appliedCompaction.contextWindow, appliedCompaction.autoCompactLimit))
     setAuthJson(applied.authJson)
     // 新建：名称空，或仍是某个预设显示名时，跟切换走
     if (!initial && presetId !== CODEX_CUSTOM_PRESET_ID) {
@@ -507,6 +526,7 @@ export function CliProviderModal({
   const codexBaseUrl = isCodex ? extractCodexBaseUrl(configToml) : ''
   const codexModel = isCodex ? (extractCodexModel(configToml) || 'gpt-5.5') : ''
   const codexApiKey = isCodex ? extractOpenAiApiKey(authJson) : ''
+  const codexCompaction = isCodex ? readCodexCompactionFields(configToml) : null
   const grokFields = isGrok ? parseGrokConfigToml(configToml) : null
   const kimiFields = isKimi ? parseKimiConfigToml(configToml) : null
 
@@ -620,6 +640,18 @@ export function CliProviderModal({
       const tomlErr = validateCodexConfigToml(configToml)
       if (tomlErr) {
         setError(t.externalAgentsProviderTomlInvalid)
+        return
+      }
+      if (
+        (codexCompaction?.contextWindow && !isPositiveInteger(codexCompaction.contextWindow))
+        || (codexCompaction?.autoCompactLimit && !isPositiveInteger(codexCompaction.autoCompactLimit))
+        || (
+          codexCompaction?.contextWindow
+          && codexCompaction.autoCompactLimit
+          && Number(codexCompaction.autoCompactLimit) >= Number(codexCompaction.contextWindow)
+        )
+      ) {
+        setError(t.externalAgentsCodexCompactionInvalid)
         return
       }
       if (authJson.trim()) {
@@ -1139,6 +1171,102 @@ export function CliProviderModal({
         </p>
       </section>
 
+      <section className="kv-native-section">
+        <div className="kv-native-section-head">
+          <div>
+            <h4>{t.externalAgentsCodexCompaction}</h4>
+            <p>{t.externalAgentsCodexCompactionHint}</p>
+          </div>
+        </div>
+        <div className="kv-form-grid">
+          <div className="kv-form-block">
+            <FieldLabel text={t.externalAgentsCodexContextWindow} />
+            <Input
+              value={codexCompaction?.contextWindow ?? ''}
+              onChange={(value) => setConfigToml((current) => {
+                const previous = readCodexCompactionFields(current)
+                const contextWindow = value.replace(/\D/g, '')
+                if (!contextWindow && (codexCompactionSelection === '80' || codexCompactionSelection === '90')) {
+                  setCodexCompactionSelection('default')
+                }
+                const ratio = codexCompactionSelection === '80'
+                  ? 0.8
+                  : codexCompactionSelection === '90'
+                    ? 0.9
+                    : null
+                return setCodexCompactionFields(current, {
+                  contextWindow,
+                  autoCompactLimit: ratio
+                    ? contextWindow ? String(Math.floor(Number(contextWindow) * ratio)) : ''
+                    : previous.autoCompactLimit,
+                })
+              })}
+              inputMode="numeric"
+              mono
+              placeholder={t.externalAgentsCodexFollowDefault}
+            />
+          </div>
+        </div>
+        <div className="kv-form-block">
+          <FieldLabel text={t.externalAgentsCodexCompactionMode} />
+          <div className="kv-seg" role="group" aria-label={t.externalAgentsCodexCompactionMode}>
+            {(['default', '80', '90', 'custom'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={codexCompactionSelection === mode ? 'active' : ''}
+                disabled={(mode === '80' || mode === '90') && !codexCompaction?.contextWindow}
+                onClick={() => {
+                  setCodexCompactionSelection(mode)
+                  setConfigToml((current) => {
+                    const fields = readCodexCompactionFields(current)
+                    const autoCompactLimit = mode === 'default' || mode === 'custom'
+                      ? ''
+                      : String(Math.floor(Number(fields.contextWindow) * Number(mode) / 100))
+                    return setCodexCompactionFields(current, { autoCompactLimit })
+                  })
+                }}
+              >
+                {mode === 'default'
+                  ? t.externalAgentsCodexCompactionModeDefault
+                  : mode === 'custom'
+                    ? t.externalAgentsCodexCompactionModeCustom
+                    : `${mode}%`}
+              </button>
+            ))}
+          </div>
+        </div>
+        {codexCompactionSelection === 'custom' && (
+          <div className="kv-form-block">
+            <FieldLabel text={t.externalAgentsCodexAutoCompactLimit} />
+            <Input
+              value={codexCompaction?.autoCompactLimit ?? ''}
+              onChange={(value) => setConfigToml((current) => setCodexCompactionFields(current, {
+                autoCompactLimit: value.replace(/\D/g, ''),
+              }))}
+              inputMode="numeric"
+              mono
+              placeholder="210000"
+            />
+          </div>
+        )}
+        {codexCompactionSelection !== 'default' && codexCompaction?.autoCompactLimit && (
+          <div className="kv-form-block">
+            <FieldLabel text={t.externalAgentsCodexCompactionScope} />
+            <Select
+              value={codexCompaction.autoCompactScope}
+              onChange={(value) => setConfigToml((current) => setCodexCompactionFields(current, {
+                autoCompactScope: value as CodexCompactionScope,
+              }))}
+              options={[
+                { value: 'total', label: t.externalAgentsCodexCompactionScopeTotal },
+                { value: 'body_after_prefix', label: t.externalAgentsCodexCompactionScopeBody },
+              ]}
+            />
+          </div>
+        )}
+      </section>
+
       <div className="kv-native-provider-advanced">
         <button
           type="button"
@@ -1158,6 +1286,8 @@ export function CliProviderModal({
                 onChange={(value) => {
                   setConfigToml(value)
                   setCodexPreset(detectCodexPresetId(value))
+                  const fields = readCodexCompactionFields(value)
+                  setCodexCompactionSelection(codexCompactionMode(fields.contextWindow, fields.autoCompactLimit))
                 }}
                 rows={10}
                 mono
