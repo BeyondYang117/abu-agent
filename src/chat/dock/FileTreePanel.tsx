@@ -51,6 +51,7 @@ import { DiffView } from './DiffView'
 import { ChatMarkdown } from '../ChatMarkdown'
 import type { DockFsEntry } from './types'
 import type { DockPreviewRequest } from './RightDock'
+import { emitDirectoryDrag } from '../directoryDrag'
 
 const ROW_HEIGHT = 28
 
@@ -519,18 +520,48 @@ export function FileTreePanel({
     }
   }
 
+  const navigateViewerToDirectory = (directory: string) => {
+    setViewer(null)
+    const next = addExpanded(expandedSet, directory)
+    emitExpanded(next)
+    if (directory) void tree.loadChildren(directory)
+    setSelected(directory ? new Set([directory]) : new Set())
+    selectionAnchorRef.current = directory || null
+    requestAnimationFrame(() => {
+      const index = rows.findIndex((row) => row.kind === 'node' && row.path === directory)
+      if (index >= 0) vlistRef.current?.scrollToIndex(index, { align: 'center' })
+    })
+  }
+
   /** 行上按下左键：超过 6px 位移进入拖拽（ghost 跟随、elementFromPoint 命中投放目录），
    *  松手落到目标目录；没动过就交还给 click（选中/展开/打开查看器）。 */
   const startRowDrag = (e: React.MouseEvent, path: string) => {
     if (e.button !== 0) return
+    const draggedNode = tree.nodes[path]
+    const isDraggedDirectory = draggedNode?.kind === 'dir'
+    const pathSeparator = workdir.includes('\\') && !workdir.includes('/') ? '\\' : '/'
+    const absolutePath = isDraggedDirectory
+      ? (path ? `${workdir.replace(/[\\/]+$/, '')}${pathSeparator}${path.replace(/[\\/]+/g, pathSeparator)}` : workdir)
+      : ''
+    const draggedKind = isDraggedDirectory ? 'dir' : 'file'
     const paths = selected.has(path) ? [...selected] : [path]
     dragStateRef.current = { paths, startX: e.clientX, startY: e.clientY, active: false }
+    let lastX = e.clientX
+    let lastY = e.clientY
     const onMove = (ev: MouseEvent) => {
+      lastX = ev.clientX
+      lastY = ev.clientY
       const st = dragStateRef.current
       if (!st) return
       if (!st.active) {
         if (Math.abs(ev.clientX - st.startX) + Math.abs(ev.clientY - st.startY) < 6) return
         st.active = true
+        emitDirectoryDrag({
+          type: 'start',
+          path: isDraggedDirectory ? absolutePath : path,
+          name: basenameOf(path),
+          kind: draggedKind,
+        })
         if (!selected.has(path)) {
           setSelected(new Set([path]))
           selectionAnchorRef.current = path
@@ -542,8 +573,17 @@ export function FileTreePanel({
         label: st.paths.length > 1 ? `${st.paths.length} 项` : basenameOf(st.paths[0]),
       })
       const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null
+      const overComposer = Boolean(el?.closest('[data-chat-composer-drop-target="true"]'))
+      emitDirectoryDrag({
+        type: 'over',
+        path: isDraggedDirectory ? absolutePath : path,
+        overComposer,
+        kind: draggedKind,
+      })
+      if (overComposer) setDrop(null)
       const rowEl = el?.closest('[data-drop-dir]') as HTMLElement | null
-      if (rowEl) setDrop(rowEl.dataset.dropDir ?? null)
+      if (overComposer) setDrop(null)
+      else if (rowEl) setDrop(rowEl.dataset.dropDir ?? null)
       else if (el && treeAreaRef.current?.contains(el)) setDrop(ROOT_PATH)
       else setDrop(null)
     }
@@ -553,14 +593,23 @@ export function FileTreePanel({
       dragStateRef.current = null
       setDragGhost(null)
       const target = dropTargetRef.current
+      const el = document.elementFromPoint(lastX, lastY) as HTMLElement | null
+      const overComposer = Boolean(el?.closest('[data-chat-composer-drop-target="true"]'))
       setDrop(null)
       if (st?.active) {
         suppressClickRef.current = true
         window.setTimeout(() => {
           suppressClickRef.current = false
         }, 0)
-        if (target !== null) void handleDropPaths(target, st.paths)
+        emitDirectoryDrag({
+          type: 'drop',
+          path: isDraggedDirectory ? absolutePath : path,
+          overComposer,
+          kind: draggedKind,
+        })
+        if (target !== null && !overComposer) void handleDropPaths(target, st.paths)
       }
+      emitDirectoryDrag({ type: 'end' })
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp, { once: true })
@@ -613,7 +662,7 @@ export function FileTreePanel({
       if (onInsertMention) {
         items.push({
           key: 'mention',
-          label: t.dockInsertMention,
+          label: t.dockSendToChat,
           icon: <AtSign strokeWidth={1.75} />,
           onSelect: () => onInsertMention(node.path),
         })
@@ -951,6 +1000,8 @@ export function FileTreePanel({
           path={viewer.path}
           lang={lang}
           onClose={() => setViewer(null)}
+          onNavigateToDirectory={viewer.workdir === workdir ? navigateViewerToDirectory : undefined}
+          onInsertMention={(text) => onInsertMention?.(text)}
         />
       )}
       {viewer?.kind === 'diff' && (

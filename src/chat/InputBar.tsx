@@ -11,6 +11,7 @@ import {
   Eraser,
   Folder,
   FolderPlus,
+  Folders,
   Layers,
   ListChecks,
   MessageSquarePlus,
@@ -43,6 +44,7 @@ import { useT, type I18n, type Lang } from '../settings/i18n'
 import { api, type ChatToolDefinition, type ChatMcpServer } from '../api/tauri'
 import { chatApi } from './api'
 import type { AdditionalDirectory, AgentPlanMode, AgentPlanState, AgentTodoState, ChatAssistant, ChatProject, ChatSet, ModelRef, PendingAttachment, WebSearchMode } from './types'
+import { MAX_ADDITIONAL_DIRECTORIES } from './types'
 import {
   buildSlashCommands,
   commandMatches,
@@ -54,6 +56,7 @@ import {
 import { mapExternalCliSlashCommands, externalCliAgentLabel } from './externalCliSlashCommands'
 import type { ModeOption, ModeTone } from './permissionModes'
 import { isTauriRuntime } from './utils'
+import { CHAT_ADD_COLLABORATION_DIRS_EVENT, CHAT_DIRECTORY_DRAG_EVENT, type DirectoryDragEventDetail } from './directoryDrag'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 // 粘贴文本超过该字符数时不再写入输入框，转为内存虚拟 txt 附件（默认 3000，可配置阈值）。
@@ -124,6 +127,12 @@ function projectPathLabel(project: ChatProject): string {
 function pathTail(path: string): string {
   const normalized = path.replace(/\\/g, '/')
   return normalized.split('/').filter(Boolean).pop() ?? path
+}
+
+function normalizeRootPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  // Windows paths are case-insensitive; keep POSIX paths case-sensitive.
+  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized
 }
 
 function joinPath(parent: string, name: string): string {
@@ -530,6 +539,9 @@ export const InputBar = memo(function InputBar({
   const [attachmentError, setAttachmentError] = useState('')
   const [editingAttachment, setEditingAttachment] = useState<PendingAttachment | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  const [directoryDragActive, setDirectoryDragActive] = useState(false)
+  const [fileDragActive, setFileDragActive] = useState(false)
+  const [directoryDropError, setDirectoryDropError] = useState('')
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [presetMenuOpen, setPresetMenuOpen] = useState(false)
@@ -725,6 +737,31 @@ export const InputBar = memo(function InputBar({
       requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
     }
   }, [closeProjectMenu, disabled, onSelectProject, projectCreating, t])
+
+  const handleDirectoryDrop = useCallback(async (rootPath: string) => {
+    if (disabled || !onChangeAdditionalDirectories) return
+    setDirectoryDragActive(false)
+    setDirectoryDropError('')
+    try {
+      const normalized = normalizeRootPath(rootPath)
+      const primary = additionalDirectoryPrimaryRoot ? normalizeRootPath(additionalDirectoryPrimaryRoot) : ''
+      const attached = new Set(additionalDirectories.map((entry) => normalizeRootPath(entry.path)))
+      if (!normalized || normalized === primary || attached.has(normalized)) return
+      if (additionalDirectories.length >= MAX_ADDITIONAL_DIRECTORIES) {
+        setDirectoryDropError(t.chatAdditionalDirectoryLimit.replace('{n}', String(MAX_ADDITIONAL_DIRECTORIES)))
+        return
+      }
+      await onChangeAdditionalDirectories([
+        ...additionalDirectories,
+        { path: rootPath, name: pathTail(rootPath) },
+      ])
+    } catch (err) {
+      console.error('Failed to add dropped collaboration directory:', err)
+      setDirectoryDropError(typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatAdditionalDirectoryFailed)
+    } finally {
+      requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
+    }
+  }, [additionalDirectories, additionalDirectoryPrimaryRoot, disabled, onChangeAdditionalDirectories, t])
 
   const updateTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current
@@ -1603,6 +1640,50 @@ export const InputBar = memo(function InputBar({
     }
   }, [addAttachments, attachmentsFromPaths, composerLocked])
 
+  useEffect(() => {
+    const handleDirectoryDrag = (event: Event) => {
+      const detail = (event as CustomEvent<DirectoryDragEventDetail>).detail
+      if (detail.type === 'start') {
+        setDirectoryDropError('')
+        setDirectoryDragActive(false)
+        setFileDragActive(false)
+      } else if (detail.type === 'over') {
+        setFileDragActive(detail.kind === 'file' && detail.overComposer && !disabled)
+        setDirectoryDragActive(detail.kind !== 'file' && detail.overComposer && Boolean(onChangeAdditionalDirectories) && !disabled)
+      } else if (detail.type === 'drop') {
+        if (detail.kind === 'file') {
+          if (detail.overComposer && !disabled) insertTextAtEnd(`@${detail.path} `)
+          setFileDragActive(false)
+        } else if (detail.overComposer) void handleDirectoryDrop(detail.path)
+      } else {
+        setDirectoryDragActive(false)
+        setFileDragActive(false)
+      }
+    }
+    window.addEventListener(CHAT_DIRECTORY_DRAG_EVENT, handleDirectoryDrag)
+    return () => window.removeEventListener(CHAT_DIRECTORY_DRAG_EVENT, handleDirectoryDrag)
+  }, [disabled, handleDirectoryDrop, insertTextAtEnd, onChangeAdditionalDirectories])
+
+  useEffect(() => {
+    const handleAddDirectories = (event: Event) => {
+      if (disabled || !onChangeAdditionalDirectories) return
+      const paths = (event as CustomEvent<string[]>).detail
+      if (!Array.isArray(paths) || !paths.length) return
+      const primary = additionalDirectoryPrimaryRoot ? normalizeRootPath(additionalDirectoryPrimaryRoot) : ''
+      const attached = new Set(additionalDirectories.map((entry) => normalizeRootPath(entry.path)))
+      const next = [...additionalDirectories]
+      for (const path of paths) {
+        const normalized = normalizeRootPath(path)
+        if (!normalized || normalized === primary || attached.has(normalized) || next.length >= MAX_ADDITIONAL_DIRECTORIES) continue
+        next.push({ path, name: pathTail(path) })
+        attached.add(normalized)
+      }
+      if (next.length !== additionalDirectories.length) void onChangeAdditionalDirectories(next)
+    }
+    window.addEventListener(CHAT_ADD_COLLABORATION_DIRS_EVENT, handleAddDirectories)
+    return () => window.removeEventListener(CHAT_ADD_COLLABORATION_DIRS_EVENT, handleAddDirectories)
+  }, [additionalDirectories, additionalDirectoryPrimaryRoot, disabled, onChangeAdditionalDirectories])
+
   const canSend = (Boolean(input.trim()) || attachments.length > 0)
     && !slashPanelOpen
     && (!disabled || queueMode)
@@ -1912,8 +1993,13 @@ export const InputBar = memo(function InputBar({
 
         <div
           data-chat-composer="true"
+          data-chat-composer-drop-target={onChangeAdditionalDirectories ? 'true' : undefined}
           className={`chat-composer-shell relative select-none ${modeMenuOpen ? 'z-30' : 'z-10'} rounded-xl border px-3 py-2 transition-[box-shadow,border-color] duration-[var(--kv-dur-normal)] ease-[var(--kv-ease-out)] ${
-            dragActive
+            fileDragActive
+              ? 'border-sky-500 shadow-[0_2px_12px_rgba(14,165,233,0.12)] ring-2 ring-sky-500/25 dark:border-sky-400 dark:shadow-none'
+              : directoryDragActive
+              ? 'border-emerald-500 shadow-[0_2px_12px_rgba(16,185,129,0.12)] ring-2 ring-emerald-500/25 dark:border-emerald-400 dark:shadow-none'
+              : dragActive
               ? 'border-[#5c8df7] shadow-[0_2px_12px_rgba(0,0,0,0.06)] ring-2 ring-[#5c8df7]/25 dark:border-[#5c8df7] dark:shadow-none'
               : agentPlanActive
                 ? 'border-emerald-500 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_10px_-4px_rgba(0,0,0,0.06),0_12px_32px_-14px_rgba(0,0,0,0.14)] focus-within:border-emerald-500 focus-within:shadow-[0_1px_3px_rgba(0,0,0,0.05),0_6px_14px_-6px_rgba(0,0,0,0.07),0_18px_44px_-16px_rgba(16,185,129,0.22)] dark:border-emerald-400 dark:shadow-none dark:focus-within:border-emerald-400'
@@ -1922,7 +2008,58 @@ export const InputBar = memo(function InputBar({
                   : 'border-neutral-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_10px_-4px_rgba(0,0,0,0.06),0_12px_32px_-14px_rgba(0,0,0,0.14)] focus-within:border-neutral-300 focus-within:shadow-[0_1px_3px_rgba(0,0,0,0.05),0_6px_14px_-6px_rgba(0,0,0,0.07),0_18px_44px_-16px_rgba(0,0,0,0.20)] dark:border-neutral-700 dark:shadow-none dark:focus-within:border-neutral-600'
           }`}
         >
-          {dragActive && (
+          {additionalDirectories.length > 0 && (
+            <div className="chat-motion-fade-up mb-2 rounded-lg border border-sky-200/80 bg-sky-50/70 px-2.5 py-2 dark:border-sky-400/20 dark:bg-sky-400/[0.08]">
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-sky-800 dark:text-sky-200">
+                <Folders size={13} strokeWidth={1.8} />
+                <span>{t.chatCollaborationDirectories}</span>
+                <span className="font-normal text-sky-600/80 dark:text-sky-300/70">
+                  {t.chatCollaborationDirectoriesHint}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {additionalDirectories.map((entry) => {
+                  const name = entry.name?.trim() || pathTail(entry.path)
+                  return (
+                    <span
+                      key={entry.path}
+                      title={entry.path}
+                      className="inline-flex max-w-full items-center gap-1 rounded-md border border-sky-200 bg-white/80 py-1 pl-1.5 pr-1 text-[11px] text-sky-900 shadow-sm dark:border-sky-300/20 dark:bg-neutral-900/50 dark:text-sky-100"
+                    >
+                      <Folder size={12} strokeWidth={1.8} className="shrink-0 text-sky-600 dark:text-sky-300" />
+                      <span className="max-w-[180px] truncate">{name}</span>
+                      {onChangeAdditionalDirectories && (
+                        <button
+                          type="button"
+                          className="grid size-4 shrink-0 place-items-center rounded text-sky-500/80 hover:bg-sky-100 hover:text-sky-800 dark:hover:bg-sky-300/15 dark:hover:text-sky-100"
+                          aria-label={t.chatRemoveAdditionalDirectory.replace('{name}', name)}
+                          onClick={() => {
+                            const normalized = normalizeRootPath(entry.path)
+                            void onChangeAdditionalDirectories(
+                              additionalDirectories.filter((item) => normalizeRootPath(item.path) !== normalized),
+                            )
+                          }}
+                        >
+                          <X size={11} strokeWidth={2} />
+                        </button>
+                      )}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {directoryDragActive && (
+            <div className="chat-motion-fade-up mb-2 rounded-2xl border border-dashed border-emerald-500/80 bg-emerald-500/10 px-3 py-2 text-center text-[13px] font-medium text-emerald-700 dark:text-emerald-300">
+              {t.chatDropDirectoryToOpen}
+            </div>
+          )}
+          {fileDragActive && (
+            <div className="chat-motion-fade-up mb-2 rounded-2xl border border-dashed border-sky-500/80 bg-sky-500/10 px-3 py-2 text-center text-[13px] font-medium text-sky-700 dark:text-sky-300">
+              {t.chatDropFileToMention}
+            </div>
+          )}
+          {dragActive && !directoryDragActive && !fileDragActive && (
             <div className="chat-motion-fade-up mb-2 rounded-2xl border border-dashed border-[#5c8df7]/70 bg-[#5c8df7]/10 px-3 py-2 text-center text-[13px] font-medium text-[#2960d8] dark:text-[#9bb8fa]">
               {t.chatDropToAttach}
             </div>
@@ -1940,6 +2077,11 @@ export const InputBar = memo(function InputBar({
           {attachmentError && (
             <div className="chat-motion-fade-up mb-2 px-1 text-[12px] text-red-500 dark:text-red-400">
               {attachmentError}
+            </div>
+          )}
+          {directoryDropError && (
+            <div className="chat-motion-fade-up mb-2 px-1 text-[12px] text-red-500 dark:text-red-400">
+              {directoryDropError}
             </div>
           )}
           {quotes.length > 0 && (

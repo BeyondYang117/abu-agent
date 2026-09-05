@@ -1,11 +1,14 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { open } from '@tauri-apps/plugin-dialog'
 import { getSettingsCached } from '../api/settingsCache'
 import { chatApi } from './api'
 import { Sidebar } from './Sidebar'
 import type { ChatProject, Conversation, ConversationListItem } from './types'
 import { abuApiAuthStore } from '../api/abuApiAuth'
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn(), save: vi.fn() }))
 
 vi.mock('../api/settingsCache', () => ({
   getSettingsCached: vi.fn().mockResolvedValue({ chat: {} }),
@@ -46,6 +49,65 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.mocked(getSettingsCached).mockResolvedValue({ chat: {} } as Awaited<ReturnType<typeof getSettingsCached>>)
+  vi.mocked(open).mockReset()
+})
+
+describe('Sidebar project onboarding', () => {
+  it('opens an existing folder directly from the empty project state', async () => {
+    const user = userEvent.setup()
+    const openedProject: ChatProject = {
+      id: 'project-existing',
+      name: 'abu-agent-desktop',
+      root_path: '/Users/abu/dev/abu-agent-desktop',
+      created_at: 3,
+      updated_at: 3,
+    }
+    vi.spyOn(chatApi, 'getProjects')
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([openedProject])
+    vi.spyOn(chatApi, 'getSets').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getAssistants').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getConversations').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getConversationPins').mockResolvedValue({})
+    vi.spyOn(chatApi, 'createProject').mockResolvedValue(openedProject)
+    vi.mocked(open).mockResolvedValue('/Users/abu/dev/abu-agent-desktop')
+    const onSelectProject = vi.fn()
+
+    render(
+      <Sidebar
+        lang="zh"
+        selectedProject={null}
+        onSelectProject={onSelectProject}
+        selectedSet={null}
+        onSelectSet={vi.fn()}
+        onSelectConversation={vi.fn()}
+        onNewConversation={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenExtensionsItem={vi.fn()}
+        onSelectLang={vi.fn()}
+        onOpenUsage={vi.fn()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+        refreshKey={0}
+        searchOpen={false}
+        onSearchOpenChange={vi.fn()}
+      />,
+    )
+
+    await user.click(await screen.findByRole('button', { name: '项目', current: false }))
+    expect(await screen.findByText('直接使用已有文件夹，代码留在原处，不会被复制。')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '打开已有文件夹' }))
+
+    await waitFor(() => {
+      expect(chatApi.createProject).toHaveBeenCalledWith(
+        'abu-agent-desktop',
+        null,
+        null,
+        '/Users/abu/dev/abu-agent-desktop',
+      )
+      expect(onSelectProject).toHaveBeenCalledWith(openedProject)
+    })
+  })
 })
 
 describe('Sidebar conversation navigation', () => {

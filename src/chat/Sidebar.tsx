@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { save } from '@tauri-apps/plugin-dialog'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import {
   ChevronRight,
   Folder,
+  FolderOpen,
   FolderPlus,
   Layers,
   LayoutGrid,
@@ -20,6 +21,8 @@ import { AgentIcon, KnowledgeIcon, McpIcon, SkillIcon } from '../settings/NavIco
 import { ConversationList } from './ConversationList'
 import { ChatSectionMenu } from './ChatSectionMenu'
 import { ProjectContextMenu } from './ProjectContextMenu'
+import { ProjectSectionMenu } from './ProjectSectionMenu'
+import { emitCollaborationDirectories } from './directoryDrag'
 import { ProjectDialog } from './ProjectDialog'
 import { CliImportDialog } from './CliImportDialog'
 import { SetContextMenu } from './SetContextMenu'
@@ -52,6 +55,10 @@ function resolveChatUserProfile(
 }
 
 const modLabel = isMac ? '⌘' : 'Ctrl'
+
+function folderName(path: string): string {
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() ?? path
+}
 
 export type ExtensionsNavItem = 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations'
 
@@ -628,6 +635,7 @@ export const Sidebar = memo(function Sidebar({
   )
   const [loading, setLoading] = useState(false)
   const [sectionMenuAnchor, setSectionMenuAnchor] = useState<ConversationMenuAnchor | null>(null)
+  const [projectSectionMenuAnchor, setProjectSectionMenuAnchor] = useState<ConversationMenuAnchor | null>(null)
   const [projectMenuState, setProjectMenuState] = useState<{
     projectId: string
     anchor: ConversationMenuAnchor
@@ -636,6 +644,8 @@ export const Sidebar = memo(function Sidebar({
   const [importProject, setImportProject] = useState<ChatProject | null>(null)
   const [projectSaving, setProjectSaving] = useState(false)
   const [projectError, setProjectError] = useState('')
+  const [projectQuickError, setProjectQuickError] = useState('')
+  const [projectQuickCreating, setProjectQuickCreating] = useState(false)
   const [setMenuState, setSetMenuState] = useState<{
     setId: string
     anchor: ConversationMenuAnchor
@@ -644,6 +654,7 @@ export const Sidebar = memo(function Sidebar({
   const [setDialogSaving, setSetDialogSaving] = useState(false)
   const [setDialogError, setSetDialogError] = useState('')
   const sectionMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const projectSectionMenuButtonRef = useRef<HTMLButtonElement>(null)
   const sidebarLoadedRef = useRef(false)
   const [userProfile, setUserProfile] = useState(() => resolveChatUserProfile())
   useChatPerfRenderProbe('Sidebar', {
@@ -966,6 +977,62 @@ export const Sidebar = memo(function Sidebar({
   function openCreateProjectDialog() {
     setDialogProject(null)
     setProjectError('')
+  }
+
+  const openProjectSectionMenu = () => {
+    if (projectSectionMenuAnchor) {
+      setProjectSectionMenuAnchor(null)
+      return
+    }
+    const button = projectSectionMenuButtonRef.current
+    if (!button) return
+    const rect = button.getBoundingClientRect()
+    setProjectSectionMenuAnchor({ left: Math.max(8, rect.right - 200), top: rect.bottom + 4 })
+  }
+
+  const handleAddExistingProjects = async () => {
+    if (projectQuickCreating) return
+    setProjectQuickError('')
+    setProjectQuickCreating(true)
+    try {
+      const picked = await open({
+        directory: true,
+        multiple: true,
+        title: t.chatPickProjectFolder,
+      })
+      const paths = (Array.isArray(picked) ? picked : [picked]).filter((path): path is string => Boolean(path))
+      if (!paths.length) return
+      emitCollaborationDirectories(paths)
+    } catch (err) {
+      setProjectQuickError(typeof err === 'string' ? err : (err as Error).message || t.chatProjectCreateFailed)
+    } finally {
+      setProjectQuickCreating(false)
+    }
+  }
+
+  const handleUseExistingFolder = async () => {
+    if (projectQuickCreating) return
+    setProjectQuickError('')
+    setProjectQuickCreating(true)
+    try {
+      const picked = await open({
+        directory: true,
+        multiple: false,
+        title: t.chatPickProjectFolder,
+      })
+      const rootPath = Array.isArray(picked) ? picked[0] : picked
+      if (!rootPath) return
+      const project = await chatApi.createProject(folderName(rootPath), null, null, rootPath)
+      setProjects((previous) => [project, ...previous.filter((item) => item.id !== project.id)])
+      onSelectProject(project)
+      await loadSidebarData({ silent: true, projectOverride: project })
+    } catch (err) {
+      setProjectQuickError(
+        typeof err === 'string' ? err : (err as Error).message || t.chatProjectCreateFailed,
+      )
+    } finally {
+      setProjectQuickCreating(false)
+    }
   }
 
   const openProjectMenu = (projectId: string, button: HTMLButtonElement) => {
@@ -1415,30 +1482,26 @@ export const Sidebar = memo(function Sidebar({
                 {activeTab === 'projects' && (
                   <>
                     <IconButton
+                      ref={projectSectionMenuButtonRef}
                       size="sm"
-                      onClick={() => {
-                        setCollapsedProjectIds((previous) => {
-                          const next = new Set(previous)
-                          if (allVisibleProjectsCollapsed) {
-                            visibleProjects.forEach((project) => next.delete(project.id))
-                          } else {
-                            visibleProjects.forEach((project) => next.add(project.id))
-                          }
-                          return next
-                        })
-                      }}
-                      label={allVisibleProjectsCollapsed ? t.chatExpandAllProjects : t.chatCollapseAllProjects}
+                      onClick={openProjectSectionMenu}
+                      className={projectSectionMenuAnchor ? 'bg-black/[0.06] text-neutral-600 dark:bg-white/[0.1] dark:text-neutral-200' : ''}
+                      label={t.chatProjectActions}
+                      aria-haspopup="menu"
+                      aria-expanded={projectSectionMenuAnchor !== null}
                     >
                       <MoreHorizontal size={15} />
                     </IconButton>
-                    <IconButton
-                      size="sm"
+                    <button
+                      type="button"
                       onClick={openCreateProjectDialog}
-                      label={t.chatNewProject}
-                      title={`${t.chatNewProject} (${modLabel}P)`}
+                      className="flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-white/[0.08] dark:hover:text-neutral-100"
+                      aria-label={t.chatAddProject}
+                      title={`${t.chatAddProject} (${modLabel}P)`}
                     >
-                      <FolderPlus size={15} strokeWidth={1.75} />
-                    </IconButton>
+                      <FolderPlus size={14} strokeWidth={1.75} />
+                      <span>{t.chatAdd}</span>
+                    </button>
                   </>
                 )}
               </div>
@@ -1470,7 +1533,49 @@ export const Sidebar = memo(function Sidebar({
             {activeTab === 'projects' && (
             <section key="projects" className="chat-motion-tab-in group/projects px-3 pb-2 pt-1">
                 <div className="mt-1.5 space-y-1">
-                  {visibleProjects.map((project) => {
+                  {visibleProjects.length === 0 && !loading ? (
+                    <div className="rounded-xl border border-neutral-200/80 bg-gradient-to-br from-white to-neutral-50 p-3 shadow-sm dark:border-white/[0.08] dark:from-white/[0.055] dark:to-white/[0.02]">
+                      <div className="flex items-start gap-2.5">
+                        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-400/15 dark:text-amber-300">
+                          <FolderOpen size={17} strokeWidth={1.8} />
+                        </div>
+                        <div className="min-w-0 pt-0.5">
+                          <p className="text-[13px] font-semibold text-neutral-900 dark:text-neutral-100">
+                            {t.chatProjectEmptyTitle}
+                          </p>
+                          <p className="mt-1 text-[11px] leading-[17px] text-neutral-500 dark:text-neutral-400">
+                            {t.chatProjectEmptyDescription}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleUseExistingFolder()}
+                        disabled={projectQuickCreating}
+                        className="mt-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-neutral-900 px-2 text-[12px] font-semibold text-white transition-colors hover:bg-neutral-700 disabled:cursor-default disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-950 dark:hover:bg-white"
+                      >
+                        <FolderOpen size={14} strokeWidth={1.8} />
+                        {projectQuickCreating ? t.chatAddingProject : t.chatOpenExistingFolder}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openCreateProjectDialog}
+                        disabled={projectQuickCreating}
+                        className="mt-1 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-[12px] font-medium text-neutral-500 transition-colors hover:bg-black/[0.045] hover:text-neutral-800 disabled:cursor-default disabled:opacity-60 dark:text-neutral-400 dark:hover:bg-white/[0.07] dark:hover:text-neutral-100"
+                      >
+                        <Plus size={14} strokeWidth={1.9} />
+                        {t.chatNewBlankProject}
+                      </button>
+                      <p className="mt-2 border-t border-neutral-200/70 pt-2 text-[10px] leading-[15px] text-neutral-400 dark:border-white/[0.07] dark:text-neutral-500">
+                        {t.chatProjectCliImportHint}
+                      </p>
+                      {projectQuickError && (
+                        <p role="alert" className="mt-2 text-[11px] leading-4 text-red-600 dark:text-red-400">
+                          {projectQuickError}
+                        </p>
+                      )}
+                    </div>
+                  ) : visibleProjects.map((project) => {
                     const active = selectedProject?.id === project.id
                     const projectConversations = projectConversationMap.get(project.id) ?? []
                     const collapsedProject = collapsedProjectIds.has(project.id)
@@ -1496,12 +1601,7 @@ export const Sidebar = memo(function Sidebar({
                           <button
                             type="button"
                             onClick={() => {
-                              setCollapsedProjectIds((previous) => {
-                                const next = new Set(previous)
-                                if (next.has(project.id)) next.delete(project.id)
-                                else next.add(project.id)
-                                return next
-                              })
+                              onSelectProject(project)
                             }}
                             className={`flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-[13px] ${
                               active
@@ -1511,13 +1611,40 @@ export const Sidebar = memo(function Sidebar({
                             title={(collapsedProject ? t.chatExpandNamed : t.chatCollapseNamed).replace('{name}', project.name)}
                             aria-expanded={!collapsedProject}
                           >
-                            <ChevronRight
-                              size={13}
-                              strokeWidth={2}
-                              className={`shrink-0 text-neutral-400 transition-transform dark:text-neutral-500 ${
-                                collapsedProject ? '' : 'rotate-90'
-                              }`}
-                            />
+                            <span
+                              className="flex shrink-0 items-center"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setCollapsedProjectIds((previous) => {
+                                  const next = new Set(previous)
+                                  if (next.has(project.id)) next.delete(project.id)
+                                  else next.add(project.id)
+                                  return next
+                                })
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' && event.key !== ' ') return
+                                event.preventDefault()
+                                event.stopPropagation()
+                                setCollapsedProjectIds((previous) => {
+                                  const next = new Set(previous)
+                                  if (next.has(project.id)) next.delete(project.id)
+                                  else next.add(project.id)
+                                  return next
+                                })
+                              }}
+                              aria-label={(collapsedProject ? t.chatExpandNamed : t.chatCollapseNamed).replace('{name}', project.name)}
+                            >
+                              <ChevronRight
+                                size={13}
+                                strokeWidth={2}
+                                className={`text-neutral-400 transition-transform dark:text-neutral-500 ${
+                                  collapsedProject ? '' : 'rotate-90'
+                                }`}
+                              />
+                            </span>
                             <Folder
                               size={15}
                               strokeWidth={1.75}
@@ -1806,6 +1933,25 @@ export const Sidebar = memo(function Sidebar({
                 </div>
               ) : null}
             </section>
+            )}
+
+            {projectSectionMenuAnchor && (
+              <ProjectSectionMenu
+                anchor={projectSectionMenuAnchor}
+                allCollapsed={allVisibleProjectsCollapsed}
+                onAddExisting={() => void handleAddExistingProjects()}
+                onCreateBlank={openCreateProjectDialog}
+                onToggleCollapsed={() => {
+                  setCollapsedProjectIds((previous) => {
+                    const next = new Set(previous)
+                    if (allVisibleProjectsCollapsed) visibleProjects.forEach((project) => next.delete(project.id))
+                    else visibleProjects.forEach((project) => next.add(project.id))
+                    return next
+                  })
+                }}
+                onClose={() => setProjectSectionMenuAnchor(null)}
+                triggerRef={projectSectionMenuButtonRef}
+              />
             )}
             </div>
           </>
