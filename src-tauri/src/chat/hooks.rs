@@ -566,7 +566,7 @@ async fn run_http_hook(hook: &HookDef, body: &str) -> Result<(), String> {
         .request(method, hook.url.trim())
         .timeout(std::time::Duration::from_millis(hook.timeout_ms))
         .header("content-type", "application/json")
-        .header("X-ABU Agent-Hook-Event", hook.event.as_str());
+        .header("X-ABU-Agent-Hook-Event", hook.event.as_str());
     if send_body {
         request = request.body(body.to_string());
     }

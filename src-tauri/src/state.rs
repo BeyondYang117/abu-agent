@@ -317,6 +317,7 @@ pub struct ExternalBackgroundTask {
 /// 单个 key 触发 failover 后的冷却时长。
 pub const KEY_COOLDOWN: Duration = Duration::from_secs(60);
 const EXTERNAL_DISCOVERY_CACHE_CAPACITY: usize = 64;
+const MODEL_PROBE_LOCK_CAPACITY: usize = 256;
 const EXTERNAL_DISCOVERY_CACHE_RETENTION: Duration = Duration::from_secs(300);
 
 /// 共享的 TTL 缓存读取：每次访问全表清理过期项，命中时刷新 LRU 时间。
@@ -1015,6 +1016,15 @@ impl AppState {
             .model_probe_locks
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if !locks.contains_key(key) && locks.len() >= MODEL_PROBE_LOCK_CAPACITY {
+            if let Some(oldest) = locks
+                .iter()
+                .find(|(_, lock)| std::sync::Arc::strong_count(lock) == 1)
+                .map(|(key, _)| key.clone())
+            {
+                locks.remove(&oldest);
+            }
+        }
         locks
             .entry(key.to_string())
             .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))

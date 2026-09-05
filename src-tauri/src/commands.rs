@@ -605,6 +605,7 @@ pub(crate) fn open_data_url_file(
     name: String,
     data_url: String,
 ) -> Result<(), String> {
+    const MAX_DATA_URL_BYTES: usize = 32 * 1024 * 1024;
     let payload = data_url
         .split_once(";base64,")
         .map(|(_, rest)| rest)
@@ -612,10 +613,14 @@ pub(crate) fn open_data_url_file(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload.trim().as_bytes())
         .map_err(|e| format!("data URL 解码失败：{e}"))?;
+    if bytes.len() > MAX_DATA_URL_BYTES {
+        return Err("data URL 文件过大".to_string());
+    }
 
     let file_name = temp_file_name_from_artifact_name(&name);
     // 每次一个独立子目录：同名产物不会互相覆盖，也不用担心撞到别的临时文件。
     let dir = std::env::temp_dir().join(format!("abu-agent-artifact-{}", uuid::Uuid::new_v4()));
+    cleanup_old_temp_artifacts();
     let path = dir.join(&file_name);
     ensure_openable_extension(&path)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败：{e}"))?;
@@ -629,6 +634,11 @@ pub(crate) fn open_data_url_file(
 #[tauri::command]
 #[allow(deprecated)]
 pub(crate) fn open_html_preview(app: AppHandle, html: String) -> Result<(), String> {
+    const MAX_HTML_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
+    if html.len() > MAX_HTML_PREVIEW_BYTES {
+        return Err("HTML preview is too large".to_string());
+    }
+    cleanup_old_temp_artifacts();
     let path =
         std::env::temp_dir().join(format!("abu-agent-html-preview-{}.html", uuid::Uuid::new_v4()));
     std::fs::write(&path, html).map_err(|e| format!("Write HTML preview failed: {e}"))?;
@@ -636,6 +646,32 @@ pub(crate) fn open_html_preview(app: AppHandle, html: String) -> Result<(), Stri
         .to_str()
         .ok_or_else(|| "Invalid HTML preview path".to_string())?;
     app.shell().open(path_str, None).map_err(|e| e.to_string())
+}
+
+fn cleanup_old_temp_artifacts() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(24 * 60 * 60));
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("abu-agent-artifact-") && !name.starts_with("abu-agent-html-preview-") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else { continue };
+        let old = cutoff
+            .zip(metadata.modified().ok())
+            .map(|(cutoff, modified)| modified < cutoff)
+            .unwrap_or(false);
+        if old {
+            let _ = if metadata.is_dir() {
+                std::fs::remove_dir_all(entry.path())
+            } else {
+                std::fs::remove_file(entry.path())
+            };
+        }
+    }
 }
 
 // ===== RapidOCR 离线 OCR 命令 =====

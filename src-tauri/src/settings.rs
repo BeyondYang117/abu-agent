@@ -1,5 +1,6 @@
 use chrono::{Datelike, Local};
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 
@@ -2867,7 +2868,9 @@ fn normalize_onboarding_status(settings: &Settings) -> String {
  * 新版加载时 sanitize_settings 会把 api_key_legacy.take() 合并回 api_keys 并去重，无副作用。
  */
 pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
-    crate::external_agents::overrides::sync_from_settings(settings);
+    let _lock = settings_persist_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let effective = current_settings_or(app, settings);
+    crate::external_agents::overrides::sync_from_settings(&effective);
     // 镜像同步之后立刻物化：供应商的落地文件（claude 的 `--settings` 覆盖 / codex 的私有
     // CODEX_HOME）必须与设置同生共死。放在这里而不是让前端保存后再调一个命令，是因为
     // 前端只要漏调一次，用户就会得到「选了供应商但没生效」——而这种 bug 完全不报错。
@@ -2880,12 +2883,30 @@ pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), Stri
         state.clear_all_external_agent_models_cache();
         state.clear_detected_agents_cache();
     }
-    persist_settings_snapshot(app, settings)
+    persist_settings_snapshot_inner(app, &effective)
+}
+
+fn settings_persist_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn current_settings_or(app: &AppHandle, fallback: &Settings) -> Settings {
+    use tauri::Manager;
+    app.try_state::<crate::state::AppState>()
+        .map(|state| state.settings_read().clone())
+        .unwrap_or_else(|| fallback.clone())
 }
 
 /// 只写 settings store，不重新物化供应商配置或清运行时缓存。
 /// 适用于 onboarding 状态这类与运行时无关的单字段更新。
 pub fn persist_settings_snapshot(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let _lock = settings_persist_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let effective = current_settings_or(app, settings);
+    persist_settings_snapshot_inner(app, &effective)
+}
+
+fn persist_settings_snapshot_inner(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let mut to_persist = settings.clone();
     // Keep legacy top-level chat fields from turning Lens/Translator fallback into
     // an explicit defaultModels.chat selection on the next load.

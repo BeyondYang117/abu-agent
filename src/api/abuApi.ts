@@ -104,6 +104,11 @@ export class AbuApiClient {
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), 20_000)
+    const externalSignal = options.signal
+    const abortExternal = () => controller.abort()
+    externalSignal?.addEventListener('abort', abortExternal, { once: true })
     const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -114,19 +119,27 @@ export class AbuApiClient {
       headers['X-Abu-Session-Token'] = this.sessionToken
     }
 
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    })
-
-    const data = await response.json()
-
-    if (!data.success) {
-      const error = data as AbuApiError
-      throw new Error(error.message || 'API request failed')
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers,
+      })
+      const data = await response.json()
+      if (!data.success) {
+        const error = data as AbuApiError
+        throw new Error(error.message || 'API request failed')
+      }
+      return data.data as T
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error('网络请求超时，请检查网络后重试')
+      }
+      throw error
+    } finally {
+      window.clearTimeout(timeoutId)
+      externalSignal?.removeEventListener('abort', abortExternal)
     }
-
-    return data.data as T
   }
 
   // ==================== 认证相关 ====================

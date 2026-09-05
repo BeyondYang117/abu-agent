@@ -8,6 +8,7 @@ import { cjk } from '@streamdown/cjk'
 import { code } from '@streamdown/code'
 import { createMathPlugin } from '@streamdown/math'
 import { mermaid } from '@streamdown/mermaid'
+import DOMPurify from 'dompurify'
 import remarkBreaks from 'remark-breaks'
 import { normalizeMarkdownForRender, preserveLocalMarkdownLinks } from './markdownUtils'
 import { MarkdownErrorBoundary } from './MarkdownErrorBoundary'
@@ -550,8 +551,11 @@ function MermaidBlock({ code }: { code: string }) {
         if (valid) {
           const { svg: rendered } = await mermaid.render(renderId, normalizedCode)
           if (cancelled) return
-          cacheMermaidSvg(cacheKey, rendered)
-          setSvg(rendered)
+          const safeSvg = DOMPurify.sanitize(rendered, {
+            USE_PROFILES: { svg: true, svgFilters: true },
+          })
+          cacheMermaidSvg(cacheKey, safeSvg)
+          setSvg(safeSvg)
           setError('')
           setLoading(false)
         } else {

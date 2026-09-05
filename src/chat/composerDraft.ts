@@ -12,6 +12,7 @@ export interface ComposerDraft {
 }
 
 const NEW_CHAT_KEY = '__new__'
+const MAX_DRAFTS = 128
 const drafts = new Map<string, ComposerDraft>()
 
 export function draftKey(conversationId: string | null | undefined): string {
@@ -26,6 +27,10 @@ export function setComposerDraft(key: string, draft: ComposerDraft): void {
   if (!draft.input && draft.quotes.length === 0 && draft.attachments.length === 0) {
     drafts.delete(key)
   } else {
+    if (!drafts.has(key) && drafts.size >= MAX_DRAFTS) {
+      const oldest = drafts.keys().next().value
+      if (oldest) drafts.delete(oldest)
+    }
     drafts.set(key, draft)
   }
 }

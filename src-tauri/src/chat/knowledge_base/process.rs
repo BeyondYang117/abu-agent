@@ -23,6 +23,8 @@ const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_MAX_ATTEMPTS: usize = 90; // ~3 min ceiling per document
+const MAX_PROCESSOR_RESULT_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_PROCESSOR_MARKDOWN_BYTES: u64 = 64 * 1024 * 1024;
 
 fn ext_lower(path: &Path) -> String {
     path.extension()
@@ -258,17 +260,24 @@ async fn mineru_process(
 /// Download MinerU's result zip and extract its markdown (`full.md`, else the
 /// first `.md` entry).
 async fn mineru_download_md(state: &AppState, zip_url: &str) -> Result<String, String> {
-    let bytes = state
+    let response = state
         .http
         .get(zip_url)
         .send()
         .await
         .map_err(|e| format!("MinerU zip download: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("MinerU zip: {e}"))?
+        .map_err(|e| format!("MinerU zip: {e}"))?;
+    if response.content_length().unwrap_or(0) > MAX_PROCESSOR_RESULT_BYTES {
+        return Err("MinerU result is too large".to_string());
+    }
+    let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("MinerU zip body: {e}"))?;
+    if bytes.len() as u64 > MAX_PROCESSOR_RESULT_BYTES {
+        return Err("MinerU result is too large".to_string());
+    }
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("MinerU zip open: {e}"))?;
     let names: Vec<String> = (0..zip.len())
@@ -281,10 +290,19 @@ async fn mineru_download_md(state: &AppState, zip_url: &str) -> Result<String, S
         .ok_or("MinerU zip has no markdown")?
         .clone();
     let mut s = String::new();
-    zip.by_name(&target)
-        .map_err(|e| format!("MinerU zip read: {e}"))?
+    let entry = zip
+        .by_name(&target)
+        .map_err(|e| format!("MinerU zip read: {e}"))?;
+    if entry.size() > MAX_PROCESSOR_MARKDOWN_BYTES {
+        return Err("MinerU markdown result is too large".to_string());
+    }
+    entry
+        .take(MAX_PROCESSOR_MARKDOWN_BYTES + 1)
         .read_to_string(&mut s)
         .map_err(|e| format!("MinerU md read: {e}"))?;
+    if s.len() as u64 > MAX_PROCESSOR_MARKDOWN_BYTES {
+        return Err("MinerU markdown result is too large".to_string());
+    }
     Ok(s)
 }
 

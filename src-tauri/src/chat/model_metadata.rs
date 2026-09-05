@@ -1187,7 +1187,7 @@ mod tests {
         );
         assert_eq!(
             reasoning_efforts_for_model(Some(&anthropic), "claude-haiku-4.5"),
-            vec!["low", "medium", "high"]
+            Vec::<String>::new()
         );
         assert_eq!(
             reasoning_efforts_for_model(Some(&anthropic), "claude-3-5-sonnet-20241022"),

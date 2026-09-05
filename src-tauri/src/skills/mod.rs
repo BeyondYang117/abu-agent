@@ -222,6 +222,9 @@ pub fn chat_skills_uninstall(app: AppHandle, id: String) -> Result<(), String> {
 
 /// 技能包下载大小上限（与本地 zip 导入的隐含约束一致，防止误装超大包）。
 const MAX_SKILL_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_SKILL_ENTRIES: usize = 4096;
+const MAX_SKILL_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_SKILL_EXTRACTED_BYTES: u64 = 128 * 1024 * 1024;
 
 /// 把 GitHub 仓库页面 URL 归一为 codeload zip 直链；直链 zip / clawhub 下载链 / 其它原样返回。
 /// 支持 `github.com/{owner}/{repo}`、`.../tree/{ref}`（子目录忽略，安装首个 SKILL.md）。
@@ -346,9 +349,11 @@ fn import_skill_zip(source: &Path, skills_dir: &Path) -> Result<SkillMeta, Strin
 }
 
 /// 从内存中的 zip 字节解压一个 Skill 到 `{skills_dir}/{id}`。本地导入与技能市场安装共用。
-/// ponytail: 失败时删掉刚建的目标目录以免留半个技能；未做 temp+rename 原子安装（技能包小、
-/// 单用户本地操作，冲突概率低）——若将来并发安装需要，改成解压到临时目录再 rename。
+/// 解压到临时目录后再切换到目标目录，失败时不会留下半个技能。
 pub fn install_skill_zip_bytes(bytes: Vec<u8>, skills_dir: &Path) -> Result<SkillMeta, String> {
+    if bytes.len() as u64 > MAX_SKILL_DOWNLOAD_BYTES {
+        return Err("Skill package too large (over 50MB)".to_string());
+    }
     let reader = Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|err| format!("Open zip failed: {err}"))?;
@@ -357,8 +362,13 @@ pub fn install_skill_zip_bytes(bytes: Vec<u8>, skills_dir: &Path) -> Result<Skil
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|err| err.to_string())?;
         if file.name().ends_with("SKILL.md") {
-            file.read_to_string(&mut skill_raw)
+            let mut limited = (&mut file).take(MAX_SKILL_FILE_BYTES + 1);
+            limited
+                .read_to_string(&mut skill_raw)
                 .map_err(|err| format!("Read SKILL.md in zip failed: {err}"))?;
+            if skill_raw.len() as u64 > MAX_SKILL_FILE_BYTES {
+                return Err("SKILL.md is too large".to_string());
+            }
             skill_path = file.name().to_string();
             break;
         }
@@ -368,17 +378,21 @@ pub fn install_skill_zip_bytes(bytes: Vec<u8>, skills_dir: &Path) -> Result<Skil
     }
     let parsed = parse_skill_markdown(&skill_raw, "user", None, Vec::new())?;
     let dest = skills_dir.join(&parsed.meta.id);
-    // 更新/重装：先清掉旧目录，保证覆盖而不是残留混合。
-    if dest.exists() {
-        fs::remove_dir_all(&dest).map_err(|err| format!("clear old skill dir failed: {err}"))?;
-    }
-    match extract_zip_into(&mut archive, &skill_path, &dest) {
-        Ok(()) => Ok(SkillMeta {
-            path: Some(dest.join("SKILL.md").display().to_string()),
-            ..parsed.meta
-        }),
+    let temp = skills_dir.join(format!(".abu-skill-install-{}", uuid::Uuid::new_v4()));
+    match extract_zip_into(&mut archive, &skill_path, &temp) {
+        Ok(()) => {
+            if dest.exists() {
+                fs::remove_dir_all(&dest)
+                    .map_err(|err| format!("clear old skill dir failed: {err}"))?;
+            }
+            fs::rename(&temp, &dest).map_err(|err| format!("activate skill failed: {err}"))?;
+            Ok(SkillMeta {
+                path: Some(dest.join("SKILL.md").display().to_string()),
+                ..parsed.meta
+            })
+        }
         Err(err) => {
-            let _ = fs::remove_dir_all(&dest);
+            let _ = fs::remove_dir_all(&temp);
             Err(err)
         }
     }
@@ -390,24 +404,35 @@ fn extract_zip_into<R: Read + std::io::Seek>(
     dest: &Path,
 ) -> Result<(), String> {
     fs::create_dir_all(dest).map_err(|err| format!("create skill dir failed: {err}"))?;
+    if archive.len() > MAX_SKILL_ENTRIES {
+        return Err("Skill package contains too many files".to_string());
+    }
+    let prefix = Path::new(skill_path)
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new(""));
+    let mut extracted_bytes = 0u64;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|err| err.to_string())?;
         if file.is_dir() {
             continue;
         }
-        let name = file.name();
-        let relative = if skill_path.contains('/') {
-            let prefix = skill_path
-                .rsplit_once('/')
-                .map(|(prefix, _)| format!("{prefix}/"))
-                .unwrap_or_default();
-            name.strip_prefix(&prefix).unwrap_or(name)
-        } else {
-            name
-        };
-        if relative.contains("..") {
-            continue;
+        let enclosed = file
+            .enclosed_name()
+            .ok_or_else(|| "Skill package contains an unsafe path".to_string())?;
+        let relative = enclosed
+            .strip_prefix(prefix)
+            .map_err(|_| "Skill package entry is outside the skill directory".to_string())?;
+        if relative.as_os_str().is_empty() || relative.is_absolute() {
+            return Err("Skill package contains an unsafe path".to_string());
         }
+        let size = file.size();
+        if size > MAX_SKILL_FILE_BYTES
+            || extracted_bytes.saturating_add(size) > MAX_SKILL_EXTRACTED_BYTES
+        {
+            return Err("Skill package extracted content is too large".to_string());
+        }
+        extracted_bytes = extracted_bytes.saturating_add(size);
         let out = dest.join(relative);
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
