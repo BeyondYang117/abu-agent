@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { type Settings } from '../api/tauri'
-import { getSettingsCached, saveSettingsCached } from '../api/settingsCache'
+import {
+  getSettingsCached,
+  saveSettingsCached,
+  setOnboardingStatusCached,
+} from '../api/settingsCache'
 import { i18n, type Lang } from '../settings/i18n'
 import { usesNativeTitlebar } from '../chat/platform'
 import { Button } from '../components/Button'
@@ -118,8 +122,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
       onSettingsChange?.()
       return true
     } catch (err) {
-      // save_settings 在热键注册失败时会 Err 并回滚——必须把错误呈现给用户，
-      // 否则用户点 Finish/Skip 无反应、卡在页面上不知所以。
+      // 写盘失败必须呈现给用户，避免 Finish/Skip 看起来无响应。
       console.error('Failed to save onboarding settings:', err)
       setSaveError(err instanceof Error ? err.message : String(err))
       return false
@@ -129,22 +132,35 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   }, [onSettingsChange, settings])
 
   const handleSkip = useCallback(async () => {
-    const ok = await persistSettings('skipped')
-    if (ok) onSkip()
-  }, [onSkip, persistSettings])
-
-  const handleSkipAfterLoadFailure = useCallback(async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      const loaded = await getSettingsCached()
-      await saveSettingsCached({ ...loaded, onboardingStatus: 'skipped' })
+      const saved = await setOnboardingStatusCached('skipped')
+      setSettings(saved)
       onSettingsChange?.()
+      onSkip()
     } catch (err) {
-      console.error('Failed to skip onboarding after load error:', err)
+      console.error('Failed to skip onboarding:', err)
+      setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }
-    onSkip()
+  }, [onSettingsChange, onSkip])
+
+  const handleSkipAfterLoadFailure = useCallback(async () => {
+    setSaving(true)
+    setLoadError(null)
+    try {
+      const saved = await setOnboardingStatusCached('skipped')
+      setSettings(saved)
+      onSettingsChange?.()
+      onSkip()
+    } catch (err) {
+      console.error('Failed to skip onboarding after load error:', err)
+      setLoadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
   }, [onSettingsChange, onSkip])
 
   const handleFinish = useCallback(async () => {

@@ -451,6 +451,9 @@ pub async fn abu_api_create_device_authorization(
     let response = reqwest::Client::new()
         .post(url)
         .json(&serde_json::json!({ "device_name": device_name }))
+        // A network outage must return control to the onboarding UI instead of
+        // leaving the button in its loading state indefinitely (especially on Windows).
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;
@@ -487,6 +490,7 @@ pub async fn abu_api_exchange_device_authorization(
     let response = reqwest::Client::new()
         .post(url)
         .json(&serde_json::json!({ "device_code": device_code }))
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;
@@ -542,6 +546,7 @@ pub async fn abu_api_register_device(
             "device_name": device_name,
             "capabilities": capabilities.unwrap_or_default(),
         }))
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("无法连接 ABU API：{e}"))?;

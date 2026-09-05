@@ -56,4 +56,21 @@ describe('LoginStep device authorization', () => {
       'https://api.abuai.chat/agent/authorize?user_code=ABC12345',
     )
   })
+
+  it('does not leave the UI loading while the Windows browser launcher is pending', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    openExternalMock.mockImplementation(() => new Promise<void>(() => {}))
+    render(
+      <LoginStep
+        t={{} as never}
+        abuApiBaseUrl="https://api.abuai.chat"
+        onLoginSuccess={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '在浏览器中登录' }))
+
+    expect(await screen.findByText('等待浏览器授权...')).toBeInTheDocument()
+    expect(screen.queryByText('正在准备...')).not.toBeInTheDocument()
+  })
 })

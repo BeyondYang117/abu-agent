@@ -2880,6 +2880,12 @@ pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), Stri
         state.clear_all_external_agent_models_cache();
         state.clear_detected_agents_cache();
     }
+    persist_settings_snapshot(app, settings)
+}
+
+/// 只写 settings store，不重新物化供应商配置或清运行时缓存。
+/// 适用于 onboarding 状态这类与运行时无关的单字段更新。
+pub fn persist_settings_snapshot(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let mut to_persist = settings.clone();
     // Keep legacy top-level chat fields from turning Lens/Translator fallback into
     // an explicit defaultModels.chat selection on the next load.

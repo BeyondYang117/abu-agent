@@ -92,6 +92,31 @@ pub(crate) async fn save_settings(
     apply_settings(&app, &state, settings, true).await
 }
 
+/// 引导退出只更新状态并写盘，不重新应用自启动、热键、托盘或供应商配置。
+/// Windows 上这些系统集成可能较慢，不能让“跳过引导”被无关操作阻塞。
+#[tauri::command]
+pub(crate) fn set_onboarding_status(
+    app: AppHandle,
+    state: State<AppState>,
+    status: String,
+) -> Result<Settings, String> {
+    if !matches!(status.as_str(), "pending" | "completed" | "skipped") {
+        return Err("Invalid onboarding status".to_string());
+    }
+
+    let (previous_status, snapshot) = {
+        let mut guard = state.settings_write();
+        let previous_status = guard.onboarding_status.clone();
+        guard.onboarding_status = status;
+        (previous_status, guard.clone())
+    };
+    if let Err(error) = crate::settings::persist_settings_snapshot(&app, &snapshot) {
+        state.settings_write().onboarding_status = previous_status;
+        return Err(error);
+    }
+    Ok(snapshot)
+}
+
 /// trim + 去空 + 去重（保序）。
 fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();

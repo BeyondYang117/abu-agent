@@ -1982,6 +1982,10 @@ export const api = {
   // 外部链接
   openExternal: (url: string) => invoke<void>('open_external', { url }),
 
+  // 首次引导状态：轻量写盘，不触发完整设置的运行时重应用。
+  setOnboardingStatus: (status: 'pending' | 'completed' | 'skipped') =>
+    invoke<Settings>('set_onboarding_status', { status }),
+
   // ABU API 集成：设备身份 + 会话配置
   /** 设备指纹：同一台机器多次调用返回同一值，用于 abu-api 侧的设备 upsert。 */
   getDeviceFingerprint: () => invoke<string>('get_device_fingerprint'),

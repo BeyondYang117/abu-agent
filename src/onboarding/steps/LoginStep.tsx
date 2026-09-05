@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ExternalLink, Loader2, Copy, Check } from 'lucide-react'
 import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
@@ -18,6 +18,24 @@ type DeviceFlowState = {
   userCode: string
   verificationUri: string
   expiresAt: number
+}
+
+const DEVICE_REQUEST_TIMEOUT_MS = 20_000
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (error) => {
+        window.clearTimeout(timeoutId)
+        reject(error)
+      },
+    )
+  })
 }
 
 function buildDeviceAuthorizationUrl(
@@ -43,6 +61,8 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
   // Copy state
   const [copied, setCopied] = useState(false)
+  const pollingGenerationRef = useRef(0)
+  const pollingTimerRef = useRef<number | null>(null)
 
   // 创建临时客户端（登录前不需要 session token）
   const client = useMemo(() => new AbuApiClient(abuApiBaseUrl), [abuApiBaseUrl])
@@ -59,48 +79,85 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
     }
   }, [deviceFlow])
 
-  // 轮询兑换 token
+  const stopPolling = useCallback(() => {
+    pollingGenerationRef.current += 1
+    if (pollingTimerRef.current !== null) {
+      window.clearTimeout(pollingTimerRef.current)
+      pollingTimerRef.current = null
+    }
+    setPolling(false)
+  }, [])
+
+  useEffect(() => () => {
+    pollingGenerationRef.current += 1
+    if (pollingTimerRef.current !== null) window.clearTimeout(pollingTimerRef.current)
+  }, [])
+
+  // 串行轮询兑换 token，避免慢网络下 setInterval 叠加多个未完成请求。
   const startPolling = useCallback(
     (deviceCode: string, intervalSeconds: number) => {
+      stopPolling()
       setPolling(true)
-      const intervalId = setInterval(async () => {
+      const generation = pollingGenerationRef.current
+      const expiresAt = Date.now() + 10 * 60 * 1000
+
+      const poll = async () => {
+        if (pollingGenerationRef.current !== generation) return
         try {
-          const response = isTauriRuntime()
-            ? await api.abuApiExchangeDeviceAuthorization(abuApiBaseUrl, deviceCode)
-            : await client.exchangeDeviceAuthorization(deviceCode)
+          const request = isTauriRuntime()
+            ? api.abuApiExchangeDeviceAuthorization(abuApiBaseUrl, deviceCode)
+            : client.exchangeDeviceAuthorization(deviceCode)
+          const response = await withTimeout(
+            request,
+            DEVICE_REQUEST_TIMEOUT_MS,
+            t.onboardingLoginTimeout || '网络请求超时，请检查网络后重试',
+          )
+
+          if (pollingGenerationRef.current !== generation) return
 
           if (response.status === 'consumed' && response.session_token) {
-            clearInterval(intervalId)
-            setPolling(false)
+            stopPolling()
             onLoginSuccess(response.session_token)
+            return
           } else if (response.status === 'denied') {
-            clearInterval(intervalId)
-            setPolling(false)
+            stopPolling()
             setError(t.onboardingLoginDenied || '用户拒绝了授权请求')
+            return
           } else if (response.status === 'expired') {
-            clearInterval(intervalId)
-            setPolling(false)
+            stopPolling()
             setError(t.onboardingLoginExpired || '授权请求已过期，请重新开始')
             setDeviceFlow(null)
+            return
           }
           // pending 或 approved 时继续轮询
         } catch (err) {
-          // 网络错误时继续轮询（不清除 interval）
+          const timeoutMessage = t.onboardingLoginTimeout || '网络请求超时，请检查网络后重试'
+          if (err instanceof Error && err.message === timeoutMessage) {
+            // Tauri invoke 无法取消底层 reqwest 请求；超时后停止本轮，避免慢请求
+            // 与下一轮叠加，并把控制权交还给用户重试。
+            stopPolling()
+            setError(timeoutMessage)
+            setDeviceFlow(null)
+            return
+          }
+          // 短暂网络错误时继续轮询。
           console.warn('Polling error:', err)
         }
-      }, intervalSeconds * 1000)
 
-      // 10 分钟后自动停止轮询（防止无限轮询）
-      setTimeout(() => {
-        clearInterval(intervalId)
-        if (polling) {
-          setPolling(false)
+        if (pollingGenerationRef.current !== generation) return
+        if (Date.now() >= expiresAt) {
+          stopPolling()
           setError(t.onboardingLoginTimeout || '授权超时，请重新开始')
           setDeviceFlow(null)
+          return
         }
-      }, 10 * 60 * 1000)
+
+        pollingTimerRef.current = window.setTimeout(poll, Math.max(1, intervalSeconds) * 1000)
+      }
+
+      pollingTimerRef.current = window.setTimeout(poll, Math.max(1, intervalSeconds) * 1000)
     },
-    [abuApiBaseUrl, client, onLoginSuccess, polling, t],
+    [abuApiBaseUrl, client, onLoginSuccess, stopPolling, t],
   )
 
   // 开始 Device Code Flow
@@ -109,12 +166,21 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
     setError(null)
     try {
       // 1. 获取设备名称（用于显示）
-      const deviceName = await getDeviceName()
+      const deviceName = await withTimeout(
+        getDeviceName(),
+        5_000,
+        t.onboardingLoginTimeout || '读取设备信息超时，请重试',
+      )
 
       // 2. 请求 device code
-      const response = isTauriRuntime()
-        ? await api.abuApiCreateDeviceAuthorization(abuApiBaseUrl, deviceName)
-        : await client.createDeviceAuthorization(deviceName)
+      const request = isTauriRuntime()
+        ? api.abuApiCreateDeviceAuthorization(abuApiBaseUrl, deviceName)
+        : client.createDeviceAuthorization(deviceName)
+      const response = await withTimeout(
+        request,
+        DEVICE_REQUEST_TIMEOUT_MS,
+        t.onboardingLoginTimeout || '连接 ABU API 超时，请检查网络后重试',
+      )
       setDeviceFlow({
         deviceCode: response.device_code,
         userCode: response.user_code,
@@ -128,14 +194,14 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         response.verification_uri,
         response.user_code,
       )
-      try {
-        await api.openExternal(verificationUrl)
-      } catch (err) {
+      // 打开浏览器不是轮询授权的前置条件。Windows 默认浏览器调用异常时，
+      // 用户仍可复制验证码或点击“重新打开浏览器”，页面不能卡在 loading。
+      void api.openExternal(verificationUrl).catch((err) => {
         const detail = err instanceof Error ? err.message : String(err)
-        throw new Error(`授权请求已创建，但无法打开系统浏览器：${detail}`)
-      }
+        setError(`授权请求已创建，但无法打开系统浏览器：${detail}`)
+      })
 
-      // 4. 开始轮询
+      // 4. 开始轮询，不等待系统浏览器调用返回
       startPolling(response.device_code, response.interval)
     } catch (err) {
       console.error('Failed to start device flow:', err)
@@ -143,7 +209,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
     } finally {
       setLoading(false)
     }
-  }, [abuApiBaseUrl, client, startPolling])
+  }, [abuApiBaseUrl, client, startPolling, t])
 
   // 密码登录
   const handlePasswordLogin = useCallback(async () => {
@@ -167,10 +233,10 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
   // 取消 Device Flow
   const cancelDeviceFlow = useCallback(() => {
-    setPolling(false)
+    stopPolling()
     setDeviceFlow(null)
     setError(null)
-  }, [])
+  }, [stopPolling])
 
   return (
     <div className="onboarding-step">
@@ -273,7 +339,9 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                       deviceFlow.verificationUri,
                       deviceFlow.userCode,
                     )
-                    api.openExternal(url)
+                    void api.openExternal(url).catch((err) => {
+                      setError(err instanceof Error ? err.message : String(err))
+                    })
                   }}
                   data-tauri-drag-region="false"
                 >

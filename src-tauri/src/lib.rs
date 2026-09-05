@@ -532,6 +532,7 @@ pub fn run() {
             fonts::list_system_fonts,
             commands::get_default_prompt_templates,
             commands::save_settings,
+            commands::set_onboarding_status,
             commands::set_favorite_models,
             commands::set_translate_card_size,
             commands::export_settings,

@@ -89,6 +89,16 @@ export async function saveSettingsCached(settings: Settings): Promise<Settings> 
   return saved
 }
 
+/** 轻量更新首次引导状态，避免退出引导时重应用热键、自启动等系统集成。 */
+export async function setOnboardingStatusCached(
+  status: 'pending' | 'completed' | 'skipped',
+): Promise<Settings> {
+  const saved = await api.setOnboardingStatus(status)
+  cached = saved
+  notifySettingsUpdated(saved)
+  return saved
+}
+
 /**
  * importSettings + 成功写通缓存。import 会用文件内容整体覆盖磁盘 settings，
  * 返回归一化后的新 Settings，直接替换缓存。

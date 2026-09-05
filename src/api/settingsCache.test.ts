@@ -5,6 +5,7 @@ const getSettingsMock = vi.fn()
 const saveSettingsMock = vi.fn()
 const importSettingsMock = vi.fn()
 const setFavoriteModelsMock = vi.fn()
+const setOnboardingStatusMock = vi.fn()
 
 vi.mock('./tauri', () => ({
   api: {
@@ -12,6 +13,7 @@ vi.mock('./tauri', () => ({
     saveSettings: (...args: unknown[]) => saveSettingsMock(...args),
     importSettings: (...args: unknown[]) => importSettingsMock(...args),
     setFavoriteModels: (...args: unknown[]) => setFavoriteModelsMock(...args),
+    setOnboardingStatus: (...args: unknown[]) => setOnboardingStatusMock(...args),
   },
 }))
 
@@ -23,6 +25,7 @@ import {
   refreshSettings,
   saveSettingsCached,
   setFavoriteModelsCached,
+  setOnboardingStatusCached,
 } from './settingsCache'
 
 const settingsA = { theme: 'dark', providers: [], favoriteModels: [] } as unknown as Settings
@@ -34,6 +37,7 @@ beforeEach(() => {
   saveSettingsMock.mockReset()
   importSettingsMock.mockReset()
   setFavoriteModelsMock.mockReset()
+  setOnboardingStatusMock.mockReset()
 })
 
 describe('settingsCache', () => {
@@ -94,6 +98,20 @@ describe('settingsCache', () => {
 
     saveSettingsMock.mockRejectedValueOnce(new Error('save failed'))
     await expect(saveSettingsCached(settingsA)).rejects.toThrow('save failed')
+    expect(peekSettings()).toBe(settingsB)
+  })
+
+  it('setOnboardingStatusCached 成功写通缓存；失败保留旧缓存', async () => {
+    getSettingsMock.mockResolvedValue(settingsA)
+    await getSettingsCached()
+
+    setOnboardingStatusMock.mockResolvedValueOnce(settingsB)
+    await expect(setOnboardingStatusCached('skipped')).resolves.toBe(settingsB)
+    expect(setOnboardingStatusMock).toHaveBeenCalledWith('skipped')
+    expect(peekSettings()).toBe(settingsB)
+
+    setOnboardingStatusMock.mockRejectedValueOnce(new Error('save failed'))
+    await expect(setOnboardingStatusCached('completed')).rejects.toThrow('save failed')
     expect(peekSettings()).toBe(settingsB)
   })
 
