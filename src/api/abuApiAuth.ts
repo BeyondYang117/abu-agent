@@ -135,6 +135,7 @@ export async function switchAbuApiBaseUrl(baseUrl: string): Promise<void> {
 export async function completeLogin(sessionToken: string): Promise<void> {
   const { api, isTauriRuntime } = await import('./tauri')
   const { DEFAULT_ABU_API_BASE_URL, initAbuApiClient, AbuApiClient } = await import('./abuApi')
+  const { requestWithAbuApiEndpointFailover } = await import('./abuApiEndpoints')
   const fingerprint = await api.getDeviceFingerprint()
   const baseUrl = abuApiAuthStore.getState().baseUrl || DEFAULT_ABU_API_BASE_URL
 
@@ -150,30 +151,37 @@ export async function completeLogin(sessionToken: string): Promise<void> {
     platform,
     version: clientVersion,
   })
-  const device = isTauriRuntime()
-    ? await api.abuApiRegisterDevice({
-        baseUrl,
-        sessionToken,
-        fingerprint,
-        platform,
-        clientVersion,
-        deviceName,
-        capabilities,
-      })
-    : await client.registerDevice({
-        fingerprint,
-        platform,
-        client_version: clientVersion,
-        device_name: deviceName,
-        capabilities,
-      })
+  const registration = isTauriRuntime()
+    ? await requestWithAbuApiEndpointFailover(baseUrl, (candidate) =>
+        api.abuApiRegisterDevice({
+          baseUrl: candidate,
+          sessionToken,
+          fingerprint,
+          platform,
+          clientVersion,
+          deviceName,
+          capabilities,
+        }),
+      )
+    : {
+        baseUrl: client.getBaseUrl(),
+        value: await client.registerDevice({
+          fingerprint,
+          platform,
+          client_version: clientVersion,
+          device_name: deviceName,
+          capabilities,
+        }),
+      }
+  const device = registration.value
+  const resolvedBaseUrl = registration.baseUrl
 
   // 使用服务端返回的 device.id 而不是本地指纹
   const deviceId = device.id
 
   // 保存到 settings
   await api.saveAbuApiConfig({
-    base_url: baseUrl,
+    base_url: resolvedBaseUrl,
     session_token: sessionToken,
     device_id: deviceId,
     runtime_mode: 'cloud',
@@ -188,10 +196,10 @@ export async function completeLogin(sessionToken: string): Promise<void> {
   }
 
   // 初始化 ABU API 客户端
-  initAbuApiClient(baseUrl, sessionToken)
+  initAbuApiClient(resolvedBaseUrl, sessionToken)
 
   // 更新内存状态
-  abuApiAuthStore.login(sessionToken, deviceId, baseUrl)
+  abuApiAuthStore.login(sessionToken, deviceId, resolvedBaseUrl)
   const { syncModelRoutingPolicy } = await import('../chat/modelRoutingPolicy')
   void syncModelRoutingPolicy()
 }

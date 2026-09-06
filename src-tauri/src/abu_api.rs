@@ -450,6 +450,7 @@ pub async fn abu_api_create_device_authorization(
     let url = format!("{}/api/agent/auth/device", base_url.trim_end_matches('/'));
     let response = reqwest::Client::new()
         .post(url)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({ "device_name": device_name }))
         // A network outage must return control to the onboarding UI instead of
         // leaving the button in its loading state indefinitely (especially on Windows).
@@ -489,6 +490,7 @@ pub async fn abu_api_exchange_device_authorization(
     );
     let response = reqwest::Client::new()
         .post(url)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({ "device_code": device_code }))
         .timeout(std::time::Duration::from_secs(15))
         .send()
@@ -539,6 +541,7 @@ pub async fn abu_api_register_device(
     let response = reqwest::Client::new()
         .post(url)
         .header("X-Abu-Session-Token", session_token)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({
             "fingerprint": fingerprint,
             "platform": platform,

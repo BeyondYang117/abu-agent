@@ -697,8 +697,9 @@ fn ensure_overlay_window(
 /// 不会把用户从全屏 Space 拽走。Chat 窗口**绝不**走这里，保持普通 NSWindow。
 #[cfg(target_os = "macos")]
 pub fn ensure_overlay_panel(window: &WebviewWindow) {
-    run_overlay_on_main(window, |ptr| unsafe {
-        configure_overlay_panel(ptr);
+    let level = overlay_window_level(window.label());
+    run_overlay_on_main(window, move |ptr| unsafe {
+        configure_overlay_panel(ptr, level);
     });
 }
 
@@ -711,10 +712,11 @@ pub fn ensure_overlay_panel(window: &WebviewWindow) {
 #[cfg(target_os = "macos")]
 pub fn show_overlay_panel(window: &WebviewWindow, need_key: bool) {
     use objc::{msg_send, sel, sel_impl};
+    let level = overlay_window_level(window.label());
     run_overlay_on_main(window, move |ptr| unsafe {
         // 显示前再重申一次 panel 行为，抵消 tao set_resizable / set_always_on_top 可能造成的
         // styleMask / level 漂移。
-        configure_overlay_panel(ptr);
+        configure_overlay_panel(ptr, level);
         let _: () = msg_send![ptr, orderFrontRegardless];
         if need_key {
             let _: () = msg_send![ptr, makeKeyWindow];
@@ -1028,9 +1030,24 @@ fn abu_agent_overlay_panel_class() -> *const objc::runtime::Class {
         .0
 }
 
+#[cfg(target_os = "macos")]
+const NS_FLOATING_WINDOW_LEVEL: isize = 3;
+#[cfg(target_os = "macos")]
+const NS_STATUS_WINDOW_LEVEL: isize = 25;
+
+/// 文本翻译器需要低于系统输入法候选窗；全屏 Lens / 截图遮罩保持原高层级。
+#[cfg(target_os = "macos")]
+fn overlay_window_level(label: &str) -> isize {
+    if label == "main" || label == "translate" {
+        NS_FLOATING_WINDOW_LEVEL
+    } else {
+        NS_STATUS_WINDOW_LEVEL
+    }
+}
+
 /// 重分类窗口为非激活 NSPanel 并设置全屏浮现所需的 styleMask / collectionBehavior / level（幂等）。
 #[cfg(target_os = "macos")]
-unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
+unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object, level: isize) {
     use objc::{msg_send, sel, sel_impl};
 
     // 1) 重分类到 NSPanel 子类（已是则跳过 object_setClass）。
@@ -1084,10 +1101,9 @@ unsafe fn configure_overlay_panel(window: *mut objc::runtime::Object) {
         | FULL_SCREEN_AUXILIARY;
     let _: () = msg_send![window, setCollectionBehavior: behavior];
 
-    // 4) 置于菜单栏之上以盖住全屏内容；用 status 档(25)，避开 screenSaver(1000) 那种会在
-    //    错误 Space 闪一下的过高层级。
-    const NS_STATUS_WINDOW_LEVEL: isize = 25;
-    let _: () = msg_send![window, setLevel: NS_STATUS_WINDOW_LEVEL];
+    // 4) main 文本翻译器用 floating 档(3)，让中/日/韩输入法的候选窗能显示在其上；
+    //    全屏 Lens / 截图遮罩仍用 status 档(25)，保持对全屏内容的覆盖能力。
+    let _: () = msg_send![window, setLevel: level];
 
     // 5) 关键：NSPanel 默认在宿主 app 失活时自动隐藏；浮窗显示时前台是别的 App（如全屏 Chrome），
     //    不设 NO 会立刻消失。
@@ -1224,9 +1240,22 @@ pub fn restore_previous_frontmost_app(app: &AppHandle, slot: &std::sync::atomic:
 mod tests {
     use super::{is_valid_chat_last_route, APP_DISPLAY_NAME};
 
+    #[cfg(target_os = "macos")]
+    use super::{
+        overlay_window_level, NS_FLOATING_WINDOW_LEVEL, NS_STATUS_WINDOW_LEVEL,
+    };
+
     #[test]
     fn user_facing_window_brand_is_abu_agent_desktop() {
         assert_eq!(APP_DISPLAY_NAME, "ABU Agent Desktop");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn text_translator_stays_below_ime_candidates() {
+        assert_eq!(overlay_window_level("main"), NS_FLOATING_WINDOW_LEVEL);
+        assert_eq!(overlay_window_level("translate"), NS_FLOATING_WINDOW_LEVEL);
+        assert_eq!(overlay_window_level("lens"), NS_STATUS_WINDOW_LEVEL);
     }
 
     #[test]

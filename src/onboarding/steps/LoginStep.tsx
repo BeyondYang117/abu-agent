@@ -4,7 +4,7 @@ import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
 import { AbuApiClient } from '../../api/abuApi'
 import { api, isTauriRuntime } from '../../api/tauri'
-import { ABU_API_BASE_URLS } from '../../api/abuApiEndpoints'
+import { ABU_API_BASE_URLS, requestWithAbuApiEndpointFailover } from '../../api/abuApiEndpoints'
 import { abuApiAuthStore } from '../../api/abuApiAuth'
 
 type LoginStepProps = {
@@ -98,29 +98,37 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
   // 串行轮询兑换 token，避免慢网络下 setInterval 叠加多个未完成请求。
   const startPolling = useCallback(
-    (deviceCode: string, intervalSeconds: number) => {
+    (deviceCode: string, intervalSeconds: number, pollingBaseUrl: string) => {
       stopPolling()
       setPolling(true)
       const generation = pollingGenerationRef.current
       const expiresAt = Date.now() + 10 * 60 * 1000
+      let activeBaseUrl = pollingBaseUrl
 
       const poll = async () => {
         if (pollingGenerationRef.current !== generation) return
         try {
-          const request = isTauriRuntime()
-            ? api.abuApiExchangeDeviceAuthorization(selectedBaseUrl, deviceCode)
-            : client.exchangeDeviceAuthorization(deviceCode)
-          const response = await withTimeout(
-            request,
-            DEVICE_REQUEST_TIMEOUT_MS,
-            t.onboardingLoginTimeout || '网络请求超时，请检查网络后重试',
-          )
+          const result = isTauriRuntime()
+            ? await requestWithAbuApiEndpointFailover(activeBaseUrl, (baseUrl) =>
+                withTimeout(
+                  api.abuApiExchangeDeviceAuthorization(baseUrl, deviceCode),
+                  DEVICE_REQUEST_TIMEOUT_MS,
+                  t.onboardingLoginTimeout || '网络请求超时，请检查网络后重试',
+                ),
+              )
+            : {
+                baseUrl: client.getBaseUrl(),
+                value: await client.exchangeDeviceAuthorization(deviceCode),
+              }
+          activeBaseUrl = result.baseUrl
+          if (result.baseUrl !== selectedBaseUrl) setSelectedBaseUrl(result.baseUrl)
+          const response = result.value
 
           if (pollingGenerationRef.current !== generation) return
 
           if (response.status === 'consumed' && response.session_token) {
             stopPolling()
-            abuApiAuthStore.setState({ baseUrl: selectedBaseUrl })
+            abuApiAuthStore.setState({ baseUrl: result.baseUrl })
             onLoginSuccess(response.session_token)
             return
           } else if (response.status === 'denied') {
@@ -177,14 +185,21 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
       )
 
       // 2. 请求 device code
-      const request = isTauriRuntime()
-        ? api.abuApiCreateDeviceAuthorization(selectedBaseUrl, deviceName)
-        : client.createDeviceAuthorization(deviceName)
-      const response = await withTimeout(
-        request,
-        DEVICE_REQUEST_TIMEOUT_MS,
-        t.onboardingLoginTimeout || '连接 ABU API 超时，请检查网络后重试',
-      )
+      const result = isTauriRuntime()
+        ? await requestWithAbuApiEndpointFailover(selectedBaseUrl, (baseUrl) =>
+            withTimeout(
+              api.abuApiCreateDeviceAuthorization(baseUrl, deviceName),
+              DEVICE_REQUEST_TIMEOUT_MS,
+              t.onboardingLoginTimeout || '连接 ABU API 超时，请检查网络后重试',
+            ),
+          )
+        : {
+            baseUrl: client.getBaseUrl(),
+            value: await client.createDeviceAuthorization(deviceName),
+          }
+      const response = result.value
+      const resolvedBaseUrl = result.baseUrl
+      setSelectedBaseUrl(resolvedBaseUrl)
       setDeviceFlow({
         deviceCode: response.device_code,
         userCode: response.user_code,
@@ -194,7 +209,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
       // 3. 打开浏览器到验证页面
       const verificationUrl = buildDeviceAuthorizationUrl(
-        selectedBaseUrl,
+        resolvedBaseUrl,
         response.verification_uri,
         response.user_code,
       )
@@ -206,7 +221,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
       })
 
       // 4. 开始轮询，不等待系统浏览器调用返回
-      startPolling(response.device_code, response.interval)
+      startPolling(response.device_code, response.interval, resolvedBaseUrl)
     } catch (err) {
       console.error('Failed to start device flow:', err)
       setError(err instanceof Error ? err.message : String(err))
@@ -347,7 +362,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                   variant="ghost"
                   onClick={() => {
                     const url = buildDeviceAuthorizationUrl(
-                      abuApiBaseUrl,
+                      selectedBaseUrl,
                       deviceFlow.verificationUri,
                       deviceFlow.userCode,
                     )

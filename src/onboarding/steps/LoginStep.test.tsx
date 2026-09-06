@@ -73,4 +73,33 @@ describe('LoginStep device authorization', () => {
     expect(await screen.findByText('等待浏览器授权...')).toBeInTheDocument()
     expect(screen.queryByText('正在准备...')).not.toBeInTheDocument()
   })
+
+  it('falls back to the next API endpoint when creating the device code fails', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    createDeviceAuthorizationMock
+      .mockRejectedValueOnce(new Error('error sending request'))
+      .mockResolvedValueOnce({
+        device_code: 'device-code',
+        user_code: 'ABC12345',
+        verification_uri: '/agent/authorize',
+        expires_at: 1_900_000_000,
+        interval: 2,
+      })
+    render(
+      <LoginStep
+        t={{} as never}
+        abuApiBaseUrl="https://api.abuai.chat"
+        onLoginSuccess={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '在浏览器中登录' }))
+
+    await waitFor(() => {
+      expect(createDeviceAuthorizationMock).toHaveBeenNthCalledWith(2, 'https://api.abusz.com', 'test-mac')
+      expect(openExternalMock).toHaveBeenCalledWith(
+        'https://api.abusz.com/agent/authorize?user_code=ABC12345',
+      )
+    })
+  })
 })
