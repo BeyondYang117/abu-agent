@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
-import { LogOut, User, Mail, Coins, RefreshCw, LogIn } from 'lucide-react'
+import { LogOut, User, Mail, Coins, RefreshCw, LogIn, Globe2, CheckCircle2, XCircle } from 'lucide-react'
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
-import { useAbuApiAuth } from '../../api/abuApiAuth'
-import { getAbuApiClient } from '../../api/abuApi'
+import { abuApiAuthStore, switchAbuApiBaseUrl, useAbuApiAuth } from '../../api/abuApiAuth'
+import { getAbuApiClient, DEFAULT_ABU_API_BASE_URL } from '../../api/abuApi'
+import { api, isTauriRuntime } from '../../api/tauri'
+import { ABU_API_BASE_URLS, probeAbuApiEndpoint } from '../../api/abuApiEndpoints'
 import { formatAbuQuota } from '../../api/quota'
 
 interface AccountInfo {
@@ -27,7 +29,32 @@ export function AccountInfoCard({
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [endpoint, setEndpoint] = useState<string>(DEFAULT_ABU_API_BASE_URL)
+  const [probing, setProbing] = useState(false)
+  const [probeResult, setProbeResult] = useState<boolean | null>(null)
   const { isAuthenticated } = useAbuApiAuth()
+
+  useEffect(() => {
+    setEndpoint(abuApiAuthStore.getState().baseUrl || DEFAULT_ABU_API_BASE_URL)
+  }, [isAuthenticated])
+
+  const testEndpoint = async () => {
+    setProbing(true)
+    setProbeResult(null)
+    setProbeResult(await (isTauriRuntime() ? api.abuApiProbeEndpoint(endpoint) : probeAbuApiEndpoint(endpoint)))
+    setProbing(false)
+  }
+
+  const applyEndpoint = async (next: string) => {
+    setEndpoint(next)
+    setProbeResult(null)
+    try {
+      await switchAbuApiBaseUrl(next)
+      await loadAccountInfo()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -90,6 +117,18 @@ export function AccountInfoCard({
   return (
     <SettingsGroup title={lang === 'zh' ? '账户信息' : 'Account'}>
       <div className="space-y-3 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 p-4">
+        <div className="space-y-2 border-b border-neutral-200 pb-3 dark:border-neutral-700">
+          <div className="flex items-center gap-2 text-sm font-medium"><Globe2 size={14} />{lang === 'zh' ? 'API 服务器' : 'API server'}</div>
+          <select className="w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-900" value={endpoint} onChange={(e) => void applyEndpoint(e.target.value)}>
+            {ABU_API_BASE_URLS.map((url) => <option key={url} value={url}>{url}</option>)}
+          </select>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => void testEndpoint()} disabled={probing}>{probing ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}{lang === 'zh' ? '测试连接' : 'Test connection'}</Button>
+            {probeResult === true && <span className="flex items-center gap-1 text-xs text-green-600"><CheckCircle2 size={14} />{lang === 'zh' ? '可用' : 'Available'}</span>}
+            {probeResult === false && <span className="flex items-center gap-1 text-xs text-red-600"><XCircle size={14} />{lang === 'zh' ? '不可用' : 'Unavailable'}</span>}
+          </div>
+          <div className="text-xs text-neutral-500">{lang === 'zh' ? '域名故障时可快速切换，选择会自动保存。' : 'Switch quickly when a domain is unavailable; selection is saved automatically.'}</div>
+        </div>
         {loading ? (
           <div className="flex items-center justify-center gap-2 text-sm text-neutral-500 dark:text-neutral-400 py-2">
             <RefreshCw size={14} className="animate-spin" />

@@ -1,5 +1,6 @@
 import { api, isTauriRuntime } from './tauri'
 import { abuApiAuthStore } from './abuApiAuth'
+import { ABU_API_BASE_URLS, getAbuApiEndpointCandidates, normalizeAbuApiBaseUrl } from './abuApiEndpoints'
 
 /**
  * ABU API 客户端
@@ -12,7 +13,7 @@ import { abuApiAuthStore } from './abuApiAuth'
  * ABU API 生产环境地址。与 Rust 侧
  * `settings_abu_api::DEFAULT_ABU_API_BASE_URL` 保持一致。
  */
-export const DEFAULT_ABU_API_BASE_URL = 'https://api.abuai.chat'
+export const DEFAULT_ABU_API_BASE_URL = ABU_API_BASE_URLS[0]
 
 /** Cloud 模式的虚拟 Provider ID（与 Rust 侧 ABU_API_PROVIDER_ID 对应） */
 export const ABU_API_PROVIDER_ID = 'abu-api-relay'
@@ -96,9 +97,41 @@ export interface AbuApiError {
 
 export class AbuApiClient {
   constructor(
-    private baseUrl: string,
+    baseUrl: string,
     private sessionToken?: string,
-  ) {}
+  ) {
+    this.baseUrl = normalizeAbuApiBaseUrl(baseUrl)
+  }
+
+  private baseUrl: string
+
+  getBaseUrl(): string {
+    return this.baseUrl
+  }
+
+  private async nativeWithFailover<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (firstError) {
+      const candidates = getAbuApiEndpointCandidates(this.baseUrl)
+      for (const candidate of candidates.slice(1)) {
+        const healthy = isTauriRuntime()
+          ? await api.abuApiProbeEndpoint(candidate).catch(() => false)
+          : await import('./abuApiEndpoints').then(({ probeAbuApiEndpoint }) => probeAbuApiEndpoint(candidate))
+        if (!healthy) continue
+        try {
+          const config = await api.loadAbuApiConfig()
+          await api.saveAbuApiConfig({ ...config, base_url: candidate })
+          this.baseUrl = candidate
+          abuApiAuthStore.setState({ baseUrl: candidate })
+          return await operation()
+        } catch {
+          // Continue with the next healthy candidate.
+        }
+      }
+      throw firstError
+    }
+  }
 
   private async request<T>(
     path: string,
@@ -109,7 +142,6 @@ export class AbuApiClient {
     const externalSignal = options.signal
     const abortExternal = () => controller.abort()
     externalSignal?.addEventListener('abort', abortExternal, { once: true })
-    const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
@@ -119,22 +151,29 @@ export class AbuApiClient {
       headers['X-Abu-Session-Token'] = this.sessionToken
     }
 
+    const candidates = isTauriRuntime() ? [this.baseUrl] : getAbuApiEndpointCandidates(this.baseUrl)
+    let lastError: unknown
     try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-        headers,
-      })
-      const data = await response.json()
-      if (!data.success) {
-        const error = data as AbuApiError
-        throw new Error(error.message || 'API request failed')
+      for (const candidate of candidates) {
+        try {
+          const response = await fetch(`${candidate}${path}`, { ...options, signal: controller.signal, headers })
+          const data = await response.json()
+          if (!data.success) {
+            const error = data as AbuApiError
+            // 5xx responses may indicate a broken edge; try the next domain.
+            if (response.status >= 500) throw new Error(error.message || `HTTP ${response.status}`)
+            throw new Error(error.message || 'API request failed')
+          }
+          if (candidate !== this.baseUrl) this.baseUrl = candidate
+          return data.data as T
+        } catch (error) {
+          lastError = error
+          if (controller.signal.aborted) throw error
+        }
       }
-      return data.data as T
+      throw lastError || new Error('API request failed')
     } catch (error) {
-      if (controller.signal.aborted) {
-        throw new Error('网络请求超时，请检查网络后重试')
-      }
+      if (controller.signal.aborted) throw new Error('网络请求超时，请检查网络后重试')
       throw error
     } finally {
       window.clearTimeout(timeoutId)
@@ -253,7 +292,7 @@ export class AbuApiClient {
       // Do not fall back to WebView fetch on desktop: the ABU API session is
       // not represented by browser cookies, and fetch only masks the native
       // error as the unhelpful "Load failed" CORS message.
-      return api.abuApiGetUserInfo()
+      return this.nativeWithFailover(() => api.abuApiGetUserInfo())
     }
     return this.request('/api/agent/devices?include_account=1')
   }
@@ -267,7 +306,7 @@ export class AbuApiClient {
     if (isTauriRuntime()) {
       // Keep desktop requests on Rust's network stack to avoid WebView CORS
       // failures being surfaced as the unhelpful "Load failed" message.
-      return api.abuApiListModels()
+      return this.nativeWithFailover(() => api.abuApiListModels())
     }
     return this.request<AgentModelsResponse>('/api/agent/models')
   }
@@ -285,7 +324,7 @@ export class AbuApiClient {
   /** 获取当前用户可用于 Agent 的有效套餐权益。 */
   async listEntitlements(): Promise<AgentEntitlement[]> {
     if (isTauriRuntime()) {
-      return api.abuApiListEntitlements()
+      return this.nativeWithFailover(() => api.abuApiListEntitlements())
     }
     return this.request<AgentEntitlement[]>('/api/agent/entitlements')
   }

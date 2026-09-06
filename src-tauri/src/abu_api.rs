@@ -876,6 +876,22 @@ fn agent_models_url(base_url: &str) -> String {
     format!("{}/api/agent/models", base_url.trim_end_matches('/'))
 }
 
+/// 检测 ABU API 域名是否可达。2xx/401/403 均表示边缘节点在线。
+#[command]
+pub async fn abu_api_probe_endpoint(base_url: String) -> Result<bool, String> {
+    let url = format!("{}/api/agent/models", base_url.trim().trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .head(url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    let status = response.status();
+    Ok(status.is_success()
+        || status == reqwest::StatusCode::UNAUTHORIZED
+        || status == reqwest::StatusCode::FORBIDDEN)
+}
+
 /// 通过 Rust 网络层获取可用模型，避免 Tauri WebView 的跨域请求失败。
 #[command]
 pub async fn abu_api_list_models(

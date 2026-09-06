@@ -4,6 +4,8 @@ import type { I18n } from '../../settings/i18n'
 import { Button } from '../../components/Button'
 import { AbuApiClient } from '../../api/abuApi'
 import { api, isTauriRuntime } from '../../api/tauri'
+import { ABU_API_BASE_URLS } from '../../api/abuApiEndpoints'
+import { abuApiAuthStore } from '../../api/abuApiAuth'
 
 type LoginStepProps = {
   t: I18n
@@ -47,6 +49,7 @@ function buildDeviceAuthorizationUrl(
 }
 
 export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) {
+  const [selectedBaseUrl, setSelectedBaseUrl] = useState(abuApiBaseUrl)
   const [mode, setMode] = useState<LoginMode>('device')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,7 +68,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
   const pollingTimerRef = useRef<number | null>(null)
 
   // 创建临时客户端（登录前不需要 session token）
-  const client = useMemo(() => new AbuApiClient(abuApiBaseUrl), [abuApiBaseUrl])
+  const client = useMemo(() => new AbuApiClient(selectedBaseUrl), [selectedBaseUrl])
 
   // 复制验证码
   const copyCode = useCallback(async () => {
@@ -105,7 +108,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         if (pollingGenerationRef.current !== generation) return
         try {
           const request = isTauriRuntime()
-            ? api.abuApiExchangeDeviceAuthorization(abuApiBaseUrl, deviceCode)
+            ? api.abuApiExchangeDeviceAuthorization(selectedBaseUrl, deviceCode)
             : client.exchangeDeviceAuthorization(deviceCode)
           const response = await withTimeout(
             request,
@@ -117,6 +120,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
           if (response.status === 'consumed' && response.session_token) {
             stopPolling()
+            abuApiAuthStore.setState({ baseUrl: selectedBaseUrl })
             onLoginSuccess(response.session_token)
             return
           } else if (response.status === 'denied') {
@@ -157,7 +161,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
       pollingTimerRef.current = window.setTimeout(poll, Math.max(1, intervalSeconds) * 1000)
     },
-    [abuApiBaseUrl, client, onLoginSuccess, stopPolling, t],
+    [client, onLoginSuccess, selectedBaseUrl, stopPolling, t],
   )
 
   // 开始 Device Code Flow
@@ -174,7 +178,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
       // 2. 请求 device code
       const request = isTauriRuntime()
-        ? api.abuApiCreateDeviceAuthorization(abuApiBaseUrl, deviceName)
+        ? api.abuApiCreateDeviceAuthorization(selectedBaseUrl, deviceName)
         : client.createDeviceAuthorization(deviceName)
       const response = await withTimeout(
         request,
@@ -190,7 +194,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
       // 3. 打开浏览器到验证页面
       const verificationUrl = buildDeviceAuthorizationUrl(
-        abuApiBaseUrl,
+        selectedBaseUrl,
         response.verification_uri,
         response.user_code,
       )
@@ -209,7 +213,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
     } finally {
       setLoading(false)
     }
-  }, [abuApiBaseUrl, client, startPolling, t])
+  }, [client, selectedBaseUrl, startPolling, t])
 
   // 密码登录
   const handlePasswordLogin = useCallback(async () => {
@@ -260,6 +264,14 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 {t.onboardingLoginDeviceDesc ||
                   '点击下方按钮将在浏览器中打开授权页面，登录后即可自动完成桌面端授权'}
               </p>
+              <select
+                className="mb-3 w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-900"
+                value={selectedBaseUrl}
+                onChange={(e) => setSelectedBaseUrl(e.target.value)}
+                aria-label="ABU API server"
+              >
+                {ABU_API_BASE_URLS.map((url) => <option key={url} value={url}>{url}</option>)}
+              </select>
               <Button
                 variant="primary"
                 onClick={startDeviceFlow}

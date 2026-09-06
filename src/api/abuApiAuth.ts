@@ -107,6 +107,30 @@ export const abuApiAuthActions = {
   }) => abuApiAuthStore.updateFromSettings(config),
 }
 
+/** 切换 ABU API 域名并持久化；会立即更新内存客户端与认证状态。 */
+export async function switchAbuApiBaseUrl(baseUrl: string): Promise<void> {
+  const { api } = await import('./tauri')
+  const { initAbuApiClient } = await import('./abuApi')
+  const { normalizeAbuApiBaseUrl } = await import('./abuApiEndpoints')
+  const normalized = normalizeAbuApiBaseUrl(baseUrl)
+  const current = abuApiAuthStore.getState()
+  const config = await api.loadAbuApiConfig()
+  await api.saveAbuApiConfig({
+    base_url: normalized,
+    session_token: current.sessionToken || config.session_token,
+    device_id: current.deviceId || config.device_id,
+    runtime_mode: config.runtime_mode,
+  })
+  initAbuApiClient(normalized, current.sessionToken || config.session_token || undefined)
+  abuApiAuthStore.setState({ baseUrl: normalized })
+  try {
+    const { refreshSettings } = await import('./settingsCache')
+    await refreshSettings()
+  } catch {
+    // Settings refresh is best effort; native config is already persisted.
+  }
+}
+
 // 完成登录流程（在 Onboarding 中调用）
 export async function completeLogin(sessionToken: string): Promise<void> {
   const { api, isTauriRuntime } = await import('./tauri')
