@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
-import { Cpu, Settings as SettingsIcon } from 'lucide-react'
+import { ArrowUp, Check, Copy, Cpu, Languages, Settings as SettingsIcon, X } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { api, isTauriRuntime } from './api/tauri'
@@ -23,6 +23,7 @@ import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import { normalizeThemeColorId } from './themeColors'
 import { nextThemeMode, type ThemeMode } from './chat/themeMode'
 import { ModernFloatingBall } from './components/ModernFloatingBall'
+import { copyToClipboard } from './utils/clipboard'
 import './components/ModernFloatingBall.css'
 import './index.css'
 
@@ -35,7 +36,7 @@ const ChatPopout = lazy(() => import('./chat/popout/ChatPopout'))
  * 翻译器主组件
  * 磨砂玻璃风格悬浮窗：顶部 drag bar、输入与结果分层级、底部提示与模型芯片。
  */
-function Translator({
+export function Translator({
   translateSource,
   lang,
   onOpenSettings,
@@ -48,42 +49,48 @@ function Translator({
   const [result, setResult] = useState('')
   const [resultInput, setResultInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
   const resultRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const translateSeq = useRef(0)
   const requestWindowFocus = useWindowInteractionFocus()
   const t = i18n[lang]
 
-  // 输入防抖翻译：600ms 延迟后发送翻译请求
+  const translate = useCallback(async (text: string, seq: number) => {
+    if (seq !== translateSeq.current) return
+    setLoading(true)
+    setError('')
+    try {
+      const translated = await api.translateText(text)
+      if (seq !== translateSeq.current) return
+      setResult(translated)
+      setResultInput(text)
+    } catch (e) {
+      if (seq !== translateSeq.current) return
+      console.error(e)
+      setError(typeof e === 'string' ? e : (e as Error).message || 'Error')
+    } finally {
+      if (seq === translateSeq.current) setLoading(false)
+    }
+  }, [])
+
+  // 短防抖保留“边打边译”，同时让 Enter 可以绕过等待立即翻译。
   useEffect(() => {
     const seq = ++translateSeq.current
     setResult('')
     setResultInput('')
+    setError('')
+    setCopied(false)
+    setLoading(false)
     const trimmed = input.trim()
     if (!trimmed) {
-      setLoading(false)
       return
     }
 
-    const timer = setTimeout(async () => {
-      if (seq !== translateSeq.current) return
-      setLoading(true)
-      try {
-        const translated = await api.translateText(input)
-        if (seq !== translateSeq.current) return
-        setResult(translated)
-        setResultInput(input)
-      } catch (e) {
-        if (seq !== translateSeq.current) return
-        console.error(e)
-        setResult(typeof e === 'string' ? e : (e as Error).message || 'Error')
-        setResultInput(input)
-      } finally {
-        if (seq === translateSeq.current) setLoading(false)
-      }
-    }, 600)
+    const timer = setTimeout(() => void translate(input, seq), 420)
     return () => clearTimeout(timer)
-  }, [input])
+  }, [input, translate])
 
   // Esc 键关闭输入翻译窗口，释放不常用的 main WebView。
   useEffect(() => {
@@ -100,112 +107,151 @@ function Translator({
     return () => window.removeEventListener('keydown', handler, true)
   }, [])
 
-  // 结果区域自动滚动到底部
+  // 新译文从开头展示，长结果留给用户主动滚动。
   useEffect(() => {
     if (resultRef.current) {
-      resultRef.current.scrollTop = resultRef.current.scrollHeight
+      resultRef.current.scrollTop = 0
     }
   }, [result])
 
-  // 输入框自动滚动到右侧（显示最新输入）
+  // 多行编辑区随内容长高，超过三行后内部滚动，始终保留译文阅读空间。
   useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.scrollLeft = inputRef.current.scrollWidth
-    }
+    const textarea = inputRef.current
+    if (!textarea) return
+    textarea.style.height = '0px'
+    textarea.style.height = `${Math.min(92, Math.max(44, textarea.scrollHeight))}px`
   }, [input])
 
-  // Enter 键提交翻译结果
-  // IME 合成中（中/日/韩输入法选词按回车）不要触发：isComposing 是组合事件官方标志，
-  // keyCode === 229 是浏览器在 IME 拦截 keydown 时的兜底信号，两个条件并查更稳。
-  const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== 'Enter') return
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+  const commitResult = useCallback(async () => {
     if (loading || !result || resultInput !== input) return
-    const textToCommit = result
-    await api.commitTranslation(textToCommit)
+    await api.commitTranslation(result)
     setInput('')
     setResult('')
     setResultInput('')
+  }, [input, loading, result, resultInput])
+
+  const translateNow = useCallback(() => {
+    if (!input.trim() || loading) return
+    const seq = ++translateSeq.current
+    setResult('')
+    setResultInput('')
+    void translate(input, seq)
+  }, [input, loading, translate])
+
+  const handlePrimaryAction = () => {
+    if (result && resultInput === input) {
+      void commitResult()
+    } else {
+      translateNow()
+    }
   }
+
+  const handleCopy = async () => {
+    if (!result) return
+    if (await copyToClipboard(result)) {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }
+  }
+
+  // Enter 立即翻译/使用译文；Shift+Enter 专门负责换行。
+  // IME 合成中（中/日/韩输入法选词按回车）不要触发：isComposing 是组合事件官方标志，
+  // keyCode === 229 是浏览器在 IME 拦截 keydown 时的兜底信号，两个条件并查更稳。
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey) return
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    e.preventDefault()
+    handlePrimaryAction()
+  }
+
+  const hasFreshResult = Boolean(result && resultInput === input)
 
   return (
     <div
-      className="window-container"
+      className="window-container translator-window"
       onPointerEnter={requestWindowFocus}
       onPointerMove={requestWindowFocus}
       onPointerDownCapture={requestWindowFocus}
     >
-      {/* 卡片：填满外壳 padding 内区域；圆角 + 阴影都在这层 */}
-      <div className="window-frosted h-full w-full flex flex-col select-none overflow-hidden relative group">
-        {/* 顶部隐形 drag bar */}
-        <div
-          className="absolute top-0 left-0 right-0 h-6 z-10"
-          data-tauri-drag-region
-        />
+      <div className="window-frosted translator-card">
+        <header className="translator-header" data-tauri-drag-region>
+          <div className="translator-brand" data-tauri-drag-region>
+            <span className="translator-brand-icon"><Languages size={15} strokeWidth={2} /></span>
+            <span>{t.translatorTitle}</span>
+            <span className="translator-direction">{t.translatorAutoDirection}</span>
+          </div>
+          <button className="translator-icon-button" onClick={onOpenSettings} title={t.translatorSettings} aria-label={t.translatorSettings}>
+            <SettingsIcon size={15} strokeWidth={1.8} />
+          </button>
+        </header>
 
-        {/* 设置按钮（悬浮右上角） */}
-        <button
-          onClick={onOpenSettings}
-          className="absolute top-1.5 right-2 z-20 p-1 text-neutral-400 hover:text-neutral-700 dark:text-neutral-500 dark:hover:text-neutral-200 rounded-md hover:bg-black/5 dark:hover:bg-white/10 opacity-60 hover:opacity-100 transition-all duration-150"
-          title={t.translatorSettings}
-        >
-          <SettingsIcon size={13} strokeWidth={1.75} />
-        </button>
-
-        {/* 主内容区 */}
-        <div className="relative z-0 flex-1 flex flex-col justify-center px-3.5 pt-3 pb-2.5">
-        {/* 翻译结果展示（微渐变背景 + 柔光内描边） */}
-        {(result || loading) && (
-          <div
-            ref={resultRef}
-            className="mb-2 px-3 py-2 rounded-xl max-h-14 overflow-y-auto custom-scrollbar bg-gradient-to-br from-neutral-100/90 to-neutral-50/80 dark:from-neutral-800/70 dark:to-neutral-800/40 ring-1 ring-black/[0.04] dark:ring-white/[0.06] shadow-sm"
-          >
-            {loading ? (
-              <div className="flex items-center gap-2 text-neutral-500 dark:text-neutral-400">
-                <span className="flex gap-0.5">
-                  <span className="w-1 h-1 rounded-full bg-neutral-400 dark:bg-neutral-500 animate-pulse" />
-                  <span className="w-1 h-1 rounded-full bg-neutral-400 dark:bg-neutral-500 animate-pulse [animation-delay:0.2s]" />
-                  <span className="w-1 h-1 rounded-full bg-neutral-400 dark:bg-neutral-500 animate-pulse [animation-delay:0.4s]" />
-                </span>
-                <span className="text-[11px]">{t.translatorTranslating}</span>
+        <section ref={resultRef} className="translator-result custom-scrollbar" aria-live="polite">
+          {loading ? (
+            <div className="translator-state">
+              <span className="translator-loader"><i /><i /><i /></span>
+              <span>{t.translatorTranslating}</span>
+            </div>
+          ) : error ? (
+            <div className="translator-error">{error}</div>
+          ) : result ? (
+            <div className="translator-result-content">
+              <div className="translator-result-label">
+                <span>{t.translatorResult}</span>
+                <button className="translator-copy-button" onClick={() => void handleCopy()} aria-label={t.translatorCopy} title={t.translatorCopy}>
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                  <span>{copied ? t.translatorCopied : t.translatorCopy}</span>
+                </button>
               </div>
-            ) : (
-              <p className="text-neutral-800 dark:text-neutral-100 text-[14.5px] font-normal select-text leading-[1.5]">
-                {result}
-              </p>
+              <p>{result}</p>
+            </div>
+          ) : (
+            <div className="translator-empty">
+              <Languages size={22} strokeWidth={1.4} />
+              <span>{t.translatorEmpty}</span>
+            </div>
+          )}
+        </section>
+
+        <footer className="translator-composer-wrap">
+          <div className="translator-composer">
+            <textarea
+              ref={inputRef}
+              autoFocus
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              rows={1}
+              aria-label={t.translatorPlaceholder}
+              placeholder={t.translatorPlaceholder}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+            />
+            <div className="translator-composer-actions">
+              {input && (
+                <button className="translator-clear-button" onClick={() => setInput('')} aria-label={t.translatorClear} title={t.translatorClear}>
+                  <X size={14} />
+                </button>
+              )}
+              <button
+                className={`translator-primary-button${hasFreshResult ? ' is-ready' : ''}`}
+                onClick={handlePrimaryAction}
+                disabled={!input.trim() || loading}
+                aria-label={hasFreshResult ? t.translatorUse : t.translatorTranslate}
+                title={hasFreshResult ? t.translatorUse : t.translatorTranslate}
+              >
+                {hasFreshResult ? <Check size={15} /> : <ArrowUp size={15} />}
+              </button>
+            </div>
+          </div>
+          <div className="translator-meta">
+            <span>{t.translatorHintEnter} · {t.translatorHintNewline} · {t.translatorHintEsc}</span>
+            {translateSource && (
+              <span className="translator-model"><Cpu size={10} strokeWidth={1.6} /><span>{translateSource}</span></span>
             )}
           </div>
-        )}
-
-        {/* 输入框（更精致的圆角 + focus 渐变） */}
-        <input
-          ref={inputRef}
-          autoFocus
-          autoCapitalize="off"
-          autoCorrect="off"
-          autoComplete="off"
-          spellCheck={false}
-          className="w-full px-3.5 py-2 bg-white/70 dark:bg-neutral-800/40 ring-1 ring-black/[0.05] dark:ring-white/[0.06] rounded-xl text-[14.5px] text-neutral-900 dark:text-white placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-black/[0.12] dark:focus:ring-white/[0.18] focus:bg-white dark:focus:bg-neutral-800/70 transition-all"
-          placeholder={t.translatorPlaceholder}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-
-        {/* 底部提示 */}
-        <div className="mt-1.5 flex justify-between items-center text-[10px] text-neutral-400 dark:text-neutral-500">
-          <div className="flex items-center gap-2">
-            <span>{t.translatorHintEnter}</span>
-            <span>{t.translatorHintEsc}</span>
-          </div>
-          {translateSource && (
-            <span className="flex items-center gap-1 opacity-70 max-w-[140px] truncate">
-              <Cpu size={9} strokeWidth={1.5} className="shrink-0" />
-              <span className="truncate">{translateSource}</span>
-            </span>
-          )}
-        </div>
-        </div>
+        </footer>
       </div>
     </div>
   )

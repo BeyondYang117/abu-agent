@@ -239,6 +239,380 @@ html.windows body {
     0 8px 20px -12px rgba(0, 0, 0, 0.68);
 }
 
+/* 输入翻译器：结果与编辑器各占自己的布局区域，输入永远固定在卡片底部。 */
+.translator-window {
+  --translator-accent: #0f766e;
+  --translator-accent-strong: #0b5f59;
+  --translator-accent-soft: rgba(15, 118, 110, 0.10);
+  padding: 12px;
+}
+
+.dark .translator-window {
+  --translator-accent: #5eead4;
+  --translator-accent-strong: #99f6e4;
+  --translator-accent-soft: rgba(94, 234, 212, 0.12);
+}
+
+.translator-card {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 20px;
+  user-select: none;
+}
+
+.translator-header {
+  display: flex;
+  height: 46px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.dark .translator-header {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.translator-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #222728;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.dark .translator-brand {
+  color: #f1f5f4;
+}
+
+.translator-brand-icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--translator-accent);
+  background: var(--translator-accent-soft);
+}
+
+.translator-direction {
+  margin-left: 2px;
+  padding: 3px 7px;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 999px;
+  color: var(--translator-accent);
+  background: rgba(255, 255, 255, 0.46);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.dark .translator-direction {
+  border-color: rgba(94, 234, 212, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.translator-icon-button,
+.translator-clear-button,
+.translator-copy-button,
+.translator-primary-button {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.translator-icon-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  color: #8a8f91;
+  background: transparent;
+  transition: color var(--kv-dur-fast), background var(--kv-dur-fast), transform var(--kv-dur-instant);
+}
+
+.translator-icon-button:hover {
+  color: #303536;
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.dark .translator-icon-button:hover {
+  color: #f3f4f4;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.translator-result {
+  min-height: 0;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 13px 16px 12px;
+  scroll-padding: 12px;
+}
+
+.translator-empty,
+.translator-state {
+  display: flex;
+  height: 100%;
+  min-height: 76px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #999c9d;
+  font-size: 11.5px;
+}
+
+.translator-empty {
+  flex-direction: column;
+  gap: 7px;
+}
+
+.translator-empty svg {
+  color: var(--translator-accent);
+  opacity: 0.48;
+}
+
+.translator-loader {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.translator-loader i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--translator-accent);
+  animation: translator-dot 1.1s ease-in-out infinite;
+}
+
+.translator-loader i:nth-child(2) { animation-delay: 120ms; }
+.translator-loader i:nth-child(3) { animation-delay: 240ms; }
+
+.translator-result-content {
+  animation: translator-reveal var(--kv-dur-normal) var(--kv-ease-standard) both;
+}
+
+.translator-result-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+  color: var(--translator-accent);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.translator-result-content p {
+  margin: 0;
+  color: #202526;
+  font-size: 14.5px;
+  font-weight: 420;
+  line-height: 1.58;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.dark .translator-result-content p {
+  color: #f3f5f4;
+}
+
+.translator-copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 7px;
+  color: #7d8283;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.translator-copy-button:hover {
+  color: var(--translator-accent);
+  background: var(--translator-accent-soft);
+}
+
+.translator-error {
+  padding: 10px 11px;
+  border: 1px solid rgba(196, 52, 28, 0.14);
+  border-radius: 10px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.translator-composer-wrap {
+  flex: none;
+  padding: 0 12px 10px;
+}
+
+.translator-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  padding: 5px 5px 5px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.11);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: border-color var(--kv-dur-fast), box-shadow var(--kv-dur-fast), background var(--kv-dur-fast);
+}
+
+.translator-composer:focus-within {
+  border-color: color-mix(in srgb, var(--translator-accent) 55%, transparent);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 3px var(--translator-accent-soft);
+}
+
+.dark .translator-composer {
+  border-color: rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: none;
+}
+
+.dark .translator-composer:focus-within {
+  border-color: rgba(94, 234, 212, 0.35);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.translator-composer textarea {
+  display: block;
+  min-width: 0;
+  min-height: 44px;
+  flex: 1;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px 0 8px;
+  border: 0;
+  outline: 0;
+  color: #202526;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.dark .translator-composer textarea {
+  color: #f4f6f5;
+}
+
+.translator-composer textarea::placeholder {
+  color: #a1a5a5;
+}
+
+.translator-composer-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding-bottom: 1px;
+}
+
+.translator-clear-button,
+.translator-primary-button {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 9px;
+}
+
+.translator-clear-button {
+  color: #999d9e;
+  background: transparent;
+}
+
+.translator-clear-button:hover {
+  color: #555b5c;
+  background: rgba(15, 23, 42, 0.055);
+}
+
+.translator-primary-button {
+  color: white;
+  background: var(--translator-accent);
+  box-shadow: 0 3px 9px -4px rgba(15, 118, 110, 0.7);
+  transition: background var(--kv-dur-fast), opacity var(--kv-dur-fast), transform var(--kv-dur-instant);
+}
+
+.translator-primary-button.is-ready {
+  background: var(--translator-accent-strong);
+}
+
+.translator-primary-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.translator-primary-button:active:not(:disabled),
+.translator-icon-button:active {
+  transform: scale(0.94);
+}
+
+.translator-primary-button:disabled {
+  cursor: default;
+  opacity: 0.28;
+  box-shadow: none;
+}
+
+.translator-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 2px 0;
+  color: #9b9fa0;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.translator-model {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 112px;
+  align-items: center;
+  gap: 4px;
+  color: #8b9090;
+}
+
+.translator-model span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes translator-dot {
+  0%, 70%, 100% { opacity: 0.25; transform: translateY(0); }
+  35% { opacity: 1; transform: translateY(-2px); }
+}
+
+@keyframes translator-reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 400px), (max-height: 290px) {
+  .translator-window { padding: 8px; }
+  .translator-header { height: 40px; }
+  .translator-result { padding: 9px 13px; }
+  .translator-composer-wrap { padding: 0 9px 7px; }
+  .translator-meta > span:first-child { max-width: 245px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
 .lens-floating-surface {
   box-shadow:
     0 0 0 0.5px rgba(15, 23, 42, 0.07),

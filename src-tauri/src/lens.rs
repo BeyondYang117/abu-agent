@@ -221,12 +221,12 @@ mod tests {
             1117.0
         ));
         assert!(is_abu_agent_auxiliary_window("abu_agent", "Lens", 1728.0, 1117.0));
-        assert!(is_abu_agent_auxiliary_window("abu_agent", "ABU Agent", 392.0, 152.0));
+        assert!(is_abu_agent_auxiliary_window("abu_agent", "ABU Agent", 440.0, 320.0));
         assert!(is_abu_agent_auxiliary_window("ABU Agent", "", 600.0, 72.0));
     }
 
     #[test]
     fn other_apps_are_not_self_filtered() {
-        assert!(!is_abu_agent_auxiliary_window("Safari", "ABU Agent", 392.0, 152.0));
+        assert!(!is_abu_agent_auxiliary_window("Safari", "ABU Agent", 440.0, 320.0));
     }
 }

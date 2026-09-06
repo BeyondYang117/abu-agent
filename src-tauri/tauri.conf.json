@@ -17,8 +17,10 @@
       {
         "label": "main",
         "title": "ABU Agent Desktop",
-        "width": 392,
-        "height": 152,
+        "width": 440,
+        "height": 320,
+        "minWidth": 380,
+        "minHeight": 280,
         "resizable": true,
         "decorations": false,
         "transparent": true,

@@ -870,6 +870,54 @@ pub(crate) fn get_mouse_position(app: &AppHandle) -> Option<tauri::PhysicalPosit
     app.cursor_position().ok()
 }
 
+/// 把输入翻译窗放在光标附近，并在右/下空间不足时翻到光标另一侧。
+/// 尺寸与坐标都使用物理像素，避免混合 DPI 显示器上的缩放误差。
+fn main_window_position_near_cursor(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    cursor: tauri::PhysicalPosition<f64>,
+) -> tauri::PhysicalPosition<i32> {
+    const GAP: f64 = 10.0;
+    let Some(monitor) = app.available_monitors().ok().and_then(|monitors| {
+        monitors.into_iter().find(|monitor| {
+            let origin = monitor.position();
+            let size = monitor.size();
+            cursor.x >= origin.x as f64
+                && cursor.x < (origin.x + size.width as i32) as f64
+                && cursor.y >= origin.y as f64
+                && cursor.y < (origin.y + size.height as i32) as f64
+        })
+    }) else {
+        return tauri::PhysicalPosition::new((cursor.x + GAP) as i32, (cursor.y + GAP) as i32);
+    };
+
+    let origin = monitor.position();
+    let monitor_size = monitor.size();
+    let window_size = window.outer_size().unwrap_or_else(|_| {
+        let scale = monitor.scale_factor();
+        tauri::PhysicalSize::new((440.0 * scale) as u32, (320.0 * scale) as u32)
+    });
+    let min_x = origin.x as f64 + GAP;
+    let min_y = origin.y as f64 + GAP;
+    let max_x = (origin.x + monitor_size.width as i32) as f64 - window_size.width as f64 - GAP;
+    let max_y = (origin.y + monitor_size.height as i32) as f64 - window_size.height as f64 - GAP;
+    let preferred_x = if cursor.x + GAP + window_size.width as f64 <= (origin.x + monitor_size.width as i32) as f64 {
+        cursor.x + GAP
+    } else {
+        cursor.x - window_size.width as f64 - GAP
+    };
+    let preferred_y = if cursor.y + GAP + window_size.height as f64 <= (origin.y + monitor_size.height as i32) as f64 {
+        cursor.y + GAP
+    } else {
+        cursor.y - window_size.height as f64 - GAP
+    };
+
+    tauri::PhysicalPosition::new(
+        preferred_x.max(min_x).min(max_x.max(min_x)) as i32,
+        preferred_y.max(min_y).min(max_y.max(min_y)) as i32,
+    )
+}
+
 /// 切换输入翻译窗口。
 /// 可见时关闭销毁 main WebView；显示时跟随鼠标位置偏移 (10,10) 弹出，翻译器保持置顶。
 pub(crate) fn toggle_main_window(app: &AppHandle) {
@@ -922,9 +970,8 @@ pub(crate) fn toggle_main_window(app: &AppHandle) {
         "window.location.hash = ''; window.dispatchEvent(new HashChangeEvent('hashchange'));",
     );
 
-    let pos = get_mouse_position(app).map(|cursor| {
-        tauri::PhysicalPosition::new((cursor.x + 10.0) as i32, (cursor.y + 10.0) as i32)
-    });
+    let pos = get_mouse_position(app)
+        .map(|cursor| main_window_position_near_cursor(app, &window, cursor));
 
     #[cfg(target_os = "macos")]
     {
