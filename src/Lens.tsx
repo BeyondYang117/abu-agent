@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { flushSync } from 'react-dom'
 import { Loader2, Copy, Check, Square, Image as ImageIcon, ArrowUp, History as HistoryIcon, ChevronDown, MousePointer2, Code, Eye, MessageSquarePlus } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensReplaceGroup, type LensReplaceRenderSlot, type LensReplaceStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
+import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensReplaceStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
 import { getSettingsCached, setTranslateCardSizeCached } from './api/settingsCache'
 import { ChatMarkdown } from './chat/ChatMarkdown'
 import { Button } from './components/Button'
@@ -10,25 +10,23 @@ import { i18n, type Lang } from './settings/i18n'
 import { isWebSearchConfigured } from './settings/webSearch'
 import { copyToClipboard } from './utils/clipboard'
 
-import type { Annotation, AnnotationKind, BarRect, CapturedFrame, HistoryItem, Metrics, Mode, Point, Stage, TranslateCardDrag } from './lens/types'
+import type { Annotation, AnnotationKind, BarRect, CapturedFrame, HistoryItem, Metrics, Mode, Point, Stage } from './lens/types'
 import { ArrowSvg } from './lens/ArrowSvg'
 import { AnnotateToolbar } from './lens/AnnotateToolbar'
 import { MosaicPreview } from './lens/MosaicPreview'
-import { ReplaceTranslateOverlay } from './lens/ReplaceTranslateOverlay'
 import { ARROW_MIN_DRAG_PX, composeAnnotatedImage } from './lens/annotation'
 import { HISTORY_MAX, HISTORY_THUMB_SIZE, loadHistoryFromStorage, makeThumbnail, saveHistoryToStorage } from './lens/history'
 import { ANCHOR_GAP, DRAG_THRESHOLD, FLOATING_GAP, FLOATING_PADDING, READY_BAR_H, SELECT_REVEAL_DELAY_MS, TRANSITION_MS, clamp, computeChatBarWidth, computeMetrics, computeSelectBar, isMacPlatform } from './lens/layout'
 
-// 翻译卡缩放后内容区高度固定，此值预留 header+footer+padding，
-// 保证「卡整体高 = chrome + 内容」不被 overflow-hidden 裁掉底部复制栏。
-const CARD_CHROME_RESERVE = 96
-// lens-floating-surface 的下投影最大约 50px（暗色 0 20px 52px -22px）。浮动窗口高度须在卡片
-// 外框之外再留这么多，否则整圈阴影（尤其底部）被 OS 窗口边缘硬裁。
-const CARD_SHADOW_MARGIN = 52
 import { estimateTokens, formatTokens } from './utils/tokens'
 import { ThinkingBlock } from './lens/ThinkingBlock'
 import { WebSearchBlock } from './lens/WebSearchBlock'
 import { useWindowInteractionFocus } from './utils/windowFocus'
+import { ReplaceTranslateOverlay } from './lens/ReplaceTranslateOverlay'
+
+const CARD_CHROME_RESERVE = 96
+const CARD_SHADOW_MARGIN = 52
+const makeTextRequestId = () => `text-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 /** 解析 webview hash query：'#lens?mode=translate' → 'translate' */
 function readModeFromHash(): Mode {
@@ -38,21 +36,16 @@ function readModeFromHash(): Mode {
   if (q < 0) return 'chat'
   const params = new URLSearchParams(hash.slice(q + 1))
   const mode = params.get('mode')
-  if (mode === 'translate') return 'translate'
-  if (mode === 'translateText') return 'translateText'
-  if (mode === 'replace') return 'replace'
+  // Translation modes were removed; legacy hashes fall back to the normal Lens view.
+  if (mode === 'translate' || mode === 'translateText' || mode === 'replace') return 'chat'
   if (mode === 'screenshot') return 'screenshot'
   return 'chat'
 }
 
-function keepFullscreenForMode(curMode: Mode, screenshotKeepFullscreen: boolean): boolean {
-  return curMode === 'chat'
-    || curMode === 'replace'
-    || curMode === 'screenshot'
-    || (curMode === 'translate' && screenshotKeepFullscreen)
+function keepFullscreenForMode(curMode: Mode, _screenshotKeepFullscreen: boolean): boolean {
+  return curMode === 'chat' || curMode === 'screenshot'
 }
 
-const makeTextRequestId = () => `text-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 type LensResetFrame = {
   x: number
@@ -147,20 +140,18 @@ export default function Lens() {
   const [messageOrder, setMessageOrder] = useState<'asc' | 'desc'>('asc')
   const [webSearchAvailable, setWebSearchAvailable] = useState(false)
   const [webSearchEnabled, setWebSearchEnabled] = useState(false)
-  const [keepFullscreen, setKeepFullscreen] = useState(() => readModeFromHash() !== 'translateText')
+  const [keepFullscreen, setKeepFullscreen] = useState(true)
   const [floatingRebased, setFloatingRebased] = useState(false)
   const [mode, setMode] = useState<Mode>(() => readModeFromHash())
   const [surfaceDormant, setSurfaceDormant] = useState(false)
-  // translate 模式专用：OCR 原文 + 翻译结果 + 计时
   const [translateOriginal, setTranslateOriginal] = useState('')
   const [translateText, setTranslateText] = useState('')
   const [translateError, setTranslateError] = useState('')
-  const [replaceGroups, setReplaceGroups] = useState<LensReplaceGroup[]>([])
-  const [replaceSlots, setReplaceSlots] = useState<LensReplaceRenderSlot[]>([])
+  const [replaceGroups, setReplaceGroups] = useState<any[]>([])
+  const [replaceSlots, setReplaceSlots] = useState<any[]>([])
   const [replaceCleanedImage, setReplaceCleanedImage] = useState('')
   const [replacePhase, setReplacePhase] = useState<'ocr' | 'processing' | 'done' | 'error' | ''>('')
   const [replaceError, setReplaceError] = useState('')
-  // 局部降级提示（个别区域缺少译文回退原文等）：非错误，随 done 一起展示。
   const [replaceWarning, setReplaceWarning] = useState('')
   const [translateDurationMs, setTranslateDurationMs] = useState<number | null>(null)
   const [translateNow, setTranslateNow] = useState(() => Date.now())
@@ -191,10 +182,6 @@ export default function Lens() {
   // 最终位置，用 transform: translate(dx, dy) 把视觉位置拉回起点，下一帧再把 delta 过渡到 (0,0)。
   // transform 走合成层，不阻塞主线程，多窗口会话间稳定。
   const [flyDelta, setFlyDelta] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
-  const [translateCardDragging, setTranslateCardDragging] = useState(false)
-  const [translateCardResizing, setTranslateCardResizing] = useState(false)
-  // 本次会话内拖出的卡片高度（px）。0=自动。刻意不持久化：下次打开回到自动高度。
-  const [cardSessionHeight, setCardSessionHeight] = useState(0)
   // capturedFrame：保留最后一次截图选区/窗口的高亮框，作为"已截图"视觉标记，ready/answering 态继续显示
   const [capturedFrame, setCapturedFrame] = useState<CapturedFrame | null>(null)
   const [showCaptureHint, setShowCaptureHint] = useState(false)
@@ -209,6 +196,9 @@ export default function Lens() {
   const [annotateSaving, setAnnotateSaving] = useState(false)
   // 源码/渲染切换：false=渲染模式(ChatMarkdown)，true=源码模式(原始文本)
   const [sourceMode, setSourceMode] = useState(false)
+  const [translateCardDragging, setTranslateCardDragging] = useState(false)
+  const [translateCardResizing, setTranslateCardResizing] = useState(false)
+  const [cardSessionHeight, setCardSessionHeight] = useState(0)
   const [draftArrow, setDraftArrow] = useState<Annotation | null>(null)
   // 任何 stage 切换时强制清掉 draw 子模式 + 已落标注
   useEffect(() => {
@@ -275,8 +265,8 @@ export default function Lens() {
   const captureHintEnabledRef = useRef(true)
   const sendToChatRef = useRef(true)
   const screenshotKeepFullscreenRef = useRef(true)
-  // 快速翻译结果卡宽度（截图翻译 + 选中文本翻译共用，来自设置，默认 480）
   const cardWidthRef = useRef(480)
+  // 快速翻译结果卡宽度（截图翻译 + 选中文本翻译共用，来自设置，默认 480）
   const prevStreamingRef = useRef(false)
   const preparingSendRef = useRef(false)
   const answerFinishedRef = useRef(false)
@@ -291,10 +281,8 @@ export default function Lens() {
   // selectionText 异步 take 的重入 token：每次 enterSelect / resetBeforeHide / restoreHistory 都 +1，
   // 老请求看到 myReq !== current 直接丢弃，避免 take 完成时已经进入新会话被错误注入。
   const selectionReqIdRef = useRef(0)
-  const translateCardDragRef = useRef<TranslateCardDrag | null>(null)
-  // 翻译卡右下角缩放拖拽。宽 360–720（与设置页一致）持久记忆；高只在本会话内生效。
-  const translateCardResizeRef = useRef<{ pointerId: number; startX: number; startY: number; startW: number; startH: number } | null>(null)
-  // 翻译卡内容区 DOM：缩放起点量实际渲染高度（内容短时远小于 maxHeight 上限，不能拿上限当起点）
+  const translateCardDragRef = useRef<any>(null)
+  const translateCardResizeRef = useRef<any>(null)
   const translateContentRef = useRef<HTMLDivElement>(null)
   // 答案区滚动容器，stream 时自动滚到底部
   const chatScrollRef = useRef<HTMLDivElement>(null)
@@ -417,7 +405,7 @@ export default function Lens() {
     flushSync(() => {
       setBarNoTransition(true)
       setSurfaceDormant(false)
-      setStage(curMode === 'translateText' ? 'translating' : 'select')
+      setStage('select')
       setMode(curMode)
       setKeepFullscreen(keepFullscreenForMode(curMode, screenshotKeepFullscreenRef.current))
       setFloatingRebased(false)
@@ -447,9 +435,7 @@ export default function Lens() {
       const h = resetFrame?.height ?? window.innerHeight
       setViewport({ w, h })
       const m = computeMetrics(w, h)
-      setBarRect(curMode === 'translateText'
-        ? { x: FLOATING_PADDING, y: FLOATING_PADDING, width: Math.min(cardWidthRef.current, w) }
-        : computeSelectBar(w, h, m))
+      setBarRect(computeSelectBar(w, h, m))
       setFlyDelta({ x: 0, y: 0 })
       setCapturedFrame(null)
       // 重置 intro：先关再开，下一帧让 transition 从 scale-90 到 scale-100
@@ -1401,6 +1387,8 @@ export default function Lens() {
       setStage('translated')
     }
   }, [])
+  void runTranslate
+  void runReplaceTranslate
 
   // lens-replace-stream 事件监听
   useEffect(() => {
@@ -1511,8 +1499,6 @@ export default function Lens() {
         info.owner,
       )
       if (captureOpenSeq !== lensOpenSeqRef.current) return
-      if (mode === 'translate') void runTranslate(newId)
-      else if (mode === 'replace') void runReplaceTranslate(newId)
     } finally {
       capturingRef.current = false
     }
@@ -1570,8 +1556,6 @@ export default function Lens() {
       }
       await flyBarToAnchor(params.absoluteX, params.absoluteY, params.width, params.height, '')
       if (captureOpenSeq !== lensOpenSeqRef.current) return
-      if (mode === 'translate') void runTranslate(newId)
-      else if (mode === 'replace') void runReplaceTranslate(newId)
     } finally {
       capturingRef.current = false
     }

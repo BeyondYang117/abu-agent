@@ -151,7 +151,7 @@ describe('HotkeysTab', () => {
         chatHotkey: 'Alt+1',
         closeChatHotkey: 'Alt+3',
       } as never),
-      hotkeyConflicts: { main: 'chat', chat: 'main' },
+      hotkeyConflicts: { chat: 'closeChat' },
     })
     await userEvent.click(screen.getByRole('button', { name: t.hotkeyCheckConflicts }))
     expect(screen.getByText(t.hotkeyCheckFound.replace('{count}', '1'))).toBeTruthy()

@@ -1,21 +1,13 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
-
-use arboard::Clipboard;
 use base64::Engine as _;
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_shell::ShellExt;
 
 use crate::api::{
-    call_openai_text, effective_retry_attempts, resolve_provider_credentials, send_with_failover,
+    effective_retry_attempts, resolve_provider_credentials, send_with_failover,
     send_with_retry, with_standard_request_timeout, ProviderConnectionInput,
-};
-use crate::prompts::{
-    build_translation_prompt, DEFAULT_REPLACE_TRANSLATION_TEMPLATE,
-    DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE, DEFAULT_SELECTED_TEXT_TRANSLATION_TEMPLATE,
-    DEFAULT_TRANSLATION_TEMPLATE,
 };
 use crate::rapidocr;
 use crate::settings::{
@@ -24,13 +16,8 @@ use crate::settings::{
 };
 #[cfg(target_os = "macos")]
 use crate::shortcuts::{check_accessibility, check_screen_recording_permission};
-use crate::shortcuts::{
-    open_chat_settings_window as open_settings_window_impl, register_hotkeys,
-    restore_runtime_settings, send_paste_shortcut, setup_tray,
-};
+use crate::shortcuts::{open_chat_settings_window as open_settings_window_impl, register_hotkeys, restore_runtime_settings, setup_tray};
 use crate::state::AppState;
-use crate::utils::{language_name, resolve_target_lang};
-use crate::windows::get_main_window;
 
 pub(crate) fn apply_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let auto_launch = app.autolaunch();
@@ -57,10 +44,6 @@ pub(crate) fn get_settings(app: AppHandle, state: State<AppState>) -> Settings {
 #[tauri::command]
 pub(crate) fn get_default_prompt_templates() -> serde_json::Value {
     serde_json::json!({
-      "translationTemplate": DEFAULT_TRANSLATION_TEMPLATE,
-      "screenshotTranslationTemplate": DEFAULT_SCREENSHOT_TRANSLATION_TEMPLATE,
-      "selectedTextTranslationTemplate": DEFAULT_SELECTED_TEXT_TRANSLATION_TEMPLATE,
-      "replaceTranslationTemplate": DEFAULT_REPLACE_TRANSLATION_TEMPLATE,
       "lensPrompts": {
         "zh": {
           "system": default_lens_system_prompt("zh", true),
@@ -151,7 +134,7 @@ pub(crate) fn set_favorite_models(
     persist_settings(&app, &snapshot)
 }
 
-/// 轻量持久化快速翻译卡宽度（拖拽缩放的记忆；高度始终自动不持久化）。
+/* 轻量持久化快速翻译卡宽度（拖拽缩放的记忆；高度始终自动不持久化）。
 /// 与 set_favorite_models 同理：不走 apply_settings 的热键/托盘重应用。
 /// clamp 到 360–720 与设置页一致。
 #[tauri::command]
@@ -171,6 +154,7 @@ pub(crate) fn set_translate_card_size(
     let _ = tauri::Emitter::emit_to(&app, "chat", "translate-card-width", clamped);
     Ok(())
 }
+*/
 
 /// sanitize → 应用运行时（自启/热键/托盘）→ 持久化，失败回滚。save_settings 与 import_settings 共用。
 async fn apply_settings(
@@ -290,20 +274,7 @@ pub(crate) fn open_settings_window(app: AppHandle) -> Result<(), String> {
     open_settings_window_impl(&app)
 }
 
-#[tauri::command]
-pub(crate) fn close_translator_window(app: AppHandle, state: State<'_, AppState>) {
-    if let Some(window) = get_main_window(&app) {
-        #[cfg(target_os = "macos")]
-        {
-            crate::windows::destroy_overlay_window(&window);
-            crate::windows::restore_previous_frontmost_app(&app, &state.prev_frontmost_pid_main);
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = window.close();
-    }
-}
-
-/// 翻译文本命令
+/*
 /// 根据设置中的翻译供应商和模型进行翻译；如果 API Key 为空则返回提示信息
 #[tauri::command]
 pub(crate) async fn translate_text(
@@ -368,11 +339,10 @@ pub(crate) async fn commit_translation(
     #[cfg(target_os = "macos")]
     crate::windows::forget_frontmost_app(&state.prev_frontmost_pid_main);
 
-    // macOS 输入翻译窗口被重分类为 AbuAgentOverlayPanel；必须先换回 TaoWindow 再 destroy，
-    // 否则 WebKit 清理 contentLayoutRect KVO observer 时会抛 ObjC 异常并让 Rust abort。
+    // 智能翻译保持为普通 NSWindow，让 AppKit 在输入期间管理完整的 IME 会话。
     #[cfg(target_os = "macos")]
     if let Some(window) = get_main_window(&app) {
-        crate::windows::destroy_overlay_window(&window);
+        let _ = window.destroy();
     }
 
     // 其他平台没有 macOS TSM/IMK 的销毁问题，保持原有的关闭释放行为。
@@ -393,6 +363,7 @@ pub(crate) async fn commit_translation(
 
     Ok(())
 }
+*/
 
 /// 读取 Rust 端在 lens_request_internal 中暂存的 selection 文本（peek，不清除）。
 /// 不能"读一次清一次"：前端 enterSelect 在 React StrictMode（dev 双调）/ 冷挂载 / 复用事件等
@@ -705,7 +676,7 @@ pub(crate) async fn rapidocr_install(
     Ok(client.install(tier).await)
 }
 
-/// 查询替换翻译完整离线包（ONNX Runtime + RapidOCR）的校验状态与实际字节数。
+/* 查询替换翻译完整离线包（ONNX Runtime + RapidOCR）的校验状态与实际字节数。
 /// async + spawn_blocking:同 rapidocr_status,SHA-256 校验不能占用主线程。
 #[tauri::command]
 pub(crate) async fn replace_translation_pack_status(
@@ -729,6 +700,7 @@ pub(crate) async fn replace_translation_pack_install(
     let tier = crate::offline_models::OcrModelTier::parse(&tier);
     Ok(manager.install_replace_translation(tier).await)
 }
+*/
 
 /// 拼一个只用来读「请求配置」的临时 provider：优先前端传来的编辑中配置，缺省回落已保存的；
 /// 供应商都还没保存过时给一份默认值（跟随系统代理、无自定义头）。

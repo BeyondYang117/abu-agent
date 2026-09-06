@@ -305,10 +305,6 @@ pub fn apply_frameless_window_chrome(window: &WebviewWindow) {
 /**
  * 获取主窗口
  */
-pub fn get_main_window(app: &AppHandle) -> Option<WebviewWindow> {
-    app.get_webview_window("main")
-}
-
 pub fn get_chat_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("chat")
 }
@@ -389,25 +385,6 @@ pub fn chat_remember_last_route(app: AppHandle, route: Option<String>) -> Result
  * 确保主窗口存在（不存在则创建）
  * 从 tauri.conf.json 中读取主窗口配置进行创建
  */
-pub fn ensure_main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
-    if let Some(window) = get_main_window(app) {
-        return Ok(window);
-    }
-
-    let config = app
-        .config()
-        .app
-        .windows
-        .iter()
-        .find(|w| w.label == "main")
-        .ok_or_else(|| "Main window config not found".to_string())?;
-
-    WebviewWindowBuilder::from_config(app, config)
-        .map_err(|e| e.to_string())?
-        .build()
-        .map_err(|e| e.to_string())
-}
-
 /**
  * 确保独立 Chat 窗口存在。
  * 创建时优先把上次停留的 chat 路由烤进 URL（设置页等显式路由不受影响）。
@@ -625,15 +602,7 @@ pub fn ensure_lens_window(app: &AppHandle, mode: &str) -> Result<WebviewWindow, 
     ensure_overlay_window(app, "lens", "Lens", mode)
 }
 
-/// 确保独立"快速翻译"窗口存在（不存在则创建）。
-/// 与 lens 浮窗共用同一套无边框透明 NSPanel 形态与 Lens.tsx bundle，按 hash query
-/// 的 mode（translate / translateText）渲染翻译 UI。与 lens 问答窗口互斥（同一时刻
-/// 只有一个浮窗可见，由 `lens_is_active` 泛化 + 热键 toggle 保证）。
-pub fn ensure_translate_window(app: &AppHandle, mode: &str) -> Result<WebviewWindow, String> {
-    ensure_overlay_window(app, "translate", "Translate", mode)
-}
-
-/// lens / translate 浮窗共用的创建逻辑：无边框、透明、无原生阴影、初始隐藏，建窗后在
+/// Lens 浮窗：无边框、透明、无原生阴影、初始隐藏，建窗后在
 /// macOS 上转成非激活 NSPanel（`ensure_overlay_panel`）。两窗口除 label / title 外完全一致。
 /// mode 烤进创建 URL 的 hash query，使冷挂载的前端首帧即读到正确 mode（不依赖事后 eval 设 hash 的时机）。
 fn ensure_overlay_window(
@@ -647,10 +616,7 @@ fn ensure_overlay_window(
     }
 
     // chat 模式 hash 为 '#lens'（readModeFromHash 默认即 chat）；其余模式带 query。
-    let hash = if mode == "translate"
-        || mode == "translateText"
-        || mode == "replace"
-        || mode == "screenshot"
+    let hash = if mode == "screenshot"
     {
         format!("lens?mode={mode}")
     } else {
@@ -1031,18 +997,13 @@ fn abu_agent_overlay_panel_class() -> *const objc::runtime::Class {
 }
 
 #[cfg(target_os = "macos")]
-const NS_FLOATING_WINDOW_LEVEL: isize = 3;
 #[cfg(target_os = "macos")]
 const NS_STATUS_WINDOW_LEVEL: isize = 25;
 
 /// 文本翻译器需要低于系统输入法候选窗；全屏 Lens / 截图遮罩保持原高层级。
 #[cfg(target_os = "macos")]
-fn overlay_window_level(label: &str) -> isize {
-    if label == "main" || label == "translate" {
-        NS_FLOATING_WINDOW_LEVEL
-    } else {
-        NS_STATUS_WINDOW_LEVEL
-    }
+fn overlay_window_level(_label: &str) -> isize {
+    NS_STATUS_WINDOW_LEVEL
 }
 
 /// 重分类窗口为非激活 NSPanel 并设置全屏浮现所需的 styleMask / collectionBehavior / level（幂等）。
@@ -1253,8 +1214,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn text_translator_stays_below_ime_candidates() {
-        assert_eq!(overlay_window_level("main"), NS_FLOATING_WINDOW_LEVEL);
-        assert_eq!(overlay_window_level("translate"), NS_FLOATING_WINDOW_LEVEL);
         assert_eq!(overlay_window_level("lens"), NS_STATUS_WINDOW_LEVEL);
     }
 

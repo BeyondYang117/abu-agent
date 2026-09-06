@@ -1134,33 +1134,15 @@ export type Settings = {
     providerId: string
     model: string
     directTranslate?: boolean
-    /** 思考模式开关（默认 false）。OCR 模型 + 翻译模型都会注入对应字段 */
     thinkingEnabled?: boolean
-    /** 流式输出开关（默认 true）。OCR + 翻译两步都用 SSE，token 逐字到达 */
     streamEnabled?: boolean
-    /** 截图后是否保持全屏覆盖（默认 true）。false 时截图后窗口缩小为浮动 */
     keepFullscreenAfterCapture?: boolean
-    /** 快速翻译结果卡左右宽度(px)。截图翻译与选中文本翻译共用，统一且可调（默认 480） */
     cardWidth?: number
-    /** 使用系统 OCR(macOS Apple Vision / Windows OCR) 做文字识别,然后让 provider 翻译纯文本(默认 false)。
-     *  true 时 provider 可以是任意文字模型;false 时 provider 必须是多模态视觉模型。
-     *  从 vNext 起作 ocrMode 的降级镜像保留:System→true，其它→false。新代码应读 ocrMode。 */
     useSystemOcr?: boolean
-    /** OCR 引擎选择(vNext+):
-     *  - 'cloud_vision': 现有云端多模态 provider 一次完成 OCR+翻译
-     *  - 'system': macOS Apple Vision / Windows.Media.Ocr 识别后交 provider 翻译
-     *  - 'rapid_ocr': 本地 RapidOCR (PaddleOCR ONNX) 识别后交 provider 翻译。
-     *    模型文件 + onnxruntime dylib 由用户在设置页面下载,安装包不带。
-     *  缺省时由后端 sanitize_settings 按 useSystemOcr 自动迁移。 */
     ocrMode?: 'cloud_vision' | 'system' | 'rapid_ocr'
-    /** RapidOCR 模型档位(ocrMode==='rapid_ocr' 时生效;替换翻译也跟随此档位)。
-     *  缺省 'standard'(PP-OCRv5 mobile,快),'high' = PP-OCRv6 medium 高精度。 */
     rapidOcrTier?: RapidOcrTier
-    /** 截图(OCR/视觉)翻译自定义提示词。空 → 内置截图模板 */
     prompt?: string
-    /** 选中文本翻译自定义提示词。空 → 内置选中文本模板 */
     textPrompt?: string
-    /** 替换翻译自定义提示词（仅翻译规则，JSON 输出契约固定）。空 → 内置替换模板 */
     replacePrompt?: string
   }
   /** 独立截图标注（截图 → 箭头/矩形/马赛克 → 复制/保存） */
@@ -1937,9 +1919,6 @@ export const api = {
   /** 轻量持久化收藏模型（不触发热键/托盘重注册，区别于 saveSettings 的全量事务保存）。 */
   setFavoriteModels: (models: string[]) =>
     invoke<void>('set_favorite_models', { models }),
-  /** 轻量持久化快速翻译卡宽度（拖拽缩放记忆；高度始终自动）。 */
-  setTranslateCardSize: (width: number) =>
-    invoke<void>('set_translate_card_size', { width }),
   exportSettings: (path: string) => invoke<void>('export_settings', { path }),
   importSettings: async (path: string) =>
     normalizeSettings(await invoke<Settings>('import_settings', { path })),
@@ -1973,11 +1952,6 @@ export const api = {
   // 应用信息
   getAppVersion: () => getVersion(),
   openSettingsWindow: () => invoke<void>('open_settings_window'),
-  closeTranslatorWindow: () => invoke<void>('close_translator_window'),
-
-  // 文本翻译
-  translateText: (text: string) => invoke<string>('translate_text', { text }),
-  commitTranslation: (text: string) => invoke<void>('commit_translation', { text }),
 
   // 外部链接
   openExternal: (url: string) => invoke<void>('open_external', { url }),
@@ -2531,16 +2505,6 @@ export const api = {
   },
   onLensWebSearch: (listener: (payload: LensWebSearchPayload) => void) =>
     on<LensWebSearchPayload>('lens-web-search', (payload) => listener(payload)),
-  onLensTranslateStream: (listener: (payload: LensTranslateStreamPayload) => void) =>
-    on<LensTranslateStreamPayload>('lens-translate-stream', (payload) => listener(payload)),
-  onLensReplaceStream: (listener: (payload: LensReplaceStreamPayload) => void) =>
-    on<unknown>('lens-replace-stream', (payload) => {
-      try {
-        listener(parseLensReplaceStreamPayload(payload))
-      } catch (error) {
-        console.error('Invalid lens-replace-stream payload', error)
-      }
-    }),
   onLensCloseRequest: (listener: () => void) =>
     on('lens-close-request', () => listener()),
   lensListWindows: () => invoke<LensWindowInfo[]>('lens_list_windows'),
@@ -2564,18 +2528,6 @@ export const api = {
     invoke<{ success: boolean; error?: string }>('lens_copy_image_to_clipboard', { base64Png }),
   lensSaveAnnotatedPng: (base64Png: string, path: string) =>
     invoke<{ success: boolean; error?: string }>('lens_save_annotated_png', { base64Png, path }),
-  lensTranslate: (imageId: string) =>
-    invoke<{ success: boolean; original?: string; translated?: string; error?: string }>(
-      'lens_translate', { imageId }
-    ),
-  lensTranslateText: (text: string, requestId: string) =>
-    invoke<{ success: boolean; original?: string; translated?: string; error?: string }>(
-      'lens_translate_text', { text, requestId }
-    ),
-  lensReplaceTranslate: (imageId: string) =>
-    invoke<{ success: boolean; regionCount?: number; missingBytes?: number; warning?: string; error?: string }>(
-      'lens_replace_translate', { imageId }
-    ),
   lensAsk: (imageId: string, messages: ExplainMessage[], options?: { webSearch?: boolean }) =>
     invoke<{ success: boolean; response?: string; error?: string; webSearchResults?: LensWebSearchResult[] }>('lens_ask', {
       imageId,
@@ -2651,11 +2603,11 @@ export const api = {
    *  阻塞到全部完成返回(standard ~30-50MB,high ~150MB),前端转圈圈等。 */
   rapidOcrInstall: (tier: RapidOcrTier) =>
     invoke<RapidOcrInstallResult>('rapidocr_install', { tier }),
+  setTranslateCardSize: (width: number) => invoke<void>('set_translate_card_size', { width }),
+  onLensTranslateStream: (listener: (payload: LensTranslateStreamPayload) => void) => on<LensTranslateStreamPayload>('lens-translate-stream', payload => listener(payload)),
+  onLensReplaceStream: (listener: (payload: LensReplaceStreamPayload) => void) => on<unknown>('lens-replace-stream', payload => listener(parseLensReplaceStreamPayload(payload))),
+  lensTranslate: (imageId: string) => invoke<{ success: boolean; original?: string; translated?: string; error?: string }>('lens_translate', { imageId }),
+  lensTranslateText: (text: string, requestId: string) => invoke<{ success: boolean; original?: string; translated?: string; error?: string }>('lens_translate_text', { text, requestId }),
+  lensReplaceTranslate: (imageId: string) => invoke<{ success: boolean; regionCount?: number; missingBytes?: number; warning?: string; error?: string }>('lens_replace_translate', { imageId }),
 
-  replaceTranslationPackStatus: (tier: RapidOcrTier) =>
-    invoke<ReplaceTranslationPackStatus>('replace_translation_pack_status', { tier }),
-  replaceTranslationPackInstall: (tier: RapidOcrTier) =>
-    invoke<RapidOcrInstallResult>('replace_translation_pack_install', { tier }),
-  onReplaceTranslationPackProgress: (listener: (progress: OfflineModelProgress) => void) =>
-    on<OfflineModelProgress>('replace-translation-pack-progress', payload => listener(payload)),
 }

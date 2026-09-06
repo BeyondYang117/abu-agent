@@ -1,11 +1,8 @@
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
-import { ArrowUp, Check, Copy, Cpu, Languages, Settings as SettingsIcon, X } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { api, isTauriRuntime } from './api/tauri'
 import { getSettingsCached, saveSettingsCached } from './api/settingsCache'
-import { i18n, type Lang } from './settings/i18n'
-import { useWindowInteractionFocus } from './utils/windowFocus'
 import { ChatWindowHost } from './chat/ChatWindowHost'
 import {
   getRememberedChatRoute,
@@ -23,7 +20,6 @@ import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import { normalizeThemeColorId } from './themeColors'
 import { nextThemeMode, type ThemeMode } from './chat/themeMode'
 import { ModernFloatingBall } from './components/ModernFloatingBall'
-import { copyToClipboard } from './utils/clipboard'
 import './components/ModernFloatingBall.css'
 import './index.css'
 
@@ -31,231 +27,6 @@ const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
 const ChatPopout = lazy(() => import('./chat/popout/ChatPopout'))
 
-
-/**
- * 翻译器主组件
- * 磨砂玻璃风格悬浮窗：顶部 drag bar、输入与结果分层级、底部提示与模型芯片。
- */
-export function Translator({
-  translateSource,
-  lang,
-  onOpenSettings,
-}: {
-  translateSource: string
-  lang: Lang
-  onOpenSettings: () => void
-}) {
-  const [input, setInput] = useState('')
-  const [result, setResult] = useState('')
-  const [resultInput, setResultInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
-  const resultRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-  const translateSeq = useRef(0)
-  const requestWindowFocus = useWindowInteractionFocus()
-  const t = i18n[lang]
-
-  const translate = useCallback(async (text: string, seq: number) => {
-    if (seq !== translateSeq.current) return
-    setLoading(true)
-    setError('')
-    try {
-      const translated = await api.translateText(text)
-      if (seq !== translateSeq.current) return
-      setResult(translated)
-      setResultInput(text)
-    } catch (e) {
-      if (seq !== translateSeq.current) return
-      console.error(e)
-      setError(typeof e === 'string' ? e : (e as Error).message || 'Error')
-    } finally {
-      if (seq === translateSeq.current) setLoading(false)
-    }
-  }, [])
-
-  // 短防抖保留“边打边译”，同时让 Enter 可以绕过等待立即翻译。
-  useEffect(() => {
-    const seq = ++translateSeq.current
-    setResult('')
-    setResultInput('')
-    setError('')
-    setCopied(false)
-    setLoading(false)
-    const trimmed = input.trim()
-    if (!trimmed) {
-      return
-    }
-
-    const timer = setTimeout(() => void translate(input, seq), 420)
-    return () => clearTimeout(timer)
-  }, [input, translate])
-
-  // Esc 键关闭输入翻译窗口，释放不常用的 main WebView。
-  useEffect(() => {
-    const handler = async (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        try {
-          await api.closeTranslatorWindow()
-        } catch (err) {
-          console.error('[Translator] Failed to close window:', err)
-        }
-      }
-    }
-    window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
-  }, [])
-
-  // 新译文从开头展示，长结果留给用户主动滚动。
-  useEffect(() => {
-    if (resultRef.current) {
-      resultRef.current.scrollTop = 0
-    }
-  }, [result])
-
-  // 多行编辑区随内容长高，超过三行后内部滚动，始终保留译文阅读空间。
-  useEffect(() => {
-    const textarea = inputRef.current
-    if (!textarea) return
-    textarea.style.height = '0px'
-    textarea.style.height = `${Math.min(92, Math.max(44, textarea.scrollHeight))}px`
-  }, [input])
-
-  const commitResult = useCallback(async () => {
-    if (loading || !result || resultInput !== input) return
-    await api.commitTranslation(result)
-    setInput('')
-    setResult('')
-    setResultInput('')
-  }, [input, loading, result, resultInput])
-
-  const translateNow = useCallback(() => {
-    if (!input.trim() || loading) return
-    const seq = ++translateSeq.current
-    setResult('')
-    setResultInput('')
-    void translate(input, seq)
-  }, [input, loading, translate])
-
-  const handlePrimaryAction = () => {
-    if (result && resultInput === input) {
-      void commitResult()
-    } else {
-      translateNow()
-    }
-  }
-
-  const handleCopy = async () => {
-    if (!result) return
-    if (await copyToClipboard(result)) {
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
-    }
-  }
-
-  // Enter 立即翻译/使用译文；Shift+Enter 专门负责换行。
-  // IME 合成中（中/日/韩输入法选词按回车）不要触发：isComposing 是组合事件官方标志，
-  // keyCode === 229 是浏览器在 IME 拦截 keydown 时的兜底信号，两个条件并查更稳。
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return
-    e.preventDefault()
-    handlePrimaryAction()
-  }
-
-  const hasFreshResult = Boolean(result && resultInput === input)
-
-  return (
-    <div
-      className="window-container translator-window"
-      onPointerEnter={requestWindowFocus}
-      onPointerMove={requestWindowFocus}
-      onPointerDownCapture={requestWindowFocus}
-    >
-      <div className="window-frosted translator-card">
-        <header className="translator-header" data-tauri-drag-region>
-          <div className="translator-brand" data-tauri-drag-region>
-            <span className="translator-brand-icon"><Languages size={15} strokeWidth={2} /></span>
-            <span>{t.translatorTitle}</span>
-            <span className="translator-direction">{t.translatorAutoDirection}</span>
-          </div>
-          <button className="translator-icon-button" onClick={onOpenSettings} title={t.translatorSettings} aria-label={t.translatorSettings}>
-            <SettingsIcon size={15} strokeWidth={1.8} />
-          </button>
-        </header>
-
-        <section ref={resultRef} className="translator-result custom-scrollbar" aria-live="polite">
-          {loading ? (
-            <div className="translator-state">
-              <span className="translator-loader"><i /><i /><i /></span>
-              <span>{t.translatorTranslating}</span>
-            </div>
-          ) : error ? (
-            <div className="translator-error">{error}</div>
-          ) : result ? (
-            <div className="translator-result-content">
-              <div className="translator-result-label">
-                <span>{t.translatorResult}</span>
-                <button className="translator-copy-button" onClick={() => void handleCopy()} aria-label={t.translatorCopy} title={t.translatorCopy}>
-                  {copied ? <Check size={13} /> : <Copy size={13} />}
-                  <span>{copied ? t.translatorCopied : t.translatorCopy}</span>
-                </button>
-              </div>
-              <p>{result}</p>
-            </div>
-          ) : (
-            <div className="translator-empty">
-              <Languages size={22} strokeWidth={1.4} />
-              <span>{t.translatorEmpty}</span>
-            </div>
-          )}
-        </section>
-
-        <footer className="translator-composer-wrap">
-          <div className="translator-composer">
-            <textarea
-              ref={inputRef}
-              autoFocus
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              rows={1}
-              aria-label={t.translatorPlaceholder}
-              placeholder={t.translatorPlaceholder}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-            />
-            <div className="translator-composer-actions">
-              {input && (
-                <button className="translator-clear-button" onClick={() => setInput('')} aria-label={t.translatorClear} title={t.translatorClear}>
-                  <X size={14} />
-                </button>
-              )}
-              <button
-                className={`translator-primary-button${hasFreshResult ? ' is-ready' : ''}`}
-                onClick={handlePrimaryAction}
-                disabled={!input.trim() || loading}
-                aria-label={hasFreshResult ? t.translatorUse : t.translatorTranslate}
-                title={hasFreshResult ? t.translatorUse : t.translatorTranslate}
-              >
-                {hasFreshResult ? <Check size={15} /> : <ArrowUp size={15} />}
-              </button>
-            </div>
-          </div>
-          <div className="translator-meta">
-            <span>{t.translatorHintEnter} · {t.translatorHintNewline} · {t.translatorHintEsc}</span>
-            {translateSource && (
-              <span className="translator-model"><Cpu size={10} strokeWidth={1.6} /><span>{translateSource}</span></span>
-            )}
-          </div>
-        </footer>
-      </div>
-    </div>
-  )
-}
 
 /**
  * 应用根组件
@@ -289,8 +60,6 @@ function App() {
   const [mode, setMode] = useState(getMode)
   const [themeMode, setThemeMode] = useState<ThemeMode>('system')
   const [translucentSidebar, setTranslucentSidebar] = useState(false)
-  const [translateSource, setTranslateSource] = useState<string>('')
-  const [lang, setLang] = useState<Lang>('zh')
 
   useEffect(() => {
     const path = hashPath()
@@ -348,8 +117,6 @@ function App() {
           : UI_MONO_FALLBACK_STACK,
       )
     }
-    setTranslateSource(settings.translatorModel || 'AI')
-    setLang((settings.settingsLanguage as Lang) || 'zh')
     // 首次应用主题后（下一帧）再开启主题色过渡，避免初始 light↔dark 闪烁；
     // 之后用户切换主题/系统主题变化时才平滑过渡。classList.add 幂等。
     requestAnimationFrame(() => {
@@ -579,22 +346,9 @@ function App() {
   // 根据当前模式调整窗口大小
   useEffect(() => {
     const resize = async () => {
-      if (mode === '' || mode === 'translator') {
-        await api.resizeWindow(392, 152)
-      }
     }
     resize()
   }, [mode])
-
-  // 打开设置页
-  const openSettings = async () => {
-    try {
-      await api.openSettingsWindow()
-      await api.closeTranslatorWindow()
-    } catch (err) {
-      console.error('[App] Error opening settings window:', err)
-    }
-  }
 
   // 根据当前模式渲染对应视图
   if (mode === 'lens') {
@@ -639,7 +393,7 @@ function App() {
       </ChatWindowHost>
     )
   }
-  return <Translator translateSource={translateSource} lang={lang} onOpenSettings={openSettings} />
+  return null
 }
 
 export default App

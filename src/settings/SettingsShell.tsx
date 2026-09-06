@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef, useReducer } from 'react'
+import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   X, RefreshCw,
   Download, Upload, ArrowLeft,
@@ -16,8 +16,6 @@ import {
   type ChatNativeToolsConfig,
   type ChatMemoryConfig,
   defaultNativeTools,
-  type ReplaceTranslationPackStatus,
-  type RapidOcrTier,
 } from '../api/tauri'
 import {
   getSettingsCached,
@@ -30,23 +28,20 @@ import {
 import { rebaseDraftAgainstCache } from './rebaseSettingsDraft'
 import { i18n } from './i18n'
 import {
-  GeneralIcon, HotkeysIcon, TranslateIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
+  GeneralIcon, HotkeysIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
   AgentIcon, WebSearchIcon, ConnectorsIcon, PluginsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
 } from './NavIcons'
 import { PluginCenter } from '../chat/PluginCenter'
 import { SessionCenter, type SessionCenterProps } from '../chat/SessionCenter'
-import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, resolveSettingsSaveEcho, stableStringify } from './utils'
+import { buildHotkey, formatHotkeyError, isProviderEnabled, resolveSettingsSaveEcho, stableStringify } from './utils'
 import { type ProviderPreset } from './providerPresets'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
-import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
-import { initialReplacePackProgressState, reduceReplacePackProgress } from './replacePackProgress'
 import { UsageStatsPanel } from './UsageStatsPanel'
 import { RequestDebugPanel } from './RequestDebugPanel'
 import { ExternalAgentsSettings } from './ExternalAgentsSettings'
 import { HotkeysTab } from './tabs/HotkeysTab'
 import { LensTab } from './tabs/LensTab'
 import { MixerTab } from './tabs/MixerTab'
-import { TranslateTab } from './tabs/TranslateTab'
 import { MemoryTab } from './tabs/MemoryTab'
 import { ChatTab } from './tabs/ChatTab'
 import { ProvidersTab } from './tabs/ProvidersTab'
@@ -73,7 +68,7 @@ import { ConnectorsPanel } from './ConnectorsPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 import { defaultChatTools } from './chatToolsShared'
 
-export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'devices' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'hotkeys' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'devices' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -109,12 +104,8 @@ export interface SettingsShellHandle {
 
 /** 快捷键作用域。原本是组件体内的局部 type，抽 HotkeysTab 后需要跨模块共享，提到模块作用域。 */
 export type HotkeyScopeKey =
-  | 'main'
   | 'chat'
   | 'closeChat'
-  | 'screenshotTranslation'
-  | 'screenshotTranslationText'
-  | 'screenshotTranslationReplace'
   | 'screenshotAnnotate'
   | 'lens'
 
@@ -158,7 +149,7 @@ function resolveEffectiveChatModel(settings: SettingsData): { provider?: ModelPr
     storedChat: settings.defaultModels.chat,
     legacyChat: { providerId: settings.chatProviderId, model: settings.chatModel },
     lens: { providerId: settings.lens?.providerId || '', model: settings.lens?.model || '' },
-    translator: { providerId: settings.translatorProviderId, model: settings.translatorModel },
+    translator: { providerId: '', model: '' },
   })
 
   return {
@@ -295,20 +286,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const requestWindowFocus = useWindowInteractionFocus()
   const [downloadedPath, setDownloadedPath] = useState('')
   const [downloadError, setDownloadError] = useState('')
-  // RapidOCR 离线 OCR 状态:检查 app data 目录里 dylib + 模型 4 个文件齐不齐。
-  const [rapidOcrStatus, setRapidOcrStatus] = useState<import('../api/tauri').RapidOcrStatus | null>(null)
-  // 下载临时状态:'idle' / 'downloading' / 'failed'(success 后自动 refresh status 到已就绪,
-  // 没有专门的 success 终态)
-  const [rapidOcrDownloadState, setRapidOcrDownloadState] = useState<'idle' | 'downloading' | 'failed'>('idle')
-  const [rapidOcrDownloadError, setRapidOcrDownloadError] = useState('')
-  const [replacePackStatus, setReplacePackStatus] = useState<ReplaceTranslationPackStatus | null>(null)
-  const [replacePackDownload, dispatchReplacePackDownload] = useReducer(
-    reduceReplacePackProgress,
-    initialReplacePackProgressState,
-  )
-  const platform = getPlatform()
-  const isMac = platform === 'macos'
-  const hasSystemOcr = isMac || platform === 'windows'
   // 加载失败时的错误信息；非空则渲染错误 UI 而不是用合成默认值进入正常视图
   // （否则用户可能没察觉就自动保存把磁盘真实数据覆盖掉）
   const [loadError, setLoadError] = useState('')
@@ -363,28 +340,11 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const hotkeyConflicts = useMemo<Partial<Record<HotkeyScopeKey, HotkeyScopeKey>>>(() => {
     if (!settings) return {}
     const slots: Array<{ scope: HotkeyScopeKey; hotkey: string; enabled: boolean }> = [
-      { scope: 'main', hotkey: settings.hotkey || '', enabled: !!(settings.hotkey || '').trim() },
       { scope: 'chat', hotkey: settings.chatHotkey || '', enabled: !!(settings.chatHotkey || '').trim() },
       {
         scope: 'closeChat',
         hotkey: settings.closeChatHotkey || '',
         enabled: !!(settings.closeChatHotkey || '').trim(),
-      },
-      {
-        scope: 'screenshotTranslation',
-        hotkey: settings.screenshotTranslation?.hotkey || '',
-        enabled: settings.screenshotTranslation?.enabled !== false,
-      },
-      {
-        scope: 'screenshotTranslationText',
-        hotkey: settings.screenshotTranslation?.textHotkey || '',
-        enabled: settings.screenshotTranslation?.enabled !== false,
-      },
-      {
-        scope: 'screenshotTranslationReplace',
-        hotkey: settings.screenshotTranslation?.replaceHotkey || '',
-        enabled: settings.screenshotTranslation?.enabled !== false
-          && settings.screenshotTranslation?.replaceEnabled !== false,
       },
       { scope: 'screenshotAnnotate', hotkey: settings.screenshotAnnotate?.hotkey || '', enabled: settings.screenshotAnnotate?.enabled !== false },
       { scope: 'lens', hotkey: settings.lens?.hotkey || '', enabled: settings.lens?.enabled !== false },
@@ -408,13 +368,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     return out
   }, [settings])
 
-  const SCOPE_I18N_KEY: Record<HotkeyScopeKey, 'hotkeyScopeTranslator' | 'hotkeyScopeChat' | 'hotkeyScopeCloseChat' | 'hotkeyScopeScreenshot' | 'hotkeyScopeScreenshotText' | 'hotkeyScopeScreenshotReplace' | 'annotateHotkeyLabel' | 'hotkeyScopeLens'> = {
-    main: 'hotkeyScopeTranslator',
+  const SCOPE_I18N_KEY: Record<HotkeyScopeKey, 'hotkeyScopeChat' | 'hotkeyScopeCloseChat' | 'annotateHotkeyLabel' | 'hotkeyScopeLens'> = {
     chat: 'hotkeyScopeChat',
     closeChat: 'hotkeyScopeCloseChat',
-    screenshotTranslation: 'hotkeyScopeScreenshot',
-    screenshotTranslationText: 'hotkeyScopeScreenshotText',
-    screenshotTranslationReplace: 'hotkeyScopeScreenshotReplace',
     screenshotAnnotate: 'annotateHotkeyLabel',
     lens: 'hotkeyScopeLens',
   }
@@ -634,97 +590,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
   }, [downloadedPath])
 
-  /** 拉一次 RapidOCR 状态(app data 里 dylib + 模型 4 个文件齐不齐)。
-   *  挂载时 + 切换到 RapidOCR 引擎时调一下。 */
-  const refreshRapidOcrStatus = useCallback(async () => {
-    if (!hasSystemOcr) return
-    try {
-      const status = await api.rapidOcrStatus()
-      setRapidOcrStatus(status)
-    } catch (err) {
-      console.error('rapidOcrStatus failed:', err)
-    }
-  }, [hasSystemOcr])
-
-  /** 下载指定档位的 RapidOCR 包(dylib 共享 + 该档模型):阻塞若干秒,完成后 refresh status。 */
-  const handleDownloadRapidOcr = useCallback(async (tier: import('../api/tauri').RapidOcrTier) => {
-    setRapidOcrDownloadState('downloading')
-    setRapidOcrDownloadError('')
-    try {
-      const result = await api.rapidOcrInstall(tier)
-      if (result.success) {
-        setRapidOcrDownloadState('idle')
-        await refreshRapidOcrStatus()
-      } else {
-        setRapidOcrDownloadError(result.message)
-        setRapidOcrDownloadState('failed')
-      }
-    } catch (err) {
-      const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err)
-      setRapidOcrDownloadError(msg)
-      setRapidOcrDownloadState('failed')
-    }
-  }, [refreshRapidOcrStatus])
-
-  const refreshReplacePackStatus = useCallback(async (tier: RapidOcrTier) => {
-    if (!hasSystemOcr) return
-    try {
-      setReplacePackStatus(await api.replaceTranslationPackStatus(tier))
-    } catch (err) {
-      console.error('replaceTranslationPackStatus failed:', err)
-    }
-  }, [hasSystemOcr])
-
-  const handleDownloadReplacePack = useCallback(async (tier: RapidOcrTier) => {
-    dispatchReplacePackDownload({ type: 'start' })
-    try {
-      const result = await api.replaceTranslationPackInstall(tier)
-      if (result.success) {
-        dispatchReplacePackDownload({ type: 'success' })
-        await Promise.all([refreshReplacePackStatus(tier), refreshRapidOcrStatus()])
-      } else {
-        dispatchReplacePackDownload({ type: 'failure', error: result.message })
-      }
-    } catch (err) {
-      const message = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err)
-      dispatchReplacePackDownload({ type: 'failure', error: message })
-    }
-  }, [refreshRapidOcrStatus, refreshReplacePackStatus])
-
-  useEffect(() => {
-    let cancelled = false
-    let unlisten: (() => void) | undefined
-    const tier = settings?.screenshotTranslation?.rapidOcrTier ?? 'standard'
-    api.onReplaceTranslationPackProgress(progress => {
-      if (cancelled) return
-      // 两个安装包共用同一事件名；只消费替换翻译离线包事件，
-      // 避免知识库 RapidOCR 安装把本面板驱动进“下载中”。
-      if (progress.pack !== 'replace_translation') return
-      dispatchReplacePackDownload({ type: 'progress', progress })
-      // 终态（最后一个文件 completed）时刷新就绪状态，
-      // 与 handleDownloadReplacePack 成功路径一致；即使 install promise 丢失也不会卡住。
-      if (progress.state === 'completed' && progress.overallDownloadedBytes >= progress.overallTotalBytes) {
-        void refreshReplacePackStatus(tier)
-      }
-    }).then(dispose => {
-      if (cancelled) dispose()
-      else unlisten = dispose
-    }).catch(err => console.error('replace translation pack progress listener failed:', err))
-    return () => {
-      cancelled = true
-      unlisten?.()
-    }
-  }, [refreshReplacePackStatus, settings?.screenshotTranslation?.rapidOcrTier])
-
-  // 挂载时拉一次状态
-  useEffect(() => {
-    refreshRapidOcrStatus()
-  }, [refreshRapidOcrStatus])
-
-  useEffect(() => {
-    const tier = settings?.screenshotTranslation?.rapidOcrTier ?? 'standard'
-    void refreshReplacePackStatus(tier)
-  }, [refreshReplacePackStatus, settings?.screenshotTranslation?.rapidOcrTier])
+  /* translation OCR support removed */
 
   const retryAttempts = settings?.retryAttempts
 
@@ -1229,8 +1095,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     if (!settings) return
     if (modelPickerProviderId === id) setModelPickerProviderId(null)
     const nextProviders = settings.providers.filter(p => p.id !== id)
-    const translatorProvider = resolveProvider(nextProviders, settings.translatorProviderId)
-    const screenshotProvider = resolveProvider(nextProviders, settings.screenshotTranslation?.providerId || '')
     // lens providerId 为空表示 fallback 到 translator，删除时若已设置自身 provider 才需要级联
     const lensHadOwnProvider = !!settings.lens?.providerId
     const lensProvider = lensHadOwnProvider
@@ -1246,14 +1110,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       ...settings,
       providers: nextProviders,
       providerIcons,
-      translatorProviderId: translatorProvider ? translatorProvider.id : '',
-      translatorModel: resolveModel(translatorProvider, settings.translatorModel),
       defaultModels,
-      screenshotTranslation: {
-        ...settings.screenshotTranslation,
-        providerId: screenshotProvider ? screenshotProvider.id : '',
-        model: resolveModel(screenshotProvider, settings.screenshotTranslation?.model || '')
-      },
       ...(lensHadOwnProvider ? {
         lens: {
           ...settings.lens,
@@ -1336,19 +1193,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         resolveAfterRemoval,
       )
 
-      if (prev.translatorProviderId === providerId) {
-        next.translatorModel = resolveAfterRemoval(prev.translatorModel)
-      }
       next.defaultModels = defaultModels
       next.chatProviderId = defaultModels.chat.providerId
       next.chatModel = defaultModels.chat.model
-
-      if (prev.screenshotTranslation.providerId === providerId) {
-        next.screenshotTranslation = {
-          ...prev.screenshotTranslation,
-          model: resolveAfterRemoval(prev.screenshotTranslation.model),
-        }
-      }
 
       if (prev.lens?.providerId === providerId) {
         next.lens = {
@@ -1423,28 +1270,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     if (!settings.providers.some((p) => p.id === providerId)) return
     setModelPickerProviderId(providerId)
   }
-
-  /**
-   * 更新截图翻译配置
-   */
-  const updateScreenshotTranslation = useCallback((updates: Partial<SettingsData['screenshotTranslation']>) => {
-    setSettings((prev) => {
-      if (!prev) return prev
-      const current = prev.screenshotTranslation || {
-        enabled: true,
-        hotkey: 'CommandOrControl+Shift+A',
-        textHotkey: 'CommandOrControl+Shift+T',
-        providerId: 'default-ocr',
-        model: '',
-        directTranslate: false,
-        thinkingEnabled: false,
-        streamEnabled: true,
-        ocrMode: 'cloud_vision',
-        prompt: ''
-      }
-      return { ...prev, screenshotTranslation: { ...current, ...updates } }
-    })
-  }, [])
 
   /**
    * 更新截图标注配置
@@ -1641,18 +1466,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       }
       const hotkey = buildHotkey(e)
       if (!hotkey) return
-      if (recordingTarget === 'main') {
-        updateSettings({ hotkey })
-      } else if (recordingTarget === 'chat') {
+      if (recordingTarget === 'chat') {
         updateSettings({ chatHotkey: hotkey })
       } else if (recordingTarget === 'closeChat') {
         updateSettings({ closeChatHotkey: hotkey })
-      } else if (recordingTarget === 'screenshotTranslation') {
-        updateScreenshotTranslation({ hotkey })
-      } else if (recordingTarget === 'screenshotTranslationText') {
-        updateScreenshotTranslation({ textHotkey: hotkey })
-      } else if (recordingTarget === 'screenshotTranslationReplace') {
-        updateScreenshotTranslation({ replaceHotkey: hotkey })
       } else if (recordingTarget === 'screenshotAnnotate') {
         updateScreenshotAnnotate({ hotkey })
       } else if (recordingTarget === 'lens') {
@@ -1662,7 +1479,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [recordingTarget, updateLens, updateScreenshotAnnotate, updateScreenshotTranslation, updateSettings])
+  }, [recordingTarget, updateLens, updateScreenshotAnnotate, updateSettings])
 
   const loadingShellClass =
     variant === 'embedded'
@@ -1716,7 +1533,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'general' as const, label: t.tabGeneral, icon: GeneralIcon },
     { id: 'providers' as const, label: t.tabModels, icon: ProvidersIcon },
     { id: 'hotkeys' as const, label: t.tabHotkeys, icon: HotkeysIcon },
-    { id: 'translate' as const, label: t.tabTranslation, icon: TranslateIcon },
     { id: 'lens' as const, label: t.lensTabLabel, icon: LensIcon },
     { id: 'chat' as const, label: t.tabChatClient, icon: ChatIcon },
     { id: 'memory' as const, label: t.tabMemory, icon: MemoryIcon },
@@ -1736,10 +1552,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     general: {
       title: t.tabGeneral,
       subtitle: lang === 'zh' ? '外观、行为、归档和权限。' : 'Appearance, behavior, archive, and permissions.',
-    },
-    translate: {
-      title: t.tabTranslation,
-      subtitle: lang === 'zh' ? '输入翻译与快速翻译的语言、模型、OCR 和提示词。' : 'Language, model, OCR, and prompts for input and quick translation.',
     },
     hotkeys: {
       title: t.tabHotkeys,
@@ -1823,7 +1635,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const selectedProvider = settings.providers.find((provider) => provider.id === selectedProviderId) ?? settings.providers[0]
   const chatProvider = settings.providers.find((provider) => provider.id === settings.chatProviderId)
     ?? settings.providers.find((provider) => provider.id === settings.lens?.providerId)
-    ?? settings.providers.find((provider) => provider.id === settings.translatorProviderId)
 
   const categoryNav =
     variant === 'embedded' ? (
@@ -2014,39 +1825,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             )}
 
             {/* ===== 翻译设置标签页 ===== */}
-            {activeTab === 'translate' && (
-              <>
-                <TranslateTab
-                  settings={settings}
-                  t={t}
-                  lang={lang}
-                  defaultPrompts={defaultPrompts}
-                  onUpdateSettings={updateSettings}
-                />
-
-                <div className="kv-section-title">{t.tabScreenshot}</div>
-                <ScreenshotTranslationSettings
-                  settings={settings}
-                  isMac={isMac}
-                  hasSystemOcr={hasSystemOcr}
-                  defaultPrompts={defaultPrompts}
-                  rapidOcrStatus={rapidOcrStatus}
-                  rapidOcrDownloadState={rapidOcrDownloadState}
-                  rapidOcrDownloadError={rapidOcrDownloadError}
-                  replacePackStatus={replacePackStatus}
-                  replacePackDownloadState={replacePackDownload.downloadState}
-                  replacePackDownloadError={replacePackDownload.error}
-                  replacePackProgress={replacePackDownload.progress}
-                  t={t}
-                  onUpdate={updateScreenshotTranslation}
-                  onRefreshRapidOcrStatus={refreshRapidOcrStatus}
-                  onDownloadRapidOcr={handleDownloadRapidOcr}
-                  onRefreshReplacePack={refreshReplacePackStatus}
-                  onDownloadReplacePack={handleDownloadReplacePack}
-                />
-              </>
-            )}
-
             {/* ===== 快捷键标签页：集中所有全局热键 ===== */}
             {activeTab === 'hotkeys' && (
               <HotkeysTab
@@ -2057,7 +1835,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 conflictMessageFor={conflictMessageFor}
                 hotkeyConflicts={hotkeyConflicts}
                 onUpdateSettings={updateSettings}
-                onUpdateScreenshotTranslation={updateScreenshotTranslation}
                 onUpdateScreenshotAnnotate={updateScreenshotAnnotate}
                 onUpdateLens={updateLens}
               />

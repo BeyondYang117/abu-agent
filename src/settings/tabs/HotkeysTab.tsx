@@ -16,36 +16,23 @@ interface HotkeysTabProps {
   /** scope → 与之冲突的另一 scope（SettingsShell 客户端冲突检测结果） */
   hotkeyConflicts: Partial<Record<HotkeyScopeKey, HotkeyScopeKey>>
   onUpdateSettings: (updates: Partial<SettingsData>) => void
-  onUpdateScreenshotTranslation: (updates: Partial<SettingsData['screenshotTranslation']>) => void
   onUpdateScreenshotAnnotate: (updates: Partial<NonNullable<SettingsData['screenshotAnnotate']>>) => void
   onUpdateLens: (updates: Partial<SettingsData['lens']>) => void
 }
 
 const ALL_SCOPES: HotkeyScopeKey[] = [
-  'main',
   'chat',
   'closeChat',
-  'screenshotTranslation',
-  'screenshotTranslationText',
-  'screenshotTranslationReplace',
   'screenshotAnnotate',
   'lens',
 ]
 
 function scopeLabel(scope: HotkeyScopeKey, t: I18n): string {
   switch (scope) {
-    case 'main':
-      return t.tabTranslate
     case 'chat':
       return t.chatHotkeyLabel
     case 'closeChat':
       return t.closeChatHotkeyLabel
-    case 'screenshotTranslation':
-      return t.screenshotHotkey
-    case 'screenshotTranslationText':
-      return t.screenshotTextHotkey
-    case 'screenshotTranslationReplace':
-      return t.replaceTranslateHotkey
     case 'screenshotAnnotate':
       return t.annotateHotkeyLabel
     case 'lens':
@@ -55,18 +42,10 @@ function scopeLabel(scope: HotkeyScopeKey, t: I18n): string {
 
 function hotkeyForScope(settings: SettingsData, scope: HotkeyScopeKey): string {
   switch (scope) {
-    case 'main':
-      return settings.hotkey || ''
     case 'chat':
       return settings.chatHotkey || ''
     case 'closeChat':
       return settings.closeChatHotkey || ''
-    case 'screenshotTranslation':
-      return settings.screenshotTranslation?.hotkey ?? ''
-    case 'screenshotTranslationText':
-      return settings.screenshotTranslation?.textHotkey ?? ''
-    case 'screenshotTranslationReplace':
-      return settings.screenshotTranslation?.replaceHotkey ?? ''
     case 'screenshotAnnotate':
       return settings.screenshotAnnotate?.hotkey ?? ''
     case 'lens':
@@ -83,7 +62,6 @@ export function HotkeysTab({
   conflictMessageFor,
   hotkeyConflicts,
   onUpdateSettings,
-  onUpdateScreenshotTranslation,
   onUpdateScreenshotAnnotate,
   onUpdateLens,
 }: HotkeysTabProps) {
@@ -95,11 +73,6 @@ export function HotkeysTab({
       hotkey: DEFAULT_HOTKEYS.hotkey,
       chatHotkey: DEFAULT_HOTKEYS.chatHotkey,
       closeChatHotkey: DEFAULT_HOTKEYS.closeChatHotkey,
-    })
-    onUpdateScreenshotTranslation({
-      hotkey: DEFAULT_HOTKEYS.screenshotHotkey,
-      textHotkey: DEFAULT_HOTKEYS.screenshotTextHotkey,
-      replaceHotkey: DEFAULT_HOTKEYS.screenshotReplaceHotkey,
     })
     onUpdateScreenshotAnnotate({ hotkey: DEFAULT_HOTKEYS.screenshotAnnotateHotkey })
     onUpdateLens({ hotkey: DEFAULT_HOTKEYS.lensHotkey })
@@ -178,21 +151,6 @@ export function HotkeysTab({
         </div>
       )}
 
-      <SettingRow label={t.tabTranslate}>
-        <HotkeyInput
-          inline
-          value={settings.hotkey}
-          placeholder={t.hotkeyPlaceholder}
-          recording={recordingTarget === 'main'}
-          onToggleRecording={() => onToggleRecording('main')}
-          recordLabel={t.hotkeyRecord}
-          recordingLabel={t.hotkeyRecording}
-          recordingPlaceholder={t.hotkeyRecordingPlaceholder}
-          onClear={() => onUpdateSettings({ hotkey: '' })}
-          clearLabel={t.hotkeyClear}
-          error={conflictMessageFor('main')}
-        />
-      </SettingRow>
       <SettingRow label={t.chatHotkeyLabel}>
         <HotkeyInput
           inline
@@ -221,51 +179,6 @@ export function HotkeysTab({
           onClear={() => onUpdateSettings({ closeChatHotkey: '' })}
           clearLabel={t.hotkeyClear}
           error={conflictMessageFor('closeChat')}
-        />
-      </SettingRow>
-      <SettingRow label={t.screenshotHotkey}>
-        <HotkeyInput
-          inline
-          value={settings.screenshotTranslation?.hotkey ?? ''}
-          placeholder={t.hotkeyPlaceholder}
-          recording={recordingTarget === 'screenshotTranslation'}
-          onToggleRecording={() => onToggleRecording('screenshotTranslation')}
-          recordLabel={t.hotkeyRecord}
-          recordingLabel={t.hotkeyRecording}
-          recordingPlaceholder={t.hotkeyRecordingPlaceholder}
-          onClear={() => onUpdateScreenshotTranslation({ hotkey: '' })}
-          clearLabel={t.hotkeyClear}
-          error={conflictMessageFor('screenshotTranslation')}
-        />
-      </SettingRow>
-      <SettingRow label={t.screenshotTextHotkey}>
-        <HotkeyInput
-          inline
-          value={settings.screenshotTranslation?.textHotkey ?? ''}
-          placeholder={t.hotkeyPlaceholder}
-          recording={recordingTarget === 'screenshotTranslationText'}
-          onToggleRecording={() => onToggleRecording('screenshotTranslationText')}
-          recordLabel={t.hotkeyRecord}
-          recordingLabel={t.hotkeyRecording}
-          recordingPlaceholder={t.hotkeyRecordingPlaceholder}
-          onClear={() => onUpdateScreenshotTranslation({ textHotkey: '' })}
-          clearLabel={t.hotkeyClear}
-          error={conflictMessageFor('screenshotTranslationText')}
-        />
-      </SettingRow>
-      <SettingRow label={t.replaceTranslateHotkey}>
-        <HotkeyInput
-          inline
-          value={settings.screenshotTranslation?.replaceHotkey ?? ''}
-          placeholder={t.hotkeyPlaceholder}
-          recording={recordingTarget === 'screenshotTranslationReplace'}
-          onToggleRecording={() => onToggleRecording('screenshotTranslationReplace')}
-          recordLabel={t.hotkeyRecord}
-          recordingLabel={t.hotkeyRecording}
-          recordingPlaceholder={t.hotkeyRecordingPlaceholder}
-          onClear={() => onUpdateScreenshotTranslation({ replaceHotkey: '' })}
-          clearLabel={t.hotkeyClear}
-          error={conflictMessageFor('screenshotTranslationReplace')}
         />
       </SettingRow>
       <SettingRow label={t.annotateHotkeyLabel}>

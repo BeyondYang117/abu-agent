@@ -522,18 +522,10 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
     // 先记下浮窗是否"已存在"（复用）：冷创建时前端会全新挂载、自行 take 复位载荷与选区，
     // 之后绝不能再发 lens:reset——否则 mount 的 enterSelect 与事件的 enterSelect 双跑,
     // take-once 的选中文本会被先取后作废丢弃（见前端 selectionReqIdRef 竞态）。
-    let target_label = if mode == "chat" || mode == "screenshot" {
-        "lens"
-    } else {
-        "translate"
-    };
+    let target_label = "lens";
     let overlay_existed = app.get_webview_window(target_label).is_some();
     let window = {
-        let ensured = if mode == "chat" || mode == "screenshot" {
-            windows::ensure_lens_window(app, mode)
-        } else {
-            windows::ensure_translate_window(app, mode)
-        };
+        let ensured = windows::ensure_lens_window(app, mode);
         match ensured {
             Ok(w) => w,
             Err(e) => {
@@ -640,20 +632,6 @@ pub(crate) fn lens_request_internal(app: &AppHandle, mode: &str) -> Result<(), S
 /// 注：仅由 shortcuts.rs 的热键处理器作为普通 Rust fn 调用；前端从不 invoke，故无 `#[tauri::command]`。
 pub(crate) fn lens_request(app: AppHandle) -> Result<(), String> {
     lens_request_internal(&app, "chat")
-}
-
-/// 截图翻译入口：lens webview 进入 select 态，截完做 OCR + 翻译并弹结果浮卡
-pub(crate) fn lens_request_translate(app: AppHandle) -> Result<(), String> {
-    lens_request_internal(&app, "translate")
-}
-
-pub(crate) fn lens_request_translate_text(app: AppHandle) -> Result<(), String> {
-    lens_request_internal(&app, "translateText")
-}
-
-/// 替换翻译入口：截完后 RapidOCR + 批量翻译，Canvas 原位覆盖译文。
-pub(crate) fn lens_request_replace(app: AppHandle) -> Result<(), String> {
-    lens_request_internal(&app, "replace")
 }
 
 /// 独立截图标注入口：截完进标注态（箭头/矩形/马赛克 + 复制/保存），无 AI 输入框。
@@ -2226,7 +2204,7 @@ pub(crate) fn lens_close(app: AppHandle) -> Result<(), String> {
     if let Some(window) = active_overlay_window(&app) {
         // Windows：无 NSPanel 限制，且默认开启冻结帧（重建时背景是截屏冻结帧，不会白闪）
         // → 关闭即销毁，回收 renderer 内存。lens/translate 低频调用，偶尔付一次冷创建可接受。
-        // 下次触发由 ensure_lens_window / ensure_translate_window 重建。
+        // 下次触发由 ensure_lens_window 重建。
         // 先 hide 再 destroy：直接 destroy 会触发 Windows 的窗口关闭动画（全屏浮层往中间缩，
         // 即视觉回归）。先即时 hide 让它瞬间消失，再销毁已不可见的窗口就没有可见动画。
         #[cfg(target_os = "windows")]

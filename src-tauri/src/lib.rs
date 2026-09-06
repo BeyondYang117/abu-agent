@@ -64,7 +64,7 @@ use shortcuts::{
 use state::AppState;
 use updates::check_github_latest_release;
 #[cfg(target_os = "macos")]
-use windows::{ensure_overlay_panel, restore_previous_frontmost_app};
+use windows::ensure_overlay_panel;
 
 /// 自启动参数，用于区分用户手动启动和系统自动启动
 const AUTOSTART_ARG: &str = "--from-autostart";
@@ -72,7 +72,7 @@ const AUTOSTART_ARG: &str = "--from-autostart";
 const MCP_STARTUP_WARMUP_CONCURRENCY: usize = 2;
 
 #[cfg(target_os = "macos")]
-const USER_WINDOW_LABELS: &[&str] = &["chat", "main"];
+const USER_WINDOW_LABELS: &[&str] = &["chat"];
 
 #[cfg(target_os = "macos")]
 fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -175,7 +175,7 @@ pub fn run() {
                     // 弹出窗关即销毁，不走主聊天窗 keep-alive。
                     return;
                 }
-                if window.label() == "lens" || window.label() == "translate" {
+                if window.label() == "lens" {
                     api.prevent_close();
                     // Windows：原生关闭（Alt+F4 等 WM_CLOSE）也要走完整清理 + destroy，回收内存，
                     // 不留隐藏僵尸 overlay（active_overlay_window 只认可见窗，hide 掉的再也销毁不到）。
@@ -191,24 +191,11 @@ pub fn run() {
                     }
                     return;
                 }
-                // 翻译窗（main）若仍收到默认 CloseRequested，必须拦截并走安全销毁：先恢复
-                // TaoWindow 原类，再 destroy WebView/NSPanel，同时把前台交还给打开它之前的 App。
-                #[cfg(target_os = "macos")]
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let handle = window.app_handle();
-                    let st = handle.state::<AppState>();
-                    restore_previous_frontmost_app(handle, &st.prev_frontmost_pid_main);
-                    if let Some(webview_window) = handle.get_webview_window("main") {
-                        windows::destroy_overlay_window(&webview_window);
-                    }
-                    return;
-                }
             }
             tauri::WindowEvent::Focused(true) =>
             {
                 #[cfg(target_os = "macos")]
-                if window.label() == "lens" || window.label() == "translate" {
+                if window.label() == "lens" {
                     if let Some(webview_window) =
                         window.app_handle().get_webview_window(window.label())
                     {
@@ -534,13 +521,9 @@ pub fn run() {
             commands::save_settings,
             commands::set_onboarding_status,
             commands::set_favorite_models,
-            commands::set_translate_card_size,
             commands::export_settings,
             commands::import_settings,
             commands::open_settings_window,
-            commands::close_translator_window,
-            commands::translate_text,
-            commands::commit_translation,
             commands::open_external,
             commands::open_local_file,
             commands::open_data_url_file,
@@ -560,9 +543,6 @@ pub fn run() {
             lens_commands::lens_ask,
             lens_commands::lens_send_to_chat,
             lens_commands::lens_send_history_to_chat,
-            lens_commands::lens_translate,
-            lens_commands::lens_translate_text,
-            lens_commands::lens_replace_translate,
             lens_commands::lens_cancel_stream,
             lens_commands::lens_focus_webview,
             lens_commands::lens_close,
@@ -578,8 +558,6 @@ pub fn run() {
             updates::install_update_and_quit,
             commands::rapidocr_status,
             commands::rapidocr_install,
-            commands::replace_translation_pack_status,
-            commands::replace_translation_pack_install,
             usage::usage_get_stats,
             usage::usage_clear,
             chat::commands::interaction::get_request_debug_records,

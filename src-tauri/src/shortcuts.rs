@@ -6,20 +6,17 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::commands::apply_launch_at_startup;
 use crate::lens_commands::{
-    lens_close, lens_request, lens_request_replace, lens_request_screenshot,
-    lens_request_translate, lens_request_translate_text, request_lens_close,
+    lens_close, lens_request, lens_request_screenshot, request_lens_close,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
 use crate::windows::{
-    apply_chat_window_chrome, apply_frameless_window_chrome, ensure_chat_window,
-    ensure_chat_window_with_hash, ensure_main_window, normalize_chat_window_behavior,
+    apply_chat_window_chrome, ensure_chat_window,
+    ensure_chat_window_with_hash, normalize_chat_window_behavior,
 };
 #[cfg(target_os = "macos")]
 use crate::windows::{
-    apply_macos_traffic_light_position, ensure_overlay_panel, forget_frontmost_app,
-    reassert_previous_frontmost_app, refocus_overlay_after_frontmost_reassert,
-    remember_frontmost_app, restore_previous_frontmost_app, show_overlay_panel,
+    apply_macos_traffic_light_position, forget_frontmost_app,
 };
 
 /// 模拟一次 Cmd+C(macOS)/Ctrl+C(Windows)。
@@ -468,16 +465,12 @@ enum HotkeyErrorKind {
     Other,
 }
 
-/// 热键所属的功能范围。前端按它查"翻译器"/"截图翻译"等本地化名称。
+/// 热键所属的功能范围。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 enum HotkeyScope {
-    Translator,
     Chat,
     CloseChat,
-    Screenshot,
-    ScreenshotText,
-    ScreenshotReplace,
     ScreenshotAnnotate,
     Lens,
     Automation,
@@ -550,31 +543,6 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
     let mut errors: Vec<HotkeyError> = Vec::new();
     let mut registered = HashSet::new();
 
-    if !settings.hotkey.trim().is_empty() {
-        let hotkey = settings.hotkey.trim().to_string();
-        let hotkey_key = hotkey.to_lowercase();
-        if !registered.insert(hotkey_key) {
-            errors.push(HotkeyError {
-                kind: HotkeyErrorKind::Duplicate,
-                scope: HotkeyScope::Translator,
-                hotkey: hotkey.clone(),
-                raw: None,
-            });
-        } else if let Err(err) =
-            shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    toggle_main_window(app);
-                }
-            })
-        {
-            errors.push(classify_hotkey_error(
-                HotkeyScope::Translator,
-                hotkey,
-                err.to_string(),
-            ));
-        }
-    }
-
     if !settings.chat_hotkey.trim().is_empty() {
         let hotkey = settings.chat_hotkey.trim().to_string();
         let hotkey_key = hotkey.to_lowercase();
@@ -627,123 +595,6 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    if settings.screenshot_translation.enabled {
-        let hotkey = settings.screenshot_translation.hotkey.trim().to_string();
-        if !hotkey.is_empty() {
-            let hotkey_key = hotkey.to_lowercase();
-            if !registered.insert(hotkey_key) {
-                errors.push(HotkeyError {
-                    kind: HotkeyErrorKind::Duplicate,
-                    scope: HotkeyScope::Screenshot,
-                    hotkey: hotkey.clone(),
-                    raw: None,
-                });
-            } else if let Err(err) =
-                shortcut_manager.on_shortcut(hotkey.as_str(), move |app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        // 切换行为：Lens 可见时关闭，不可见时打开截图翻译
-                        if lens_is_active(app) {
-                            let _ = request_lens_close(app);
-                        } else {
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(err) = lens_request_translate(handle) {
-                                    eprintln!("Screenshot translation trigger error: {err}");
-                                }
-                            });
-                        }
-                    }
-                })
-            {
-                errors.push(classify_hotkey_error(
-                    HotkeyScope::Screenshot,
-                    hotkey,
-                    err.to_string(),
-                ));
-            }
-        }
-
-        let text_hotkey = settings
-            .screenshot_translation
-            .text_hotkey
-            .trim()
-            .to_string();
-        if !text_hotkey.is_empty() {
-            let hotkey_key = text_hotkey.to_lowercase();
-            if !registered.insert(hotkey_key) {
-                errors.push(HotkeyError {
-                    kind: HotkeyErrorKind::Duplicate,
-                    scope: HotkeyScope::ScreenshotText,
-                    hotkey: text_hotkey.clone(),
-                    raw: None,
-                });
-            } else if let Err(err) =
-                shortcut_manager.on_shortcut(text_hotkey.as_str(), move |app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        if lens_is_active(app) {
-                            let _ = request_lens_close(app);
-                        } else {
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(err) = lens_request_translate_text(handle) {
-                                    eprintln!(
-                                        "Selected text screenshot translation trigger error: {err}"
-                                    );
-                                }
-                            });
-                        }
-                    }
-                })
-            {
-                errors.push(classify_hotkey_error(
-                    HotkeyScope::ScreenshotText,
-                    text_hotkey,
-                    err.to_string(),
-                ));
-            }
-        }
-
-        if settings.screenshot_translation.replace_enabled {
-            let replace_hotkey = settings
-                .screenshot_translation
-                .replace_hotkey
-                .trim()
-                .to_string();
-            if !replace_hotkey.is_empty() {
-                let hotkey_key = replace_hotkey.to_lowercase();
-                if !registered.insert(hotkey_key) {
-                    errors.push(HotkeyError {
-                        kind: HotkeyErrorKind::Duplicate,
-                        scope: HotkeyScope::ScreenshotReplace,
-                        hotkey: replace_hotkey.clone(),
-                        raw: None,
-                    });
-                } else if let Err(err) = shortcut_manager.on_shortcut(
-                    replace_hotkey.as_str(),
-                    move |app, _shortcut, event| {
-                        if event.state == ShortcutState::Pressed {
-                            if lens_is_active(app) {
-                                let _ = request_lens_close(app);
-                            } else {
-                                let handle = app.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    if let Err(err) = lens_request_replace(handle) {
-                                        eprintln!("Replace translation trigger error: {err}");
-                                    }
-                                });
-                            }
-                        }
-                    },
-                ) {
-                    errors.push(classify_hotkey_error(
-                        HotkeyScope::ScreenshotReplace,
-                        replace_hotkey,
-                        err.to_string(),
-                    ));
-                }
-            }
-        }
-    }
 
     if settings.screenshot_annotate.enabled {
         let hotkey = settings.screenshot_annotate.hotkey.trim().to_string();
@@ -916,98 +767,6 @@ fn main_window_position_near_cursor(
         preferred_x.max(min_x).min(max_x.max(min_x)) as i32,
         preferred_y.max(min_y).min(max_y.max(min_y)) as i32,
     )
-}
-
-/// 切换输入翻译窗口。
-/// 可见时关闭销毁 main WebView；显示时跟随鼠标位置偏移 (10,10) 弹出，翻译器保持置顶。
-pub(crate) fn toggle_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
-            #[cfg(target_os = "macos")]
-            {
-                crate::windows::destroy_overlay_window(&window);
-                let st = app.state::<AppState>();
-                restore_previous_frontmost_app(app, &st.prev_frontmost_pid_main);
-            }
-            #[cfg(not(target_os = "macos"))]
-            let _ = window.close();
-            return;
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let st = app.state::<AppState>();
-        remember_frontmost_app(&st.prev_frontmost_pid_main);
-    }
-
-    let window = match ensure_main_window(app) {
-        Ok(window) => window,
-        Err(err) => {
-            #[cfg(target_os = "macos")]
-            {
-                let st = app.state::<AppState>();
-                restore_previous_frontmost_app(app, &st.prev_frontmost_pid_main);
-            }
-            eprintln!("Failed to ensure main window: {}", err);
-            return;
-        }
-    };
-
-    #[cfg(not(target_os = "macos"))]
-    let _ = window.set_always_on_top(true);
-    #[cfg(target_os = "macos")]
-    {
-        ensure_overlay_panel(&window);
-        // ensure_main_window 的冷创建若短暂激活了 ABU Agent，在显示非激活 Panel 前立刻纠正；
-        // 不触碰 Chat 窗口本身。
-        let st = app.state::<AppState>();
-        reassert_previous_frontmost_app(app, &st.prev_frontmost_pid_main);
-    }
-
-    // 重置 hash 为翻译模式；main 现在只承载输入翻译。
-    let _ = window.eval(
-        "window.location.hash = ''; window.dispatchEvent(new HashChangeEvent('hashchange'));",
-    );
-
-    let pos = get_mouse_position(app)
-        .map(|cursor| main_window_position_near_cursor(app, &window, cursor));
-
-    #[cfg(target_os = "macos")]
-    {
-        let window_for_task = window.clone();
-        let app_for_task = app.clone();
-        let _ = window.run_on_main_thread(move || {
-            if let Some(pos) = pos {
-                if let Err(e) = window_for_task.set_position(pos) {
-                    eprintln!("Failed to set window position: {}", e);
-                }
-            } else {
-                eprintln!("Failed to get mouse position");
-            }
-            // 非激活 panel：need_key=true 让翻译输入框接收键盘，但不激活 app、不切 Space。
-            show_overlay_panel(&window_for_task, true);
-            // 某些 macOS/tao 组合即便已带 NonactivatingPanel tag，冷创建后的首次
-            // makeKeyWindow 仍会激活宿主 App；显示后再校正一次，确保普通 Chat 不被带到前面。
-            let st = app_for_task.state::<AppState>();
-            reassert_previous_frontmost_app(&app_for_task, &st.prev_frontmost_pid_main);
-            refocus_overlay_after_frontmost_reassert(&window_for_task);
-        });
-        return;
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(pos) = pos {
-            if let Err(e) = window.set_position(pos) {
-                eprintln!("Failed to set window position: {}", e);
-            }
-        } else {
-            eprintln!("Failed to get mouse position");
-        }
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
 }
 
 /// 恢复运行时设置
@@ -1280,11 +1039,11 @@ pub(crate) fn open_chat_settings_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 浮窗（lens 问答 或 translate 快速翻译）是否有任意一个正在显示。两窗口互斥，热键 toggle
+/// Lens 浮窗是否正在显示。
 /// 据此判断"已开 → 关闭，否则打开"，从而保证同一时刻只有一个浮窗可见。
 fn lens_is_active(app: &AppHandle) -> bool {
     let any_overlay_visible = || {
-        ["lens", "translate"].iter().any(|label| {
+        ["lens"].iter().any(|label| {
             app.get_webview_window(label)
                 .and_then(|window| window.is_visible().ok())
                 .unwrap_or(false)
@@ -1310,7 +1069,7 @@ fn lens_is_active(app: &AppHandle) -> bool {
 }
 
 fn focus_lens_window(app: &AppHandle) -> bool {
-    let Some(window) = ["translate", "lens"]
+    let Some(window) = ["lens"]
         .iter()
         .filter_map(|label| app.get_webview_window(label))
         .find(|window| window.is_visible().ok().unwrap_or(false))
@@ -1376,16 +1135,14 @@ fn tray_labels(lang: &str) -> (&'static str, &'static str, &'static str, &'stati
 /// 构建托盘菜单
 fn build_tray_menu(app: &AppHandle, lang: &str) -> Result<tauri::menu::Menu<tauri::Wry>, String> {
     use tauri::menu::{Menu, MenuItem};
-    let (chat_label, show_label, settings_label, quit_label) = tray_labels(lang);
+    let (chat_label, _show_label, settings_label, quit_label) = tray_labels(lang);
     let chat = MenuItem::with_id(app, "chat", chat_label, true, None::<&str>)
-        .map_err(|e| e.to_string())?;
-    let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)
         .map_err(|e| e.to_string())?;
-    Menu::with_items(app, &[&chat, &show, &settings, &quit]).map_err(|e| e.to_string())
+    Menu::with_items(app, &[&chat, &settings, &quit]).map_err(|e| e.to_string())
 }
 
 /// 设置系统托盘图标和菜单
@@ -1429,29 +1186,6 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
                     eprintln!("Failed to open chat window: {}", err);
                 }
             }
-            "show" => match ensure_main_window(app) {
-                Ok(window) => {
-                    apply_frameless_window_chrome(&window);
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = window.set_always_on_top(true);
-                    #[cfg(target_os = "macos")]
-                    {
-                        let st = app.state::<AppState>();
-                        remember_frontmost_app(&st.prev_frontmost_pid_main);
-                        ensure_overlay_panel(&window);
-                    }
-                    let _ = window.eval(
-                        "window.location.hash = '#translator'; window.dispatchEvent(new HashChangeEvent('hashchange'));",
-                    );
-                    #[cfg(target_os = "macos")]
-                    show_overlay_panel(&window, true);
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = window.show();
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = window.set_focus();
-                }
-                Err(err) => eprintln!("Failed to ensure main window: {}", err),
-            },
             "settings" => {
                 if let Err(err) = open_chat_settings_window(app) {
                     eprintln!("Failed to open chat settings window: {}", err);
