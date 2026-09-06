@@ -1202,9 +1202,7 @@ mod tests {
     use super::{is_valid_chat_last_route, APP_DISPLAY_NAME};
 
     #[cfg(target_os = "macos")]
-    use super::{
-        overlay_window_level, NS_FLOATING_WINDOW_LEVEL, NS_STATUS_WINDOW_LEVEL,
-    };
+    use super::{overlay_window_level, NS_STATUS_WINDOW_LEVEL};
 
     #[test]
     fn user_facing_window_brand_is_abu_agent_desktop() {
@@ -1213,7 +1211,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn text_translator_stays_below_ime_candidates() {
+    fn lens_overlay_uses_status_window_level() {
         assert_eq!(overlay_window_level("lens"), NS_STATUS_WINDOW_LEVEL);
     }
 

@@ -1,7 +1,7 @@
 # ABU Agent Rust 后端 Cargo 配置
 [package]
 name = "abu-agent"
-version = "0.1.6"
+version = "0.1.7"
 description = "ABU Agent Desktop - Screen-level AI assistant for macOS/Windows"
 authors = ["abu"]
 repository = "https://github.com/BeyondYang117/abu-agent"

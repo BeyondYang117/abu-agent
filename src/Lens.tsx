@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { flushSync } from 'react-dom'
 import { Loader2, Copy, Check, Square, Image as ImageIcon, ArrowUp, History as HistoryIcon, ChevronDown, MousePointer2, Code, Eye, MessageSquarePlus } from 'lucide-react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensReplaceStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
+import { api, type LensStreamPayload, type LensTranslateStreamPayload, type LensReplaceGroup, type LensReplaceRenderSlot, type LensReplaceStreamPayload, type LensWindowInfo, type ExplainMessage, type LensWebSearchPayload } from './api/tauri'
 import { getSettingsCached, setTranslateCardSizeCached } from './api/settingsCache'
 import { ChatMarkdown } from './chat/ChatMarkdown'
 import { Button } from './components/Button'
@@ -42,7 +42,7 @@ function readModeFromHash(): Mode {
   return 'chat'
 }
 
-function keepFullscreenForMode(curMode: Mode, _screenshotKeepFullscreen: boolean): boolean {
+function keepFullscreenForMode(curMode: Mode): boolean {
   return curMode === 'chat' || curMode === 'screenshot'
 }
 
@@ -57,6 +57,21 @@ type LensResetFrame = {
 type LensResetPayload = {
   frame?: LensResetFrame
   freezeFrameImageId?: string
+}
+
+type TranslateCardDrag = {
+  pointerId: number
+  startX: number
+  startY: number
+  startRect: BarRect
+}
+
+type TranslateCardResize = {
+  pointerId: number
+  startX: number
+  startY: number
+  startW: number
+  startH: number
 }
 
 function readLensResetPayload(detail: unknown): LensResetPayload {
@@ -147,8 +162,8 @@ export default function Lens() {
   const [translateOriginal, setTranslateOriginal] = useState('')
   const [translateText, setTranslateText] = useState('')
   const [translateError, setTranslateError] = useState('')
-  const [replaceGroups, setReplaceGroups] = useState<any[]>([])
-  const [replaceSlots, setReplaceSlots] = useState<any[]>([])
+  const [replaceGroups, setReplaceGroups] = useState<LensReplaceGroup[]>([])
+  const [replaceSlots, setReplaceSlots] = useState<LensReplaceRenderSlot[]>([])
   const [replaceCleanedImage, setReplaceCleanedImage] = useState('')
   const [replacePhase, setReplacePhase] = useState<'ocr' | 'processing' | 'done' | 'error' | ''>('')
   const [replaceError, setReplaceError] = useState('')
@@ -264,7 +279,6 @@ export default function Lens() {
   const selectRevealedRef = useRef(false)
   const captureHintEnabledRef = useRef(true)
   const sendToChatRef = useRef(true)
-  const screenshotKeepFullscreenRef = useRef(true)
   const cardWidthRef = useRef(480)
   // 快速翻译结果卡宽度（截图翻译 + 选中文本翻译共用，来自设置，默认 480）
   const prevStreamingRef = useRef(false)
@@ -281,8 +295,8 @@ export default function Lens() {
   // selectionText 异步 take 的重入 token：每次 enterSelect / resetBeforeHide / restoreHistory 都 +1，
   // 老请求看到 myReq !== current 直接丢弃，避免 take 完成时已经进入新会话被错误注入。
   const selectionReqIdRef = useRef(0)
-  const translateCardDragRef = useRef<any>(null)
-  const translateCardResizeRef = useRef<any>(null)
+  const translateCardDragRef = useRef<TranslateCardDrag | null>(null)
+  const translateCardResizeRef = useRef<TranslateCardResize | null>(null)
   const translateContentRef = useRef<HTMLDivElement>(null)
   // 答案区滚动容器，stream 时自动滚到底部
   const chatScrollRef = useRef<HTMLDivElement>(null)
@@ -332,15 +346,14 @@ export default function Lens() {
       const canUseWebSearch = webSearch?.enabled === true && isWebSearchConfigured(webSearch)
       setWebSearchAvailable(canUseWebSearch)
       setWebSearchEnabled(canUseWebSearch && curMode === 'chat')
-      screenshotKeepFullscreenRef.current = settings.screenshotTranslation?.keepFullscreenAfterCapture !== false
       cardWidthRef.current = settings.screenshotTranslation?.cardWidth ?? 480
-      setKeepFullscreen(keepFullscreenForMode(curMode, screenshotKeepFullscreenRef.current))
+      setKeepFullscreen(keepFullscreenForMode(curMode))
       captureHintEnabledRef.current = settings.lens?.showCaptureHint !== false
       sendToChatRef.current = settings.lens?.sendToChat !== false
     } catch (err) { console.error('Failed to load settings', err) }
   }, [])
 
-  // 加载设置：普通 Lens 截图后固定保持全屏覆盖；截图翻译仍读自己的保留全屏配置。
+  // 加载设置：Lens 截图后固定保持全屏覆盖。
   useEffect(() => {
     void loadLensSettings()
   }, [loadLensSettings])
@@ -407,7 +420,7 @@ export default function Lens() {
       setSurfaceDormant(false)
       setStage('select')
       setMode(curMode)
-      setKeepFullscreen(keepFullscreenForMode(curMode, screenshotKeepFullscreenRef.current))
+      setKeepFullscreen(keepFullscreenForMode(curMode))
       setFloatingRebased(false)
       setHovered(null)
       setDragStart(null)
@@ -469,9 +482,8 @@ export default function Lens() {
       try {
         const settings = await getSettingsCached()
         if (motionSeq !== motionSeqRef.current) return
-        screenshotKeepFullscreenRef.current = settings.screenshotTranslation?.keepFullscreenAfterCapture !== false
         cardWidthRef.current = settings.screenshotTranslation?.cardWidth ?? 480
-        setKeepFullscreen(keepFullscreenForMode(curMode, screenshotKeepFullscreenRef.current))
+        setKeepFullscreen(keepFullscreenForMode(curMode))
         captureHintEnabledRef.current = settings.lens?.showCaptureHint !== false
         if (stageRef.current === 'select' && selectRevealedRef.current) {
           setShowCaptureHint(captureHintEnabledRef.current)
