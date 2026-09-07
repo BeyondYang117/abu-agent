@@ -26,6 +26,26 @@ type OnboardingShellProps = {
   onSettingsChange?: () => void
 }
 
+const ONBOARDING_LOAD_TIMEOUT_MS = 15_000
+
+function withOnboardingTimeout<T>(promise: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error('读取设置超时，请重试或跳过引导'))
+    }, ONBOARDING_LOAD_TIMEOUT_MS)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (error) => {
+        window.clearTimeout(timeoutId)
+        reject(error)
+      },
+    )
+  })
+}
+
 /** 首次运行按系统语言（浏览器/系统 locale）自动选定界面语言：中文 locale → zh，其余 → en。 */
 function detectSystemLang(): Lang {
   const raw = (
@@ -68,7 +88,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setLoading(true)
     setLoadError(null)
     try {
-      const loaded = await getSettingsCached()
+      const loaded = await withOnboardingTimeout(getSettingsCached())
       // 首次运行按系统语言自动设定界面语言（欢迎页起即本地化）；但若用户此前已选过语言
       // （如重跑引导的老用户），沿用其选择，不要用系统 locale 覆盖。
       setSettings({
@@ -258,7 +278,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
         return
       }
       // 重新加载 settings 以获取更新后的 runtime_mode
-      const reloaded = await getSettingsCached()
+      const reloaded = await withOnboardingTimeout(getSettingsCached())
       setSettings(reloaded)
       // 自动进入下一步
       goNext()
@@ -395,7 +415,13 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
               {stepId === 'login' ? (
                 <Button
                   variant="ghost"
-                  onClick={goNext}
+                  onClick={() => {
+                    if (settings.runtimeMode?.trim().toLowerCase() === 'cloud') {
+                      void handleSkip()
+                    } else {
+                      goNext()
+                    }
+                  }}
                   disabled={saving}
                   data-tauri-drag-region="false"
                 >
