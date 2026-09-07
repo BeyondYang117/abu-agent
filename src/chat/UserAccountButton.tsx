@@ -10,6 +10,7 @@ import { IconButton } from '../components/Button'
 import { UserAccountMenu } from './UserAccountMenu'
 import { formatAbuQuota } from '../api/quota'
 import { resolveAccountDisplayName } from './accountDisplayName'
+import { ABU_PLATFORM_URL } from '../api/abuApiEndpoints'
 
 interface UserAccountButtonProps {
   profile: ChatUserProfile
@@ -151,8 +152,7 @@ export const UserAccountButton = memo(function UserAccountButton({
   }, [checkinLoading, checkinStats?.checked_in_today])
 
   const openTopup = useCallback(() => {
-    const baseUrl = getAbuApiClient().getBaseUrl().replace(/\/+$/, '')
-    void api.openExternal(`${baseUrl}/console/topup?source=desktop_account_menu`)
+    void api.openExternal(`${ABU_PLATFORM_URL}/console/topup?source=desktop_account_menu`)
       .catch((err) => console.error('Failed to open top-up page:', err))
   }, [])
 

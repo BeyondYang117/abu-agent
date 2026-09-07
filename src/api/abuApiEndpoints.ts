@@ -1,6 +1,9 @@
 /** 支持网页登录授权的 ABU 平台域名池。顺序即故障转移优先级。 */
+/** 充值、订阅等平台页面固定使用主站，不能跟随 API 故障转移域名。 */
+export const ABU_PLATFORM_URL = 'https://api.abuai.chat'
+
 export const ABU_API_BASE_URLS = [
-  'https://api.abuai.chat',
+  ABU_PLATFORM_URL,
   'https://api.abusz.com',
 ] as const
 

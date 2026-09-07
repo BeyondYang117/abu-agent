@@ -5,7 +5,7 @@ import { SettingsGroup } from '../components'
 import { abuApiAuthStore, switchAbuApiBaseUrl, useAbuApiAuth } from '../../api/abuApiAuth'
 import { getAbuApiClient, DEFAULT_ABU_API_BASE_URL } from '../../api/abuApi'
 import { api, isTauriRuntime } from '../../api/tauri'
-import { ABU_API_BASE_URLS, probeAbuApiEndpoint } from '../../api/abuApiEndpoints'
+import { ABU_API_BASE_URLS, ABU_PLATFORM_URL, probeAbuApiEndpoint } from '../../api/abuApiEndpoints'
 import { formatAbuQuota } from '../../api/quota'
 
 interface AccountInfo {
@@ -93,8 +93,7 @@ export function AccountInfoCard({
   }
 
   const openTopup = () => {
-    const baseUrl = getAbuApiClient().getBaseUrl().replace(/\/+$/, '')
-    void api.openExternal(`${baseUrl}/console/topup?source=desktop_settings`)
+    void api.openExternal(`${ABU_PLATFORM_URL}/console/topup?source=desktop_settings`)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 

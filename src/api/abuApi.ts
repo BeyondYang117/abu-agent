@@ -318,14 +318,14 @@ export class AbuApiClient {
     if (isTauriRuntime()) {
       return this.nativeWithFailover(() => api.abuApiGetCheckinStats())
     }
-    return this.request<CheckinStats>('/api/agent/checkin/stats')
+    return this.request<CheckinStats>('/api/user/checkin/stats')
   }
 
   async checkin(): Promise<CheckinResult> {
     if (isTauriRuntime()) {
       return this.nativeWithFailover(() => api.abuApiCheckin())
     }
-    return this.request<CheckinResult>('/api/agent/checkin', { method: 'POST' })
+    return this.request<CheckinResult>('/api/user/checkin', { method: 'POST' })
   }
 
   // ==================== 模型与会话 ====================

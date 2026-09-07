@@ -98,4 +98,20 @@ describe('AbuApiClient.listModels', () => {
     expect(abuApiCheckinMock).toHaveBeenCalledOnce()
     expect(fetch).not.toHaveBeenCalled()
   })
+
+  it('uses the canonical user check-in endpoints in the web runtime', async () => {
+    isTauriRuntimeMock.mockReturnValue(false)
+    vi.stubGlobal('window', { setTimeout, clearTimeout })
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, data: { checked_in_today: false } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, data: { total_reward: 1000 } }), { status: 200 }))
+    const { AbuApiClient } = await import('./abuApi')
+    const client = new AbuApiClient('https://api.abuai.chat', 'session-token')
+
+    await client.getCheckinStats()
+    await client.checkin()
+
+    expect(fetch).toHaveBeenNthCalledWith(1, 'https://api.abuai.chat/api/user/checkin/stats', expect.any(Object))
+    expect(fetch).toHaveBeenNthCalledWith(2, 'https://api.abuai.chat/api/user/checkin', expect.any(Object))
+  })
 })

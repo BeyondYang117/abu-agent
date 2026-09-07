@@ -912,7 +912,7 @@ pub async fn abu_api_get_checkin_stats(
 ) -> Result<CheckinStatsResponse, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
     let response = reqwest::Client::new()
-        .get(format!("{base_url}/api/agent/checkin/stats"))
+        .get(format!("{base_url}/api/user/checkin/stats"))
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .send()
@@ -926,7 +926,7 @@ pub async fn abu_api_get_checkin_stats(
 pub async fn abu_api_checkin(state: State<'_, AppState>) -> Result<CheckinResultResponse, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
     let response = reqwest::Client::new()
-        .post(format!("{base_url}/api/agent/checkin"))
+        .post(format!("{base_url}/api/user/checkin"))
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .send()
