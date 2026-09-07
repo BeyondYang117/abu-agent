@@ -25,6 +25,7 @@ import {
   syncModelRoutingPolicy,
   type ModelRoutingPolicy,
 } from './modelRoutingPolicy'
+import { ABU_PLATFORM_URL } from '../api/abuApiEndpoints'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -50,7 +51,7 @@ function ModelSelectorBase({
 }: ModelSelectorProps) {
   const t = useT()
   const lang = useLang()
-  const { isAuthenticated, baseUrl: abuBaseUrl } = useAbuApiAuth()
+  const { isAuthenticated } = useAbuApiAuth()
   const [open, setOpen] = useState(false)
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
@@ -187,7 +188,7 @@ function ModelSelectorBase({
 
   const openCloudPurchase = useCallback((model: string) => {
     const access = cloudModelAccess[model]
-    const baseUrl = (abuBaseUrl || 'https://api.abuai.chat').replace(/\/+$/, '')
+    const baseUrl = ABU_PLATFORM_URL
     const planIds = access?.recommended_plan_ids?.join(',')
     const query = new URLSearchParams({
       model,
@@ -197,7 +198,7 @@ function ModelSelectorBase({
     }).toString()
     const path = access?.status === 'quota_exhausted' ? '/console/topup' : '/console/subscription'
     void api.openExternal(`${baseUrl}${path}?${query}`).catch((error) => console.error('Failed to open purchase page:', error))
-  }, [abuBaseUrl, cloudModelAccess])
+  }, [cloudModelAccess])
 
   const currentProvider = activeProviders.find((p) => p.id === currentProviderId)
     ?? providers.find((p) => p.id === currentProviderId)

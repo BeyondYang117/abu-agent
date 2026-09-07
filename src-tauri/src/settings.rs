@@ -2020,6 +2020,15 @@ fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
 }
 
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
+    // api.abu117.cn only serves model API traffic and has no browser login or
+    // device authorization pages. Migrate desktop account configs away from it.
+    if settings
+        .abu_api_base_url
+        .as_deref()
+        .is_some_and(|value| value.trim().trim_end_matches('/') == "https://api.abu117.cn")
+    {
+        settings.abu_api_base_url = Some(DEFAULT_ABU_API_BASE_URL.to_string());
+    }
     // Chat remains decodable for existing conversations, but it is no longer
     // a selectable/default runtime for newly created conversations.
     if settings.chat.default_agent_runtime.is_chat() {
@@ -3306,6 +3315,19 @@ mod tests {
         s.retry_attempts = 99;
         let s = sanitize_settings(s);
         assert!((1..=8).contains(&s.retry_attempts));
+    }
+
+    #[test]
+    fn sanitize_settings_migrates_api_only_abu_domain() {
+        let mut settings = Settings::default();
+        settings.abu_api_base_url = Some("https://api.abu117.cn/".to_string());
+
+        let settings = sanitize_settings(settings);
+
+        assert_eq!(
+            settings.abu_api_base_url.as_deref(),
+            Some(DEFAULT_ABU_API_BASE_URL)
+        );
     }
 
     #[test]

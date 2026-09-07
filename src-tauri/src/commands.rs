@@ -386,7 +386,28 @@ pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
         return Err("Invalid URL".to_string());
     }
 
-    app.shell().open(url, None).map_err(|e| e.to_string())
+    // `tauri-plugin-shell` ultimately calls ShellExecuteExW on Windows. That call can
+    // block on a broken/default-browser association, occupying Tauri's command thread;
+    // the device-flow poll then times out before the browser is ever shown. Explorer
+    // accepts the URL as a real process argument and returns immediately after handing
+    // it to the registered browser, without going through `cmd.exe` string parsing.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("explorer.exe")
+            .arg(&url)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("Failed to launch the default browser: {err}"))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.shell().open(url, None).map_err(|e| e.to_string())
+    }
 }
 
 /// 模型输出里的本地文件链接**禁止**打开的扩展名。

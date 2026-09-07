@@ -24,6 +24,13 @@ export function isChatOnboardingRoute(path: string): boolean {
   return isChatOnboardingPath(path)
 }
 
+/** The login screen reuses the old onboarding shell, but is not a setup wizard. */
+export function isChatLoginRoute(): boolean {
+  if (!isChatOnboardingPath(hashPath())) return false
+  const query = window.location.hash.split('?')[1] || ''
+  return new URLSearchParams(query).get('return') === 'chat'
+}
+
 export function isChatSkillCenterPath(path: string): boolean {
   return path === 'chat/skill' || path.startsWith('chat/skill/')
 }
