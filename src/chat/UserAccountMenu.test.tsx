@@ -43,6 +43,22 @@ describe('UserAccountMenu', () => {
     expect(screen.getByText('· +$0.002')).toBeInTheDocument()
   })
 
+  it('does not allow check-in before the status has loaded', () => {
+    const props = renderMenu({ checkinStats: null, loading: true })
+
+    const button = screen.getByRole('button', { name: /加载中/ })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(props.onCheckin).not.toHaveBeenCalled()
+  })
+
+  it('keeps check-in disabled when status loading fails', () => {
+    renderMenu({ checkinStats: null, loading: false, checkinError: '网络错误' })
+
+    expect(screen.getByRole('button', { name: '暂不可用' })).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('网络错误')
+  })
+
   it('opens the abu-api top-up flow from the balance action', () => {
     const props = renderMenu()
 

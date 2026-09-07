@@ -1,15 +1,16 @@
-/** ABU API 可用域名池。顺序即故障转移优先级。 */
+/** 支持网页登录授权的 ABU 平台域名池。顺序即故障转移优先级。 */
 export const ABU_API_BASE_URLS = [
   'https://api.abuai.chat',
   'https://api.abusz.com',
-  'https://api.abu117.cn',
 ] as const
+
+const API_ONLY_BASE_URLS = new Set(['https://api.abu117.cn'])
 
 export type AbuApiBaseUrl = (typeof ABU_API_BASE_URLS)[number]
 
 export function normalizeAbuApiBaseUrl(value: string | null | undefined): string {
   const trimmed = (value || '').trim().replace(/\/+$/, '')
-  return trimmed || ABU_API_BASE_URLS[0]
+  return !trimmed || API_ONLY_BASE_URLS.has(trimmed) ? ABU_API_BASE_URLS[0] : trimmed
 }
 
 export function getAbuApiEndpointCandidates(current?: string | null): string[] {

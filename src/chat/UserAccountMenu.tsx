@@ -184,12 +184,16 @@ export function UserAccountMenu({
           </div>
           <button
             type="button"
-            disabled={checkinLoading || checkinStats?.checked_in_today === true}
+            disabled={loading || checkinLoading || !checkinStats || checkinStats.checked_in_today}
             onClick={onCheckin}
             className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-amber-500 px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:bg-amber-300 disabled:shadow-none dark:disabled:bg-amber-900/60"
           >
-            {checkinLoading && <LoaderCircle size={11} className="animate-spin" />}
-            {checkinStats?.checked_in_today
+            {(loading || checkinLoading || !checkinStats) && <LoaderCircle size={11} className="animate-spin" />}
+            {checkinError && !checkinStats
+              ? (lang === 'zh' ? '暂不可用' : 'Unavailable')
+              : loading || !checkinStats
+              ? (lang === 'zh' ? '加载中' : 'Loading')
+              : checkinStats?.checked_in_today
               ? (lang === 'zh' ? '已签到' : 'Done')
               : (lang === 'zh' ? '签到' : 'Check in')}
           </button>

@@ -59,12 +59,14 @@ export const UserAccountButton = memo(function UserAccountButton({
 
   const loadAccount = useCallback(async () => {
     setLoading(true)
+    setCheckinError(null)
     try {
       const client = getAbuApiClient()
       const [info, stats] = await Promise.all([
         client.getUserInfo(),
         client.getCheckinStats().catch((err) => {
           console.error('Failed to load check-in status:', err)
+          if (mountedRef.current) setCheckinError(err instanceof Error ? err.message : String(err))
           return null
         }),
       ])
@@ -125,7 +127,24 @@ export const UserAccountButton = memo(function UserAccountButton({
       setCheckinStats(stats)
       setCheckinReward(result.total_reward)
     } catch (err) {
-      if (mountedRef.current) setCheckinError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('今日已签到') || message.toLowerCase().includes('already checked in')) {
+        try {
+          const stats = await getAbuApiClient().getCheckinStats()
+          if (mountedRef.current) {
+            setCheckinStats({ ...stats, checked_in_today: true })
+            setCheckinError(null)
+          }
+          return
+        } catch {
+          if (mountedRef.current) {
+            setCheckinStats((current) => current ? { ...current, checked_in_today: true } : current)
+            setCheckinError(null)
+          }
+          return
+        }
+      }
+      if (mountedRef.current) setCheckinError(message)
     } finally {
       if (mountedRef.current) setCheckinLoading(false)
     }
