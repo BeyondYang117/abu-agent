@@ -61,7 +61,6 @@ import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/ch
 import { normalizeThemeColorId } from '../themeColors'
 import { UI_FONT_PX_MIN, UI_FONT_PX_MAX } from './uiFont'
 import {
-  SettingRow,
   SettingsGroup, FieldBlock,
 } from './components'
 import { ConnectorsPanel } from './ConnectorsPanel'
@@ -907,22 +906,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
   }, [lang, onSettingsChange])
 
-  const handleRestartOnboarding = useCallback(async () => {
-    if (!settings) return
-    try {
-      const saved = await saveSettingsCached({
-        ...settings,
-        onboardingStatus: 'pending',
-      })
-      setSettings(saved)
-      setInitialSettingsSnapshot(stableStringify(saved))
-      onSettingsChange()
-      window.location.hash = '#chat/onboarding'
-    } catch (err) {
-      console.error('Failed to restart onboarding:', err)
-    }
-  }, [onSettingsChange, settings])
-
   const updateDefaultModel = useCallback((
     key: keyof SettingsData['defaultModels'],
     providerId: string,
@@ -1763,21 +1746,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   onRetryAttemptsChange={handleRetryAttemptsChange}
                   onRetryAttemptsBlur={handleRetryAttemptsBlur}
                 />
-
-                <SettingsGroup title={lang === 'zh' ? '首次使用' : 'First-time setup'}>
-                  <SettingRow
-                    label={lang === 'zh' ? '首次使用引导' : 'Setup wizard'}
-                    description={t.onboardingRestartDesc}
-                  >
-                    <Button
-                      size="sm"
-                      onClick={() => void handleRestartOnboarding()}
-                      data-tauri-drag-region="false"
-                    >
-                      {t.onboardingRestart}
-                    </Button>
-                  </SettingRow>
-                </SettingsGroup>
 
                 <SettingsGroup title={lang === 'zh' ? '备份与恢复' : 'Backup & Restore'}>
                   <FieldBlock

@@ -13,6 +13,7 @@ import {
   isChatAssistantCenterPath,
   isChatAutomationsPath,
   isChatKnowledgeCenterPath,
+  isChatLoginRoute,
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatOnboardingRoute,
@@ -85,6 +86,17 @@ describe('hashPath', () => {
   it('空 hash 返回空串', () => {
     withHash('')
     expect(hashPath()).toBe('')
+  })
+})
+
+describe('isChatLoginRoute', () => {
+  it('only recognizes the on-demand login route', () => {
+    withHash('#chat/onboarding?step=login&return=chat')
+    expect(isChatLoginRoute()).toBe(true)
+    withHash('#chat/onboarding')
+    expect(isChatLoginRoute()).toBe(false)
+    withHash('#chat/onboarding?step=login')
+    expect(isChatLoginRoute()).toBe(false)
   })
 })
 

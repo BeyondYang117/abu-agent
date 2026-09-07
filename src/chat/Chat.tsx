@@ -17,6 +17,7 @@ import {
   hashPath,
   isChatAssistantCenterPath,
   isChatKnowledgeCenterPath,
+  isChatLoginRoute,
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatOnboardingRoute,
@@ -630,7 +631,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   useChatPerfLongTaskProbe()
   const [chatView, setChatView] = useState<ChatView>(() => {
     const path = hashPath()
-    if (isChatOnboardingRoute(path)) return 'onboarding'
+    if (isChatOnboardingRoute(path) && isChatLoginRoute()) return 'onboarding'
     if (isChatSettingsPath(path)) return 'settings'
     if (isChatAssistantCenterPath(path)) return 'assistants'
     if (isChatSkillCenterPath(path)) return 'skill'
@@ -2691,22 +2692,6 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     }
   }, [])
 
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return
-    let cancelled = false
-    void getSettingsCached().then((settings) => {
-      if (cancelled) return
-      if (settings.onboardingStatus === 'pending' && !isChatOnboardingRoute(hashPath())) {
-        syncOnboardingRoute()
-      }
-    }).catch((err) => {
-      console.error('Failed to check onboarding status:', err)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [syncOnboardingRoute])
 
   useEffect(() => {
     let cancelled = false

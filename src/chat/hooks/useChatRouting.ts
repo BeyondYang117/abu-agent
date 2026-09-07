@@ -6,6 +6,7 @@ import {
   isChatAssistantCenterPath,
   isChatAutomationsPath,
   isChatKnowledgeCenterPath,
+  isChatLoginRoute,
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatOnboardingRoute,
@@ -74,8 +75,15 @@ export function useChatRouting({
   useEffect(() => {
     const loadFromRoute = () => {
       const path = hashPath()
-      if (isChatOnboardingRoute(path)) {
+      if (isChatOnboardingRoute(path) && isChatLoginRoute()) {
         onViewChange('onboarding')
+        return
+      }
+      // The former first-run wizard is retired. Keep old links harmless by opening chat.
+      if (isChatOnboardingRoute(path)) {
+        setHash('#chat')
+        onViewChange('conversation')
+        onResetConversation()
         return
       }
       if (isChatSettingsPath(path)) {
