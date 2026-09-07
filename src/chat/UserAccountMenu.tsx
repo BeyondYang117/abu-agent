@@ -1,15 +1,17 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { LogOut, Coins, Crown, Calendar, Settings, Gift, TrendingUp } from 'lucide-react'
+import { LogOut, Coins, Crown, CalendarCheck2, Settings, CreditCard, LoaderCircle, Check, Flame } from 'lucide-react'
 import { useCloseAnimation } from './useCloseAnimation'
 import { type Lang } from '../settings/i18n'
-import { formatAbuQuota } from '../api/quota'
+import { formatAbuQuota, formatAbuQuotaReward } from '../api/quota'
+import type { CheckinStats } from '../api/abuApi'
 
 interface AccountInfo {
   username: string
   displayName?: string
   email?: string
   quota: number
+  temporaryQuota: number
   usedQuota: number
   group: string
 }
@@ -19,6 +21,12 @@ interface UserAccountMenuProps {
   lang: Lang
   accountInfo: AccountInfo | null
   loading: boolean
+  checkinStats: CheckinStats | null
+  checkinLoading: boolean
+  checkinError: string | null
+  checkinReward: number | null
+  onCheckin: () => void
+  onRecharge: () => void
   onOpenSettings: () => void
   onLogout: () => void
   onClose: () => void
@@ -29,6 +37,12 @@ export function UserAccountMenu({
   lang,
   accountInfo,
   loading,
+  checkinStats,
+  checkinLoading,
+  checkinError,
+  checkinReward,
+  onCheckin,
+  onRecharge,
   onOpenSettings,
   onLogout,
   onClose: onCloseProp,
@@ -53,7 +67,7 @@ export function UserAccountMenu({
     }
   }, [onClose])
 
-  const balance = accountInfo ? formatAbuQuota(accountInfo.quota) : '0.00'
+  const balance = accountInfo ? formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota) : '0.00'
   const usedBalance = accountInfo ? formatAbuQuota(accountInfo.usedQuota) : '0.00'
   const isVip = accountInfo?.group === 'vip'
 
@@ -113,6 +127,16 @@ export function UserAccountMenu({
                 {lang === 'zh' ? '已消费' : 'Used'} ${usedBalance}
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                onRecharge()
+                onClose()
+              }}
+              className="shrink-0 rounded-md bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-80 dark:bg-neutral-100 dark:text-neutral-900"
+            >
+              {lang === 'zh' ? '充值' : 'Top up'}
+            </button>
           </div>
         </div>
       ) : loading ? (
@@ -137,55 +161,58 @@ export function UserAccountMenu({
 
       <div className="kv-menu-sep" />
 
-      {/* 签到按钮 - 未来功能 */}
+      <div className="mx-1 rounded-lg border border-amber-200/80 bg-gradient-to-br from-amber-50 to-orange-50/70 p-2 dark:border-amber-900/60 dark:from-amber-950/30 dark:to-orange-950/20">
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-400/20 text-amber-700 dark:text-amber-300">
+            {checkinStats?.checked_in_today ? <Check size={15} /> : <CalendarCheck2 size={15} />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+              {checkinStats?.checked_in_today
+                ? (lang === 'zh' ? '今日已签到' : 'Checked in today')
+                : (lang === 'zh' ? '每日签到领额度' : 'Daily quota reward')}
+            </div>
+            <div className="mt-0.5 flex items-center gap-1 text-[10px] text-neutral-500 dark:text-neutral-400">
+              <Flame size={10} className="text-orange-500" />
+              {lang === 'zh' ? `连续 ${checkinStats?.consecutive_days ?? 0} 天` : `${checkinStats?.consecutive_days ?? 0}-day streak`}
+              {checkinReward != null && (
+                <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                  · +${formatAbuQuotaReward(checkinReward)}
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={checkinLoading || checkinStats?.checked_in_today === true}
+            onClick={onCheckin}
+            className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-amber-500 px-2.5 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:bg-amber-300 disabled:shadow-none dark:disabled:bg-amber-900/60"
+          >
+            {checkinLoading && <LoaderCircle size={11} className="animate-spin" />}
+            {checkinStats?.checked_in_today
+              ? (lang === 'zh' ? '已签到' : 'Done')
+              : (lang === 'zh' ? '签到' : 'Check in')}
+          </button>
+        </div>
+        {checkinError && (
+          <div role="alert" className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-red-600 dark:text-red-400" title={checkinError}>
+            {checkinError}
+          </div>
+        )}
+      </div>
+
       <button
         type="button"
         role="menuitem"
         className="kv-menu-item"
         onClick={() => {
-          // TODO: 实现签到功能
-          console.log('签到功能即将上线')
+          onRecharge()
           onClose()
         }}
       >
-        <Calendar strokeWidth={1.75} />
-        {lang === 'zh' ? '每日签到' : 'Daily Check-in'}
-        <span className="ml-auto text-xs text-neutral-400 dark:text-neutral-500">
-          {lang === 'zh' ? '即将上线' : 'Coming soon'}
-        </span>
-      </button>
-
-      {/* 升级按钮 - 未来功能 */}
-      {!isVip && (
-        <button
-          type="button"
-          role="menuitem"
-          className="kv-menu-item"
-          onClick={() => {
-            // TODO: 实现升级功能
-            console.log('升级功能即将上线')
-            onClose()
-          }}
-        >
-          <TrendingUp strokeWidth={1.75} />
-          {lang === 'zh' ? '升级会员' : 'Upgrade'}
-          <Crown size={14} className="ml-auto text-yellow-500" />
-        </button>
-      )}
-
-      {/* 兑换码 - 未来功能 */}
-      <button
-        type="button"
-        role="menuitem"
-        className="kv-menu-item"
-        onClick={() => {
-          // TODO: 实现兑换码功能
-          console.log('兑换码功能即将上线')
-          onClose()
-        }}
-      >
-        <Gift strokeWidth={1.75} />
-        {lang === 'zh' ? '兑换码' : 'Redeem Code'}
+        <CreditCard strokeWidth={1.75} />
+        {lang === 'zh' ? '充值余额' : 'Top up balance'}
+        <span className="kv-menu-hint">abu-api ↗</span>
       </button>
 
       <div className="kv-menu-sep" />

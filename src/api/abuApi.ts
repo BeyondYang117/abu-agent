@@ -89,6 +89,22 @@ export interface AgentRelayCredentials {
   recommended_model: string
 }
 
+export interface CheckinStats {
+  consecutive_days: number
+  total_checkins: number
+  total_quota: number
+  checked_in_today: boolean
+}
+
+export interface CheckinResult {
+  success: boolean
+  base_reward: number
+  bonus_reward: number
+  total_reward: number
+  consecutive_days: number
+  bonus_triggered: boolean
+}
+
 export interface AbuApiError {
   success: false
   message: string
@@ -285,6 +301,7 @@ export class AbuApiClient {
     display_name?: string
     email?: string
     quota: number
+    temporary_quota?: number
     used_quota: number
     group: string
   }> {
@@ -295,6 +312,20 @@ export class AbuApiClient {
       return this.nativeWithFailover(() => api.abuApiGetUserInfo())
     }
     return this.request('/api/agent/devices?include_account=1')
+  }
+
+  async getCheckinStats(): Promise<CheckinStats> {
+    if (isTauriRuntime()) {
+      return this.nativeWithFailover(() => api.abuApiGetCheckinStats())
+    }
+    return this.request<CheckinStats>('/api/agent/checkin/stats')
+  }
+
+  async checkin(): Promise<CheckinResult> {
+    if (isTauriRuntime()) {
+      return this.nativeWithFailover(() => api.abuApiCheckin())
+    }
+    return this.request<CheckinResult>('/api/agent/checkin', { method: 'POST' })
   }
 
   // ==================== 模型与会话 ====================

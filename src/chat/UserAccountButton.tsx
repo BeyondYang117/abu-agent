@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { User, Settings, Coins, Crown } from 'lucide-react'
 import { useAbuApiAuth } from '../api/abuApiAuth'
-import { getAbuApiClient } from '../api/abuApi'
+import { getAbuApiClient, type CheckinStats } from '../api/abuApi'
+import { api } from '../api/tauri'
 import { UserAvatar } from './UserAvatar'
 import type { ChatUserProfile } from './types'
 import { i18n, type Lang } from '../settings/i18n'
@@ -24,6 +25,7 @@ interface AccountInfo {
   displayName?: string
   email?: string
   quota: number
+  temporaryQuota: number
   usedQuota: number
   group: string
 }
@@ -40,47 +42,100 @@ export const UserAccountButton = memo(function UserAccountButton({
   const { isAuthenticated } = useAbuApiAuth()
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
   const [loading, setLoading] = useState(false)
+  const [checkinStats, setCheckinStats] = useState<CheckinStats | null>(null)
+  const [checkinLoading, setCheckinLoading] = useState(false)
+  const [checkinError, setCheckinError] = useState<string | null>(null)
+  const [checkinReward, setCheckinReward] = useState<number | null>(null)
   const [menuRect, setMenuRect] = useState<{ left: number; top: number; width: number } | null>(null)
   const rowRef = useRef<HTMLDivElement>(null)
+  const mountedRef = useRef(true)
 
-  // 加载用户信息
   useEffect(() => {
-    let cancelled = false
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
+  const loadAccount = useCallback(async () => {
+    setLoading(true)
+    try {
+      const client = getAbuApiClient()
+      const [info, stats] = await Promise.all([
+        client.getUserInfo(),
+        client.getCheckinStats().catch((err) => {
+          console.error('Failed to load check-in status:', err)
+          return null
+        }),
+      ])
+      if (!mountedRef.current) return
+      setAccountInfo({
+        username: info.username,
+        displayName: info.display_name,
+        email: info.email,
+        quota: info.quota,
+        temporaryQuota: info.temporary_quota ?? 0,
+        usedQuota: info.used_quota,
+        group: info.group,
+      })
+      setCheckinStats(stats)
+    } catch (err) {
+      console.error('Failed to load account info:', err)
+      if (!mountedRef.current) return
+      setAccountInfo(null)
+      setCheckinStats(null)
+    } finally {
+      if (mountedRef.current) setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
     if (isAuthenticated) {
-      setLoading(true)
-      const fetchInfo = async () => {
-        try {
-          const client = getAbuApiClient()
-          const info = await client.getUserInfo()
-          if (!cancelled) {
-            setAccountInfo({
-              username: info.username,
-              displayName: info.display_name,
-              email: info.email,
-              quota: info.quota,
-              usedQuota: info.used_quota,
-              group: info.group,
-            })
-          }
-        } catch (err) {
-          console.error('Failed to load account info:', err)
-          if (!cancelled) {
-            setAccountInfo(null)
-          }
-        } finally {
-          if (!cancelled) setLoading(false)
-        }
-      }
-      void fetchInfo()
+      void loadAccount()
     } else {
       setAccountInfo(null)
+      setCheckinStats(null)
     }
+  }, [isAuthenticated, loadAccount])
 
-    return () => {
-      cancelled = true
+  // Reopening the menu refreshes both a completed web top-up and a new calendar day.
+  useEffect(() => {
+    if (menuRect && isAuthenticated) void loadAccount()
+  }, [isAuthenticated, loadAccount, menuRect])
+
+  const handleCheckin = useCallback(async () => {
+    if (checkinLoading || checkinStats?.checked_in_today) return
+    setCheckinLoading(true)
+    setCheckinError(null)
+    setCheckinReward(null)
+    try {
+      const client = getAbuApiClient()
+      const result = await client.checkin()
+      const [info, stats] = await Promise.all([client.getUserInfo(), client.getCheckinStats()])
+      if (!mountedRef.current) return
+      setAccountInfo({
+        username: info.username,
+        displayName: info.display_name,
+        email: info.email,
+        quota: info.quota,
+        temporaryQuota: info.temporary_quota ?? 0,
+        usedQuota: info.used_quota,
+        group: info.group,
+      })
+      setCheckinStats(stats)
+      setCheckinReward(result.total_reward)
+    } catch (err) {
+      if (mountedRef.current) setCheckinError(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (mountedRef.current) setCheckinLoading(false)
     }
-  }, [isAuthenticated])
+  }, [checkinLoading, checkinStats?.checked_in_today])
+
+  const openTopup = useCallback(() => {
+    const baseUrl = getAbuApiClient().getBaseUrl().replace(/\/+$/, '')
+    void api.openExternal(`${baseUrl}/console/topup?source=desktop_account_menu`)
+      .catch((err) => console.error('Failed to open top-up page:', err))
+  }, [])
 
   const toggleMenu = useCallback(() => {
     if (!isAuthenticated) {
@@ -109,7 +164,7 @@ export const UserAccountButton = memo(function UserAccountButton({
   }
 
   // 余额
-  const balance = accountInfo ? formatAbuQuota(accountInfo.quota) : null
+  const balance = accountInfo ? formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota) : null
 
   return (
     <div className="px-2">
@@ -176,6 +231,12 @@ export const UserAccountButton = memo(function UserAccountButton({
           lang={lang}
           accountInfo={accountInfo}
           loading={loading}
+          checkinStats={checkinStats}
+          checkinLoading={checkinLoading}
+          checkinError={checkinError}
+          checkinReward={checkinReward}
+          onCheckin={() => void handleCheckin()}
+          onRecharge={openTopup}
           onOpenSettings={onOpenSettings}
           onLogout={onLogout}
           onClose={() => setMenuRect(null)}

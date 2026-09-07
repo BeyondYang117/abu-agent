@@ -2006,9 +2006,26 @@ export const api = {
       display_name?: string
       email?: string
       quota: number
+      temporary_quota: number
       used_quota: number
       group: string
     }>('abu_api_get_user_info'),
+  abuApiGetCheckinStats: () =>
+    invoke<{
+      consecutive_days: number
+      total_checkins: number
+      total_quota: number
+      checked_in_today: boolean
+    }>('abu_api_get_checkin_stats'),
+  abuApiCheckin: () =>
+    invoke<{
+      success: boolean
+      base_reward: number
+      bonus_reward: number
+      total_reward: number
+      consecutive_days: number
+      bonus_triggered: boolean
+    }>('abu_api_checkin'),
   abuApiListModels: () =>
     invoke<{ models: string[]; recommended: string; model_access?: Array<{ model: string; status: 'available' | 'subscription_required' | 'quota_exhausted' | 'unavailable'; recommended_plan_ids?: number[] }> }>('abu_api_list_models'),
   abuApiProbeEndpoint: (baseUrl: string) => invoke<boolean>('abu_api_probe_endpoint', { baseUrl }),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LogOut, User, Mail, Coins, RefreshCw, LogIn, Globe2, CheckCircle2, XCircle } from 'lucide-react'
+import { LogOut, User, Mail, Coins, RefreshCw, LogIn, Globe2, CheckCircle2, XCircle, CreditCard } from 'lucide-react'
 import { Button } from '../../components/Button'
 import { SettingsGroup } from '../components'
 import { abuApiAuthStore, switchAbuApiBaseUrl, useAbuApiAuth } from '../../api/abuApiAuth'
@@ -13,6 +13,7 @@ interface AccountInfo {
   displayName?: string
   email?: string
   quota: number
+  temporaryQuota: number
   usedQuota: number
   group: string
 }
@@ -78,6 +79,7 @@ export function AccountInfoCard({
         displayName: info.display_name,
         email: info.email,
         quota: info.quota,
+        temporaryQuota: info.temporary_quota ?? 0,
         usedQuota: info.used_quota,
         group: info.group,
       })
@@ -88,6 +90,12 @@ export function AccountInfoCard({
     } finally {
       setLoading(false)
     }
+  }
+
+  const openTopup = () => {
+    const baseUrl = getAbuApiClient().getBaseUrl().replace(/\/+$/, '')
+    void api.openExternal(`${baseUrl}/console/topup?source=desktop_settings`)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 
   if (!isAuthenticated) {
@@ -196,7 +204,7 @@ export function AccountInfoCard({
               <span className="text-neutral-700 dark:text-neutral-300">
                 {lang === 'zh' ? '余额：' : 'Balance: '}
                 <span className="font-semibold text-neutral-900 dark:text-neutral-100">
-                  ${formatAbuQuota(accountInfo.quota)}
+                  ${formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota)}
                 </span>
                 <span className="text-xs text-neutral-500 dark:text-neutral-400 ml-1">
                   ({lang === 'zh' ? '已用' : 'used'} ${formatAbuQuota(accountInfo.usedQuota)})
@@ -204,6 +212,16 @@ export function AccountInfoCard({
               </span>
             </div>
             <div className="pt-2 border-t border-neutral-200 dark:border-neutral-700 flex gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={openTopup}
+                data-tauri-drag-region="false"
+                className="flex-1"
+              >
+                <CreditCard size={14} />
+                {lang === 'zh' ? '去充值' : 'Top up'}
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"

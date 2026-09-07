@@ -773,6 +773,8 @@ pub fn run() {
             abu_api::abu_api_exchange_device_authorization,
             abu_api::abu_api_register_device,
             abu_api::abu_api_get_user_info,
+            abu_api::abu_api_get_checkin_stats,
+            abu_api::abu_api_checkin,
             abu_api::abu_api_list_models,
             abu_api::abu_api_probe_endpoint,
             abu_api::abu_api_list_entitlements,

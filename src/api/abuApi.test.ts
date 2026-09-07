@@ -6,12 +6,16 @@ const {
   abuApiListEntitlementsMock,
   abuApiListDevicesMock,
   abuApiRevokeDeviceMock,
+  abuApiGetCheckinStatsMock,
+  abuApiCheckinMock,
 } = vi.hoisted(() => ({
   isTauriRuntimeMock: vi.fn(),
   abuApiListModelsMock: vi.fn(),
   abuApiListEntitlementsMock: vi.fn(),
   abuApiListDevicesMock: vi.fn(),
   abuApiRevokeDeviceMock: vi.fn(),
+  abuApiGetCheckinStatsMock: vi.fn(),
+  abuApiCheckinMock: vi.fn(),
 }))
 
 vi.mock('./tauri', () => ({
@@ -20,6 +24,8 @@ vi.mock('./tauri', () => ({
     abuApiListEntitlements: abuApiListEntitlementsMock,
     abuApiListDevices: abuApiListDevicesMock,
     abuApiRevokeDevice: abuApiRevokeDeviceMock,
+    abuApiGetCheckinStats: abuApiGetCheckinStatsMock,
+    abuApiCheckin: abuApiCheckinMock,
   },
   isTauriRuntime: isTauriRuntimeMock,
 }))
@@ -32,6 +38,8 @@ describe('AbuApiClient.listModels', () => {
     abuApiListEntitlementsMock.mockReset()
     abuApiListDevicesMock.mockReset()
     abuApiRevokeDeviceMock.mockReset()
+    abuApiGetCheckinStatsMock.mockReset()
+    abuApiCheckinMock.mockReset()
     vi.stubGlobal('fetch', vi.fn())
   })
 
@@ -73,6 +81,21 @@ describe('AbuApiClient.listModels', () => {
 
     expect(abuApiListDevicesMock).toHaveBeenCalledOnce()
     expect(abuApiRevokeDeviceMock).toHaveBeenCalledWith('device-1')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('uses native desktop requests for check-in status and execution', async () => {
+    isTauriRuntimeMock.mockReturnValue(true)
+    abuApiGetCheckinStatsMock.mockResolvedValue({ consecutive_days: 4, checked_in_today: false })
+    abuApiCheckinMock.mockResolvedValue({ success: true, total_reward: 1000, consecutive_days: 5 })
+    const { AbuApiClient } = await import('./abuApi')
+    const client = new AbuApiClient('https://api.example.com', 'session-token')
+
+    await expect(client.getCheckinStats()).resolves.toMatchObject({ consecutive_days: 4 })
+    await expect(client.checkin()).resolves.toMatchObject({ total_reward: 1000 })
+
+    expect(abuApiGetCheckinStatsMock).toHaveBeenCalledOnce()
+    expect(abuApiCheckinMock).toHaveBeenCalledOnce()
     expect(fetch).not.toHaveBeenCalled()
   })
 })

@@ -715,9 +715,39 @@ pub struct UserInfoResponse {
     #[serde(default)]
     pub quota: i64,
     #[serde(default)]
+    pub temporary_quota: i64,
+    #[serde(default)]
     pub used_quota: i64,
     #[serde(default)]
     pub group: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct CheckinStatsResponse {
+    #[serde(default)]
+    pub consecutive_days: i64,
+    #[serde(default)]
+    pub total_checkins: i64,
+    #[serde(default)]
+    pub total_quota: i64,
+    #[serde(default)]
+    pub checked_in_today: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct CheckinResultResponse {
+    #[serde(default)]
+    pub success: bool,
+    #[serde(default)]
+    pub base_reward: i64,
+    #[serde(default)]
+    pub bonus_reward: i64,
+    #[serde(default)]
+    pub total_reward: i64,
+    #[serde(default)]
+    pub consecutive_days: i64,
+    #[serde(default)]
+    pub bonus_triggered: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -873,6 +903,36 @@ pub async fn abu_api_get_user_info(state: State<'_, AppState>) -> Result<UserInf
     }
     serde_json::from_value(body.get("data").cloned().unwrap_or_default())
         .map_err(|e| format!("ABU API 用户信息格式错误：{e}"))
+}
+
+/// 获取桌面账户的今日签到状态。
+#[command]
+pub async fn abu_api_get_checkin_stats(
+    state: State<'_, AppState>,
+) -> Result<CheckinStatsResponse, String> {
+    let (base_url, session_token) = agent_api_credentials(state.inner())?;
+    let response = reqwest::Client::new()
+        .get(format!("{base_url}/api/agent/checkin/stats"))
+        .header("X-Abu-Session-Token", session_token)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    parse_agent_data(response, "获取签到状态").await
+}
+
+/// 执行每日签到。服务端负责并发去重和奖励结算。
+#[command]
+pub async fn abu_api_checkin(state: State<'_, AppState>) -> Result<CheckinResultResponse, String> {
+    let (base_url, session_token) = agent_api_credentials(state.inner())?;
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}/api/agent/checkin"))
+        .header("X-Abu-Session-Token", session_token)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 ABU API：{e}"))?;
+    parse_agent_data(response, "签到").await
 }
 
 fn agent_models_url(base_url: &str) -> String {
