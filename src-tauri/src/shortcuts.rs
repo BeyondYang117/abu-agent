@@ -946,7 +946,20 @@ pub(crate) fn close_chat_window(app: &AppHandle) {
 
 /// 隐藏 chat 窗口并回收 Dock 身份，WebView 进程保留以便下次立刻复用。
 pub(crate) fn hide_chat_window(app: &AppHandle, window: &tauri::Window) {
-    let _ = window.hide();
+    // Windows 修复：增加防御性错误处理，避免 hide 操作卡死
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(e) = window.hide() {
+            eprintln!("Warning: Failed to hide chat window on Windows: {}", e);
+            // 隐藏失败时尝试最小化作为降级方案
+            let _ = window.minimize();
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.hide();
+    }
+
     #[cfg(target_os = "macos")]
     crate::chat::popout::sync_macos_activation_policy(app);
     #[cfg(not(target_os = "macos"))]

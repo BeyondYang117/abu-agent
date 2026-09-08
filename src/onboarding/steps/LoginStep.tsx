@@ -159,7 +159,12 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         if (pollingGenerationRef.current !== generation) return
         if (Date.now() >= expiresAt) {
           stopPolling()
-          setError(t.onboardingLoginTimeout || '授权超时，请重新开始')
+          // Windows 修复：提供更明确的超时原因和恢复建议
+          console.error('Device authorization timeout after 10 minutes')
+          setError(
+            t.onboardingLoginTimeout ||
+              '授权超时（10分钟内未完成）。可能原因：浏览器未打开、未完成授权、或网络问题。请重试。',
+          )
           setDeviceFlow(null)
           return
         }
@@ -214,10 +219,14 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         response.user_code,
       )
       // 打开浏览器不是轮询授权的前置条件。Windows 默认浏览器调用异常时，
-      // 用户仍可复制验证码或点击“重新打开浏览器”，页面不能卡在 loading。
+      // 用户仍可复制验证码或点击”重新打开浏览器”，页面不能卡在 loading。
+      // Windows 修复：增强错误提示，明确说明手动操作路径
       void api.openExternal(verificationUrl).catch((err) => {
         const detail = err instanceof Error ? err.message : String(err)
-        setError(`授权请求已创建，但无法打开系统浏览器：${detail}`)
+        console.error('Windows browser launch failed:', detail)
+        setError(
+          `无法自动打开浏览器（${detail}）。请手动复制下方验证码到浏览器完成授权。`,
+        )
       })
 
       // 4. 开始轮询，不等待系统浏览器调用返回
@@ -345,7 +354,12 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 </div>
                 <p className="text-xs text-neutral-500 dark:text-neutral-500">
                   {t.onboardingLoginCodeHint ||
-                    '如果浏览器未自动填入验证码，请手动输入上方代码'}
+                    '如果浏览器未自动打开或填入验证码，请手动复制上方代码到浏览器完成授权'}
+                </p>
+                {/* Windows 修复：添加明确的授权网址显示 */}
+                <p className="text-xs text-neutral-400 dark:text-neutral-600 mt-2">
+                  授权地址：{selectedBaseUrl}
+                  {deviceFlow.verificationUri}
                 </p>
               </div>
 
