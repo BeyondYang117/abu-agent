@@ -77,6 +77,14 @@
     "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
     "pricing": { "input": 1.00, "output": 6.00, "cachedInput": 0.10 }
   },
+  "gpt-6-astra": {
+    "displayName": "GPT-6 Astra",
+    "contextWindow": 256000,
+    "maxOutput": 128000,
+    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "pricing": { "input": 5.00, "output": 30.00, "cachedInput": 0.50 }
+  },
   "gpt-5.5": {
     "displayName": "GPT-5.5",
     "contextWindow": 256000,
@@ -298,6 +306,14 @@
 
   "claude-fable-5": {
     "displayName": "Claude Fable 5",
+    "contextWindow": 1000000,
+    "maxOutput": 128000,
+    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
+    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
+    "pricing": { "input": 10.00, "output": 50.00, "cachedInput": 1.00 }
+  },
+  "claude-fable-5-1": {
+    "displayName": "Claude Fable 5.1",
     "contextWindow": 1000000,
     "maxOutput": 128000,
     "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
