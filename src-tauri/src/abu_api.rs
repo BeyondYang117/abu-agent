@@ -1103,7 +1103,39 @@ pub async fn abu_api_revoke_device(
 /// 那是个不依赖 `AppHandle` 的纯函数，便于单测直接调用。
 #[command]
 pub fn get_device_fingerprint(_app: AppHandle) -> Result<String, String> {
-    Ok(compute_device_fingerprint())
+    let path = directories::BaseDirs::new().map(|base| {
+        base.data_local_dir()
+            .join(crate::app_data::APP_IDENTIFIER)
+            .join(DEVICE_FINGERPRINT_FILE)
+    });
+    Ok(load_or_create_device_fingerprint(path.as_deref()))
+}
+
+const DEVICE_FINGERPRINT_FILE: &str = "device-fingerprint";
+
+/// 指纹首次算出后落盘，之后只读文件。`compute_device_fingerprint` 用的
+/// `DefaultHasher` 不保证跨 Rust 版本稳定，机器名也可能被改；重新计算出不同的值，
+/// 服务端就会把同一台机器登记成新设备。放 local（非 Roaming）目录，避免漫游配置文件
+/// 把同一个指纹带到另一台电脑。写盘失败时仍返回算出的值，不影响登录。
+fn load_or_create_device_fingerprint(path: Option<&std::path::Path>) -> String {
+    if let Some(saved) = path
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.len() == 16 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return saved;
+    }
+    let fingerprint = compute_device_fingerprint();
+    if let Some(path) = path {
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(path, &fingerprint));
+        if let Err(error) = written {
+            eprintln!("[abu-api] 设备指纹写盘失败：{error}");
+        }
+    }
+    fingerprint
 }
 
 /// 组合机器 ID / 主机名 / 用户名算出 16 位十六进制指纹。
@@ -1132,8 +1164,10 @@ pub fn compute_device_fingerprint() -> String {
 
     #[cfg(target_os = "windows")]
     {
+        use crate::proc::NoConsoleWindow;
         if let Ok(output) = std::process::Command::new("wmic")
             .args(["csproduct", "get", "UUID"])
+            .no_console_window()
             .output()
         {
             if let Ok(text) = String::from_utf8(output.stdout) {
@@ -1382,6 +1416,21 @@ mod tests {
             agent_models_url("https://api.example.com/"),
             "https://api.example.com/api/agent/models"
         );
+    }
+
+    #[test]
+    fn device_fingerprint_is_persisted_and_reused() {
+        let dir = std::env::temp_dir().join(format!("abu-fp-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join(DEVICE_FINGERPRINT_FILE);
+        let first = load_or_create_device_fingerprint(Some(&path));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+
+        std::fs::write(&path, "0123456789abcdef\n").unwrap();
+        assert_eq!(load_or_create_device_fingerprint(Some(&path)), "0123456789abcdef");
+
+        std::fs::write(&path, "corrupted").unwrap();
+        assert_eq!(load_or_create_device_fingerprint(Some(&path)), first);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
