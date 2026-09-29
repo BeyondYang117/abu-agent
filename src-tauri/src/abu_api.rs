@@ -747,6 +747,11 @@ pub struct CheckinStatsResponse {
     pub total_quota: i64,
     #[serde(default)]
     pub checked_in_today: bool,
+    /// `"welfare"`：签到奖励是福利余额而不是额度（服务端已统一到福利签到）。
+    #[serde(default)]
+    pub reward_unit: String,
+    #[serde(default)]
+    pub welfare_balance: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -763,6 +768,10 @@ pub struct CheckinResultResponse {
     pub consecutive_days: i64,
     #[serde(default)]
     pub bonus_triggered: bool,
+    #[serde(default)]
+    pub reward_unit: String,
+    #[serde(default)]
+    pub welfare_balance: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

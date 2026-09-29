@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { User, Settings, Coins, Crown } from 'lucide-react'
 import { useAbuApiAuth } from '../api/abuApiAuth'
-import { getAbuApiClient, type CheckinStats } from '../api/abuApi'
+import { getAbuApiClient, type CheckinReward, type CheckinStats } from '../api/abuApi'
 import { api } from '../api/tauri'
 import { UserAvatar } from './UserAvatar'
 import type { ChatUserProfile } from './types'
@@ -46,7 +46,7 @@ export const UserAccountButton = memo(function UserAccountButton({
   const [checkinStats, setCheckinStats] = useState<CheckinStats | null>(null)
   const [checkinLoading, setCheckinLoading] = useState(false)
   const [checkinError, setCheckinError] = useState<string | null>(null)
-  const [checkinReward, setCheckinReward] = useState<number | null>(null)
+  const [checkinReward, setCheckinReward] = useState<CheckinReward | null>(null)
   const [menuRect, setMenuRect] = useState<{ left: number; top: number; width: number } | null>(null)
   const rowRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
@@ -126,7 +126,7 @@ export const UserAccountButton = memo(function UserAccountButton({
         group: info.group,
       })
       setCheckinStats(stats)
-      setCheckinReward(result.total_reward)
+      setCheckinReward({ amount: result.total_reward, unit: result.reward_unit })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (message.includes('今日已签到') || message.toLowerCase().includes('already checked in')) {

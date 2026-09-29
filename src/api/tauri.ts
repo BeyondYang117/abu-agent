@@ -2016,6 +2016,8 @@ export const api = {
       total_checkins: number
       total_quota: number
       checked_in_today: boolean
+      reward_unit?: string
+      welfare_balance?: number
     }>('abu_api_get_checkin_stats'),
   abuApiCheckin: () =>
     invoke<{
@@ -2025,6 +2027,8 @@ export const api = {
       total_reward: number
       consecutive_days: number
       bonus_triggered: boolean
+      reward_unit?: string
+      welfare_balance?: number
     }>('abu_api_checkin'),
   abuApiListModels: () =>
     invoke<{ models: string[]; recommended: string; model_access?: Array<{ model: string; status: 'available' | 'subscription_required' | 'quota_exhausted' | 'unavailable'; recommended_plan_ids?: number[] }> }>('abu_api_list_models'),

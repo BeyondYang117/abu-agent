@@ -4,7 +4,7 @@ import { LogOut, Coins, Crown, CalendarCheck2, Settings, CreditCard, LoaderCircl
 import { useCloseAnimation } from './useCloseAnimation'
 import { type Lang } from '../settings/i18n'
 import { formatAbuQuota, formatAbuQuotaReward } from '../api/quota'
-import type { CheckinStats } from '../api/abuApi'
+import { CHECKIN_REWARD_UNIT_WELFARE, type CheckinReward, type CheckinStats } from '../api/abuApi'
 
 interface AccountInfo {
   username: string
@@ -24,7 +24,7 @@ interface UserAccountMenuProps {
   checkinStats: CheckinStats | null
   checkinLoading: boolean
   checkinError: string | null
-  checkinReward: number | null
+  checkinReward: CheckinReward | null
   onCheckin: () => void
   onRecharge: () => void
   onOpenSettings: () => void
@@ -170,14 +170,16 @@ export function UserAccountMenu({
             <div className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
               {checkinStats?.checked_in_today
                 ? (lang === 'zh' ? '今日已签到' : 'Checked in today')
-                : (lang === 'zh' ? '每日签到领额度' : 'Daily quota reward')}
+                : checkinStats?.reward_unit === CHECKIN_REWARD_UNIT_WELFARE
+                  ? (lang === 'zh' ? '每日签到领福利' : 'Daily welfare reward')
+                  : (lang === 'zh' ? '每日签到领额度' : 'Daily quota reward')}
             </div>
             <div className="mt-0.5 flex items-center gap-1 text-[10px] text-neutral-500 dark:text-neutral-400">
               <Flame size={10} className="text-orange-500" />
               {lang === 'zh' ? `连续 ${checkinStats?.consecutive_days ?? 0} 天` : `${checkinStats?.consecutive_days ?? 0}-day streak`}
               {checkinReward != null && (
                 <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                  · +${formatAbuQuotaReward(checkinReward)}
+                  · +{formatCheckinReward(checkinReward, lang)}
                 </span>
               )}
             </div>
@@ -252,4 +254,11 @@ export function UserAccountMenu({
   )
 
   return createPortal(menu, document.body)
+}
+
+function formatCheckinReward(reward: CheckinReward, lang: Lang): string {
+  if (reward.unit === CHECKIN_REWARD_UNIT_WELFARE) {
+    return lang === 'zh' ? `${reward.amount} 福利余额` : `${reward.amount} welfare balance`
+  }
+  return `$${formatAbuQuotaReward(reward.amount)}`
 }

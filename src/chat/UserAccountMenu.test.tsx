@@ -36,11 +36,21 @@ describe('UserAccountMenu', () => {
   it('disables check-in after it has completed', () => {
     renderMenu({
       checkinStats: { consecutive_days: 4, total_checkins: 10, total_quota: 4000, checked_in_today: true },
-      checkinReward: 1000,
+      checkinReward: { amount: 1000 },
     })
 
     expect(screen.getByRole('button', { name: '已签到' })).toBeDisabled()
     expect(screen.getByText('· +$0.002')).toBeInTheDocument()
+  })
+
+  it('shows welfare-balance rewards once check-in is unified with the welfare center', () => {
+    renderMenu({
+      checkinStats: { consecutive_days: 1, total_checkins: 1, total_quota: 300, checked_in_today: false, reward_unit: 'welfare' },
+      checkinReward: { amount: 300, unit: 'welfare' },
+    })
+
+    expect(screen.getByText('每日签到领福利')).toBeInTheDocument()
+    expect(screen.getByText('· +300 福利余额')).toBeInTheDocument()
   })
 
   it('does not allow check-in before the status has loaded', () => {

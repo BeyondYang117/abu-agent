@@ -94,6 +94,9 @@ export interface CheckinStats {
   total_checkins: number
   total_quota: number
   checked_in_today: boolean
+  /** `'welfare'`：奖励是福利余额而不是额度（服务端已把签到统一到福利中心）。 */
+  reward_unit?: string
+  welfare_balance?: number
 }
 
 export interface CheckinResult {
@@ -103,6 +106,15 @@ export interface CheckinResult {
   total_reward: number
   consecutive_days: number
   bonus_triggered: boolean
+  reward_unit?: string
+  welfare_balance?: number
+}
+
+export const CHECKIN_REWARD_UNIT_WELFARE = 'welfare'
+
+export interface CheckinReward {
+  amount: number
+  unit?: string
 }
 
 export interface AbuApiError {
