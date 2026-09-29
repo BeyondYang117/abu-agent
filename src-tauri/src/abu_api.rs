@@ -11,6 +11,21 @@ const MODEL_ROUTING_CACHE_FILE: &str = "model-routing-policy-cache.json";
 // Keep native desktop requests identifiable as the reqwest client used by the app.
 const AGENT_API_USER_AGENT: &str = "reqwest/0.12";
 
+/// ABU API 账户接口共用的 client：复用连接池（原先每个请求都新建 client、重新握手），
+/// 并给所有请求兜底连接/总超时——未单独设超时的请求在网络异常时会让界面一直转圈。
+/// 个别请求仍可用 `.timeout()` 覆盖为更短的值。
+fn agent_http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(AGENT_API_USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelRoutingPolicyCache {
     pub version: i64,
@@ -261,7 +276,7 @@ pub async fn abu_api_sync_model_routing_policy(
         Some(token) if !token.trim().is_empty() => token,
         _ => return cached.ok_or_else(|| "尚未登录且没有可用的路由策略缓存".to_string()),
     };
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!(
             "{}/api/agent/model-routing-policy",
             base_url.trim_end_matches('/'),
@@ -448,7 +463,7 @@ pub async fn abu_api_create_device_authorization(
     device_name: String,
 ) -> Result<DeviceAuthResponse, String> {
     let url = format!("{}/api/agent/auth/device", base_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({ "device_name": device_name }))
@@ -488,7 +503,7 @@ pub async fn abu_api_exchange_device_authorization(
         "{}/api/agent/auth/device/exchange",
         base_url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({ "device_code": device_code }))
@@ -538,7 +553,7 @@ pub async fn abu_api_register_device(
     capabilities: Option<String>,
 ) -> Result<AgentDeviceResponse, String> {
     let url = format!("{}/api/agent/devices", base_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -586,7 +601,7 @@ pub async fn abu_api_get_cli_credentials(
         "{}/api/agent/cli-credentials",
         base_url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header("X-Abu-Session-Token", session_token)
         .json(&serde_json::json!({ "agent": agent }))
@@ -618,7 +633,7 @@ pub async fn fetch_agent_relay_credentials(
     session_token: &str,
     model: &str,
 ) -> Result<AgentRelayCredentialsResponse, String> {
-    let client = reqwest::Client::new();
+    let client = agent_http();
     let response = client
         .post(format!("{}/api/agent/relay-credentials", base_url.trim_end_matches('/')))
         .header("X-Abu-Session-Token", session_token)
@@ -877,7 +892,7 @@ pub async fn abu_api_get_user_info(state: State<'_, AppState>) -> Result<UserInf
     };
 
     let url = agent_user_info_url(&base_url);
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(url)
         .header("X-Abu-Session-Token", &session_token)
         .send()
@@ -911,7 +926,7 @@ pub async fn abu_api_get_checkin_stats(
     state: State<'_, AppState>,
 ) -> Result<CheckinStatsResponse, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!("{base_url}/api/user/checkin/stats"))
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -925,7 +940,7 @@ pub async fn abu_api_get_checkin_stats(
 #[command]
 pub async fn abu_api_checkin(state: State<'_, AppState>) -> Result<CheckinResultResponse, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(format!("{base_url}/api/user/checkin"))
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -943,7 +958,7 @@ fn agent_models_url(base_url: &str) -> String {
 #[command]
 pub async fn abu_api_probe_endpoint(base_url: String) -> Result<bool, String> {
     let url = format!("{}/api/agent/models", base_url.trim().trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .head(url)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -973,7 +988,7 @@ pub async fn abu_api_list_models(
         (base_url, session_token)
     };
 
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(agent_models_url(&base_url))
         .header("X-Abu-Session-Token", &session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -1019,7 +1034,7 @@ pub async fn abu_api_list_entitlements(
             .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
         (base_url, session_token)
     };
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!(
             "{}/api/agent/entitlements",
             base_url.trim_end_matches('/')
@@ -1056,7 +1071,7 @@ pub async fn abu_api_list_devices(
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentDeviceResponse>, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!("{base_url}/api/agent/devices"))
         .header("X-Abu-Session-Token", session_token)
         .send()
@@ -1073,7 +1088,7 @@ pub async fn abu_api_revoke_device(
 ) -> Result<(), String> {
     let device_id = agent_path_id(&device_id, "设备 ID")?;
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .delete(format!("{base_url}/api/agent/devices/{device_id}"))
         .header("X-Abu-Session-Token", session_token)
         .send()
@@ -1325,7 +1340,7 @@ mod tests {
             relay_key: "relay-secret".to_string(),
         };
         let results =
-            search_platform_web(&reqwest::Client::new(), &credentials, "current release", 4)
+            search_platform_web(agent_http(), &credentials, "current release", 4)
                 .await
                 .unwrap();
         server.join().unwrap();
