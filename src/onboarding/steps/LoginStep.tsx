@@ -64,6 +64,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
   // Copy state
   const [copied, setCopied] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
   const pollingGenerationRef = useRef(0)
   const pollingTimerRef = useRef<number | null>(null)
 
@@ -81,6 +82,23 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
       console.error('Failed to copy:', err)
     }
   }, [deviceFlow])
+
+  // Windows 上浏览器是经 explorer.exe 拉起的：进程起来就算成功，默认浏览器关联坏了也报不出错，
+  // 所以完整授权链接必须能一键复制，不能只靠 openExternal 的失败回调提示。
+  const deviceAuthorizationUrl = deviceFlow
+    ? buildDeviceAuthorizationUrl(selectedBaseUrl, deviceFlow.verificationUri, deviceFlow.userCode)
+    : ''
+
+  const copyLink = useCallback(async () => {
+    if (!deviceAuthorizationUrl) return
+    try {
+      await navigator.clipboard.writeText(deviceAuthorizationUrl)
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }, [deviceAuthorizationUrl])
 
   const stopPolling = useCallback(() => {
     pollingGenerationRef.current += 1
@@ -225,7 +243,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         const detail = err instanceof Error ? err.message : String(err)
         console.error('Windows browser launch failed:', detail)
         setError(
-          `无法自动打开浏览器（${detail}）。请手动复制下方验证码到浏览器完成授权。`,
+          `无法自动打开浏览器（${detail}）。请复制下方授权链接到浏览器中打开完成授权。`,
         )
       })
 
@@ -356,11 +374,29 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                   {t.onboardingLoginCodeHint ||
                     '如果浏览器未自动打开或填入验证码，请手动复制上方代码到浏览器完成授权'}
                 </p>
-                {/* Windows 修复：添加明确的授权网址显示 */}
-                <p className="text-xs text-neutral-400 dark:text-neutral-600 mt-2">
-                  授权地址：{selectedBaseUrl}
-                  {deviceFlow.verificationUri}
-                </p>
+                <div className="onboarding-login-link-row">
+                  <span className="onboarding-login-link" title={deviceAuthorizationUrl}>
+                    {deviceAuthorizationUrl}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={copyLink}
+                    className="onboarding-login-copy-btn"
+                    data-tauri-drag-region="false"
+                  >
+                    {linkCopied ? (
+                      <>
+                        <Check size={14} className="text-green-600 dark:text-green-400" />
+                        <span>{t.lensCopied || '已复制'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={14} />
+                        <span>{t.onboardingLoginCopyLink || '复制链接'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="flex gap-2 justify-center">
@@ -375,12 +411,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 <Button
                   variant="ghost"
                   onClick={() => {
-                    const url = buildDeviceAuthorizationUrl(
-                      selectedBaseUrl,
-                      deviceFlow.verificationUri,
-                      deviceFlow.userCode,
-                    )
-                    void api.openExternal(url).catch((err) => {
+                    void api.openExternal(deviceAuthorizationUrl).catch((err) => {
                       setError(err instanceof Error ? err.message : String(err))
                     })
                   }}

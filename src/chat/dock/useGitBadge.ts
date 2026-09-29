@@ -1,7 +1,7 @@
 // Git 徽标共享数据源：dock_git_status + dock_git_diff_stat，
 // workspace:activity 秒级驱动 + watcher 不可用时 10s 兜底轮询。
 // 签名相同跳过 setState；GitStatusPill（工具栏）与 GitDiffChip（状态条）各自实例化，
-// 后端调用翻倍但都是毫秒级查询，换取两个组件互不耦合。
+// 换取两个组件互不耦合 —— 实际的 git 调用由 fetchGitBadge 按 workdir 合并，不翻倍。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { dockApi } from './api'
 import { gitStatusSignature } from './gitReviewModel'
@@ -15,6 +15,44 @@ export type GitBadge = {
   /** 变更操作（如 init）返回的权威 state 直接写入，不等下一轮 refresh。 */
   applyMutationState: (next: GitRepoState) => void
   refresh: (options?: { silent?: boolean }) => Promise<void>
+}
+
+type GitBadgeSnapshot = { state: GitRepoState; diffStat: GitDiffStat | null }
+
+const inflight = new Map<string, { promise: Promise<GitBadgeSnapshot>; requestRerun: () => void }>()
+
+async function loadGitBadge(workdir: string): Promise<GitBadgeSnapshot> {
+  const state = await dockApi.gitStatus(workdir)
+  if (state.status !== 'ready') return { state, diffStat: null }
+  const diffStat = await dockApi.gitDiffStat(workdir).catch(() => null)
+  return { state, diffStat }
+}
+
+/** 同一 workdir 的并发刷新合并成一次 git 调用。两个徽标各自实例化本 hook，每批
+ *  workspace:activity 以前是两遍 `git status` + `git diff --numstat`，且上一遍没跑完下一批
+ *  又来 —— Windows 上每次都是起 git.exe。进行中又来的请求只记一笔，结束后补跑一次，
+ *  所有等待者拿到的都是补跑后的最新结果。 */
+export function fetchGitBadge(workdir: string): Promise<GitBadgeSnapshot> {
+  const running = inflight.get(workdir)
+  if (running) {
+    running.requestRerun()
+    return running.promise
+  }
+  let rerun = false
+  const promise = (async () => {
+    try {
+      let snapshot = await loadGitBadge(workdir)
+      while (rerun) {
+        rerun = false
+        snapshot = await loadGitBadge(workdir)
+      }
+      return snapshot
+    } finally {
+      inflight.delete(workdir)
+    }
+  })()
+  inflight.set(workdir, { promise, requestRerun: () => { rerun = true } })
+  return promise
 }
 
 export function useGitBadge(workdir: string): GitBadge {
@@ -40,10 +78,9 @@ export function useGitBadge(workdir: string): GitBadge {
       if (!workdir) return
       if (!options?.silent) setLoading(true)
       try {
-        const next = await dockApi.gitStatus(workdir)
+        const { state: next, diffStat: stat } = await fetchGitBadge(workdir)
         applyState(next)
         if (next.status === 'ready') {
-          const stat = await dockApi.gitDiffStat(workdir).catch(() => null)
           if (stat) {
             setDiffStat((prev) =>
               prev &&

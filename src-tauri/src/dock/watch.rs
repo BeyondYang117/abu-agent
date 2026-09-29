@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use tauri::Emitter;
@@ -20,6 +21,11 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_millis(250);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_STOP_CHECK: Duration = Duration::from_millis(250);
 const MAX_CHANGED_PATHS: usize = 64;
+/// 没有 .gitignore 也要跳过的目录段（chat-workspaces 常常不是仓库，但照样 npm install）。
+const ALWAYS_IGNORED_DIR_SEGMENTS: &[&str] = &["node_modules"];
+/// gitdir 里只增不减、又不影响 `git status` 的子树：任何改变工作区状态的操作都会同时写
+/// index / HEAD / refs，那几处照常触发。
+const GIT_NOISE_SUBDIRS: &[&str] = &["objects", "logs"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -280,6 +286,66 @@ fn spawn_workdir_watcher(workdir: String, service: Weak<WorkspaceWatchService>) 
     }
 }
 
+// ---- 事件过滤 ----
+
+/// 被 git 忽略的路径不驱动刷新。以前递归监听不做任何过滤，一次 `npm install` / `cargo build`
+/// 就是每 250ms 一批事件 → 前端每批跑 `git status --untracked-files=all` + `git diff --numstat`
+/// （Windows 上起进程很贵），右栏关着也照跑。文件树默认视图同样按 .gitignore 隐藏这些路径。
+///
+/// 只读根 `.gitignore` 与 `info/exclude`（嵌套 .gitignore 不管，宁可多报）；`.gitignore`
+/// 本身变更时由聚合线程重载。
+struct WorkspaceIgnore {
+    root: PathBuf,
+    gitignore: Gitignore,
+}
+
+impl WorkspaceIgnore {
+    fn load(workdir: &Path, git_dir: &Path) -> Self {
+        let mut builder = GitignoreBuilder::new(workdir);
+        // 文件不存在时 add 返回错误，但不影响其余规则，忽略即可。
+        let _ = builder.add(workdir.join(".gitignore"));
+        let _ = builder.add(git_dir.join("info").join("exclude"));
+        Self {
+            root: workdir.to_path_buf(),
+            gitignore: builder.build().unwrap_or_else(|_| Gitignore::empty()),
+        }
+    }
+
+    #[cfg(test)]
+    fn empty(workdir: &Path) -> Self {
+        Self {
+            root: workdir.to_path_buf(),
+            gitignore: Gitignore::empty(),
+        }
+    }
+
+    /// `rel`：workdir 相对路径，`/` 分隔。
+    fn skips(&self, rel: &str) -> bool {
+        if let Some(inside_git) = rel.strip_prefix(".git/") {
+            return is_git_noise(inside_git);
+        }
+        if rel == ".git" {
+            return false;
+        }
+        if rel
+            .split('/')
+            .any(|segment| ALWAYS_IGNORED_DIR_SEGMENTS.contains(&segment))
+        {
+            return true;
+        }
+        let path = self.root.join(rel);
+        self.gitignore
+            .matched_path_or_any_parents(&path, path.is_dir())
+            .is_ignore()
+    }
+}
+
+/// `inside_git`：gitdir 内的相对路径。
+fn is_git_noise(inside_git: &str) -> bool {
+    let first = inside_git.split('/').next().unwrap_or("");
+    GIT_NOISE_SUBDIRS.contains(&first)
+}
+
 // ---- 事件聚合与分类 ----
 
 #[derive(Default)]
@@ -309,6 +375,7 @@ impl ActivityBatch {
         workdir: &Path,
         canonical_workdir: Option<&Path>,
         class_roots: &[PathBuf],
+        ignore: &WorkspaceIgnore,
         event: notify::Result<Event>,
     ) {
         let event = match event {
@@ -333,6 +400,9 @@ impl ActivityBatch {
                 .map(|rel| rel.to_string_lossy().replace('\\', "/"));
             match rel {
                 Some(rel) if !rel.is_empty() => {
+                    if ignore.skips(&rel) {
+                        continue;
+                    }
                     if is_git_meta_rel(&rel) {
                         self.git = true;
                     } else {
@@ -342,7 +412,14 @@ impl ActivityBatch {
                 }
                 // 外部 gitdir 的路径无法表达为 workdir 相对路径，只置 git 标志。
                 _ if class_roots.iter().any(|root| path.starts_with(root)) => {
-                    self.git = true;
+                    let noise = class_roots.iter().any(|root| {
+                        path.strip_prefix(root).is_ok_and(|inside| {
+                            is_git_noise(&inside.to_string_lossy().replace('\\', "/"))
+                        })
+                    });
+                    if !noise {
+                        self.git = true;
+                    }
                 }
                 _ => {
                     // 无法归因：宁可误报也不漏报。
@@ -369,6 +446,7 @@ fn run_aggregator(
     // 部分后端（符号链接前缀后的 FSEvents）上报解析后的路径，留一个备选前缀。
     let canonical = std::fs::canonicalize(&workdir_path).ok();
     let canonical = canonical.filter(|resolved| resolved != &workdir_path);
+    let mut ignore = WorkspaceIgnore::load(&workdir_path, &meta.git_dir);
 
     loop {
         // 先阻塞等 burst 的第一个事件，再在去抖窗口内持续吸收。
@@ -381,6 +459,7 @@ fn run_aggregator(
             &workdir_path,
             canonical.as_deref(),
             &meta.class_roots,
+            &ignore,
             first,
         );
         let window_end = Instant::now() + DEBOUNCE_WINDOW;
@@ -395,6 +474,7 @@ fn run_aggregator(
                     &workdir_path,
                     canonical.as_deref(),
                     &meta.class_roots,
+                    &ignore,
                     event,
                 ),
                 Err(RecvTimeoutError::Timeout) => break,
@@ -403,6 +483,10 @@ fn run_aggregator(
                     break;
                 }
             }
+        }
+        // 规则文件变了（或事件多到截断、可能漏看了它）就重载，下一批按新规则过滤。
+        if batch.truncated || batch.changed.contains(".gitignore") {
+            ignore = WorkspaceIgnore::load(&workdir_path, &meta.git_dir);
         }
         if !batch.is_empty() {
             let Some(service) = service.upgrade() else {
@@ -591,15 +675,18 @@ mod tests {
             Ok::<Event, notify::Error>(event)
         };
 
+        let ignore = WorkspaceIgnore::empty(&workdir);
+
         // 工作区文件 → fs；.git 内 → git；外部 gitdir → git（不记路径）。
-        batch.absorb(&workdir, None, &class_roots, mk(&["/repo/src/main.rs"]));
+        batch.absorb(&workdir, None, &class_roots, &ignore, mk(&["/repo/src/main.rs"]));
         assert!(batch.fs && !batch.git);
-        batch.absorb(&workdir, None, &class_roots, mk(&["/repo/.git/HEAD"]));
+        batch.absorb(&workdir, None, &class_roots, &ignore, mk(&["/repo/.git/HEAD"]));
         assert!(batch.git);
         batch.absorb(
             &workdir,
             None,
             &class_roots,
+            &ignore,
             mk(&["/external/gitdir/index"]),
         );
         assert!(batch.git);
@@ -615,5 +702,56 @@ mod tests {
         }
         assert_eq!(big.changed.len(), 64);
         assert!(big.truncated);
+    }
+
+    #[test]
+    fn skips_git_ignored_and_git_noise_paths() {
+        let dir = temp_dir("ignore");
+        std::fs::write(dir.join(".gitignore"), "target/\n*.log\n").expect("write gitignore");
+        std::fs::create_dir_all(dir.join("target").join("debug")).expect("create target");
+        let git_dir = dir.join(".git");
+        std::fs::create_dir_all(git_dir.join("info")).expect("create git info");
+        std::fs::write(git_dir.join("info").join("exclude"), "scratch/\n").expect("write exclude");
+        let ignore = WorkspaceIgnore::load(&dir, &git_dir);
+
+        // .gitignore / info/exclude / 恒忽略目录段
+        assert!(ignore.skips("target/debug/app"));
+        assert!(ignore.skips("target"));
+        assert!(ignore.skips("logs/run.log"));
+        assert!(ignore.skips("scratch/tmp.txt"));
+        assert!(ignore.skips("web/node_modules/react/index.js"));
+        // gitdir 里的 objects / logs 是噪音；HEAD / index / refs 照常触发
+        assert!(ignore.skips(".git/objects/ab/cdef"));
+        assert!(ignore.skips(".git/logs/HEAD"));
+        assert!(!ignore.skips(".git/index"));
+        assert!(!ignore.skips(".git/refs/heads/main"));
+        assert!(!ignore.skips(".git"));
+        // 普通文件与规则文件本身不被过滤
+        assert!(!ignore.skips("src/main.rs"));
+        assert!(!ignore.skips(".gitignore"));
+
+        let mk = |path: PathBuf| {
+            Ok::<Event, notify::Error>(
+                Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(path),
+            )
+        };
+        let external = vec![PathBuf::from("/external/gitdir")];
+        let mut batch = ActivityBatch::default();
+        batch.absorb(&dir, None, &external, &ignore, mk(dir.join("target/debug/app")));
+        batch.absorb(&dir, None, &external, &ignore, mk(dir.join(".git/objects/ab/cd")));
+        batch.absorb(
+            &dir,
+            None,
+            &external,
+            &ignore,
+            mk(PathBuf::from("/external/gitdir/objects/ab/cd")),
+        );
+        assert!(batch.is_empty(), "ignored paths must not produce activity");
+        assert!(batch.changed.is_empty());
+
+        batch.absorb(&dir, None, &external, &ignore, mk(PathBuf::from("/external/gitdir/HEAD")));
+        assert!(batch.git && !batch.fs);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

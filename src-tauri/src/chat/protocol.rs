@@ -2102,10 +2102,12 @@ pub fn emit_conversation_event(
     );
 }
 
+/// 每次切对话都会调。取 revision 要整份读+解析对话 JSON（含隐藏的 model_messages，可达数 MB），
+/// 所以是 async + spawn_blocking：同步命令跑在 UI 主线程上，Windows 下切对话时窗口会跟着卡。
+/// hub 锁只在同步段里拿，绝不跨 await。
 #[tauri::command]
-pub fn chat_sync_state(
+pub async fn chat_sync_state(
     app: AppHandle,
-    state: tauri::State<'_, AppState>,
     request: ChatSyncRequest,
 ) -> Result<ChatSyncResult, String> {
     if request.protocol_version != CHAT_PROTOCOL_VERSION {
@@ -2114,15 +2116,20 @@ pub fn chat_sync_state(
             CHAT_PROTOCOL_VERSION, request.protocol_version
         ));
     }
-    let mut result = state
+    let mut result = app
+        .state::<AppState>()
         .chat_protocol
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .sync(&request);
-    result.conversation_revision =
-        crate::chat::storage::load_conversation(&app, &request.conversation_id)
+    let conversation_id = request.conversation_id.clone();
+    result.conversation_revision = tauri::async_runtime::spawn_blocking(move || {
+        crate::chat::storage::load_conversation(&app, &conversation_id)
             .map(|conversation| conversation.revision)
-            .unwrap_or(0);
+            .unwrap_or(0)
+    })
+    .await
+    .unwrap_or(0);
     Ok(result)
 }
 

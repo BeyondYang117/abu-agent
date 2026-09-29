@@ -1,5 +1,5 @@
 // 状态条右端的 diff 徽标：绿 +adds / 红 −dels，无改动时不渲染，点击进 Git 面板。
-// 与工具栏的 GitStatusPill 各自实例化 useGitBadge（毫秒级查询，换取互不耦合）。
+// 与工具栏的 GitStatusPill 各自实例化 useGitBadge（git 调用在 hook 里按 workdir 合并）。
 import { i18n, type Lang } from '../../settings/i18n'
 import { useGitBadge } from './useGitBadge'
 

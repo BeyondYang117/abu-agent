@@ -320,25 +320,67 @@ function App() {
 
   // Keep the tiny status window in sync with Chat minimization. It is independent from the
   // Chat webview, so it can stay above other apps while the main window is minimized.
+  //
+  // 事件驱动，不轮询：以前每 500ms 两次 IPC（isMinimized + 同步命令 set_chat_status_indicator），
+  // 窗口隐藏时也照跑、永不停。最小化必然伴随 失焦 / resize（Windows 的 WM_SIZE）/ visibilitychange
+  // 之一；最小化动画期间 isMinimized 可能还没翻，所以事件停下后查一次、1s 后再补查一次。
+  // 悬浮球窗口改 localStorage 标记时，本窗口收到 storage 事件。
   useEffect(() => {
     if (mode !== 'chat' || !isTauriRuntime()) return
     let cancelled = false
+    let lastSent: boolean | null = null
+    const recheckTimers = new Set<number>()
+    const stops: Array<() => void> = []
+
     const sync = async () => {
       try {
         const win = (await import('@tauri-apps/api/window')).getCurrentWindow()
         const minimized = await win.isMinimized()
         const suppressed = window.localStorage.getItem('abu-status-dismissed') === '1'
           || window.localStorage.getItem('abu-status-hidden') === '1'
-        if (!cancelled) await api.setChatStatusIndicator(minimized && !suppressed)
+        const next = minimized && !suppressed
+        if (cancelled || next === lastSent) return
+        lastSent = next
+        await api.setChatStatusIndicator(next)
       } catch {
         // Browser preview and early window teardown are both harmless here.
       }
     }
+    // 合并式：拖动伸缩时 onResized 每帧都来，每次都重排定时器，停下后才真正查一次。
+    const syncSoon = () => {
+      recheckTimers.forEach(timer => window.clearTimeout(timer))
+      recheckTimers.clear()
+      for (const delay of [150, 1000]) {
+        const timer = window.setTimeout(() => {
+          recheckTimers.delete(timer)
+          void sync()
+        }, delay)
+        recheckTimers.add(timer)
+      }
+    }
+
     void sync()
-    const timer = window.setInterval(() => void sync(), 500)
+    document.addEventListener('visibilitychange', syncSoon)
+    window.addEventListener('storage', syncSoon)
+    void (async () => {
+      try {
+        const win = (await import('@tauri-apps/api/window')).getCurrentWindow()
+        for (const listen of [win.onFocusChanged.bind(win), win.onResized.bind(win)]) {
+          const stop = await listen(syncSoon)
+          if (cancelled) stop()
+          else stops.push(stop)
+        }
+      } catch {
+        // Browser preview: no window events.
+      }
+    })()
+
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', syncSoon)
+      window.removeEventListener('storage', syncSoon)
+      stops.forEach(stop => stop())
+      recheckTimers.forEach(timer => window.clearTimeout(timer))
       void api.setChatStatusIndicator(false)
     }
   }, [mode])

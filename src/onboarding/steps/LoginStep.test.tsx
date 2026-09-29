@@ -74,6 +74,25 @@ describe('LoginStep device authorization', () => {
     expect(screen.queryByText('正在准备...')).not.toBeInTheDocument()
   })
 
+  it('shows and copies the full authorization link when the browser never appears', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    render(
+      <LoginStep
+        t={{} as never}
+        abuApiBaseUrl="https://api.abuai.chat"
+        onLoginSuccess={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '在浏览器中登录' }))
+    const url = 'https://api.abuai.chat/agent/authorize?user_code=ABC12345'
+    expect(await screen.findByText(url)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '复制链接' }))
+    await expect(navigator.clipboard.readText()).resolves.toBe(url)
+    expect(screen.getByRole('button', { name: '已复制' })).toBeInTheDocument()
+  })
+
   it('falls back to the next API endpoint when creating the device code fails', async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     createDeviceAuthorizationMock

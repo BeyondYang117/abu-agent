@@ -15,7 +15,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
@@ -584,9 +583,8 @@ pub async fn run_oauth_connect(
     )?;
 
     // 5. 开浏览器，等 loopback 回调拿 code（校验 state，带整体超时）。
-    #[allow(deprecated)]
-    app.shell()
-        .open(authorize_url, None)
+    // 走统一入口：Windows 上 ShellExecuteExW 会卡在异常的默认浏览器关联上（见该函数注释）。
+    crate::commands::open_url_in_default_browser(app, &authorize_url)
         .map_err(|err| format!("Failed to open browser for authorization: {err}"))?;
     let code = wait_for_callback(listener, &state).await?;
 

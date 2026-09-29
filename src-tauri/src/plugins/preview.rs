@@ -20,7 +20,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
@@ -287,8 +286,7 @@ async fn refresh_html_preview(app: &AppHandle, doc_path: &str) -> Result<(), Str
             Some(port) => format!("http://127.0.0.1:{port}/"),
             None => path_to_file_url(&out),
         };
-        #[allow(deprecated)]
-        let _ = app.shell().open(url.as_str(), None);
+        let _ = crate::commands::open_url_in_default_browser(app, &url);
     }
 
     Ok(())

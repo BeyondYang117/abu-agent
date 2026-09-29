@@ -277,6 +277,12 @@ export function ChatWindowHost({ children, translucentSidebar }: ChatWindowHostP
     }
   }, [translucentSidebar, effectInput, dark])
 
+  // 应用主题只在前端知道（theme=system 时还跟 OS 走），Rust 建窗时只能猜一次；变了就同步。
+  useEffect(() => {
+    if (!isTauriRuntime() || effectPlatform !== 'windows') return
+    void api.chatWindowSyncBackground(dark).catch(() => {})
+  }, [dark])
+
   const nativeEffectClass = nativeEffectActive ? ' chat-window-host--native-effect' : ''
 
   if (usesNativeTitlebar) {
