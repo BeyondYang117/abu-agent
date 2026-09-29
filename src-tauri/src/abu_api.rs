@@ -1279,13 +1279,34 @@ pub async fn clear_abu_api_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let snapshot = {
+    let (snapshot, base_url, session_token) = {
         let mut guard = state.settings_write();
-        guard.abu_api_session_token = None;
-        guard.clone()
+        let base_url = guard.abu_api_base_url_or_default().to_string();
+        let session_token = guard.abu_api_session_token.take();
+        (guard.clone(), base_url, session_token)
     };
 
     crate::settings::persist_settings(&app, &snapshot)?;
+
+    // 本地先登出，再在后台撤销服务端 session：否则 token 在服务端一直有效，
+    // 被拷走的配置仍能调用账户接口。网络失败不影响本地登出。
+    if let Some(token) = session_token.filter(|token| !token.trim().is_empty()) {
+        tauri::async_runtime::spawn(async move {
+            let result = agent_http()
+                .post(format!(
+                    "{}/api/agent/auth/logout",
+                    base_url.trim_end_matches('/')
+                ))
+                .header("X-Abu-Session-Token", token)
+                .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+            if let Err(error) = result {
+                eprintln!("[abu-api] 服务端登出失败：{error}");
+            }
+        });
+    }
 
     Ok(())
 }
