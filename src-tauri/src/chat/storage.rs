@@ -15,6 +15,17 @@ use super::{
 
 const WRITE_RETRY_ATTEMPTS: usize = 3;
 
+/// 串行化 projects.json 的「读-改-写」。读侧栏的 `get_projects` 会自愈回写，和新建 / 重排 /
+/// 改名 / 删除项目并发时，没有这把锁就会拿旧快照覆盖掉别人刚写进去的项目。
+/// 只包同步段：`update_project` / `delete_project` 在 await 之前就会放锁。
+static PROJECT_INDEX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_project_index() -> std::sync::MutexGuard<'static, ()> {
+    PROJECT_INDEX_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
 fn temporary_write_path(path: &Path) -> PathBuf {
     path.parent()
         .unwrap_or_else(|| Path::new("."))
@@ -1210,6 +1221,7 @@ pub fn find_reusable_blank_conversation(
 }
 
 pub fn get_projects(app: &AppHandle) -> Result<Vec<ChatProject>, String> {
+    let _guard = lock_project_index();
     let mut project_index = load_project_index(app)?;
     let conversation_index = load_index_or_scan(app)?;
     let now = chrono::Local::now().timestamp();
@@ -1275,6 +1287,7 @@ fn reorder_by_ids<T>(items: Vec<T>, ids: &[String], id_of: impl Fn(&T) -> &str) 
 
 pub fn reorder_projects(app: &AppHandle, ids: &[String]) -> Result<Vec<ChatProject>, String> {
     // 只重排、不接收对象：整份写回会把别处（改名/改色）的改动冲掉。
+    let _guard = lock_project_index();
     let mut index = load_project_index(app)?;
     index.projects = reorder_by_ids(index.projects, ids, |p| p.id.as_str());
     save_project_index(app, &index)?;
@@ -1448,6 +1461,7 @@ pub fn create_project_with_options(
     validate_project_id(&project.id)?;
     project.name = normalize_project_name(&project.name)?;
     project.root_path = normalize_project_root_path(project.root_path, ensure_root_dir)?;
+    let _guard = lock_project_index();
     let mut index = load_project_index(app)?;
     if index.projects.iter().any(|item| item.name == project.name) {
         return Err("项目名称已存在".to_string());
@@ -1469,6 +1483,8 @@ pub async fn update_project(
     root_path_set: bool,
 ) -> Result<ChatProject, String> {
     validate_project_id(project_id)?;
+    let (project, old_name) = {
+    let _guard = lock_project_index();
     let mut project_index = load_project_index(app)?;
     let pos = project_index
         .projects
@@ -1507,6 +1523,8 @@ pub async fn update_project(
     project_index.projects[pos].updated_at = chrono::Local::now().timestamp();
     let project = project_index.projects[pos].clone();
     save_project_index(app, &project_index)?;
+    (project, old_name)
+    };
 
     if project.name != old_name {
         move_project_conversations(app, &old_name, Some(&project.id), Some(&project.name)).await?;
@@ -1517,16 +1535,20 @@ pub async fn update_project(
 
 pub async fn delete_project(app: &AppHandle, project_id: &str) -> Result<(), String> {
     validate_project_id(project_id)?;
-    let mut project_index = load_project_index(app)?;
-    let Some(pos) = project_index
-        .projects
-        .iter()
-        .position(|project| project.id == project_id)
-    else {
-        return Err("项目不存在".to_string());
+    let project = {
+        let _guard = lock_project_index();
+        let mut project_index = load_project_index(app)?;
+        let Some(pos) = project_index
+            .projects
+            .iter()
+            .position(|project| project.id == project_id)
+        else {
+            return Err("项目不存在".to_string());
+        };
+        let project = project_index.projects.remove(pos);
+        save_project_index(app, &project_index)?;
+        project
     };
-    let project = project_index.projects.remove(pos);
-    save_project_index(app, &project_index)?;
     move_project_conversations(app, &project.name, Some(&project.id), None).await
 }
 

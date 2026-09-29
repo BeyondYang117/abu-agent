@@ -87,7 +87,27 @@
   line-height: 1.55;
 }
 
-.onboarding-login-only-card .onboarding-login-mode-switch {
+.onboarding-login-only-card .onboarding-login-link-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 完整授权链接：单行截断省略，整段可选中；完整内容走 title 与「复制链接」。 */
+.onboarding-login-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  user-select: all;
+}
+
+.onboarding-login-mode-switch {
   margin-top: 20px;
   padding-top: 16px;
 }

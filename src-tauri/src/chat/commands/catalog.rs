@@ -557,6 +557,19 @@ pub(crate) async fn chat_import_external_conversation(
     }))
 }
 
+/// 侧栏每次 `refreshSidebar()` 都会并发拉这几份索引。同步命令在 UI 主线程上排队执行，
+/// 读盘（`get_projects` 还要扫会话目录、可能回写）期间窗口拖动 / 重绘都得等 —— Windows 上
+/// 尤其明显。所以挪到阻塞线程池。
+async fn run_blocking_read<T, F>(label: &str, read: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(read)
+        .await
+        .map_err(|e| format!("load {label} task failed: {e}"))?
+}
+
 fn non_empty_string(value: String) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -567,8 +580,8 @@ fn non_empty_string(value: String) -> Option<String> {
 }
 
 #[tauri::command]
-pub(crate) fn chat_get_assistants(app: AppHandle) -> Result<serde_json::Value, String> {
-    let assistants = get_assistants(&app, false)?;
+pub(crate) async fn chat_get_assistants(app: AppHandle) -> Result<serde_json::Value, String> {
+    let assistants = run_blocking_read("assistants", move || get_assistants(&app, false)).await?;
     Ok(serde_json::json!({
         "success": true,
         "assistants": assistants,
@@ -837,8 +850,8 @@ pub(crate) fn chat_delete_assistant(
 }
 
 #[tauri::command]
-pub(crate) fn chat_get_projects(app: AppHandle) -> Result<serde_json::Value, String> {
-    let projects = get_projects(&app)?;
+pub(crate) async fn chat_get_projects(app: AppHandle) -> Result<serde_json::Value, String> {
+    let projects = run_blocking_read("projects", move || get_projects(&app)).await?;
     Ok(serde_json::json!({
         "success": true,
         "projects": projects,
@@ -846,8 +859,11 @@ pub(crate) fn chat_get_projects(app: AppHandle) -> Result<serde_json::Value, Str
 }
 
 #[tauri::command]
-pub(crate) fn chat_get_conversation_pins(app: AppHandle) -> Result<serde_json::Value, String> {
-    let pins = crate::chat::storage::load_conversation_pins(&app)?;
+pub(crate) async fn chat_get_conversation_pins(app: AppHandle) -> Result<serde_json::Value, String> {
+    let pins = run_blocking_read("conversation pins", move || {
+        crate::chat::storage::load_conversation_pins(&app)
+    })
+    .await?;
     Ok(serde_json::json!({ "success": true, "pins": pins }))
 }
 
@@ -980,8 +996,8 @@ pub(crate) fn chat_project_open_folder(
 // ===== Chat 集(Set) 命令：仿 project 命令 =====
 
 #[tauri::command]
-pub(crate) fn chat_get_sets(app: AppHandle) -> Result<serde_json::Value, String> {
-    let sets = get_sets(&app)?;
+pub(crate) async fn chat_get_sets(app: AppHandle) -> Result<serde_json::Value, String> {
+    let sets = run_blocking_read("sets", move || get_sets(&app)).await?;
     Ok(serde_json::json!({ "success": true, "sets": sets }))
 }
 

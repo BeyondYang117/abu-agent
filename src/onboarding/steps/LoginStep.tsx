@@ -64,6 +64,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
 
   // Copy state
   const [copied, setCopied] = useState(false)
+  const [linkCopied, setLinkCopied] = useState(false)
   const pollingGenerationRef = useRef(0)
   const pollingTimerRef = useRef<number | null>(null)
 
@@ -81,6 +82,23 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
       console.error('Failed to copy:', err)
     }
   }, [deviceFlow])
+
+  // Windows 上浏览器是经 explorer.exe 拉起的：进程起来就算成功，默认浏览器关联坏了也报不出错，
+  // 所以完整授权链接必须能一键复制，不能只靠 openExternal 的失败回调提示。
+  const deviceAuthorizationUrl = deviceFlow
+    ? buildDeviceAuthorizationUrl(selectedBaseUrl, deviceFlow.verificationUri, deviceFlow.userCode)
+    : ''
+
+  const copyLink = useCallback(async () => {
+    if (!deviceAuthorizationUrl) return
+    try {
+      await navigator.clipboard.writeText(deviceAuthorizationUrl)
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+  }, [deviceAuthorizationUrl])
 
   const stopPolling = useCallback(() => {
     pollingGenerationRef.current += 1
@@ -159,7 +177,12 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         if (pollingGenerationRef.current !== generation) return
         if (Date.now() >= expiresAt) {
           stopPolling()
-          setError(t.onboardingLoginTimeout || '授权超时，请重新开始')
+          // Windows 修复：提供更明确的超时原因和恢复建议
+          console.error('Device authorization timeout after 10 minutes')
+          setError(
+            t.onboardingLoginTimeout ||
+              '授权超时（10分钟内未完成）。可能原因：浏览器未打开、未完成授权、或网络问题。请重试。',
+          )
           setDeviceFlow(null)
           return
         }
@@ -214,10 +237,14 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
         response.user_code,
       )
       // 打开浏览器不是轮询授权的前置条件。Windows 默认浏览器调用异常时，
-      // 用户仍可复制验证码或点击“重新打开浏览器”，页面不能卡在 loading。
+      // 用户仍可复制验证码或点击”重新打开浏览器”，页面不能卡在 loading。
+      // Windows 修复：增强错误提示，明确说明手动操作路径
       void api.openExternal(verificationUrl).catch((err) => {
         const detail = err instanceof Error ? err.message : String(err)
-        setError(`授权请求已创建，但无法打开系统浏览器：${detail}`)
+        console.error('Windows browser launch failed:', detail)
+        setError(
+          `无法自动打开浏览器（${detail}）。请复制下方授权链接到浏览器中打开完成授权。`,
+        )
       })
 
       // 4. 开始轮询，不等待系统浏览器调用返回
@@ -345,8 +372,31 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 </div>
                 <p className="text-xs text-neutral-500 dark:text-neutral-500">
                   {t.onboardingLoginCodeHint ||
-                    '如果浏览器未自动填入验证码，请手动输入上方代码'}
+                    '如果浏览器未自动打开或填入验证码，请手动复制上方代码到浏览器完成授权'}
                 </p>
+                <div className="onboarding-login-link-row">
+                  <span className="onboarding-login-link" title={deviceAuthorizationUrl}>
+                    {deviceAuthorizationUrl}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={copyLink}
+                    className="onboarding-login-copy-btn"
+                    data-tauri-drag-region="false"
+                  >
+                    {linkCopied ? (
+                      <>
+                        <Check size={14} className="text-green-600 dark:text-green-400" />
+                        <span>{t.lensCopied || '已复制'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={14} />
+                        <span>{t.onboardingLoginCopyLink || '复制链接'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="flex gap-2 justify-center">
@@ -361,12 +411,7 @@ export function LoginStep({ t, abuApiBaseUrl, onLoginSuccess }: LoginStepProps) 
                 <Button
                   variant="ghost"
                   onClick={() => {
-                    const url = buildDeviceAuthorizationUrl(
-                      selectedBaseUrl,
-                      deviceFlow.verificationUri,
-                      deviceFlow.userCode,
-                    )
-                    void api.openExternal(url).catch((err) => {
+                    void api.openExternal(deviceAuthorizationUrl).catch((err) => {
                       setError(err instanceof Error ? err.message : String(err))
                     })
                   }}

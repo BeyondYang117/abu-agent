@@ -12,6 +12,7 @@ const hoisted = vi.hoisted(() => ({
   focusHandlers: [] as FocusHandler[],
   isFocusedQueue: [] as Array<Promise<boolean>>,
   applyMica: vi.fn(async () => true),
+  syncBackground: vi.fn<(dark: boolean) => Promise<void>>(async () => {}),
 }))
 
 vi.mock('./platform', () => ({ isMac: false, isWindows: true, usesNativeTitlebar: false }))
@@ -19,6 +20,7 @@ vi.mock('./utils', () => ({ isTauriRuntime: () => true }))
 vi.mock('../api/tauri', () => ({
   api: {
     chatWindowApplyMica: () => hoisted.applyMica(),
+    chatWindowSyncBackground: (dark: boolean) => hoisted.syncBackground(dark),
     chatWindowSetOpaque: vi.fn(),
     chatTrafficLightCenterY: vi.fn(),
   },
@@ -69,6 +71,8 @@ beforeEach(() => {
   hoisted.focusHandlers.length = 0
   hoisted.isFocusedQueue = []
   hoisted.applyMica.mockClear()
+  hoisted.syncBackground.mockClear()
+  document.documentElement.classList.remove('dark')
 })
 
 afterEach(() => {
@@ -125,5 +129,18 @@ describe('ChatWindowHost 的 Mica 透明外壳', () => {
       hoisted.focusHandlers.forEach(cb => cb({ payload: false }))
     })
     expect(isTranslucent(host)).toBe(false)
+  })
+
+  it('应用主题切换时同步 Windows 不透明窗口的清屏色', async () => {
+    renderHost()
+    await flush()
+    expect(hoisted.syncBackground).toHaveBeenLastCalledWith(false)
+
+    await act(async () => {
+      document.documentElement.classList.add('dark')
+      await Promise.resolve()
+    })
+    await flush()
+    expect(hoisted.syncBackground).toHaveBeenLastCalledWith(true)
   })
 })

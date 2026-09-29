@@ -380,25 +380,33 @@ pub(crate) fn take_lens_selection(state: State<'_, AppState>) -> Result<String, 
 
 /// 使用系统默认浏览器打开外部链接（仅限 http/https）
 #[tauri::command]
-#[allow(deprecated)]
 pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("Invalid URL".to_string());
     }
+    open_url_in_default_browser(&app, &url)
+}
 
-    // `tauri-plugin-shell` ultimately calls ShellExecuteExW on Windows. That call can
-    // block on a broken/default-browser association, occupying Tauri's command thread;
-    // the device-flow poll then times out before the browser is ever shown. Explorer
-    // accepts the URL as a real process argument and returns immediately after handing
-    // it to the registered browser, without going through `cmd.exe` string parsing.
+/// 所有「拉起系统浏览器」的唯一入口（外链、账号登录、连接器 / MCP OAuth、插件预览）。
+///
+/// `tauri-plugin-shell` ultimately calls ShellExecuteExW on Windows. That call can
+/// block on a broken/default-browser association, occupying Tauri's command thread;
+/// the device-flow poll then times out before the browser is ever shown. Explorer
+/// accepts the URL as a real process argument and returns immediately after handing
+/// it to the registered browser, without going through `cmd.exe` string parsing.
+///
+/// 代价：explorer 进程起来即返回 Ok，浏览器最终没打开也报不出错 —— 调用方必须同时给出
+/// 可手动复制的地址，不能只靠这里的 Err 兜底。
+#[allow(deprecated)]
+pub(crate) fn open_url_in_default_browser(app: &AppHandle, url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
+        use crate::proc::NoConsoleWindow;
 
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = app;
         std::process::Command::new("explorer.exe")
-            .arg(&url)
-            .creation_flags(CREATE_NO_WINDOW)
+            .arg(url)
+            .no_console_window()
             .spawn()
             .map(|_| ())
             .map_err(|err| format!("Failed to launch the default browser: {err}"))

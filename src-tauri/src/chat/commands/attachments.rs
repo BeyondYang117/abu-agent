@@ -8,14 +8,21 @@ use crate::chat::attachments::{
 };
 
 /// 读取附件为 data URL，供前端 `<img>` 预览。`conversation_id` 为空时按本机绝对路径读取（发送前预览）。
+///
+/// 整张图（最大 12MB）读盘 + base64，每个图片组件挂载就调一次；同步命令会在 UI 主线程上做完
+/// 这些，切到一个多图对话时窗口会卡住。所以 async + spawn_blocking。
 #[tauri::command]
-pub(crate) fn chat_read_attachment(
+pub(crate) async fn chat_read_attachment(
     app: AppHandle,
     conversation_id: Option<String>,
     path: String,
 ) -> Result<serde_json::Value, String> {
-    let full = resolve_attachment_file_path(&app, conversation_id.as_deref(), &path)?;
-    let data_url = read_attachment_as_data_url(&full)?;
+    let data_url = tauri::async_runtime::spawn_blocking(move || {
+        let full = resolve_attachment_file_path(&app, conversation_id.as_deref(), &path)?;
+        read_attachment_as_data_url(&full)
+    })
+    .await
+    .map_err(|e| format!("read attachment task failed: {e}"))??;
     Ok(serde_json::json!({
         "success": true,
         "data": data_url,

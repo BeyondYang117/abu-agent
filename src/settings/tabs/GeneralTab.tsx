@@ -4,6 +4,7 @@ import { Toggle, Select, Input, SettingRow, SettingsGroup, PermissionItem } from
 import { Button } from '../../components/Button'
 import { THEME_COLOR_PRESETS } from '../../themeColors'
 import { UI_FONT_PX_MIN, UI_FONT_PX_MAX } from '../uiFont'
+import { getPlatform } from '../utils'
 import type { I18n, Lang } from '../i18n'
 import type { Settings as SettingsData, PermissionStatus } from '../../api/tauri'
 
@@ -139,6 +140,11 @@ export function AppearanceGroup({
       <AppearanceSubsection title={lang === 'zh' ? '材质与颜色' : 'Material & color'}>
         <SettingRow
           label={lang === 'zh' ? '半透明侧边栏' : 'Translucent sidebar'}
+          description={getPlatform() === 'windows'
+            ? (lang === 'zh'
+              ? '关闭并重新打开聊天窗口后生效（开启了「关闭时保持聊天窗口」则需重启应用）。关闭时窗口拖动、缩放更流畅。'
+              : 'Takes effect after reopening the chat window (restart the app if "Keep chat window in background" is on). Off keeps dragging and resizing smoother.')
+            : undefined}
           className="settings-appearance-toggle-row"
         >
           <Toggle

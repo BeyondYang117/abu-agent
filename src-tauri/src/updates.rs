@@ -6,6 +6,8 @@ use tauri::{AppHandle, Emitter, State};
 #[cfg(target_os = "macos")]
 use uuid::Uuid;
 
+use sha2::{Digest, Sha256};
+
 use crate::api::with_standard_request_timeout;
 use crate::state::AppState;
 
@@ -215,13 +217,16 @@ pub(crate) async fn download_update_asset(
             )
         })?;
     let asset_url = release_download_url(RELEASE_REPO, &version, &name);
+    // 先取校验值再下载：缺校验文件时不白下几十 MB。安装流程会剥 quarantine 绕过
+    // Gatekeeper（包未签名），所以这里的哈希比对是安装前唯一的完整性关卡，必须 fail-closed。
+    let expected_sha256 = fetch_expected_sha256(state.inner(), &asset_url).await?;
 
     // 决定本地文件名：保留原扩展名（.dmg / .exe）便于 install 流程根据扩展名判断行为
     let ext = std::path::Path::new(&name)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("bin");
-    let dest = std::env::temp_dir().join(format!("abu-agent-update-{version}.{ext}"));
+    let dest = std::env::temp_dir().join(format!("{UPDATE_FILE_PREFIX}{version}.{ext}"));
 
     let mut resp = state
         .http
@@ -235,6 +240,7 @@ pub(crate) async fn download_update_asset(
     }
     let total = resp.content_length().unwrap_or(0);
     let mut file = fs::File::create(&dest).map_err(|e| format!("创建文件失败: {e}"))?;
+    let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
     let mut last_emitted_pct: i32 = -1;
     while let Some(chunk) = resp
@@ -244,6 +250,7 @@ pub(crate) async fn download_update_asset(
     {
         file.write_all(&chunk)
             .map_err(|e| format!("写入失败: {e}"))?;
+        hasher.update(&chunk);
         downloaded += chunk.len() as u64;
         let pct = if total > 0 {
             (downloaded * 100 / total) as i32
@@ -263,6 +270,15 @@ pub(crate) async fn download_update_asset(
             );
         }
     }
+    file.flush().map_err(|e| format!("写入失败: {e}"))?;
+    drop(file);
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if actual_sha256 != expected_sha256 {
+        let _ = fs::remove_file(&dest);
+        return Err(format!(
+            "安装包校验失败（SHA-256 不匹配），已删除下载文件。请稍后重试，或前往 https://github.com/{RELEASE_REPO}/releases 手动下载"
+        ));
+    }
     // 收尾再 emit 一次确保 100% 落地
     let _ = app.emit(
         "update-download-progress",
@@ -273,6 +289,56 @@ pub(crate) async fn download_update_asset(
         }),
     );
     Ok(dest.to_string_lossy().to_string())
+}
+
+const UPDATE_FILE_PREFIX: &str = "abu-agent-update-";
+
+/// 读取与安装包同名的 `<asset>.sha256`（发布流水线生成，`sha256sum` 格式）。
+async fn fetch_expected_sha256(state: &AppState, asset_url: &str) -> Result<String, String> {
+    let checksum_url = format!("{asset_url}.sha256");
+    let resp = with_standard_request_timeout(
+        state
+            .http
+            .get(&checksum_url)
+            .header("User-Agent", format!("ABU-Agent/{}", env!("CARGO_PKG_VERSION"))),
+    )
+    .send()
+    .await
+    .map_err(|e| format!("获取安装包校验值失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "该版本缺少安装包校验文件（HTTP {}），为安全起见已停止自动更新，请前往 https://github.com/{RELEASE_REPO}/releases 手动下载",
+            resp.status()
+        ));
+    }
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取安装包校验值失败: {e}"))?;
+    parse_sha256_file(&body).ok_or_else(|| "安装包校验文件格式无效".to_string())
+}
+
+/// `sha256sum` 输出的首个字段即哈希；只接受 64 位十六进制。
+fn parse_sha256_file(body: &str) -> Option<String> {
+    let hash = body.split_whitespace().next()?.to_ascii_lowercase();
+    (hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())).then_some(hash)
+}
+
+/// 只允许安装 `download_update_asset` 落在临时目录里的文件：`path` 来自 WebView，
+/// 不设限的话前端被注入即可让本进程执行任意安装包。
+fn validate_update_path(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(path);
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let in_temp = p
+        .parent()
+        .and_then(|dir| dir.canonicalize().ok())
+        .zip(std::env::temp_dir().canonicalize().ok())
+        .is_some_and(|(dir, temp)| dir == temp);
+    let ext_ok = name.ends_with(".dmg") || name.ends_with(".exe");
+    if !in_temp || !name.starts_with(UPDATE_FILE_PREFIX) || !ext_ok {
+        return Err(format!("拒绝安装非更新流程下载的文件: {path}"));
+    }
+    Ok(p.to_path_buf())
 }
 
 /// NSIS 静默更新参数（与 tauri-plugin-updater Quiet 一致）。
@@ -327,7 +393,7 @@ fn launch_nsis_silent_update(path: &str) -> Result<(), String> {
 /// - Windows（.exe）：ShellExecute 跑 NSIS 静默更新，立即 exit 让 installer 能覆盖正在运行的 exe
 #[tauri::command]
 pub(crate) fn install_update_and_quit(app: AppHandle, path: String) -> Result<(), String> {
-    let p = std::path::Path::new(&path);
+    let p = validate_update_path(&path)?;
     if !p.exists() {
         return Err(format!("安装包不存在: {path}"));
     }
@@ -441,6 +507,33 @@ mod tests {
             env!("CARGO_PKG_REPOSITORY")
         );
         assert_eq!(env!("CARGO_PKG_AUTHORS"), "abu");
+    }
+
+    #[test]
+    fn parse_sha256_file_accepts_sha256sum_output_only() {
+        let hash = "A".repeat(64);
+        assert_eq!(
+            parse_sha256_file(&format!("{hash}  ABU.Agent.Desktop_0.1.11_x64-setup.exe\n")),
+            Some("a".repeat(64))
+        );
+        assert_eq!(parse_sha256_file(&"a".repeat(63)), None);
+        assert_eq!(parse_sha256_file(&"g".repeat(64)), None);
+        assert_eq!(parse_sha256_file("<html>Not Found</html>"), None);
+    }
+
+    #[test]
+    fn validate_update_path_only_allows_downloaded_installers() {
+        let temp = std::env::temp_dir();
+        let ok = temp.join(format!("{UPDATE_FILE_PREFIX}0.1.11.dmg"));
+        assert!(validate_update_path(&ok.to_string_lossy()).is_ok());
+        let wrong_name = temp.join("evil.exe");
+        assert!(validate_update_path(&wrong_name.to_string_lossy()).is_err());
+        let wrong_ext = temp.join(format!("{UPDATE_FILE_PREFIX}0.1.11.sh"));
+        assert!(validate_update_path(&wrong_ext.to_string_lossy()).is_err());
+        let wrong_dir = std::env::current_dir()
+            .unwrap()
+            .join(format!("{UPDATE_FILE_PREFIX}0.1.11.exe"));
+        assert!(validate_update_path(&wrong_dir.to_string_lossy()).is_err());
     }
 
     #[test]

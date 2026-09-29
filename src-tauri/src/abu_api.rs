@@ -11,6 +11,21 @@ const MODEL_ROUTING_CACHE_FILE: &str = "model-routing-policy-cache.json";
 // Keep native desktop requests identifiable as the reqwest client used by the app.
 const AGENT_API_USER_AGENT: &str = "reqwest/0.12";
 
+/// ABU API 账户接口共用的 client：复用连接池（原先每个请求都新建 client、重新握手），
+/// 并给所有请求兜底连接/总超时——未单独设超时的请求在网络异常时会让界面一直转圈。
+/// 个别请求仍可用 `.timeout()` 覆盖为更短的值。
+fn agent_http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(AGENT_API_USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelRoutingPolicyCache {
     pub version: i64,
@@ -261,7 +276,7 @@ pub async fn abu_api_sync_model_routing_policy(
         Some(token) if !token.trim().is_empty() => token,
         _ => return cached.ok_or_else(|| "尚未登录且没有可用的路由策略缓存".to_string()),
     };
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!(
             "{}/api/agent/model-routing-policy",
             base_url.trim_end_matches('/'),
@@ -448,7 +463,7 @@ pub async fn abu_api_create_device_authorization(
     device_name: String,
 ) -> Result<DeviceAuthResponse, String> {
     let url = format!("{}/api/agent/auth/device", base_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({ "device_name": device_name }))
@@ -488,7 +503,7 @@ pub async fn abu_api_exchange_device_authorization(
         "{}/api/agent/auth/device/exchange",
         base_url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .json(&serde_json::json!({ "device_code": device_code }))
@@ -538,7 +553,7 @@ pub async fn abu_api_register_device(
     capabilities: Option<String>,
 ) -> Result<AgentDeviceResponse, String> {
     let url = format!("{}/api/agent/devices", base_url.trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -586,7 +601,7 @@ pub async fn abu_api_get_cli_credentials(
         "{}/api/agent/cli-credentials",
         base_url.trim_end_matches('/')
     );
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(url)
         .header("X-Abu-Session-Token", session_token)
         .json(&serde_json::json!({ "agent": agent }))
@@ -618,7 +633,7 @@ pub async fn fetch_agent_relay_credentials(
     session_token: &str,
     model: &str,
 ) -> Result<AgentRelayCredentialsResponse, String> {
-    let client = reqwest::Client::new();
+    let client = agent_http();
     let response = client
         .post(format!("{}/api/agent/relay-credentials", base_url.trim_end_matches('/')))
         .header("X-Abu-Session-Token", session_token)
@@ -732,6 +747,11 @@ pub struct CheckinStatsResponse {
     pub total_quota: i64,
     #[serde(default)]
     pub checked_in_today: bool,
+    /// `"welfare"`：签到奖励是福利余额而不是额度（服务端已统一到福利签到）。
+    #[serde(default)]
+    pub reward_unit: String,
+    #[serde(default)]
+    pub welfare_balance: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -748,6 +768,10 @@ pub struct CheckinResultResponse {
     pub consecutive_days: i64,
     #[serde(default)]
     pub bonus_triggered: bool,
+    #[serde(default)]
+    pub reward_unit: String,
+    #[serde(default)]
+    pub welfare_balance: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -877,7 +901,7 @@ pub async fn abu_api_get_user_info(state: State<'_, AppState>) -> Result<UserInf
     };
 
     let url = agent_user_info_url(&base_url);
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(url)
         .header("X-Abu-Session-Token", &session_token)
         .send()
@@ -911,7 +935,7 @@ pub async fn abu_api_get_checkin_stats(
     state: State<'_, AppState>,
 ) -> Result<CheckinStatsResponse, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!("{base_url}/api/user/checkin/stats"))
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -925,7 +949,7 @@ pub async fn abu_api_get_checkin_stats(
 #[command]
 pub async fn abu_api_checkin(state: State<'_, AppState>) -> Result<CheckinResultResponse, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .post(format!("{base_url}/api/user/checkin"))
         .header("X-Abu-Session-Token", session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -943,7 +967,7 @@ fn agent_models_url(base_url: &str) -> String {
 #[command]
 pub async fn abu_api_probe_endpoint(base_url: String) -> Result<bool, String> {
     let url = format!("{}/api/agent/models", base_url.trim().trim_end_matches('/'));
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .head(url)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -973,7 +997,7 @@ pub async fn abu_api_list_models(
         (base_url, session_token)
     };
 
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(agent_models_url(&base_url))
         .header("X-Abu-Session-Token", &session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
@@ -1019,7 +1043,7 @@ pub async fn abu_api_list_entitlements(
             .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
         (base_url, session_token)
     };
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!(
             "{}/api/agent/entitlements",
             base_url.trim_end_matches('/')
@@ -1056,7 +1080,7 @@ pub async fn abu_api_list_devices(
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentDeviceResponse>, String> {
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .get(format!("{base_url}/api/agent/devices"))
         .header("X-Abu-Session-Token", session_token)
         .send()
@@ -1073,7 +1097,7 @@ pub async fn abu_api_revoke_device(
 ) -> Result<(), String> {
     let device_id = agent_path_id(&device_id, "设备 ID")?;
     let (base_url, session_token) = agent_api_credentials(state.inner())?;
-    let response = reqwest::Client::new()
+    let response = agent_http()
         .delete(format!("{base_url}/api/agent/devices/{device_id}"))
         .header("X-Abu-Session-Token", session_token)
         .send()
@@ -1088,7 +1112,39 @@ pub async fn abu_api_revoke_device(
 /// 那是个不依赖 `AppHandle` 的纯函数，便于单测直接调用。
 #[command]
 pub fn get_device_fingerprint(_app: AppHandle) -> Result<String, String> {
-    Ok(compute_device_fingerprint())
+    let path = directories::BaseDirs::new().map(|base| {
+        base.data_local_dir()
+            .join(crate::app_data::APP_IDENTIFIER)
+            .join(DEVICE_FINGERPRINT_FILE)
+    });
+    Ok(load_or_create_device_fingerprint(path.as_deref()))
+}
+
+const DEVICE_FINGERPRINT_FILE: &str = "device-fingerprint";
+
+/// 指纹首次算出后落盘，之后只读文件。`compute_device_fingerprint` 用的
+/// `DefaultHasher` 不保证跨 Rust 版本稳定，机器名也可能被改；重新计算出不同的值，
+/// 服务端就会把同一台机器登记成新设备。放 local（非 Roaming）目录，避免漫游配置文件
+/// 把同一个指纹带到另一台电脑。写盘失败时仍返回算出的值，不影响登录。
+fn load_or_create_device_fingerprint(path: Option<&std::path::Path>) -> String {
+    if let Some(saved) = path
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.len() == 16 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return saved;
+    }
+    let fingerprint = compute_device_fingerprint();
+    if let Some(path) = path {
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(path, &fingerprint));
+        if let Err(error) = written {
+            eprintln!("[abu-api] 设备指纹写盘失败：{error}");
+        }
+    }
+    fingerprint
 }
 
 /// 组合机器 ID / 主机名 / 用户名算出 16 位十六进制指纹。
@@ -1117,8 +1173,10 @@ pub fn compute_device_fingerprint() -> String {
 
     #[cfg(target_os = "windows")]
     {
+        use crate::proc::NoConsoleWindow;
         if let Ok(output) = std::process::Command::new("wmic")
             .args(["csproduct", "get", "UUID"])
+            .no_console_window()
             .output()
         {
             if let Ok(text) = String::from_utf8(output.stdout) {
@@ -1264,13 +1322,34 @@ pub async fn clear_abu_api_session(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let snapshot = {
+    let (snapshot, base_url, session_token) = {
         let mut guard = state.settings_write();
-        guard.abu_api_session_token = None;
-        guard.clone()
+        let base_url = guard.abu_api_base_url_or_default().to_string();
+        let session_token = guard.abu_api_session_token.take();
+        (guard.clone(), base_url, session_token)
     };
 
     crate::settings::persist_settings(&app, &snapshot)?;
+
+    // 本地先登出，再在后台撤销服务端 session：否则 token 在服务端一直有效，
+    // 被拷走的配置仍能调用账户接口。网络失败不影响本地登出。
+    if let Some(token) = session_token.filter(|token| !token.trim().is_empty()) {
+        tauri::async_runtime::spawn(async move {
+            let result = agent_http()
+                .post(format!(
+                    "{}/api/agent/auth/logout",
+                    base_url.trim_end_matches('/')
+                ))
+                .header("X-Abu-Session-Token", token)
+                .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+            if let Err(error) = result {
+                eprintln!("[abu-api] 服务端登出失败：{error}");
+            }
+        });
+    }
 
     Ok(())
 }
@@ -1325,7 +1404,7 @@ mod tests {
             relay_key: "relay-secret".to_string(),
         };
         let results =
-            search_platform_web(&reqwest::Client::new(), &credentials, "current release", 4)
+            search_platform_web(agent_http(), &credentials, "current release", 4)
                 .await
                 .unwrap();
         server.join().unwrap();
@@ -1346,6 +1425,21 @@ mod tests {
             agent_models_url("https://api.example.com/"),
             "https://api.example.com/api/agent/models"
         );
+    }
+
+    #[test]
+    fn device_fingerprint_is_persisted_and_reused() {
+        let dir = std::env::temp_dir().join(format!("abu-fp-test-{}", uuid::Uuid::new_v4()));
+        let path = dir.join(DEVICE_FINGERPRINT_FILE);
+        let first = load_or_create_device_fingerprint(Some(&path));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+
+        std::fs::write(&path, "0123456789abcdef\n").unwrap();
+        assert_eq!(load_or_create_device_fingerprint(Some(&path)), "0123456789abcdef");
+
+        std::fs::write(&path, "corrupted").unwrap();
+        assert_eq!(load_or_create_device_fingerprint(Some(&path)), first);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

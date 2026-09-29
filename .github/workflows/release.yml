@@ -122,6 +122,26 @@ jobs:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
+      # The in-app updater downloads `<asset>.sha256` and refuses to install on a
+      # missing file or mismatch. GitHub turns spaces in asset names into dots, so
+      # the checksum files are named (and reference) the dotted upload names.
+      - name: Upload installer checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(src-tauri/target/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/nsis/*.exe src-tauri/target/release/bundle/msi/*.msi)
+          if [ ${#files[@]} -eq 0 ]; then echo "no installers found"; exit 1; fi
+          mkdir -p checksums
+          for f in "${files[@]}"; do
+            name="$(basename "$f" | tr ' ' '.')"
+            hash="$(sha256sum "$f" | cut -d' ' -f1)"
+            printf '%s  %s\n' "$hash" "$name" > "checksums/${name}.sha256"
+          done
+          gh release upload "$RELEASE_TAG" checksums/*.sha256 --clobber --repo "$GITHUB_REPOSITORY"
+
       - name: Package and upload Windows portable zip
         if: matrix.platform == 'windows-latest'
         env:

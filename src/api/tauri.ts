@@ -2016,6 +2016,8 @@ export const api = {
       total_checkins: number
       total_quota: number
       checked_in_today: boolean
+      reward_unit?: string
+      welfare_balance?: number
     }>('abu_api_get_checkin_stats'),
   abuApiCheckin: () =>
     invoke<{
@@ -2025,6 +2027,8 @@ export const api = {
       total_reward: number
       consecutive_days: number
       bonus_triggered: boolean
+      reward_unit?: string
+      welfare_balance?: number
     }>('abu_api_checkin'),
   abuApiListModels: () =>
     invoke<{ models: string[]; recommended: string; model_access?: Array<{ model: string; status: 'available' | 'subscription_required' | 'quota_exhausted' | 'unavailable'; recommended_plan_ids?: number[] }> }>('abu_api_list_models'),
@@ -2151,6 +2155,9 @@ export const api = {
    *  路走后端而不是 window.setEffects()，因为 tauri 把 apply_mica 的失败静默吞掉了。 */
   chatWindowApplyMica: (dark: boolean): Promise<boolean> =>
     invoke('chat_window_apply_mica', { dark }),
+  /** Windows 不透明 chat 窗（没开半透明侧栏）：清屏色跟应用主题，伸缩露出的边缘不闪白。其他情况 no-op。 */
+  chatWindowSyncBackground: (dark: boolean): Promise<void> =>
+    invoke('chat_window_sync_background', { dark }),
   /** macOS：材质没上时把 NSWindow 设回 opaque，换回合成器的不透明快路径（台前调度不掉帧）。
    *  材质上了必须传 false，否则 Menu 材质被实色背景挡死。非 macOS 是 no-op。 */
   chatWindowSetOpaque: (opaque: boolean): Promise<void> =>

@@ -4,6 +4,8 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use serde_json::json;
 use tauri::{
@@ -178,9 +180,14 @@ pub fn apply_chat_window_chrome(window: &WebviewWindow) {
         let _ = window.set_decorations(false);
         #[cfg(target_os = "windows")]
         {
-            // Mica 需要透明 WebView 背景（见 ensure_chat_window_with_hash）；不支持 Mica 时
-            // 由前端不透明 shell 完整覆盖回退。所以这里不再设主题清屏色。
-            let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+            // 透明窗口：Mica 要透过 WebView，清屏色必须全透明；不支持 Mica 时由前端不透明
+            // shell 完整覆盖回退。不透明窗口（没开半透明）：清屏色跟主题，伸缩露出的边缘不闪白。
+            if is_windows_opaque_chat_window(window) {
+                let dark = windows_chat_prefers_dark(window);
+                let _ = window.set_background_color(Some(windows_chat_opaque_background(dark)));
+            } else {
+                let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+            }
             let _ = window.set_shadow(true);
             apply_windows_chat_window_frame(window);
         }
@@ -226,6 +233,112 @@ fn apply_windows_chat_window_frame(window: &WebviewWindow) {
     }
 }
 
+/// Windows：以**不透明**方式创建的 chat / popout 窗口 label。
+///
+/// 透明无边框 WebView2 每帧都要带 alpha 合成，拖动 / 伸缩明显更重；而半透明侧栏（Mica）
+/// 默认是关的 —— 大多数用户在白付这笔开销，却看不到任何材质。所以只有开了半透明才建透明窗。
+/// 透明与否只能在建窗时决定：运行中打开开关，要等窗口重建（关掉重开 / 重启）才生效，
+/// 在那之前 `chat_window_apply_mica` 对这些窗口一律报「未生效」，前端保持不透明外壳。
+#[cfg(target_os = "windows")]
+static WINDOWS_OPAQUE_CHAT_WINDOWS: Mutex<std::collections::BTreeSet<String>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+/// 与外壳底色一致：浅色 `--theme-surface`（neutral），深色 `.dark .chat-window-shell`。
+#[cfg(target_os = "windows")]
+fn windows_chat_opaque_background(dark: bool) -> Color {
+    if dark {
+        Color(0x21, 0x21, 0x21, 255)
+    } else {
+        Color(0xfd, 0xfc, 0xfa, 255)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_chat_translucent_enabled(app: &AppHandle) -> bool {
+    // try_read：建窗可能发生在设置保存链路里，别在这里等写锁；读不到按默认（关）处理。
+    app.state::<crate::state::AppState>()
+        .settings
+        .try_read()
+        .map(|settings| settings.translucent_sidebar)
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_chat_prefers_dark(window: &WebviewWindow) -> bool {
+    let theme = window
+        .app_handle()
+        .state::<crate::state::AppState>()
+        .settings
+        .try_read()
+        .map(|settings| settings.theme.clone())
+        .unwrap_or_default();
+    match theme.as_str() {
+        "dark" => true,
+        "light" => false,
+        _ => matches!(window.theme(), Ok(tauri::Theme::Dark)),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_windows_opaque_chat_window(window: &WebviewWindow) -> bool {
+    WINDOWS_OPAQUE_CHAT_WINDOWS
+        .lock()
+        .map(|labels| labels.contains(window.label()))
+        .unwrap_or(false)
+}
+
+/// 建 chat / popout 窗的 Windows 分支：按半透明开关决定透明与否（见上）。
+#[cfg(target_os = "windows")]
+fn windows_chat_window_builder<'a>(
+    app: &AppHandle,
+    builder: WebviewWindowBuilder<'a, tauri::Wry, AppHandle>,
+) -> (WebviewWindowBuilder<'a, tauri::Wry, AppHandle>, bool) {
+    let opaque = !windows_chat_translucent_enabled(app);
+    // 无边框窗口，圆角 / 描边 / 阴影交给 DWM。
+    let builder = builder.decorations(false).shadow(true);
+    let builder = if opaque {
+        builder
+            .transparent(false)
+            .background_color(windows_chat_opaque_background(false))
+    } else {
+        // 透明窗口让 Mica 穿过 WebView。
+        builder.transparent(true).background_color(Color(0, 0, 0, 0))
+    };
+    (builder, opaque)
+}
+
+#[cfg(target_os = "windows")]
+fn register_windows_chat_window(window: &WebviewWindow, opaque: bool) {
+    if let Ok(mut labels) = WINDOWS_OPAQUE_CHAT_WINDOWS.lock() {
+        if opaque {
+            labels.insert(window.label().to_string());
+        } else {
+            labels.remove(window.label());
+        }
+    }
+    if opaque {
+        // 建窗前拿不到系统主题（theme=system 时）；建完立刻按真实主题校正清屏色。
+        let dark = windows_chat_prefers_dark(window);
+        let _ = window.set_background_color(Some(windows_chat_opaque_background(dark)));
+    }
+}
+
+/// 应用主题变化时由前端调用：不透明 chat 窗的清屏色跟主题（伸缩露出的边缘、首帧前）。
+/// 透明窗 / 其他平台 no-op。
+#[tauri::command]
+pub fn chat_window_sync_background(window: WebviewWindow, dark: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        if is_windows_opaque_chat_window(&window) {
+            let _ = window.set_background_color(Some(windows_chat_opaque_background(dark)));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, dark);
+    }
+}
+
 /// 给 chat 窗口上 Mica，返回「材质是否真的生效」。
 ///
 /// 不能用 `window.set_effects()`：tauri 的 `vibrancy::apply_effects` 直接丢弃
@@ -236,6 +349,10 @@ fn apply_windows_chat_window_frame(window: &WebviewWindow) {
 pub fn chat_window_apply_mica(window: WebviewWindow, dark: bool) -> bool {
     #[cfg(target_os = "windows")]
     {
+        // 不透明窗口上了 Mica 也被 WebView 整个盖住；报「未生效」，前端就不会把外壳改透明。
+        if is_windows_opaque_chat_window(&window) {
+            return false;
+        }
         match window_vibrancy::apply_mica(&window, Some(dark)) {
             Ok(()) => true,
             Err(error) => {
@@ -361,12 +478,37 @@ fn load_stored_last_chat_route(app: &AppHandle) -> Option<String> {
     Some(route)
 }
 
+/// 路由请求的到达序号（主线程上领取，所以就是前端的调用顺序）。
+static LAST_ROUTE_REQUEST_SEQ: AtomicU64 = AtomicU64::new(0);
+/// 已落盘的最新序号；持锁写文件，顺带串行化同一路径的并发写。
+static LAST_ROUTE_WRITTEN_SEQ: Mutex<u64> = Mutex::new(0);
+
 /// 前端在路由变化时调用：记住（或清除）聊天窗口上次停留的路由。
 /// `route` 为 null / 空串时删除记录（删除对话、新建对话等场景）。
+///
+/// 每次切对话都会触发，而 `atomic_write` 要 fsync（Windows 上是 FlushFileBuffers，杀软占用时
+/// 还会 sleep 重试）—— 放在同步命令里就是在 UI 主线程上等磁盘。所以主线程只领序号，写盘交给
+/// 阻塞线程池；落盘前比序号，先发后到的旧路由直接丢弃，不会覆盖新路由。
 #[tauri::command]
-pub fn chat_remember_last_route(app: AppHandle, route: Option<String>) -> Result<(), String> {
-    let path = chat_last_route_path(&app)?;
-    let normalized = route.as_deref().map(str::trim).filter(|r| !r.is_empty());
+pub fn chat_remember_last_route(app: AppHandle, route: Option<String>) {
+    let seq = LAST_ROUTE_REQUEST_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut written = LAST_ROUTE_WRITTEN_SEQ
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if seq < *written {
+            return;
+        }
+        *written = seq;
+        if let Err(error) = write_last_chat_route(&app, route.as_deref()) {
+            eprintln!("[chat-window] {error}");
+        }
+    });
+}
+
+fn write_last_chat_route(app: &AppHandle, route: Option<&str>) -> Result<(), String> {
+    let path = chat_last_route_path(app)?;
+    let normalized = route.map(str::trim).filter(|r| !r.is_empty());
     match normalized {
         Some(route) if is_valid_chat_last_route(route) => {
             let content = serde_json::to_string(&json!({ "route": route }))
@@ -434,14 +576,11 @@ pub fn ensure_chat_window_with_hash(app: &AppHandle, hash: &str) -> Result<Webvi
     }
 
     #[cfg(target_os = "windows")]
-    {
-        // Windows：透明无边框窗口让 Mica 穿过 WebView，圆角 / 描边 / 阴影交给 DWM。
-        builder = builder
-            .decorations(false)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
-            .shadow(true);
-    }
+    let windows_opaque = {
+        let (next, opaque) = windows_chat_window_builder(app, builder);
+        builder = next;
+        opaque
+    };
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -453,16 +592,25 @@ pub fn ensure_chat_window_with_hash(app: &AppHandle, hash: &str) -> Result<Webvi
             .shadow(false);
     }
 
-    builder.build().map_err(|e| e.to_string())
+    let window = builder.build().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    register_windows_chat_window(&window, windows_opaque);
+    Ok(window)
 }
 
 /// 显示或隐藏最小化后的任务状态指示灯。
 /// The status window is deliberately tiny and independent from the Chat webview so it remains
 /// visible while Chat is minimized.
+///
+/// 只在第一次真要显示时才建窗：以前 `visible=false` 也会先 build，于是每个用户后台都常驻一个
+/// 从没露过面的透明置顶 WebView2（整套前端 + 自己的定时器）。必须是 async 命令 —— 同步命令里
+/// `build()` 会在 Windows 上和 WebView2 死锁（同 `ensure_chat_popout_window`）。
 #[tauri::command]
-pub fn set_chat_status_indicator(app: AppHandle, visible: bool) -> Result<(), String> {
+pub async fn set_chat_status_indicator(app: AppHandle, visible: bool) -> Result<(), String> {
     let window = if let Some(window) = app.get_webview_window("status") {
         window
+    } else if !visible {
+        return Ok(());
     } else {
         WebviewWindowBuilder::new(
             &app,
@@ -560,13 +708,11 @@ pub fn ensure_chat_popout_window(
     }
 
     #[cfg(target_os = "windows")]
-    {
-        builder = builder
-            .decorations(false)
-            .transparent(true)
-            .background_color(Color(0, 0, 0, 0))
-            .shadow(true);
-    }
+    let windows_opaque = {
+        let (next, opaque) = windows_chat_window_builder(app, builder);
+        builder = next;
+        opaque
+    };
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -577,7 +723,10 @@ pub fn ensure_chat_popout_window(
             .shadow(false);
     }
 
-    builder.build().map_err(|e| e.to_string())
+    let window = builder.build().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    register_windows_chat_window(&window, windows_opaque);
+    Ok(window)
 }
 
 fn urlencoding_conversation_id(conversation_id: &str) -> String {

@@ -77,7 +77,7 @@ describe('useChatRouting 分支顺序', () => {
     ['#chat/knowledge', 'knowledge'],
     ['#chat/notes', 'notes'],
     ['#chat/automations', 'automations'],
-    ['#chat/onboarding', 'onboarding'],
+    ['#chat/onboarding?return=chat', 'onboarding'],
   ]
 
   for (const [hash, view] of centerRoutes) {
@@ -88,6 +88,15 @@ describe('useChatRouting 分支顺序', () => {
       expect(onResetConversation).not.toHaveBeenCalled()
     })
   }
+
+  it('旧的 #chat/onboarding 引导链接已退役 → 打开新对话，不进入引导页', () => {
+    const { onViewChange, onLoadConversation, onResetConversation } = setup('#chat/onboarding')
+    expect(onViewChange).toHaveBeenCalledWith('conversation')
+    expect(onViewChange).not.toHaveBeenCalledWith('onboarding')
+    expect(onResetConversation).toHaveBeenCalled()
+    expect(onLoadConversation).not.toHaveBeenCalled()
+    expect(window.location.hash).toBe('#chat')
+  })
 
   it('#chat/automations/id → view=automations，不当作会话加载', () => {
     const { onViewChange, onLoadConversation } = setup('#chat/automations/auto-1')

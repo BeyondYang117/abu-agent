@@ -160,11 +160,21 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == "chat" {
-                    let keep_alive = window
-                        .app_handle()
-                        .state::<AppState>()
-                        .settings_read()
-                        .keep_chat_window_alive;
+                    // Windows 修复：避免在 CloseRequested 同步读取设置导致卡死。
+                    // 使用 try_lock 防御性读取，失败时允许直接关闭（安全降级）。
+                    let keep_alive = {
+                        let state = window.app_handle().state::<AppState>();
+                        // 先落到局部变量：块尾表达式里的 try_read() 临时值会比 `state` 活得久（E0597）。
+                        let keep_alive = match state.settings.try_read() {
+                            Ok(guard) => guard.keep_chat_window_alive,
+                            Err(_) => {
+                                // 设置锁被持有或损坏，安全降级：允许关闭窗口
+                                eprintln!("Warning: Failed to read keep_chat_window_alive setting during close, allowing window to close");
+                                false
+                            }
+                        };
+                        keep_alive
+                    };
                     if keep_alive {
                         api.prevent_close();
                         hide_chat_window(window.app_handle(), window);
@@ -510,6 +520,7 @@ pub fn run() {
             abu_api::abu_api_get_cached_model_routing_policy,
             abu_api::abu_api_sync_model_routing_policy,
             windows::chat_window_apply_mica,
+            windows::chat_window_sync_background,
             windows::chat_window_set_opaque,
             windows::chat_traffic_light_center_y,
             windows::set_chat_status_indicator,
