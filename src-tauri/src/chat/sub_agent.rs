@@ -1099,19 +1099,26 @@ pub fn handle_agent_spawn<'a>(
                     routing_policy_version = Some(route.version);
                 }
             }
-            let session_token = settings
-                .abu_api_session_token
-                .as_deref()
-                .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-            let credentials = crate::abu_api::fetch_agent_relay_credentials(
-                settings.abu_api_base_url_or_default(),
-                session_token,
+            // 子代理继承父对话组织与根任务（C §6.3），禁止独立申请用户级 Relay。
+            let parent_task_id = {
+                let cloud = ctx.state.cloud_context.lock().map_err(|e| e.to_string())?;
+                cloud
+                    .active_relays
+                    .last()
+                    .map(|r| r.task_id.clone())
+            };
+            let mut billing = parent_conversation.billing.clone();
+            let credentials = crate::cloud_context::acquire_cloud_run_credentials(
+                ctx.state,
                 &model,
+                &parent_conversation_id,
+                &mut billing,
+                parent_task_id.as_deref(),
             )
             .await?;
             (
                 crate::chat::model::create_abu_api_virtual_provider(
-                    settings.abu_api_base_url_or_default(),
+                    &credentials.base_url,
                     &credentials.api_key,
                     &model,
                 ),

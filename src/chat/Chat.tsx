@@ -4962,6 +4962,14 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
 
   // 会话页顶栏控件。非 mac 渲染进全宽标题栏带（单行 chrome），mac 仍留在主区 52px 顶栏。
   // 抽成变量而非组件：依赖十余个 Chat 局部状态与回调，拆组件只会换来一长串 props。
+  const conversationBillingOrg = currentConversation?.billing
+  const conversationOrgBadge =
+    conversationBillingOrg?.organization_id &&
+    conversationBillingOrg.organization_id !== 'legacy-personal' &&
+    conversationBillingOrg.funding_mode === 'organization_wallet'
+      ? (conversationBillingOrg.organization_name_snapshot || conversationBillingOrg.organization_id)
+      : null
+
   const conversationTitlebarControls = useMemo(() => (
     <>
       <div className="flex min-w-0 items-center gap-1">
@@ -4981,6 +4989,19 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
             }
           />
         </div>
+        {conversationOrgBadge ? (
+          <div
+            className="shrink-0 max-w-[9rem] truncate rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800/80 dark:text-neutral-300"
+            title={
+              uiLang === 'zh'
+                ? `本对话使用「${conversationOrgBadge}」共享额度`
+                : `This chat bills to “${conversationOrgBadge}”`
+            }
+            data-tauri-drag-region="false"
+          >
+            {conversationOrgBadge}
+          </div>
+        ) : null}
         <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
           {usesExternalRuntime ? (
             <ExternalModelSelector
@@ -5064,6 +5085,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     activeModel,
     activeProviderId,
     approvalPolicy,
+    conversationOrgBadge,
     currentConversation,
     dockOpen,
     draftThinkingLevel,

@@ -15,6 +15,11 @@ const AGENT_API_USER_AGENT: &str = "reqwest/0.12";
 /// 并给所有请求兜底连接/总超时——未单独设超时的请求在网络异常时会让界面一直转圈。
 /// 个别请求仍可用 `.timeout()` 覆盖为更短的值。
 fn agent_http() -> &'static reqwest::Client {
+    shared_agent_http()
+}
+
+/// Shared with `cloud_context` so bootstrap / task / relay reuse one pool.
+pub fn shared_agent_http() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -270,7 +275,10 @@ pub async fn abu_api_sync_model_routing_policy(
             .abu_api_base_url
             .clone()
             .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
-        (base_url, settings.abu_api_session_token.clone())
+        (
+            base_url,
+            crate::cloud_context::resolve_session_token(settings.abu_api_session_token.as_deref()),
+        )
     };
     let session_token = match session_token {
         Some(token) if !token.trim().is_empty() => token,
@@ -374,6 +382,8 @@ pub struct AbuApiConfig {
     pub base_url: String,
     pub session_token: Option<String>,
     pub device_id: Option<String>,
+    #[serde(default)]
+    pub active_organization_id: Option<String>,
     pub runtime_mode: String, // "cloud" | "local"
 }
 
@@ -828,14 +838,23 @@ fn agent_api_credentials(state: &AppState) -> Result<(String, String), String> {
         .abu_api_base_url_or_default()
         .trim_end_matches('/')
         .to_string();
-    let session_token = settings
-        .abu_api_session_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "尚未登录 ABU 账户".to_string())?
-        .to_string();
+    let session_token = crate::cloud_context::resolve_session_token(
+        settings.abu_api_session_token.as_deref(),
+    )
+    .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
     Ok((base_url, session_token))
+}
+
+fn active_organization_query(state: &AppState) -> Option<String> {
+    let cloud = state.cloud_context.lock().ok()?;
+    if cloud.legacy_mode || !cloud.organizations_enabled() {
+        return None;
+    }
+    cloud
+        .active_organization_id
+        .as_ref()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty() && id != crate::cloud_context::LEGACY_PERSONAL_ORG_ID)
 }
 
 fn agent_path_id(value: &str, what: &str) -> Result<String, String> {
@@ -887,18 +906,7 @@ fn agent_user_info_url(base_url: &str) -> String {
 /// 通过 Rust 网络层获取当前登录用户信息，避免 WebView CORS 导致的请求失败。
 #[command]
 pub async fn abu_api_get_user_info(state: State<'_, AppState>) -> Result<UserInfoResponse, String> {
-    let (base_url, session_token) = {
-        let settings = state.settings_read();
-        let base_url = settings
-            .abu_api_base_url
-            .clone()
-            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
-        let session_token = settings
-            .abu_api_session_token
-            .clone()
-            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-        (base_url, session_token)
-    };
+    let (base_url, session_token) = agent_api_credentials(&state)?;
 
     let url = agent_user_info_url(&base_url);
     let response = agent_http()
@@ -984,21 +992,18 @@ pub async fn abu_api_probe_endpoint(base_url: String) -> Result<bool, String> {
 pub async fn abu_api_list_models(
     state: State<'_, AppState>,
 ) -> Result<AgentModelsResponse, String> {
-    let (base_url, session_token) = {
-        let settings = state.settings_read();
-        let base_url = settings
-            .abu_api_base_url
-            .clone()
-            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
-        let session_token = settings
-            .abu_api_session_token
-            .clone()
-            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-        (base_url, session_token)
-    };
+    let (base_url, session_token) = agent_api_credentials(&state)?;
+    let org_id = active_organization_query(&state);
+    let mut url = agent_models_url(&base_url);
+    if let Some(org_id) = org_id.as_deref() {
+        url.push_str(&format!(
+            "?organization_id={}",
+            crate::cloud_context::urlencoding_encode(org_id)
+        ));
+    }
 
     let response = agent_http()
-        .get(agent_models_url(&base_url))
+        .get(url)
         .header("X-Abu-Session-Token", &session_token)
         .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
         .send()
@@ -1014,13 +1019,14 @@ pub async fn abu_api_list_models(
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
-        return Err(format!(
-            "HTTP {}: {}",
-            status.as_u16(),
-            body.get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("获取模型列表失败")
-        ));
+        let err = crate::cloud_context::parse_agent_api_error(status, &body);
+        if err.is_client_upgrade_required() {
+            if let Ok(mut cloud) = state.cloud_context.lock() {
+                cloud.client_upgrade_required = true;
+                cloud.client_upgrade_download_url = err.download_url();
+            }
+        }
+        return Err(crate::cloud_context::format_agent_error(&err));
     }
     serde_json::from_value(body.get("data").cloned().unwrap_or_default())
         .map_err(|e| format!("ABU API 模型列表格式错误：{e}"))
@@ -1031,23 +1037,20 @@ pub async fn abu_api_list_models(
 pub async fn abu_api_list_entitlements(
     state: State<'_, AppState>,
 ) -> Result<Vec<AgentEntitlementResponse>, String> {
-    let (base_url, session_token) = {
-        let settings = state.settings_read();
-        let base_url = settings
-            .abu_api_base_url
-            .clone()
-            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string());
-        let session_token = settings
-            .abu_api_session_token
-            .clone()
-            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-        (base_url, session_token)
-    };
+    let (base_url, session_token) = agent_api_credentials(&state)?;
+    let org_id = active_organization_query(&state);
+    let mut url = format!(
+        "{}/api/agent/entitlements",
+        base_url.trim_end_matches('/')
+    );
+    if let Some(org_id) = org_id.as_deref() {
+        url.push_str(&format!(
+            "?organization_id={}",
+            crate::cloud_context::urlencoding_encode(org_id)
+        ));
+    }
     let response = agent_http()
-        .get(format!(
-            "{}/api/agent/entitlements",
-            base_url.trim_end_matches('/')
-        ))
+        .get(url)
         .header("X-Abu-Session-Token", &session_token)
         .send()
         .await
@@ -1276,18 +1279,31 @@ pub fn get_default_device_name() -> Result<String, String> {
     Ok(format!("{} - {}", hostname, username))
 }
 
-/// 保存 ABU API 配置到 settings
+/// 保存 ABU API 配置到 settings（session token 写入钥匙串，不落盘）。
 #[command]
 pub async fn save_abu_api_config(
     app: AppHandle,
     state: State<'_, AppState>,
     config: AbuApiConfig,
 ) -> Result<(), String> {
+    if let Some(token) = config
+        .session_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        crate::cloud_context::store_session_token(token)?;
+    }
+
     let snapshot = {
         let mut guard = state.settings_write();
         guard.abu_api_base_url = Some(config.base_url);
-        guard.abu_api_session_token = config.session_token;
+        // 决策理由：C §10.1 — settings 不再持久化 session token。
+        guard.abu_api_session_token = None;
         guard.abu_api_device_id = config.device_id;
+        if config.active_organization_id.is_some() {
+            guard.active_organization_id = config.active_organization_id;
+        }
         guard.runtime_mode = config.runtime_mode;
         guard.clone()
     };
@@ -1297,22 +1313,43 @@ pub async fn save_abu_api_config(
     Ok(())
 }
 
-/// 加载 ABU API 配置
+/// 加载 ABU API 配置（token 自钥匙串读回，仅供内存使用）。
 #[command]
 pub async fn load_abu_api_config(
-    _app: AppHandle,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AbuApiConfig, String> {
-    let settings = state.settings_read();
+    let (base_url, device_id, runtime_mode, active_organization_id, legacy_token) = {
+        let settings = state.settings_read();
+        (
+            settings
+                .abu_api_base_url
+                .clone()
+                .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string()),
+            settings.abu_api_device_id.clone(),
+            settings.runtime_mode.clone(),
+            settings.active_organization_id.clone(),
+            settings.abu_api_session_token.clone(),
+        )
+    };
+
+    let (session_token, clear_settings) =
+        crate::cloud_context::migrate_from_settings(legacy_token.as_deref())?;
+    if clear_settings {
+        let snapshot = {
+            let mut guard = state.settings_write();
+            guard.abu_api_session_token = None;
+            guard.clone()
+        };
+        let _ = crate::settings::persist_settings(&app, &snapshot);
+    }
 
     Ok(AbuApiConfig {
-        base_url: settings
-            .abu_api_base_url
-            .clone()
-            .unwrap_or_else(|| crate::settings::DEFAULT_ABU_API_BASE_URL.to_string()),
-        session_token: settings.abu_api_session_token.clone(),
-        device_id: settings.abu_api_device_id.clone(),
-        runtime_mode: settings.runtime_mode.clone(),
+        base_url,
+        session_token,
+        device_id,
+        active_organization_id,
+        runtime_mode,
     })
 }
 
@@ -1325,11 +1362,20 @@ pub async fn clear_abu_api_session(
     let (snapshot, base_url, session_token) = {
         let mut guard = state.settings_write();
         let base_url = guard.abu_api_base_url_or_default().to_string();
-        let session_token = guard.abu_api_session_token.take();
+        let session_token = crate::cloud_context::resolve_session_token(
+            guard.abu_api_session_token.as_deref(),
+        );
+        guard.abu_api_session_token = None;
+        // Keep device_id and active_organization_id for next login.
         (guard.clone(), base_url, session_token)
     };
 
+    let _ = crate::cloud_context::clear_session_token();
     crate::settings::persist_settings(&app, &snapshot)?;
+
+    if let Ok(mut cloud) = state.cloud_context.lock() {
+        *cloud = crate::cloud_context::CloudContextManager::default();
+    }
 
     // 本地先登出，再在后台撤销服务端 session：否则 token 在服务端一直有效，
     // 被拷走的配置仍能调用账户接口。网络失败不影响本地登出。

@@ -572,6 +572,13 @@ export interface Conversation {
   agentRuntime?: AgentRuntimeConfig
   knowledge_base_ids?: string[]
   knowledgeBaseIds?: string[]
+  /** 云端结算组织绑定（WS-13）。旧对话缺字段 = 未绑定。 */
+  billing?: {
+    organization_id?: string
+    organization_name_snapshot?: string
+    funding_mode?: string
+    bound_at?: number
+  }
   force_knowledge_search?: boolean
   forceKnowledgeSearch?: boolean
   additional_directories?: AdditionalDirectory[]

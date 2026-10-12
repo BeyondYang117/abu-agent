@@ -1691,12 +1691,15 @@ pub struct Settings {
     /// ABU API 服务器地址（支持自建实例）
     #[serde(default)]
     pub abu_api_base_url: Option<String>,
-    /// ABU API 会话令牌（登录后由客户端写入）
+    /// ABU API 会话令牌（遗留字段：新版本写入系统钥匙串后清空，仅作迁移回退）
     #[serde(default)]
     pub abu_api_session_token: Option<String>,
     /// ABU API 设备 ID（首次注册后保留，登出不清除）
     #[serde(default)]
     pub abu_api_device_id: Option<String>,
+    /// 当前组织 ID（非敏感；余额/权限每次启动从服务端刷新）
+    #[serde(default)]
+    pub active_organization_id: Option<String>,
     /// 运行模式：`cloud` 走 ABU API 中转，`local` 用本机配置的服务商
     #[serde(default = "default_runtime_mode")]
     pub runtime_mode: String,
@@ -1872,6 +1875,7 @@ impl Default for Settings {
             abu_api_base_url: None,
             abu_api_session_token: None,
             abu_api_device_id: None,
+            active_organization_id: None,
             runtime_mode: default_runtime_mode(),
             openai: None,
         }

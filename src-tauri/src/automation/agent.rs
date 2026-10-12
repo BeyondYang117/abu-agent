@@ -669,6 +669,7 @@ async fn load_or_create_external_conversation(
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
         knowledge_base_ids: Vec::new(),
+        billing: Default::default(),
         force_knowledge_search: false,
         additional_directories: Vec::new(),
         thinking_level: None,

@@ -779,6 +779,7 @@ pub(crate) async fn chat_fork_conversation(
         agent_todo_state: AgentTodoState::default(),
         agent_plan_state: AgentPlanState::default(),
         knowledge_base_ids: source.knowledge_base_ids.clone(),
+        billing: source.billing.clone(),
         force_knowledge_search: source.force_knowledge_search,
         additional_directories: source.additional_directories.clone(),
         thinking_level: source.thinking_level.clone(),

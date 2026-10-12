@@ -2,6 +2,11 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { User, Settings, Coins, Crown } from 'lucide-react'
 import { useAbuApiAuth } from '../api/abuApiAuth'
 import { getAbuApiClient, type CheckinReward, type CheckinStats } from '../api/abuApi'
+import {
+  refreshCloudContext,
+  setActiveOrganization,
+  useCloudContext,
+} from '../api/cloudContext'
 import { api } from '../api/tauri'
 import { UserAvatar } from './UserAvatar'
 import type { ChatUserProfile } from './types'
@@ -41,8 +46,10 @@ export const UserAccountButton = memo(function UserAccountButton({
 }: UserAccountButtonProps) {
   const t = i18n[lang]
   const { isAuthenticated } = useAbuApiAuth()
+  const cloudContext = useCloudContext()
   const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null)
   const [loading, setLoading] = useState(false)
+  const [orgSwitching, setOrgSwitching] = useState(false)
   const [checkinStats, setCheckinStats] = useState<CheckinStats | null>(null)
   const [checkinLoading, setCheckinLoading] = useState(false)
   const [checkinError, setCheckinError] = useState<string | null>(null)
@@ -95,6 +102,7 @@ export const UserAccountButton = memo(function UserAccountButton({
   useEffect(() => {
     if (isAuthenticated) {
       void loadAccount()
+      void refreshCloudContext()
     } else {
       setAccountInfo(null)
       setCheckinStats(null)
@@ -103,8 +111,40 @@ export const UserAccountButton = memo(function UserAccountButton({
 
   // Reopening the menu refreshes both a completed web top-up and a new calendar day.
   useEffect(() => {
-    if (menuRect && isAuthenticated) void loadAccount()
+    if (menuRect && isAuthenticated) {
+      void loadAccount()
+      void refreshCloudContext()
+    }
   }, [isAuthenticated, loadAccount, menuRect])
+
+  const handleSwitchOrganization = useCallback(async (organizationId: string) => {
+    const org = cloudContext?.bootstrap?.organizations?.find((item) => item.id === organizationId)
+    if (org && org.type !== 'personal') {
+      const consentKey = `abu-org-privacy-consent:${organizationId}`
+      const consented = typeof localStorage !== 'undefined' && localStorage.getItem(consentKey) === '1'
+      if (!consented) {
+        const message =
+          lang === 'zh'
+            ? `本对话将使用「${org.name}」共享额度，管理员可以查看模型、用量和费用，但不能查看对话正文和本地文件内容。是否继续？`
+            : `Chats will use shared quota for “${org.name}”. Admins can see models, usage, and cost — not message content or local files. Continue?`
+        if (!window.confirm(message)) return
+        try {
+          localStorage.setItem(consentKey, '1')
+        } catch {
+          // ignore quota / private mode
+        }
+      }
+    }
+    setOrgSwitching(true)
+    try {
+      await setActiveOrganization(organizationId)
+      await loadAccount()
+    } catch (err) {
+      console.error('Failed to switch organization:', err)
+    } finally {
+      if (mountedRef.current) setOrgSwitching(false)
+    }
+  }, [cloudContext, lang, loadAccount])
 
   const handleCheckin = useCallback(async () => {
     if (checkinLoading || checkinStats?.checked_in_today) return
@@ -254,6 +294,9 @@ export const UserAccountButton = memo(function UserAccountButton({
           checkinLoading={checkinLoading}
           checkinError={checkinError}
           checkinReward={checkinReward}
+          cloudContext={cloudContext}
+          orgSwitching={orgSwitching}
+          onSwitchOrganization={(id) => void handleSwitchOrganization(id)}
           onCheckin={() => void handleCheckin()}
           onRecharge={openTopup}
           onOpenSettings={onOpenSettings}

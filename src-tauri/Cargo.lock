@@ -20,7 +20,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
 name = "abu-agent"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -39,6 +39,7 @@ dependencies = [
  "ignore",
  "image",
  "json5",
+ "keyring",
  "libc",
  "notify",
  "oar-ocr",
@@ -3272,6 +3273,16 @@ dependencies = [
  "bitflags 2.13.1",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "log",
+ "zeroize",
 ]
 
 [[package]]

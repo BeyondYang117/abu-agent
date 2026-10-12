@@ -1,10 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { LogOut, Coins, Crown, CalendarCheck2, Settings, CreditCard, LoaderCircle, Check, Flame } from 'lucide-react'
+import { LogOut, Coins, Crown, CalendarCheck2, Settings, CreditCard, LoaderCircle, Check, Flame, Building2, ChevronDown } from 'lucide-react'
 import { useCloseAnimation } from './useCloseAnimation'
 import { type Lang } from '../settings/i18n'
 import { formatAbuQuota, formatAbuQuotaReward } from '../api/quota'
 import { CHECKIN_REWARD_UNIT_WELFARE, type CheckinReward, type CheckinStats } from '../api/abuApi'
+import type { CloudContextView } from '../api/tauri'
+import { organizationsFeatureEnabled } from '../api/cloudContext'
 
 interface AccountInfo {
   username: string
@@ -25,6 +27,9 @@ interface UserAccountMenuProps {
   checkinLoading: boolean
   checkinError: string | null
   checkinReward: CheckinReward | null
+  cloudContext: CloudContextView | null
+  orgSwitching: boolean
+  onSwitchOrganization: (organizationId: string) => void
   onCheckin: () => void
   onRecharge: () => void
   onOpenSettings: () => void
@@ -41,6 +46,9 @@ export function UserAccountMenu({
   checkinLoading,
   checkinError,
   checkinReward,
+  cloudContext,
+  orgSwitching,
+  onSwitchOrganization,
   onCheckin,
   onRecharge,
   onOpenSettings,
@@ -67,9 +75,20 @@ export function UserAccountMenu({
     }
   }, [onClose])
 
-  const balance = accountInfo ? formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota) : '0.00'
+  const orgEnabled = organizationsFeatureEnabled(cloudContext)
+  const orgBalances = cloudContext?.context?.balances
+  const orgBudget = cloudContext?.context?.budget
+  const balance = orgBalances
+    ? formatAbuQuota(orgBalances.available)
+    : accountInfo
+      ? formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota)
+      : '0.00'
   const usedBalance = accountInfo ? formatAbuQuota(accountInfo.usedQuota) : '0.00'
   const isVip = accountInfo?.group === 'vip'
+  const orgs = cloudContext?.bootstrap?.organizations ?? []
+  const activeOrgId = cloudContext?.activeOrganizationId
+  const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? orgs[0]
+  const fundingMode = cloudContext?.context?.funding?.mode
 
   const menu = (
     <div
@@ -123,9 +142,31 @@ export function UserAccountMenu({
                   {lang === 'zh' ? '可用余额' : 'Balance'}
                 </span>
               </div>
-              <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
-                {lang === 'zh' ? '已消费' : 'Used'} ${usedBalance}
-              </div>
+              {orgBalances ? (
+                <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                  {lang === 'zh' ? '永久' : 'Permanent'} ${formatAbuQuota(orgBalances.permanent)}
+                  {' · '}
+                  {lang === 'zh' ? '临时' : 'Temp'} ${formatAbuQuota(orgBalances.temporary)}
+                  {orgBalances.debt > 0
+                    ? ` · ${lang === 'zh' ? '欠款' : 'Debt'} $${formatAbuQuota(orgBalances.debt)}`
+                    : ''}
+                </div>
+              ) : (
+                <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                  {lang === 'zh' ? '已消费' : 'Used'} ${usedBalance}
+                </div>
+              )}
+              {orgBudget && (orgBudget.daily_limit != null || orgBudget.monthly_limit != null) ? (
+                <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                  {orgBudget.daily_limit != null
+                    ? `${lang === 'zh' ? '日预算' : 'Daily'} $${formatAbuQuota(orgBudget.daily_used)}/$${formatAbuQuota(orgBudget.daily_limit)}`
+                    : ''}
+                  {orgBudget.daily_limit != null && orgBudget.monthly_limit != null ? ' · ' : ''}
+                  {orgBudget.monthly_limit != null
+                    ? `${lang === 'zh' ? '月预算' : 'Monthly'} $${formatAbuQuota(orgBudget.monthly_used)}/$${formatAbuQuota(orgBudget.monthly_limit)}`
+                    : ''}
+                </div>
+              ) : null}
             </div>
             <button
               type="button"
@@ -158,6 +199,50 @@ export function UserAccountMenu({
           </div>
         </div>
       )}
+
+      {orgEnabled && orgs.length > 0 ? (
+        <>
+          <div className="kv-menu-sep" />
+          <div className="px-3 py-2">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-neutral-500 dark:text-neutral-400">
+              <Building2 size={12} />
+              {lang === 'zh' ? '当前组织' : 'Organization'}
+            </div>
+            <label className="relative block">
+              <select
+                className="w-full appearance-none rounded-lg border border-neutral-200 bg-white py-1.5 pl-2.5 pr-7 text-xs text-neutral-900 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+                disabled={orgSwitching}
+                value={activeOrg?.id ?? ''}
+                onChange={(e) => {
+                  const next = e.target.value
+                  if (next && next !== activeOrgId) onSwitchOrganization(next)
+                }}
+              >
+                {orgs.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.name}
+                    {org.type !== 'personal' ? ` · ${org.type}` : ''}
+                    {org.status !== 'active' ? ` (${org.status})` : ''}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                size={12}
+                className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-neutral-400"
+              />
+            </label>
+            {activeOrg ? (
+              <div className="mt-1 text-[10px] text-neutral-500 dark:text-neutral-400">
+                {lang === 'zh' ? '角色' : 'Role'} {activeOrg.role}
+                {fundingMode ? ` · ${fundingMode}` : ''}
+                {activeOrg.status !== 'active'
+                  ? ` · ${lang === 'zh' ? '状态异常' : 'status'}: ${activeOrg.status}`
+                  : ''}
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
 
       <div className="kv-menu-sep" />
 

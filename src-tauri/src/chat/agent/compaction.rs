@@ -1922,6 +1922,7 @@ mod tests {
             agent_todo_state: Default::default(),
             agent_plan_state: Default::default(),
             knowledge_base_ids: Vec::new(),
+        billing: Default::default(),
             force_knowledge_search: false,
             additional_directories: Vec::new(),
             thinking_level: None,

@@ -202,6 +202,8 @@ export async function completeLogin(sessionToken: string): Promise<void> {
   abuApiAuthStore.login(sessionToken, deviceId, resolvedBaseUrl)
   const { syncModelRoutingPolicy } = await import('../chat/modelRoutingPolicy')
   void syncModelRoutingPolicy()
+  const { refreshCloudContext } = await import('./cloudContext')
+  void refreshCloudContext()
 }
 
 // 退出登录
@@ -219,4 +221,6 @@ export async function logout(): Promise<void> {
     console.warn('Failed to refresh settings cache after logout:', err)
   }
   abuApiAuthStore.logout()
+  const { cloudContextStore } = await import('./cloudContext')
+  cloudContextStore.setView(null)
 }
