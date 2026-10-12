@@ -80,7 +80,8 @@ portable-pty = "0.8"
 directories = "5"
 
 # ABU Session Token：macOS Keychain / Windows Credential Manager（C §10.1）。
-keyring = "3"
+# v3 has no native stores enabled by default; otherwise each Entry is an isolated mock.
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 # 解析 Codex 的 config.toml（从本地 CLI 导入 MCP）。
 toml = "0.8"

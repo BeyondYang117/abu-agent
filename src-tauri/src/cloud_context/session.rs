@@ -32,12 +32,13 @@ pub fn store_session_token(token: &str) -> Result<(), String> {
     if trimmed.is_empty() {
         return clear_session_token();
     }
-    let entry = entry()?;
-    entry
+    let credential = entry()?;
+    credential
         .set_password(trimmed)
         .map_err(|e| format!("写入系统凭证存储失败：{e}"))?;
-    // Verify round-trip before callers clear the settings field.
-    let read_back = entry
+    // A fresh Entry must see the token before callers clear the settings field.
+    // Reading the writer alone also succeeds with keyring's non-persistent mock.
+    let read_back = entry()?
         .get_password()
         .map_err(|e| format!("校验系统凭证存储失败：{e}"))?;
     if read_back.trim() != trimmed {
@@ -97,12 +98,16 @@ pub fn migrate_from_settings(settings_token: Option<&str>) -> Result<(Option<Str
 mod tests {
     use super::*;
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn resolve_prefers_non_empty_settings_when_keychain_empty() {
-        // Keychain may already have a value on developer machines; only assert
-        // the settings fallback path when both sides are empty-safe.
-        let resolved = resolve_session_token(Some("  settings-token  "));
-        assert!(resolved.is_some());
-        assert!(!resolved.unwrap().trim().is_empty());
+    fn session_storage_uses_native_credentials() {
+        let credential = entry().unwrap();
+        assert!(
+            credential
+                .get_credential()
+                .downcast_ref::<keyring::mock::MockCredential>()
+                .is_none(),
+            "session storage must not use keyring's non-persistent mock"
+        );
     }
 }

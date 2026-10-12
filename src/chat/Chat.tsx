@@ -4895,7 +4895,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       return
     }
     setExtensionsNavItem(null)
-    openEmbeddedSettings('chat')
+    openEmbeddedSettings('general')
   }, [chatView, extensionsNavItem, handleSettingsClose, openEmbeddedSettings])
 
   const handleSidebarOpenLogin = useCallback(() => {
