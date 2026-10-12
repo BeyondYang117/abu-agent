@@ -39,7 +39,7 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists"
           else
-            extra=()
+            extra=(--verify-tag)
             case "$RELEASE_TAG" in
               *beta*|*alpha*|*rc*) extra+=(--prerelease) ;;
             esac
@@ -47,7 +47,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "ABU Agent Desktop $RELEASE_TAG" \
               --notes "Automated macOS (Apple Silicon + Intel) + Windows (x64 NSIS/MSI installers and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
-              --verify-tag \
               "${extra[@]}"
           fi
           release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
