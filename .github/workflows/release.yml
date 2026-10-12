@@ -27,26 +27,31 @@ jobs:
     # Both platform jobs upload into this release. Creating it first avoids a
     # race where two tauri-action steps try to open the same tag.
     runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
     steps:
       - name: Ensure GitHub Release exists
+        id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists"
-            exit 0
+          else
+            extra=()
+            case "$RELEASE_TAG" in
+              *beta*|*alpha*|*rc*) extra+=(--prerelease) ;;
+            esac
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ABU Agent Desktop $RELEASE_TAG" \
+              --notes "Automated macOS (Apple Silicon + Intel) + Windows (x64 NSIS/MSI installers and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
+              --verify-tag \
+              "${extra[@]}"
           fi
-          extra=()
-          case "$RELEASE_TAG" in
-            *beta*|*alpha*|*rc*) extra+=(--prerelease) ;;
-          esac
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "ABU Agent Desktop $RELEASE_TAG" \
-            --notes "Automated macOS (Apple Silicon + Intel) + Windows (x64 NSIS/MSI installers and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
-            --verify-tag \
-            "${extra[@]}"
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   tauri-release:
     needs: create-release
@@ -109,6 +114,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # Avoid a second tag lookup after the build; retry transient uploads.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          retryAttempts: 3
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: ABU Agent Desktop ${{ env.RELEASE_TAG }}
           releaseBody: |
