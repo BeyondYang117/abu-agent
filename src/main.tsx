@@ -4,6 +4,7 @@ import App from './App.tsx'
 import './index.css'
 import 'streamdown/styles.css'
 import { abuApiAuthStore } from './api/abuApiAuth'
+import { refreshCloudContext } from './api/cloudContext'
 import { api } from './api/tauri'
 import { initAbuApiClient, DEFAULT_ABU_API_BASE_URL } from './api/abuApi'
 import { syncModelRoutingPolicy } from './chat/modelRoutingPolicy'
@@ -21,10 +22,11 @@ api
       baseUrl: config.base_url,
     })
 
-    // 如果已登录，初始化 ABU API 客户端
+    // 如果已登录，初始化 ABU API 客户端并协商组织能力
     if (config.session_token) {
       initAbuApiClient(config.base_url || DEFAULT_ABU_API_BASE_URL, config.session_token)
       void syncModelRoutingPolicy()
+      void refreshCloudContext()
     }
   })
   .catch((err: unknown) => {

@@ -168,7 +168,7 @@ export function ChatTab({
         </SettingRow>
 
         <PromptField
-          label={t.abuAgentChatSystemPrompt}
+          label={t.abuAgentChatAgentSystemPrompt}
           description={t.chatSystemPromptHint}
           value={chatConfig.systemPrompt || ''}
           defaultText={chatDefaults || ''}

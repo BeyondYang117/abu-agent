@@ -1547,8 +1547,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     chat: {
       title: t.tabChatClient,
       subtitle: lang === 'zh'
-        ? '主对话模型、流式/思考、系统提示词。'
-        : 'Main chat model, streaming/thinking, and system prompt.',
+        ? '个人资料、工作目录、响应语言和系统提示词。'
+        : 'Profile, workspace, response language, and system prompt.',
     },
     memory: {
       title: t.tabMemory,

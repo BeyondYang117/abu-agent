@@ -10,6 +10,8 @@ export interface QueuedMessage {
   attachments: PendingAttachment[]
   /** 已提交「立刻引导」、等下一个轮次边界生效。仍在队列里（见下方自愈规则）。 */
   steering: boolean
+  interrupting?: boolean
+  interruptRejected?: boolean
   /** 正在提交原生 follow-up；确认前不能撤回或被普通 drain 抢走。 */
   followingUp?: boolean
   /** 对端拒绝 follow-up 后显示一次降级提示，消息仍由本地队列轮末发送。 */
@@ -22,7 +24,7 @@ export interface QueuedMessage {
 }
 
 export function isQueuedSubmitted(message: QueuedMessage): boolean {
-  return message.steering || Boolean(message.followingUp)
+  return message.steering || Boolean(message.followingUp) || Boolean(message.interrupting)
 }
 
 interface UseMessageQueueParams {
@@ -60,6 +62,8 @@ export function useMessageQueue({ onSendMessage, onRestoreToComposer }: UseMessa
    * 又会调 drain —— 标志此刻仍然挂着，第二条就永远发不出去了。
    */
   const claimedRef = useRef<Set<string>>(new Set())
+  // run may settle before cancellation is acknowledged. Hold its fresh conversation until then.
+  const interruptionsRef = useRef(new Map<string, { conversation?: Conversation }>())
   const callbacksRef = useRef({ onSendMessage, onRestoreToComposer })
   callbacksRef.current = { onSendMessage, onRestoreToComposer }
 
@@ -125,6 +129,7 @@ export function useMessageQueue({ onSendMessage, onRestoreToComposer }: UseMessa
    */
   const drain = useCallback(async (conversation: Conversation) => {
     const conversationId = conversation.id
+    if (interruptionsRef.current.has(conversationId)) return
     const next = (queuedRef.current[conversationId] ?? [])
       .find((item) => !isQueuedSubmitted(item) && !claimedRef.current.has(item.id))
     if (!next) return
@@ -147,6 +152,40 @@ export function useMessageQueue({ onSendMessage, onRestoreToComposer }: UseMessa
     }
   }, [patch])
 
+  const sendNow = useCallback(async (
+    conversation: Conversation,
+    messageId: string,
+    interrupt: () => Promise<Conversation | null>,
+  ): Promise<boolean> => {
+    const conversationId = conversation.id
+    const message = find(conversationId, messageId)
+    if (!message || isQueuedSubmitted(message) || interruptionsRef.current.has(conversationId)) return false
+    const pending: { conversation?: Conversation } = {}
+    interruptionsRef.current.set(conversationId, pending)
+    patch(conversationId, (items) => [
+      { ...message, interrupting: true, interruptRejected: false },
+      ...items.filter((item) => item.id !== messageId),
+    ])
+    let readyConversation: Conversation | null = null
+    let interrupted = false
+    try {
+      readyConversation = await interrupt()
+      interrupted = true
+    } catch (err) {
+      console.error('Failed to interrupt for a queued message:', err)
+    } finally {
+      interruptionsRef.current.delete(conversationId)
+      patch(conversationId, (items) => items.map((item) => (
+        item.id === messageId
+          ? { ...item, interrupting: false, interruptRejected: !interrupted }
+          : item
+      )))
+    }
+    const settledConversation = pending.conversation ?? readyConversation
+    if (interrupted && settledConversation) await drain(settledConversation)
+    return interrupted
+  }, [drain, patch])
+
   const steer = useCallback(async (
     conversationId: string,
     messageId: string,
@@ -154,7 +193,7 @@ export function useMessageQueue({ onSendMessage, onRestoreToComposer }: UseMessa
     const message = find(conversationId, messageId)
     if (!message || isQueuedSubmitted(message)) return false
     patch(conversationId, (items) => items.map((item) => (
-      item.id === messageId ? { ...item, steerRejected: false } : item
+      item.id === messageId ? { ...item, steering: true, steerRejected: false } : item
     )))
     let accepted = false
     try {
@@ -245,6 +284,11 @@ export function useMessageQueue({ onSendMessage, onRestoreToComposer }: UseMessa
         }
       }
       releaseSubmitted(conversation.id)
+      const interruption = interruptionsRef.current.get(conversationId)
+      if (interruption) {
+        interruption.conversation = conversation
+        return
+      }
       return drain(conversation)
     }
     releaseSubmitted(conversationId)
@@ -257,6 +301,7 @@ export function useMessageQueue({ onSendMessage, onRestoreToComposer }: UseMessa
     restoreToComposer,
     clearConversation,
     drain,
+    sendNow,
     steer,
     followUp,
     confirm,

@@ -532,6 +532,9 @@ pub struct Conversation {
     /// 本会话挂载的知识库 id 列表；`knowledge_search` 缺省检索这些库。
     #[serde(default)]
     pub knowledge_base_ids: Vec<String>,
+    /// 云端结算组织绑定（C §5.3）。首次云端发送时固定；切换全局组织不改已绑定对话。
+    #[serde(default)]
+    pub billing: crate::cloud_context::ConversationBillingBinding,
     /// 强制检索：开启后系统提示要求模型回答前必须先调用 `knowledge_search`。默认关。
     #[serde(default)]
     pub force_knowledge_search: bool,

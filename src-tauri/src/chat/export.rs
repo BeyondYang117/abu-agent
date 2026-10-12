@@ -237,6 +237,7 @@ mod tests {
             agent_todo_state: AgentTodoState::default(),
             agent_plan_state: AgentPlanState::default(),
             knowledge_base_ids: vec![],
+        billing: Default::default(),
             force_knowledge_search: false,
             additional_directories: Vec::new(),
             thinking_level: None,

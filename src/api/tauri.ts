@@ -27,7 +27,88 @@ export interface AbuApiConfig {
   base_url: string | null
   session_token: string | null
   device_id: string | null
+  active_organization_id?: string | null
   runtime_mode: 'cloud' | 'local'
+}
+
+export interface CloudBootstrapOrganization {
+  id: string
+  name: string
+  type: string
+  role: string
+  status: string
+  permissions: string[]
+}
+
+export interface CloudBootstrapFeatures {
+  organizations: boolean
+  scoped_relay_credentials: boolean
+  price_version: boolean
+  managed_cli_session: boolean
+  wallet_breakdown: boolean
+  member_budgets: boolean
+  commission: boolean
+  missions: boolean
+}
+
+export interface CloudBootstrap {
+  schema_version: number
+  api_version: number
+  features: CloudBootstrapFeatures
+  minimum_client_version: string
+  legacy_sunset_at?: number
+  user: { id: number; username: string; display_name: string }
+  organizations: CloudBootstrapOrganization[]
+  default_organization_id: string
+}
+
+export interface AgentOrganizationContext {
+  schema_version: number
+  context_version: number
+  organization: {
+    id: string
+    name: string
+    type: string
+    edition: string
+    activated: boolean
+    member_limit: number
+  }
+  membership: {
+    id: string
+    role: string
+    permissions: string[]
+  }
+  funding: {
+    mode: string
+    billing_account_id: string
+    currency: string
+  }
+  balances?: {
+    permanent: number
+    temporary: number
+    reserved: number
+    available: number
+    debt: number
+    overdraft_limit: number
+    nearest_expiry_at?: number
+  } | null
+  budget?: {
+    daily_limit?: number | null
+    daily_used: number
+    monthly_limit?: number | null
+    monthly_used: number
+  } | null
+}
+
+export interface CloudContextView {
+  legacyMode: boolean
+  authenticated: boolean
+  activeOrganizationId?: string | null
+  bootstrap?: CloudBootstrap | null
+  context?: AgentOrganizationContext | null
+  minimumClientVersion?: string | null
+  clientUpgradeRequired: boolean
+  clientUpgradeDownloadUrl?: string | null
 }
 
 /** ABU API device payloads returned by the native network bridge. */
@@ -2083,6 +2164,14 @@ export const api = {
     invoke<void>('save_abu_api_config', { config }),
   /** 清除 session token，保留 device_id 以便下次登录复用同一设备记录。 */
   clearAbuApiSession: () => invoke<void>('clear_abu_api_session'),
+  cloudContextGetView: () => invoke<CloudContextView>('cloud_context_get_view'),
+  cloudContextRefresh: () => invoke<CloudContextView>('cloud_context_refresh'),
+  cloudContextSetOrganization: (organizationId: string) =>
+    invoke<CloudContextView>('cloud_context_set_organization', { organizationId }),
+  cloudContextGetOrganizationContext: (organizationId?: string | null) =>
+    invoke<AgentOrganizationContext>('cloud_context_get_organization_context', {
+      organizationId: organizationId ?? null,
+    }),
   /**
    * 打开模型输出里的本地文件链接（file:// / 绝对路径 / 相对路径）。
    * 相对路径由后端按会话工作目录解析，故要带 conversationId。扩展名/存在性/逃逸都在后端把关。

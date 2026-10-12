@@ -5,6 +5,7 @@ pub mod agents;
 pub mod api;
 pub mod app_data;
 pub mod automation;
+pub mod cloud_context;
 pub mod capture_geometry;
 pub mod chat;
 pub mod commands;
@@ -796,6 +797,10 @@ pub fn run() {
             abu_api::save_abu_api_config,
             abu_api::abu_api_get_cli_credentials,
             abu_api::clear_abu_api_session,
+            cloud_context::cloud_context_get_view,
+            cloud_context::cloud_context_refresh,
+            cloud_context::cloud_context_set_organization,
+            cloud_context::cloud_context_get_organization_context,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

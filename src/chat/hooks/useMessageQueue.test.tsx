@@ -35,6 +35,81 @@ beforeEach(() => {
 })
 
 describe('useMessageQueue', () => {
+  it('插队等待原回复落库后发送选中的任务，保留附件及其他任务顺序', async () => {
+    const { result, onSendMessage } = setup()
+    const attachments = [{ id: 'a1', type: 'file' as const, name: 'a.pdf', path: '/tmp/a.pdf' }]
+    let id = ''
+    act(() => {
+      result.current.enqueue('conv-1', '第一条', [])
+      id = result.current.enqueue('conv-1', '紧急任务', attachments)!.id
+      result.current.enqueue('conv-1', '第三条', [])
+    })
+    const interrupt = vi.fn().mockResolvedValue(null)
+    await act(async () => { await result.current.sendNow(conversation, id, interrupt) })
+    expect(onSendMessage).not.toHaveBeenCalled()
+    const persisted = { ...conversation, title: '最新会话' }
+    await act(async () => { await result.current.settleAfterRun('conv-1', persisted) })
+    expect(onSendMessage).toHaveBeenCalledWith('紧急任务', attachments, { conversationOverride: persisted })
+    expect(result.current.queued['conv-1'].map((item) => item.content)).toEqual(['第一条', '第三条'])
+  })
+
+  it('run 比中断回执先收尾时，等待回执后用最新会话只发送一次', async () => {
+    const { result, onSendMessage } = setup()
+    let id = ''
+    act(() => {
+      result.current.enqueue('conv-1', '普通任务', [])
+      id = result.current.enqueue('conv-1', '紧急任务', [])!.id
+    })
+    let resolve!: (value: Conversation | null) => void
+    const interrupt = vi.fn(() => new Promise<Conversation | null>((done) => { resolve = done }))
+    let sending!: Promise<boolean>
+    act(() => { sending = result.current.sendNow(conversation, id, interrupt) })
+    expect(result.current.queued['conv-1'][0].interrupting).toBe(true)
+    const persisted = { ...conversation, title: '最新会话' }
+    await act(async () => {
+      await result.current.settleAfterRun('conv-1', persisted)
+      await result.current.drain(conversation)
+      await result.current.sendNow(conversation, id, interrupt)
+      result.current.remove('conv-1', id)
+    })
+    expect(interrupt).toHaveBeenCalledTimes(1)
+    expect(onSendMessage).not.toHaveBeenCalled()
+    await act(async () => { resolve(null); await sending })
+    expect(onSendMessage).toHaveBeenCalledTimes(1)
+    expect(onSendMessage).toHaveBeenCalledWith('紧急任务', [], { conversationOverride: persisted })
+    expect(result.current.queued['conv-1'][0].content).toBe('普通任务')
+  })
+
+  it('中断失败不发送任务，保留内容并解锁重试', async () => {
+    const { result, onSendMessage } = setup()
+    let id = ''
+    act(() => { id = result.current.enqueue('conv-1', '紧急任务', [])!.id })
+    await act(async () => {
+      await result.current.sendNow(conversation, id, async () => { throw new Error('cancel failed') })
+    })
+    expect(onSendMessage).not.toHaveBeenCalled()
+    expect(result.current.queued['conv-1'][0]).toEqual(expect.objectContaining({ interrupting: false, interruptRejected: true }))
+    await act(async () => { await result.current.sendNow(conversation, id, async () => conversation) })
+    expect(onSendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('注入回执未返回时不能重复提交或删除', async () => {
+    const { result } = setup()
+    let id = ''
+    act(() => { id = result.current.enqueue('conv-1', '紧急任务', [])!.id })
+    let resolve!: (accepted: boolean) => void
+    mockSteer.mockImplementation(() => new Promise<boolean>((done) => { resolve = done }))
+    let steering!: Promise<boolean>
+    act(() => { steering = result.current.steer('conv-1', id) })
+    await act(async () => {
+      await result.current.steer('conv-1', id)
+      result.current.remove('conv-1', id)
+    })
+    expect(mockSteer).toHaveBeenCalledTimes(1)
+    expect(result.current.queued['conv-1']).toHaveLength(1)
+    await act(async () => { resolve(true); await steering })
+  })
+
   it('入队后 drain 只发队首一条', async () => {
     const { result, onSendMessage } = setup()
     act(() => {

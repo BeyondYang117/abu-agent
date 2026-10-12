@@ -1,7 +1,7 @@
 # ABU Agent Rust 后端 Cargo 配置
 [package]
 name = "abu-agent"
-version = "0.1.11"
+version = "0.1.12"
 description = "ABU Agent Desktop - Screen-level AI assistant for macOS/Windows"
 authors = ["abu"]
 repository = "https://github.com/BeyondYang117/abu-agent"
@@ -78,6 +78,10 @@ portable-pty = "0.8"
 
 # 跨平台 app-data 目录定位。
 directories = "5"
+
+# ABU Session Token：macOS Keychain / Windows Credential Manager（C §10.1）。
+# v3 has no native stores enabled by default; otherwise each Entry is an isolated mock.
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
 # 解析 Codex 的 config.toml（从本地 CLI 导入 MCP）。
 toml = "0.8"

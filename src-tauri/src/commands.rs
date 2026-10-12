@@ -391,11 +391,13 @@ pub(crate) fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 ///
 /// `tauri-plugin-shell` ultimately calls ShellExecuteExW on Windows. That call can
 /// block on a broken/default-browser association, occupying Tauri's command thread;
-/// the device-flow poll then times out before the browser is ever shown. Explorer
-/// accepts the URL as a real process argument and returns immediately after handing
-/// it to the registered browser, without going through `cmd.exe` string parsing.
+/// the device-flow poll then times out before the browser is ever shown.
+/// `url.dll,FileProtocolHandler` hands the URL to the registered http(s) protocol
+/// handler in a separate process and returns immediately, without `cmd.exe` parsing.
+/// Do not use `explorer.exe <url>`: on some Windows 11 builds Explorer does not
+/// treat the argument as a URL and opens the default folder instead of the browser.
 ///
-/// 代价：explorer 进程起来即返回 Ok，浏览器最终没打开也报不出错 —— 调用方必须同时给出
+/// 代价：子进程起来即返回 Ok，浏览器最终没打开也报不出错 —— 调用方必须同时给出
 /// 可手动复制的地址，不能只靠这里的 Err 兜底。
 #[allow(deprecated)]
 pub(crate) fn open_url_in_default_browser(app: &AppHandle, url: &str) -> Result<(), String> {
@@ -404,7 +406,8 @@ pub(crate) fn open_url_in_default_browser(app: &AppHandle, url: &str) -> Result<
         use crate::proc::NoConsoleWindow;
 
         let _ = app;
-        std::process::Command::new("explorer.exe")
+        std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
             .arg(url)
             .no_console_window()
             .spawn()

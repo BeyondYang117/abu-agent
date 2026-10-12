@@ -156,33 +156,29 @@ pub(super) async fn complete_assistant_reply_inner(
     if resolved_model.trim().is_empty() {
         return Err(chat_missing_model_error());
     }
-    // Cloud 模式：申请普通用户级 relay token，造一个指向标准 /v1 端点的
-    // 虚拟供应商，替代本机配置的 provider。凭证接口在滚动升级期间会自动
-    // 回退到旧版 CLI 凭证接口，避免服务端实例短暂不一致导致整轮不可用。
+    // Cloud 模式：legacy 走用户级 relay；组织能力开且 scoped_relay 开时创建
+    // Agent Task 并使用任务绑定短期凭证（C §6.1 / Phase C）。
+    let mut cloud_run: Option<crate::cloud_context::CloudRunCredentials> = None;
     let (provider, platform_search) = if settings.is_cloud_runtime() {
-        let base_url = settings.abu_api_base_url_or_default();
-        let session_token = settings
-            .abu_api_session_token
-            .as_deref()
-            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
-        let credentials = crate::abu_api::fetch_agent_relay_credentials(
-            &base_url,
-            session_token,
+        let credentials = crate::cloud_context::acquire_cloud_run_credentials(
+            state.inner(),
             &resolved_model,
+            &conversation.id,
+            &mut conversation.billing,
+            None,
         )
         .await?;
         let platform_search = crate::abu_api::PlatformSearchCredentials {
-            base_url: base_url.to_string(),
+            base_url: credentials.base_url.clone(),
             relay_key: credentials.api_key.clone(),
         };
-        (
-            crate::chat::model::create_abu_api_virtual_provider(
-                &base_url,
-                &credentials.api_key,
-                &resolved_model,
-            ),
-            Some(platform_search),
-        )
+        let provider = crate::chat::model::create_abu_api_virtual_provider(
+            &credentials.base_url,
+            &credentials.api_key,
+            &resolved_model,
+        );
+        cloud_run = Some(credentials);
+        (provider, Some(platform_search))
     } else {
         let provider = settings
             .get_provider(&resolved_provider_id)
@@ -922,6 +918,20 @@ pub(super) async fn complete_assistant_reply_inner(
         &terminal_content,
         conversation.revision,
     );
+    if let Some(ref creds) = cloud_run {
+        let succeeded = terminal_outcome != "error" && terminal_outcome != "cancelled";
+        crate::cloud_context::finalize_cloud_run(
+            state.inner(),
+            creds,
+            succeeded,
+            if succeeded {
+                None
+            } else {
+                Some(terminal_outcome.as_str())
+            },
+        )
+        .await;
+    }
     Ok(ArmReplyOutcome {
         message: None,
         run_id: None,

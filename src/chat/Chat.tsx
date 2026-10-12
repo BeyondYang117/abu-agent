@@ -3694,6 +3694,37 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     onError: setStreamError,
   })
 
+  const handleCancelStream = useCallback(async (): Promise<boolean> => {
+    const conversationId = currentConversationIdRef.current
+    if (
+      !conversationId
+      || getStreamCoarse().cancelling
+      || !isConversationBusy(
+        conversationId,
+        inFlightConversationsRef.current,
+        streamSnapshotsRef.current,
+      )
+    ) {
+      return false
+    }
+
+    setStreamCoarse({ cancelling: true })
+    cancelCurrentRunLocally()
+    try {
+      await chatApi.cancelStream(conversationId)
+      return true
+    } catch (err) {
+      console.error('Failed to cancel chat stream:', err)
+      setStreamErrorForConversation(
+        conversationId,
+        typeof err === 'string' ? err : (err as Error).message || '停止生成失败',
+      )
+      return false
+    } finally {
+      setStreamCoarse({ cancelling: false })
+    }
+  }, [cancelCurrentRunLocally, setStreamErrorForConversation])
+
   // 运行中的消息队列（Codex 式排队 + 立刻引导）。同上用 ref 转发 handleSendMessage，
   // 保持 drain 的身份稳定（它被 handleSendMessage 自己的 finally 调用，不能互相拖依赖）。
   const messageQueue = useMessageQueue({
@@ -3707,7 +3738,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   const currentQueuedMessages = currentConversation
     ? messageQueue.queued[currentConversation.id] ?? NO_QUEUED_MESSAGES
     : NO_QUEUED_MESSAGES
-  // 「立刻引导」能不能给入口，取决于这一轮由谁在跑：
+  // 「立即提交」是否直接注入，取决于这一轮由谁在跑；不能注入时中断后优先发送：
   //   - 内置 agent 循环 → 能（轮首注入，见 chat/agent/steering.rs）；
   //   - 外部 CLI → 看它的协议支不支持（`supportsSteering`，后端 RuntimeAgentDef 是唯一真源）。
   //     codex 有 `turn/steer`；pi 有 RPC `steer`；dsh 有 bridge `session/steer`。
@@ -3745,10 +3776,26 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
   }, [canFollowUpCurrentConversation])
 
   const handleSteerQueuedMessage = useCallback((messageId: string) => {
-    const conversationId = currentConversationIdRef.current
-    if (!conversationId) return
-    void messageQueueRef.current.steer(conversationId, messageId)
-  }, [])
+    const conversation = currentConversationRef.current
+    if (!conversation) return
+    const message = (messageQueueRef.current.queued[conversation.id] ?? [])
+      .find((item) => item.id === messageId)
+    if (!message) return
+    if (canSteerCurrentConversation && message.attachments.every((item) => item.content !== undefined)) {
+      void messageQueueRef.current.steer(conversation.id, messageId)
+      return
+    }
+    void messageQueueRef.current.sendNow(conversation, messageId, async () => {
+      if (!isConversationBusy(
+        conversation.id,
+        inFlightConversationsRef.current,
+        streamSnapshotsRef.current,
+      )) return conversation
+      if (!await handleCancelStream()) throw new Error('Failed to interrupt the current reply')
+      // The run's finally sends the priority message with the persisted conversation.
+      return null
+    })
+  }, [canSteerCurrentConversation, handleCancelStream])
 
   const handleRemoveQueuedMessage = useCallback((messageId: string) => {
     const conversationId = currentConversationIdRef.current
@@ -4416,35 +4463,6 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     }
   }, [applyConversationMeta, currentConversation, draftForceKnowledgeSearch])
 
-  const handleCancelStream = useCallback(async () => {
-    const conversationId = currentConversationIdRef.current
-    if (
-      !conversationId
-      || getStreamCoarse().cancelling
-      || !isConversationBusy(
-        conversationId,
-        inFlightConversationsRef.current,
-        streamSnapshotsRef.current,
-      )
-    ) {
-      return
-    }
-
-    setStreamCoarse({ cancelling: true })
-    cancelCurrentRunLocally()
-    try {
-      await chatApi.cancelStream(conversationId)
-    } catch (err) {
-      console.error('Failed to cancel chat stream:', err)
-      setStreamErrorForConversation(
-        conversationId,
-        typeof err === 'string' ? err : (err as Error).message || '停止生成失败',
-      )
-    } finally {
-      setStreamCoarse({ cancelling: false })
-    }
-  }, [cancelCurrentRunLocally, setStreamErrorForConversation])
-
   const displayMessages = useMemo(() => {
     const stored = currentConversation?.messages ?? []
     if (!pendingUserMessage || pendingUserMessageConversationId !== currentConversation?.id) return stored
@@ -4877,7 +4895,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
       return
     }
     setExtensionsNavItem(null)
-    openEmbeddedSettings('chat')
+    openEmbeddedSettings('general')
   }, [chatView, extensionsNavItem, handleSettingsClose, openEmbeddedSettings])
 
   const handleSidebarOpenLogin = useCallback(() => {
@@ -4962,6 +4980,14 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
 
   // 会话页顶栏控件。非 mac 渲染进全宽标题栏带（单行 chrome），mac 仍留在主区 52px 顶栏。
   // 抽成变量而非组件：依赖十余个 Chat 局部状态与回调，拆组件只会换来一长串 props。
+  const conversationBillingOrg = currentConversation?.billing
+  const conversationOrgBadge =
+    conversationBillingOrg?.organization_id &&
+    conversationBillingOrg.organization_id !== 'legacy-personal' &&
+    conversationBillingOrg.funding_mode === 'organization_wallet'
+      ? (conversationBillingOrg.organization_name_snapshot || conversationBillingOrg.organization_id)
+      : null
+
   const conversationTitlebarControls = useMemo(() => (
     <>
       <div className="flex min-w-0 items-center gap-1">
@@ -4981,6 +5007,19 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
             }
           />
         </div>
+        {conversationOrgBadge ? (
+          <div
+            className="shrink-0 max-w-[9rem] truncate rounded-md border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800/80 dark:text-neutral-300"
+            title={
+              uiLang === 'zh'
+                ? `本对话使用「${conversationOrgBadge}」共享额度`
+                : `This chat bills to “${conversationOrgBadge}”`
+            }
+            data-tauri-drag-region="false"
+          >
+            {conversationOrgBadge}
+          </div>
+        ) : null}
         <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
           {usesExternalRuntime ? (
             <ExternalModelSelector
@@ -5064,6 +5103,7 @@ export default function Chat({ onSettingsChange, onContentReady, themeMode, onTo
     activeModel,
     activeProviderId,
     approvalPolicy,
+    conversationOrgBadge,
     currentConversation,
     dockOpen,
     draftThinkingLevel,

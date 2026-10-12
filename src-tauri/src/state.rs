@@ -295,6 +295,8 @@ pub struct AppState {
     pub automation_active_runs: Mutex<HashMap<String, String>>,
     /// 用户取消的 automation run_id 集合。
     pub automation_cancelled_runs: Mutex<HashSet<String>>,
+    /// Cloud org / bootstrap / task relay authority (C §3). Never holds relay tokens in React.
+    pub cloud_context: Mutex<crate::cloud_context::CloudContextManager>,
 }
 
 /// 一条外部 CLI 后台任务（claude 的 `system/task_started` / `task_notification`）。
@@ -445,6 +447,7 @@ impl AppState {
             request_debug: Mutex::new(VecDeque::new()),
             automation_active_runs: Mutex::new(HashMap::new()),
             automation_cancelled_runs: Mutex::new(HashSet::new()),
+            cloud_context: Mutex::new(crate::cloud_context::CloudContextManager::default()),
         }
     }
 
