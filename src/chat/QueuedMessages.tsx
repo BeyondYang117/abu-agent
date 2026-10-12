@@ -6,7 +6,7 @@ import { i18n } from '../settings/i18n'
 
 interface QueuedMessagesProps {
   messages: QueuedMessage[]
-  /** 是否给「立刻引导」入口。协议不支持注入时为 false（claude / ACP，见 Chat.tsx 的判据）。 */
+  /** 支持注入时直接引导，否则中断当前回复后优先发送。 */
   canSteer: boolean
   onSteer: (messageId: string) => void
   onRemove: (messageId: string) => void
@@ -21,7 +21,7 @@ interface QueuedMessagesProps {
  *
  * 视觉上刻意**压到最轻**（soft 底、无描边、faint 字，与 `.chat-composer-status` 同一家族）：
  * 此刻屏幕上正在生成回答，队列是「待办」而非「待决定」，用审批卡那种描边白卡会抢走注意力。
- * 动作键平时隐形、悬停/聚焦才现（见 `.chat-composer-queue-actions`）。
+ * 插队与删除入口始终可见。
  */
 export function QueuedMessages({
   messages,
@@ -43,6 +43,7 @@ export function QueuedMessages({
           // 否则附件会静默消失。它仍能删、仍能立刻引导。
           const submitted = isQueuedSubmitted(message)
           const restorable = !submitted && message.attachments.length === 0
+          const canInject = canSteer && message.attachments.every((item) => item.content !== undefined)
           return (
             <li
               key={message.id}
@@ -68,7 +69,8 @@ export function QueuedMessages({
                 onClick={() => restorable && onRestore(message.id)}
                 title={
                   submitted
-                    ? message.followingUp ? t.chatFollowUpPending : t.chatSteerPending
+                    ? message.interrupting ? t.chatQueueInterruptPending
+                      : message.followingUp ? t.chatFollowUpPending : t.chatSteerPending
                     : restorable ? t.chatQueueRestore : t.chatQueueRestoreBlocked
                 }
                 className={`min-w-0 flex-1 truncate text-left text-[12px] ${
@@ -95,18 +97,21 @@ export function QueuedMessages({
                   {t.chatFollowUpRejected}
                 </span>
               )}
+              {message.interruptRejected && !submitted && (
+                <span className="shrink-0 pr-1 text-[11px] text-amber-600 dark:text-amber-300">
+                  {t.chatQueueInterruptRejected}
+                </span>
+              )}
               {!submitted && (
                 <span className="chat-composer-queue-actions flex shrink-0 items-center gap-0.5">
-                  {canSteer && (
-                    <IconButton
-                      size="xs"
-                      variant="ghost"
-                      label={t.chatSteerNow}
-                      onClick={() => onSteer(message.id)}
-                    >
-                      <CornerDownRight size={12} />
-                    </IconButton>
-                  )}
+                  <IconButton
+                    size="xs"
+                    variant="ghost"
+                    label={canInject ? t.chatSteerNow : t.chatQueueSendNow}
+                    onClick={() => onSteer(message.id)}
+                  >
+                    <CornerDownRight size={12} />
+                  </IconButton>
                   <IconButton
                     size="xs"
                     variant="ghost"

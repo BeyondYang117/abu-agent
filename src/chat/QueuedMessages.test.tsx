@@ -57,11 +57,32 @@ describe('QueuedMessages', () => {
     expect(onRemove).toHaveBeenCalledWith('q1')
   })
 
-  // 外部 CLI / 多模型一问多答下后端注入不了：入口必须消失，而不是点了没反应。
-  it('不支持引导时只保留删除', () => {
-    setup([queued()], false)
+  it('不支持注入的外部 CLI 仍可中断并立即提交', () => {
+    const { onSteer } = setup([queued()], false)
     expect(screen.queryByLabelText(/立刻引导/)).toBeNull()
+    screen.getByLabelText('立即提交（中断当前回复，优先发送）').click()
+    expect(onSteer).toHaveBeenCalledWith('q1')
     expect(screen.getByLabelText('移出队列')).toBeTruthy()
+  })
+
+  it('磁盘附件使用中断发送入口', () => {
+    setup([queued({ attachments: [{ id: 'a1', type: 'file', name: 'a.pdf', path: '/tmp/a.pdf' }] })])
+    expect(screen.getByLabelText(/立即提交/)).toBeTruthy()
+    expect(screen.queryByLabelText(/立刻引导/)).toBeNull()
+  })
+
+  it('中断期间锁定条目并显示独立状态', () => {
+    const { onRestore } = setup([queued({ interrupting: true })], false)
+    screen.getByTitle('正在中断当前回复，随后优先发送').click()
+    expect(onRestore).not.toHaveBeenCalled()
+    expect(screen.queryByLabelText(/立即提交/)).toBeNull()
+    expect(screen.queryByLabelText('移出队列')).toBeNull()
+  })
+
+  it('中断失败保留重试入口', () => {
+    setup([queued({ interruptRejected: true })], false)
+    expect(screen.getByText('中断失败，仍在队列中')).toBeTruthy()
+    expect(screen.getByLabelText(/立即提交/)).toBeTruthy()
   })
 
   // 等待态不写字（转圈就够看），文案只留在 title 里。
