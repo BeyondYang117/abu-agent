@@ -59,10 +59,90 @@ export async function refreshCloudContext(): Promise<CloudContextView | null> {
   }
 }
 
-export async function setActiveOrganization(organizationId: string): Promise<CloudContextView | null> {
-  const view = await api.cloudContextSetOrganization(organizationId)
+export async function setActiveOrganization(
+  organizationId: string,
+  options?: { privacyConsentAccepted?: boolean },
+): Promise<CloudContextView | null> {
+  const view = await api.cloudContextSetOrganization(
+    organizationId,
+    options?.privacyConsentAccepted,
+  )
   cloudContextStore.setView(view)
   return view
+}
+
+/** Open platform org management / top-up for the given organization. */
+export async function openOrganizationBillingPage(organizationId?: string | null) {
+  const { ABU_PLATFORM_URL } = await import('./abuApiEndpoints')
+  const id = String(organizationId || '').trim()
+  const path = id
+    ? `/console/organizations?organization_id=${encodeURIComponent(id)}`
+    : '/console/organizations'
+  await api.openExternal(`${ABU_PLATFORM_URL}${path}`)
+}
+
+export function describeOrganizationOption(
+  org: {
+    name: string
+    type: string
+    status: string
+    activated?: boolean
+    privacy_consent_required?: boolean
+    permissions?: string[]
+  },
+  lang: 'zh' | 'en',
+): { label: string; disabled: boolean; reason?: string } {
+  const canUseModel = (org.permissions || []).includes('model.use')
+  const active = org.status === 'active'
+  const activated = org.type === 'personal' || org.activated !== false
+  const tags: string[] = []
+  if (org.type !== 'personal') tags.push(org.type)
+  if (!active) tags.push(lang === 'zh' ? `状态:${org.status}` : org.status)
+  else if (!activated) tags.push(lang === 'zh' ? '未激活' : 'inactive')
+  if (!canUseModel) tags.push(lang === 'zh' ? '不可调用' : 'no model.use')
+  if (org.privacy_consent_required) tags.push(lang === 'zh' ? '需同意隐私' : 'consent needed')
+  const label = tags.length > 0 ? `${org.name} · ${tags.join(' · ')}` : org.name
+  // 决策理由：无 model.use 或非 active 禁止切换；未激活仍可选以便 Owner 去充值。
+  const disabled = !active || !canUseModel
+  let reason: string | undefined
+  if (!active) reason = lang === 'zh' ? '组织状态不可用' : 'Organization not active'
+  else if (!canUseModel) reason = lang === 'zh' ? '当前角色不能调用模型' : 'Role cannot use models'
+  else if (!activated) reason = lang === 'zh' ? '组织尚未激活，调用前需先充值' : 'Activate org wallet first'
+  return { label, disabled, reason }
+}
+
+export function handleAgentOrganizationError(
+  err: unknown,
+  lang: 'zh' | 'en',
+  organizationId?: string | null,
+): { code: string | null; message: string; action: string } {
+  const message = err instanceof Error ? err.message : String(err || '')
+  const code = parseAgentErrorCode(message)
+  const action = code ? actionForAgentErrorCode(code) : 'none'
+  return { code, message, action }
+}
+
+export async function runAgentOrganizationErrorAction(
+  action: string,
+  organizationId?: string | null,
+): Promise<void> {
+  switch (action) {
+    case 'open_org_topup':
+    case 'open_billing':
+    case 'open_privacy_consent':
+    case 'switch_organization':
+      await openOrganizationBillingPage(organizationId)
+      break
+    case 'open_update':
+      try {
+        await api.checkUpdate()
+      } catch {
+        // ignore
+      }
+      break
+    default:
+      break
+  }
 }
 
 export function organizationsFeatureEnabled(view: CloudContextView | null): boolean {

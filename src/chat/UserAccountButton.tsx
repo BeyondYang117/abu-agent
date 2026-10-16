@@ -3,7 +3,12 @@ import { User, Settings, Coins, Crown } from 'lucide-react'
 import { useAbuApiAuth } from '../api/abuApiAuth'
 import { getAbuApiClient, type CheckinReward, type CheckinStats } from '../api/abuApi'
 import {
+  cloudContextStore,
+  describeOrganizationOption,
+  handleAgentOrganizationError,
+  openOrganizationBillingPage,
   refreshCloudContext,
+  runAgentOrganizationErrorAction,
   setActiveOrganization,
   useCloudContext,
 } from '../api/cloudContext'
@@ -119,10 +124,22 @@ export const UserAccountButton = memo(function UserAccountButton({
 
   const handleSwitchOrganization = useCallback(async (organizationId: string) => {
     const org = cloudContext?.bootstrap?.organizations?.find((item) => item.id === organizationId)
+    if (org) {
+      const option = describeOrganizationOption(org, lang === 'zh' ? 'zh' : 'en')
+      if (option.disabled) {
+        window.alert(option.reason || (lang === 'zh' ? '无法切换到该组织' : 'Cannot switch to this organization'))
+        return
+      }
+    }
+    let privacyConsentAccepted = false
     if (org && org.type !== 'personal') {
-      const consentKey = `abu-org-privacy-consent:${organizationId}`
-      const consented = typeof localStorage !== 'undefined' && localStorage.getItem(consentKey) === '1'
-      if (!consented) {
+      const noticeVersion = cloudContext?.bootstrap?.privacy_notice_version ?? 0
+      const consentKey = `abu-org-privacy-consent:${organizationId}:v${noticeVersion}`
+      const localConsented =
+        typeof localStorage !== 'undefined' && localStorage.getItem(consentKey) === '1'
+      // 决策理由：服务端标记需同意，或本地尚未确认当前隐私版本时，必须弹窗并写服务端。
+      const needsPrompt = Boolean(org.privacy_consent_required) || !localConsented
+      if (needsPrompt) {
         const message =
           lang === 'zh'
             ? `本对话将使用「${org.name}」共享额度，管理员可以查看模型、用量和费用，但不能查看对话正文和本地文件内容。是否继续？`
@@ -134,13 +151,41 @@ export const UserAccountButton = memo(function UserAccountButton({
           // ignore quota / private mode
         }
       }
+      privacyConsentAccepted = true
     }
     setOrgSwitching(true)
     try {
-      await setActiveOrganization(organizationId)
+      const view = await setActiveOrganization(organizationId, { privacyConsentAccepted })
       await loadAccount()
+      const switched =
+        view?.bootstrap?.organizations?.find((item) => item.id === organizationId) ||
+        cloudContextStore.getView()?.bootstrap?.organizations?.find((item) => item.id === organizationId)
+      const contextActivated = view?.context?.organization?.activated
+      const notActivated =
+        switched &&
+        switched.type !== 'personal' &&
+        (switched.activated === false || contextActivated === false)
+      if (notActivated) {
+        const tip =
+          lang === 'zh'
+            ? `「${switched.name}」尚未激活，调用模型前请先为组织充值或转入。是否打开组织管理页？`
+            : `“${switched.name}” is not activated. Open organization billing to top up?`
+        if (window.confirm(tip)) {
+          await openOrganizationBillingPage(organizationId)
+        }
+      }
     } catch (err) {
       console.error('Failed to switch organization:', err)
+      const { message, action } = handleAgentOrganizationError(err, lang === 'zh' ? 'zh' : 'en', organizationId)
+      const tip =
+        lang === 'zh'
+          ? `${message}\n\n是否打开组织管理页处理？`
+          : `${message}\n\nOpen organization page to resolve?`
+      if (action !== 'none' && window.confirm(tip)) {
+        await runAgentOrganizationErrorAction(action, organizationId).catch(() => undefined)
+      } else if (action === 'none') {
+        window.alert(message)
+      }
     } finally {
       if (mountedRef.current) setOrgSwitching(false)
     }
@@ -192,9 +237,17 @@ export const UserAccountButton = memo(function UserAccountButton({
   }, [checkinLoading, checkinStats?.checked_in_today])
 
   const openTopup = useCallback(() => {
+    const activeId = cloudContext?.activeOrganizationId
+    const activeOrg = cloudContext?.bootstrap?.organizations?.find((item) => item.id === activeId)
+    if (activeOrg && activeOrg.type !== 'personal') {
+      void openOrganizationBillingPage(activeId).catch((err) =>
+        console.error('Failed to open organization billing:', err),
+      )
+      return
+    }
     void api.openExternal(`${ABU_PLATFORM_URL}/console/topup?source=desktop_account_menu`)
       .catch((err) => console.error('Failed to open top-up page:', err))
-  }, [])
+  }, [cloudContext])
 
   const toggleMenu = useCallback(() => {
     if (!isAuthenticated) {

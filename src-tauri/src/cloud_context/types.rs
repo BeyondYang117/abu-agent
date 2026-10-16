@@ -46,6 +46,11 @@ pub struct AgentBootstrapOrganization {
     pub role: String,
     #[serde(default)]
     pub status: String,
+    /// Shared-org activation; personal orgs are always true (C §4.1).
+    #[serde(default)]
+    pub activated: bool,
+    #[serde(default)]
+    pub privacy_consent_required: bool,
     #[serde(default)]
     pub permissions: Vec<String>,
 }
@@ -62,6 +67,8 @@ pub struct CloudBootstrap {
     pub minimum_client_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legacy_sunset_at: Option<i64>,
+    #[serde(default)]
+    pub privacy_notice_version: i64,
     #[serde(default)]
     pub user: AgentBootstrapUser,
     #[serde(default)]
@@ -80,12 +87,15 @@ impl CloudBootstrap {
             minimum_client_version: String::new(),
             legacy_sunset_at: None,
             user,
+            privacy_notice_version: 0,
             organizations: vec![AgentBootstrapOrganization {
                 id: LEGACY_PERSONAL_ORG_ID.to_string(),
                 name: "个人账户".to_string(),
                 org_type: "personal".to_string(),
                 role: "owner".to_string(),
                 status: "active".to_string(),
+                activated: true,
+                privacy_consent_required: false,
                 permissions: vec!["model.use".into(), "usage.view.self".into()],
             }],
             default_organization_id: LEGACY_PERSONAL_ORG_ID.to_string(),

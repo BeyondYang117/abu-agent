@@ -143,6 +143,37 @@ async fn get_json(
             action: None,
             context: None,
         })?;
+    read_json_response(response).await
+}
+
+async fn post_json(
+    base_url: &str,
+    session_token: &str,
+    path: &str,
+    body: &Value,
+) -> Result<(reqwest::StatusCode, Value), AgentApiError> {
+    let url = format!("{}{}", base_url.trim_end_matches('/'), path);
+    let response = agent_http()
+        .post(url)
+        .header("X-Abu-Session-Token", session_token)
+        .header(reqwest::header::USER_AGENT, AGENT_API_USER_AGENT)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| AgentApiError {
+            code: "NETWORK".into(),
+            message: format!("无法连接 ABU API：{e}"),
+            http_status: 0,
+            retryable: true,
+            action: None,
+            context: None,
+        })?;
+    read_json_response(response).await
+}
+
+async fn read_json_response(
+    response: reqwest::Response,
+) -> Result<(reqwest::StatusCode, Value), AgentApiError> {
     let status = response.status();
     let text = response.text().await.map_err(|e| AgentApiError {
         code: "NETWORK".into(),
@@ -159,6 +190,42 @@ async fn get_json(
         )]))
     });
     Ok((status, body))
+}
+
+/// Persist organization privacy consent on the server (C §8.4 / org privacy).
+async fn consent_organization_privacy(
+    base_url: &str,
+    session_token: &str,
+    organization_id: &str,
+    version: i64,
+) -> Result<(), AgentApiError> {
+    if version < 0 {
+        return Err(AgentApiError {
+            code: "ORG_PRIVACY_CONSENT_REQUIRED".into(),
+            message: "隐私说明版本无效".into(),
+            http_status: 400,
+            retryable: false,
+            action: Some("open_privacy_consent".into()),
+            context: None,
+        });
+    }
+    let path = format!(
+        "/api/organizations/{}/privacy-consent",
+        urlencoding_encode(organization_id)
+    );
+    let payload = serde_json::json!({
+        "version": version,
+        "accepted": true,
+    });
+    let (status, body) = post_json(base_url, session_token, &path, &payload).await?;
+    if body
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    Err(parse_agent_api_error(status, &body))
 }
 
 fn apply_upgrade_from_error(manager: &mut CloudContextManager, err: &AgentApiError) {
@@ -396,13 +463,14 @@ pub async fn cloud_context_set_organization(
     app: AppHandle,
     state: State<'_, AppState>,
     organization_id: String,
+    privacy_consent_accepted: Option<bool>,
 ) -> Result<CloudContextView, String> {
     let org_id = organization_id.trim().to_string();
     if org_id.is_empty() {
         return Err("organization_id 不能为空".into());
     }
 
-    {
+    let (privacy_version, org_type, privacy_required) = {
         let guard = cloud_manager(&state).lock().map_err(|e| e.to_string())?;
         if !guard.legacy_mode {
             if let Some(boot) = &guard.bootstrap {
@@ -410,6 +478,61 @@ pub async fn cloud_context_set_organization(
                     && !boot.organizations.iter().any(|o| o.id == org_id)
                 {
                     return Err("组织不存在或不属于当前用户".into());
+                }
+                let org = boot.organizations.iter().find(|o| o.id == org_id);
+                (
+                    boot.privacy_notice_version,
+                    org.map(|o| o.org_type.clone()).unwrap_or_default(),
+                    org.map(|o| o.privacy_consent_required).unwrap_or(false),
+                )
+            } else {
+                (0, String::new(), false)
+            }
+        } else {
+            (0, String::new(), false)
+        }
+    };
+
+    let (base_url, session_token) = {
+        let settings = state.settings_read();
+        (
+            settings.abu_api_base_url_or_default().to_string(),
+            resolve_session_token(settings.abu_api_session_token.as_deref()),
+        )
+    };
+
+    // 决策理由：非个人组织在前端确认后写服务端 consent；服务端幂等，已同意则 no-op。
+    let should_consent = org_type != "personal"
+        && org_type != LEGACY_PERSONAL_ORG_ID
+        && privacy_version > 0
+        && (privacy_consent_accepted.unwrap_or(false) || privacy_required);
+    if should_consent {
+        if !privacy_consent_accepted.unwrap_or(false) && privacy_required {
+            return Err(format_agent_error(&AgentApiError {
+                code: "ORG_PRIVACY_CONSENT_REQUIRED".into(),
+                message: "请先同意当前版本的组织隐私说明".into(),
+                http_status: 403,
+                retryable: false,
+                action: Some("open_privacy_consent".into()),
+                context: None,
+            }));
+        }
+        let token = session_token
+            .as_deref()
+            .ok_or_else(|| "尚未登录 ABU 账户".to_string())?;
+        consent_organization_privacy(&base_url, token, &org_id, privacy_version)
+            .await
+            .map_err(|e| {
+                if let Ok(mut guard) = cloud_manager(&state).lock() {
+                    apply_upgrade_from_error(&mut guard, &e);
+                    guard.last_error = Some(e.clone());
+                }
+                format_agent_error(&e)
+            })?;
+        if let Ok(mut guard) = cloud_manager(&state).lock() {
+            if let Some(boot) = guard.bootstrap.as_mut() {
+                if let Some(org) = boot.organizations.iter_mut().find(|o| o.id == org_id) {
+                    org.privacy_consent_required = false;
                 }
             }
         }
@@ -427,14 +550,8 @@ pub async fn cloud_context_set_organization(
     };
     crate::settings::persist_settings(&app, &snapshot)?;
 
-    let (base_url, session_token) = {
-        let settings = state.settings_read();
-        (
-            settings.abu_api_base_url_or_default().to_string(),
-            resolve_session_token(settings.abu_api_session_token.as_deref()),
-        )
-    };
     if let Some(token) = session_token {
+        // 决策理由：组织切换已落盘；context 拉取失败不回滚，前端靠 bootstrap.activated / 下次 refresh 恢复。
         let _ = refresh_organization_context(
             cloud_manager(&state),
             &base_url,

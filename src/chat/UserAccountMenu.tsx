@@ -6,7 +6,10 @@ import { type Lang } from '../settings/i18n'
 import { formatAbuQuota, formatAbuQuotaReward } from '../api/quota'
 import { CHECKIN_REWARD_UNIT_WELFARE, type CheckinReward, type CheckinStats } from '../api/abuApi'
 import type { CloudContextView } from '../api/tauri'
-import { organizationsFeatureEnabled } from '../api/cloudContext'
+import {
+  describeOrganizationOption,
+  organizationsFeatureEnabled,
+} from '../api/cloudContext'
 
 interface AccountInfo {
   username: string
@@ -78,17 +81,25 @@ export function UserAccountMenu({
   const orgEnabled = organizationsFeatureEnabled(cloudContext)
   const orgBalances = cloudContext?.context?.balances
   const orgBudget = cloudContext?.context?.budget
-  const balance = orgBalances
-    ? formatAbuQuota(orgBalances.available)
-    : accountInfo
-      ? formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota)
-      : '0.00'
-  const usedBalance = accountInfo ? formatAbuQuota(accountInfo.usedQuota) : '0.00'
-  const isVip = accountInfo?.group === 'vip'
   const orgs = cloudContext?.bootstrap?.organizations ?? []
   const activeOrgId = cloudContext?.activeOrganizationId
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? orgs[0]
+  const isSharedOrg = Boolean(activeOrg && activeOrg.type !== 'personal')
+  // 决策理由：共享组织无 wallet.view 时 balances 为 null，不能回退成个人余额误导扣费主体。
+  const balanceHidden = isSharedOrg && !orgBalances
+  const balance = orgBalances
+    ? formatAbuQuota(orgBalances.available)
+    : balanceHidden
+      ? null
+      : accountInfo
+        ? formatAbuQuota(accountInfo.quota + accountInfo.temporaryQuota)
+        : '0.00'
+  const usedBalance = accountInfo ? formatAbuQuota(accountInfo.usedQuota) : '0.00'
+  const isVip = accountInfo?.group === 'vip'
   const fundingMode = cloudContext?.context?.funding?.mode
+  const activeOrgMeta = activeOrg
+    ? describeOrganizationOption(activeOrg, lang === 'zh' ? 'zh' : 'en')
+    : null
 
   const menu = (
     <div
@@ -136,13 +147,25 @@ export function UserAccountMenu({
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-1.5">
                 <span className="text-sm font-bold text-neutral-900 dark:text-neutral-100 tabular-nums">
-                  ${balance}
+                  {balanceHidden
+                    ? (lang === 'zh' ? '组织余额不可见' : 'Org balance hidden')
+                    : `$${balance}`}
                 </span>
-                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                  {lang === 'zh' ? '可用余额' : 'Balance'}
-                </span>
+                {!balanceHidden && (
+                  <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    {isSharedOrg
+                      ? (lang === 'zh' ? '组织可用' : 'Org balance')
+                      : (lang === 'zh' ? '可用余额' : 'Balance')}
+                  </span>
+                )}
               </div>
-              {orgBalances ? (
+              {balanceHidden ? (
+                <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
+                  {lang === 'zh'
+                    ? '调用仍扣组织钱包；总余额需询问 Owner / 管理员'
+                    : 'Calls still bill the org wallet; ask Owner for total balance'}
+                </div>
+              ) : orgBalances ? (
                 <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
                   {lang === 'zh' ? '永久' : 'Permanent'} ${formatAbuQuota(orgBalances.permanent)}
                   {' · '}
@@ -176,7 +199,9 @@ export function UserAccountMenu({
               }}
               className="shrink-0 rounded-md bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-80 dark:bg-neutral-100 dark:text-neutral-900"
             >
-              {lang === 'zh' ? '充值' : 'Top up'}
+              {isSharedOrg
+                ? (lang === 'zh' ? '组织钱包' : 'Org wallet')
+                : (lang === 'zh' ? '充值' : 'Top up')}
             </button>
           </div>
         </div>
@@ -218,13 +243,14 @@ export function UserAccountMenu({
                   if (next && next !== activeOrgId) onSwitchOrganization(next)
                 }}
               >
-                {orgs.map((org) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name}
-                    {org.type !== 'personal' ? ` · ${org.type}` : ''}
-                    {org.status !== 'active' ? ` (${org.status})` : ''}
-                  </option>
-                ))}
+                {orgs.map((org) => {
+                  const option = describeOrganizationOption(org, lang === 'zh' ? 'zh' : 'en')
+                  return (
+                    <option key={org.id} value={org.id} disabled={option.disabled}>
+                      {option.label}
+                    </option>
+                  )
+                })}
               </select>
               <ChevronDown
                 size={12}
@@ -238,6 +264,14 @@ export function UserAccountMenu({
                 {activeOrg.status !== 'active'
                   ? ` · ${lang === 'zh' ? '状态异常' : 'status'}: ${activeOrg.status}`
                   : ''}
+                {activeOrg.type !== 'personal' && activeOrg.activated === false
+                  ? ` · ${lang === 'zh' ? '未激活' : 'not activated'}`
+                  : ''}
+              </div>
+            ) : null}
+            {activeOrgMeta?.reason ? (
+              <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
+                {activeOrgMeta.reason}
               </div>
             ) : null}
           </div>
@@ -302,7 +336,9 @@ export function UserAccountMenu({
         }}
       >
         <CreditCard strokeWidth={1.75} />
-        {lang === 'zh' ? '充值余额' : 'Top up balance'}
+        {isSharedOrg
+          ? (lang === 'zh' ? '打开组织钱包' : 'Open org wallet')
+          : (lang === 'zh' ? '充值余额' : 'Top up balance')}
         <span className="kv-menu-hint">abu-api ↗</span>
       </button>
 

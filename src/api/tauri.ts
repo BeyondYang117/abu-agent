@@ -37,6 +37,8 @@ export interface CloudBootstrapOrganization {
   type: string
   role: string
   status: string
+  activated?: boolean
+  privacy_consent_required?: boolean
   permissions: string[]
 }
 
@@ -57,6 +59,7 @@ export interface CloudBootstrap {
   features: CloudBootstrapFeatures
   minimum_client_version: string
   legacy_sunset_at?: number
+  privacy_notice_version?: number
   user: { id: number; username: string; display_name: string }
   organizations: CloudBootstrapOrganization[]
   default_organization_id: string
@@ -2166,8 +2169,14 @@ export const api = {
   clearAbuApiSession: () => invoke<void>('clear_abu_api_session'),
   cloudContextGetView: () => invoke<CloudContextView>('cloud_context_get_view'),
   cloudContextRefresh: () => invoke<CloudContextView>('cloud_context_refresh'),
-  cloudContextSetOrganization: (organizationId: string) =>
-    invoke<CloudContextView>('cloud_context_set_organization', { organizationId }),
+  cloudContextSetOrganization: (
+    organizationId: string,
+    privacyConsentAccepted?: boolean,
+  ) =>
+    invoke<CloudContextView>('cloud_context_set_organization', {
+      organizationId,
+      privacyConsentAccepted: privacyConsentAccepted ?? null,
+    }),
   cloudContextGetOrganizationContext: (organizationId?: string | null) =>
     invoke<AgentOrganizationContext>('cloud_context_get_organization_context', {
       organizationId: organizationId ?? null,
