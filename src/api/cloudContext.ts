@@ -111,11 +111,11 @@ export function describeOrganizationOption(
   return { label, disabled, reason }
 }
 
-export function handleAgentOrganizationError(
-  err: unknown,
-  lang: 'zh' | 'en',
-  organizationId?: string | null,
-): { code: string | null; message: string; action: string } {
+export function handleAgentOrganizationError(err: unknown): {
+  code: string | null
+  message: string
+  action: string
+} {
   const message = err instanceof Error ? err.message : String(err || '')
   const code = parseAgentErrorCode(message)
   const action = code ? actionForAgentErrorCode(code) : 'none'

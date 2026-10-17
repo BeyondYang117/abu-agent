@@ -176,7 +176,7 @@ export const UserAccountButton = memo(function UserAccountButton({
       }
     } catch (err) {
       console.error('Failed to switch organization:', err)
-      const { message, action } = handleAgentOrganizationError(err, lang === 'zh' ? 'zh' : 'en', organizationId)
+      const { message, action } = handleAgentOrganizationError(err)
       const tip =
         lang === 'zh'
           ? `${message}\n\n是否打开组织管理页处理？`
