@@ -7,6 +7,17 @@ use super::errors::{format_agent_error, parse_agent_api_error, AgentApiError};
 use super::types::ActiveTaskRelay;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreateSessionResponse {
+    pub id: String,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CreateTaskRequest {
     pub session_id: String,
     pub device_id: String,
@@ -86,6 +97,67 @@ fn ensure_success(status: reqwest::StatusCode, body: &Value) -> Result<(), Agent
     Err(parse_agent_api_error(status, body))
 }
 
+/// Create a server-side agent session bound to the registered device (C §4.4).
+pub async fn create_agent_session(
+    base_url: &str,
+    session_token: &str,
+    device_id: &str,
+) -> Result<CreateSessionResponse, AgentApiError> {
+    let device_id = device_id.trim();
+    if device_id.is_empty() {
+        return Err(AgentApiError {
+            code: "INVALID_DEVICE".into(),
+            message: "缺少设备 ID，无法创建 Agent Session".into(),
+            http_status: 0,
+            retryable: false,
+            action: None,
+            context: None,
+        });
+    }
+    let url = format!(
+        "{}/api/agent/sessions?device_id={}",
+        base_url.trim_end_matches('/'),
+        urlencoding_encode(device_id)
+    );
+    let response = agent_http()
+        .post(url)
+        .header("X-Abu-Session-Token", session_token)
+        .send()
+        .await
+        .map_err(|e| AgentApiError {
+            code: "NETWORK".into(),
+            message: format!("无法连接 ABU API：{e}"),
+            http_status: 0,
+            retryable: true,
+            action: None,
+            context: None,
+        })?;
+    let (status, body) = read_json_response(response).await?;
+    ensure_success(status, &body)?;
+    let session: CreateSessionResponse =
+        serde_json::from_value(body.get("data").cloned().unwrap_or_default()).map_err(|e| {
+            AgentApiError {
+                code: "PARSE".into(),
+                message: format!("Agent Session 响应格式错误：{e}"),
+                http_status: status.as_u16(),
+                retryable: false,
+                action: None,
+                context: None,
+            }
+        })?;
+    if session.id.trim().is_empty() {
+        return Err(AgentApiError {
+            code: "PARSE".into(),
+            message: "Agent Session 响应缺少 id".into(),
+            http_status: status.as_u16(),
+            retryable: false,
+            action: None,
+            context: None,
+        });
+    }
+    Ok(session)
+}
+
 pub async fn create_agent_task(
     base_url: &str,
     session_token: &str,
@@ -118,6 +190,15 @@ pub async fn create_agent_task(
             context: None,
         }
     })
+}
+
+/// Server returns this message (no stable code) when session_id is missing/mismatched.
+pub fn is_invalid_agent_session_error(err: &AgentApiError) -> bool {
+    err.http_status == 400
+        && err
+            .message
+            .to_ascii_lowercase()
+            .contains("invalid agent session")
 }
 
 pub async fn refresh_task_relay(
@@ -287,4 +368,32 @@ pub fn relay_near_expiry(relay: &ActiveTaskRelay, now_unix: i64, skew_secs: i64)
 
 pub fn map_task_error(err: AgentApiError) -> String {
     format_agent_error(&err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cloud_context::AgentApiError;
+
+    #[test]
+    fn detects_invalid_agent_session_message() {
+        let err = AgentApiError {
+            code: "UNKNOWN".into(),
+            message: "invalid agent session".into(),
+            http_status: 400,
+            retryable: false,
+            action: None,
+            context: None,
+        };
+        assert!(is_invalid_agent_session_error(&err));
+        let other = AgentApiError {
+            code: "UNKNOWN".into(),
+            message: "invalid agent device".into(),
+            http_status: 403,
+            retryable: false,
+            action: None,
+            context: None,
+        };
+        assert!(!is_invalid_agent_session_error(&other));
+    }
 }

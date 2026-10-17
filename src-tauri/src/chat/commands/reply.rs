@@ -171,11 +171,13 @@ pub(super) async fn complete_assistant_reply_inner(
         let platform_search = crate::abu_api::PlatformSearchCredentials {
             base_url: credentials.base_url.clone(),
             relay_key: credentials.api_key.clone(),
+            task_id: credentials.task_id.clone(),
         };
         let provider = crate::chat::model::create_abu_api_virtual_provider(
             &credentials.base_url,
             &credentials.api_key,
             &resolved_model,
+            credentials.task_id.as_deref(),
         );
         cloud_run = Some(credentials);
         (provider, Some(platform_search))

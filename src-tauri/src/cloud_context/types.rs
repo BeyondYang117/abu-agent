@@ -209,11 +209,19 @@ pub struct ConversationBillingBinding {
     pub funding_mode: String,
     #[serde(default)]
     pub bound_at: i64,
+    /// Server-side `agent_sessions.id` from POST /api/agent/sessions (C §4.4).
+    /// Reused for every scoped task in this conversation; empty until first cloud send.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_session_id: String,
 }
 
 impl ConversationBillingBinding {
     pub fn is_bound(&self) -> bool {
         !self.organization_id.trim().is_empty()
+    }
+
+    pub fn has_agent_session(&self) -> bool {
+        !self.agent_session_id.trim().is_empty()
     }
 }
 

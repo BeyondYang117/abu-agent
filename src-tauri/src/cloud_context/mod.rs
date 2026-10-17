@@ -17,8 +17,9 @@ pub use session::{
     store_session_token,
 };
 pub use tasks::{
-    active_relay_from_create, create_agent_task, finalize_agent_task, heartbeat_agent_task,
-    map_task_error, refresh_task_relay, relay_near_expiry, urlencoding_encode, CreateTaskRequest,
+    active_relay_from_create, create_agent_session, create_agent_task, finalize_agent_task,
+    heartbeat_agent_task, is_invalid_agent_session_error, map_task_error, refresh_task_relay,
+    relay_near_expiry, urlencoding_encode, CreateSessionResponse, CreateTaskRequest,
     CreateTaskResponse,
 };
 pub use types::*;

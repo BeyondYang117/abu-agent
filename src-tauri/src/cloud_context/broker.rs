@@ -4,11 +4,11 @@ use crate::state::AppState;
 
 use super::session::resolve_session_token;
 use super::tasks::{
-    active_relay_from_create, create_agent_task, finalize_agent_task, map_task_error,
-    refresh_task_relay, CreateTaskRequest,
+    active_relay_from_create, create_agent_session, create_agent_task, finalize_agent_task,
+    is_invalid_agent_session_error, map_task_error, refresh_task_relay, CreateTaskRequest,
 };
 use super::types::{
-    ConversationBillingBinding, ActiveTaskRelay, LEGACY_PERSONAL_ORG_ID,
+    ActiveTaskRelay, ConversationBillingBinding, LEGACY_PERSONAL_ORG_ID,
 };
 use super::{funding_mode_for, org_display_name, resolve_billing_organization_id};
 
@@ -55,10 +55,26 @@ pub fn ensure_conversation_billing_binding(
     Ok(org_id)
 }
 
+async fn ensure_agent_session_id(
+    base_url: &str,
+    session_token: &str,
+    device_id: &str,
+    billing: &mut ConversationBillingBinding,
+) -> Result<String, String> {
+    if billing.has_agent_session() {
+        return Ok(billing.agent_session_id.clone());
+    }
+    let created = create_agent_session(base_url, session_token, device_id)
+        .await
+        .map_err(map_task_error)?;
+    billing.agent_session_id = created.id;
+    Ok(billing.agent_session_id.clone())
+}
+
 pub async fn acquire_cloud_run_credentials(
     state: &AppState,
     model: &str,
-    conversation_id: &str,
+    _conversation_id: &str,
     billing: &mut ConversationBillingBinding,
     parent_task_id: Option<&str>,
 ) -> Result<CloudRunCredentials, String> {
@@ -100,9 +116,14 @@ pub async fn acquire_cloud_run_credentials(
         organization_id.clone()
     };
 
-    let request = CreateTaskRequest {
-        session_id: format!("conv:{conversation_id}"),
-        device_id,
+    // 决策理由：task.session_id 必须是 POST /api/agent/sessions 返回的 UUID，
+    // 不能用本地 conversation_id 冒充，否则服务端校验会返回 invalid agent session。
+    let mut session_id =
+        ensure_agent_session_id(&base_url, &session_token, &device_id, billing).await?;
+
+    let mut request = CreateTaskRequest {
+        session_id: session_id.clone(),
+        device_id: device_id.clone(),
         task_type: "chat".into(),
         organization_id: server_org_id.clone(),
         parent_task_id: parent_task_id.unwrap_or("").to_string(),
@@ -110,9 +131,20 @@ pub async fn acquire_cloud_run_credentials(
         hard_cap: None,
     };
 
-    let created = create_agent_task(&base_url, &session_token, &request)
-        .await
-        .map_err(map_task_error)?;
+    let created = match create_agent_task(&base_url, &session_token, &request).await {
+        Ok(created) => created,
+        Err(err) if is_invalid_agent_session_error(&err) => {
+            // 决策理由：本地清库/换库后对话仍缓存旧 session_id；清缓存重建一次即可恢复。
+            billing.agent_session_id.clear();
+            session_id =
+                ensure_agent_session_id(&base_url, &session_token, &device_id, billing).await?;
+            request.session_id = session_id;
+            create_agent_task(&base_url, &session_token, &request)
+                .await
+                .map_err(map_task_error)?
+        }
+        Err(err) => return Err(map_task_error(err)),
+    };
 
     let mut relay = active_relay_from_create(&created, &server_org_id);
     if relay.is_none() {

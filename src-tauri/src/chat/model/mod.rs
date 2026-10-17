@@ -10,7 +10,9 @@ pub mod openai;
 pub mod responses;
 pub mod types;
 
-pub use abu_api_provider::{create_abu_api_virtual_provider, ABU_API_PROVIDER_ID};
+pub use abu_api_provider::{
+    create_abu_api_virtual_provider, ABU_AGENT_TASK_ID_HEADER, ABU_API_PROVIDER_ID,
+};
 pub use anthropic::AnthropicMessagesProvider;
 pub use gemini::GeminiProvider;
 pub use openai::OpenAiChatProvider;

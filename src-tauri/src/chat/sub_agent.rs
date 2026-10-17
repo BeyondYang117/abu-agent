@@ -1121,6 +1121,7 @@ pub fn handle_agent_spawn<'a>(
                     &credentials.base_url,
                     &credentials.api_key,
                     &model,
+                    credentials.task_id.as_deref(),
                 ),
                 model,
             )

@@ -409,6 +409,8 @@ pub struct AgentRelayCredentialsResponse {
 pub struct PlatformSearchCredentials {
     pub base_url: String,
     pub relay_key: String,
+    /// Scoped `aar_` credentials require the matching Agent Task header.
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -427,13 +429,24 @@ pub async fn search_platform_web(
     query: &str,
     max_results: u8,
 ) -> Result<Vec<crate::web_search::WebSearchResult>, String> {
-    let response = client
+    let mut request = client
         .post(format!(
             "{}/v1/web-search",
             credentials.base_url.trim_end_matches('/')
         ))
         .bearer_auth(&credentials.relay_key)
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(15));
+    // 决策理由：aar_ 凭证经 TokenAuth → AgentRelayAuth，与 chat 流共用 task 头。
+    if let Some(task_id) = credentials
+        .task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        // Keep the literal here to avoid abu_api ↔ chat::model dependency cycle.
+        request = request.header("X-Abu-Agent-Task-ID", task_id);
+    }
+    let response = request
         .json(&serde_json::json!({
             "query": query,
             "max_results": max_results.clamp(1, 12),
@@ -1448,6 +1461,7 @@ mod tests {
         let credentials = PlatformSearchCredentials {
             base_url,
             relay_key: "relay-secret".to_string(),
+            task_id: None,
         };
         let results =
             search_platform_web(agent_http(), &credentials, "current release", 4)
